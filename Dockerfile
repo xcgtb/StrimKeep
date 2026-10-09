@@ -8,7 +8,7 @@ ENV PYTHONUNBUFFERED=1 \
     TZ=Asia/Shanghai
 
 # 与 app/version.py 一致；GitHub 标签必须匹配源码版本。
-ARG APP_VERSION=1.0.0
+ARG APP_VERSION=1.0.1
 ENV APP_VERSION=${APP_VERSION}
 
 WORKDIR /app

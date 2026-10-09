@@ -996,24 +996,39 @@ def get_tmdb_scan_progress() -> dict:
         p['percent'] = 100 if p['finished_at'] else 0
     return p
 
-def refresh_tmdb_scan():
+def refresh_tmdb_scan(background=False):
     """后台跑一次完整 TMDB 对照并落盘（带进度上报）。单飞：网页「强制对照」和定时预热
     可能前后脚触发，已在跑时直接返回，不再并发两份全量对照。"""
     if not _eng()._tmdb_scan_lock.acquire(blocking=False):
         return {'status': 'running', 'message': 'TMDB 对照已在后台运行'}
-    try:
-        return _refresh_tmdb_scan()
-    finally:
-        _eng()._tmdb_scan_lock.release()
-
-def _refresh_tmdb_scan():
-    log.info('TMDB 对照开始（后台）')
+    # 请求返回前预留任务并清除旧错误，不能等线程获得调度后才更新进度。
     _eng()._tmdb_scan_progress.update({
         'running': True, 'total': 0, 'done': 0,
         'stage': '拉取 Emby 库...',
         'started_at': time.time(), 'finished_at': 0,
         'stats': {}, 'error': '',
     })
+
+    def run():
+        try:
+            return _refresh_tmdb_scan()
+        finally:
+            _eng()._tmdb_scan_lock.release()
+
+    if not background:
+        return run()
+    try:
+        threading.Thread(target=run, daemon=True, name='tmdb-scan').start()
+    except Exception as e:
+        _eng()._tmdb_scan_progress.update({'running': False, 'finished_at': time.time(),
+                                         'stage': '启动失败', 'error': str(e)})
+        _eng()._tmdb_scan_lock.release()
+        log.exception('TMDB 对照启动失败')
+        return {'status': 'error', 'message': str(e)}
+    return {'status': 'started', 'message': 'TMDB 对照已在后台启动'}
+
+def _refresh_tmdb_scan():
+    log.info('TMDB 对照开始（后台）')
     try:
         data = emby_library_overview(force=True)
         series = data['series']

@@ -166,12 +166,7 @@ def api_emby_library(force: int = 0, with_tmdb: int = 1, cache_only: int = 0):
     if not with_tmdb:
         return engine.action_emby_library(Args(force=False, with_tmdb=False))
     # force=1：启动后台任务，立即返回
-    prog = engine.get_tmdb_scan_progress()
-    if prog.get('running'):
-        return {'status': 'running', 'message': 'TMDB 对照已在后台运行', 'progress': prog}
-    import threading as _th
-    _th.Thread(target=engine.refresh_tmdb_scan, daemon=True).start()
-    return {'status': 'started', 'message': 'TMDB 对照已在后台启动'}
+    return engine.refresh_tmdb_scan(background=True)
 
 
 @router.get('/api/library_stats', dependencies=[Depends(auth)])

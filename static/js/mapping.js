@@ -126,10 +126,14 @@ var embyLoaded = false;
 var embyLibraryLoading = false, embyLibraryGeneration = 0;
 function ensureEmbyLoaded(){ if (!embyLoaded && !embyLibraryLoading) loadEmbyLibrary(false, true, true); }
 var tmdbProgressTimer = null;
+var tmdbProgressGeneration = 0;
 
 async function pollTmdbProgress(){
+  var generation = tmdbProgressGeneration;
+  var watching = !!tmdbProgressTimer;
   try {
     var r = await api('/api/tmdb/progress');
+    if (generation !== tmdbProgressGeneration) return;
     var p = r.progress || {};
     if (p.running) {
       document.getElementById('tmdbProgressWrap').classList.remove('hidden');
@@ -147,7 +151,7 @@ async function pollTmdbProgress(){
       document.getElementById('tmdbProgressWrap').classList.add('hidden');
       if (tmdbProgressTimer) { clearInterval(tmdbProgressTimer); tmdbProgressTimer = null; }
       if (p.finished_at && !p.error) loadEmbyLibrary(false, true);
-      else if (p.error) toast('TMDB 对照失败: ' + p.error, 'error', 5000);
+      else if (p.error && watching) toast('TMDB 对照失败: ' + p.error, 'error', 5000);
     }
   } catch(e) {}
 }
@@ -163,16 +167,25 @@ async function loadEmbyLibrary(force, withTmdb, cacheOnly){
   embyLibraryLoading = true;
   // 数据准备好再替换；重新对照及请求失败时保留已有海报墙。
   if (force && withTmdb) {
-    startTmdbProgressWatch();
+    // 本次启动前停止旧轮询；晚到的旧进度不能中断新任务或弹出旧错误。
+    ++tmdbProgressGeneration;
+    if (tmdbProgressTimer) { clearInterval(tmdbProgressTimer); tmdbProgressTimer = null; }
     try {
       var r0 = await api('/api/emby/library?force=1&with_tmdb=1');
       if (generation !== embyLibraryGeneration) return;
       if (r0 && (r0.status === 'started' || r0.status === 'running')) {
         if (!embyLoaded) $('embyList').innerHTML = '<div class="list-empty">TMDB 对照进行中，请稍候...</div>';
         embyLibraryLoading = false;
+        startTmdbProgressWatch();
         return;
       }
-    } catch(e) {}
+      throw new Error((r0 && r0.message) || '启动失败');
+    } catch(e) {
+      if (generation !== embyLibraryGeneration) return;
+      embyLibraryLoading = false;
+      toast('TMDB 对照启动失败: ' + e.message, 'error', 5000);
+      return;
+    }
   }
   var msg = cacheOnly ? '正在读取片库缓存...' : (withTmdb ? '正在拉取 Emby + TMDB（首次可能较慢）...' : '正在拉取 Emby 库...');
   if (!embyLoaded) $('embyList').innerHTML = '<div class="list-empty">' + msg + '</div>';

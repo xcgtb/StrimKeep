@@ -2,7 +2,7 @@ services:
   strimkeep:
     build:
       context: ..
-    image: strimkeep:1.0.0
+    image: strimkeep:1.0.1
     container_name: strimkeep
     restart: unless-stopped
     network_mode: host
