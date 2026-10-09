@@ -1,67 +1,25 @@
 services:
   strimkeep:
-    # GitHub 公共部署模板：默认使用 latest（发布方维护的滚动镜像标签）
-    # latest 不代表自动升级；更新时须主动执行 docker compose pull
-    # 若需要稳定版本或便于回滚，可将 latest 改为明确的版本号
     image: ghcr.io/xcgtb/strimkeep:latest
     container_name: strimkeep
-
-    # 异常退出或 NAS 重启后自动恢复；手动停止后保持停止状态
     restart: unless-stopped
-
-    # 使用宿主机网络，无需配置 ports
-    # 默认访问地址：http://你的NAS_IP:8321
     network_mode: host
-
     environment:
-      # 时区，影响日志时间和定时任务
       TZ: Asia/Shanghai
-
-      # 首次部署前必须修改 Web 密码，禁止直接使用下方占位值
-      # 如果密码包含 $，请在 Compose 文件中写成 $$（避免变量插值）
-      # Emby、TMDB、Telegram 等应用参数登录 Web 后再配置
       WEB_USER: "admin"
       WEB_PASSWORD: "CHANGE_ME_TO_A_STRONG_PASSWORD"
-
-      # CD2 启动等待："1" 等待挂载就绪；"0" 跳过等待
-      # 如果未部署 CD2，或仅想先查看界面，可设为 "0"
-      # 注意：它不是 115 源文件联动删除的总开关
       ENABLE_CD2_WATCHDOG: "1"
-
     volumes:
-      # 持久化应用数据（配置、订阅、缓存、日志、计划与数据库）
-      # ./data 是本 Compose 文件所在目录的 data/；升级时务必保留
       - ./data:/data
-
-      # 以下仅为飞牛 OS 路径示例（非通用真实路径）：必须按实际位置修改冒号左侧
-      # 冒号右侧的容器路径和挂载选项不要修改
-      # 启动前确认这三个路径真实存在，避免挂载到错误目录
-
-      # 本地 STRM 库：映射 NAS 上的本地 STRM 根目录（非视频源目录）
-      # 主动确认执行本地清理后，可能联动删除匹配到的 115 真实源文件
-      # 所有实际删除均不可逆，首次使用务必只扫描预览
-      - /vol1/1000/TgtoDrive/strm/115网盘/影视媒体库:/media/local:rw
-
-      # 分享 STRM 库：映射 NAS 上的分享 STRM 根目录
-      # 分享库清理只操作 NAS 侧 STRM 及其附属文件，不删除远端分享源
-      - /vol1/1000/TgtoDrive/strm/115网盘/分享影视库:/media/share:rw
-
-      # CloudDrive2 源文件库：对应“本地 STRM 库”的 115 实际源目录
-      # 此路径下应能看到真实视频、字幕等文件；不可指向分享库
-      # 本地 STRM 与源目录的相对层级应对应，例如：剧集/日韩剧集/剧名/Season 1
-      # rslave 允许宿主机后续挂载变化向容器传播
-      - /vol1/1000/docker/clouddrive2/CloudDrive/影视媒体库:/media/cloud:rslave
-
+      - /你的本地STRM库:/media/local:rw
+      - /你的分享STRM库:/media/share:rw
+      - /你的CloudDrive2源文件库:/media/cloud:rslave
     logging:
-      # 限制 Docker 控制台日志大小（不等于应用 SQLite 日志保留设置）
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
-
     healthcheck:
-      # 健康检查依赖镜像内的 /app/scripts/healthcheck.py
-      # unhealthy 仅标记异常，Docker 不会仅因 unhealthy 自动重启
       test: ["CMD", "python", "/app/scripts/healthcheck.py"]
       interval: 30s
       timeout: 10s
