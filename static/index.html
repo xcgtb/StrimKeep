@@ -1,0 +1,883 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#F2F2F7">
+<title>StrimKeep</title>
+<link rel="stylesheet" href="/static/css/app.css?v=9a85298bae9c">
+<script>
+/* 尽早设置主题，避免页面闪烁（FOUC） */
+(function(){
+  try {
+    var saved = localStorage.getItem('strimkeep-theme');
+    if (saved === 'dark' || saved === 'light') {
+      document.documentElement.setAttribute('data-theme', saved);
+    }
+  } catch(e){}
+})();
+</script>
+
+
+<script>
+window.onerror = function(msg, url, line){
+  console.error('JS ERROR:', msg, 'Line:', line);
+  return false;
+};
+window.addEventListener('unhandledrejection', function(e){
+  console.error('PROMISE ERROR:', e.reason);
+});
+</script>
+
+
+
+
+</head>
+<body>
+
+<div class="app-wrap">
+  <div class="mask" id="mask" onclick="toggleSidebar(false)"></div>
+  <aside class="sidebar" id="sidebar">
+    <div class="side-title" id="sideTitle"><span class="brand-mark" aria-hidden="true">S</span><div><b>StrimKeep</b><small>影视库管理与治理</small></div><span class="v" id="sideVersion"></span></div>
+    <nav id="menu"></nav>
+    <div class="side-foot">
+      <button class="side-theme" onclick="toggleTheme()" type="button"><span class="side-theme-icon" id="sideThemeIcon"></span><span id="sideThemeText">主题</span></button>
+      <button data-icon="logout">退出系统</button>
+    </div>
+  </aside>
+
+  <main style="flex:1;min-width:0">
+    <header class="header">
+      <div class="left">
+        <button class="menu-btn" onclick="toggleSidebar(true)" data-icon="menu"></button>
+        <span class="header-product">StrimKeep</span><h2 id="tabTitle">媒体总览</h2><span class="header-version" id="headerVersion" aria-label="当前版本"></span>
+      </div>
+      <div class="right">
+        <details class="runtime-popover" id="runtimePopover">
+          <summary class="header-health" id="headerRuntime" data-tone="unknown" aria-label="查看运行状态">等待连接</summary>
+          <div class="runtime-panel" id="runtimePanel" aria-label="运行状态">
+      <div class="runtime-panel-heading"><span>运行状态</span><button type="button" onclick="document.getElementById('runtimePopover').open=false;switchTab('history')">查看日志 ↗</button></div>
+      <div class="status-line"><span>服务连接</span><b id="sideConnection" data-tone="unknown">等待连接</b></div>
+      <div class="status-line" title="来自最近总览检查，刷新总览可更新"><span>Emby / TMDB</span><b id="sideServices" data-tone="unknown">尚未检查</b></div>
+      <div class="status-line"><span>Telegram 机器人</span><b id="sideBot" data-tone="unknown">等待检查</b></div>
+      <div class="status-line"><span>当前任务</span><b id="sideTask" data-tone="unknown">等待检查</b></div>
+      <div class="status-line"><span>数据保存</span><b id="sideStorage" data-tone="unknown">等待检查</b></div>
+      <div class="runtime-panel-note" id="sideStatusTime">页面打开时检查</div>
+    </div>
+        </details>
+        <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="切换主题" aria-label="切换主题">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="main">
+
+      <!-- 媒体总览 -->
+      <section class="tab active" id="tab-dashboard">
+        <div class="page-intro"><div><span class="eyebrow">媒体库管理</span><h1>媒体总览</h1><p>先看待处理事项，再了解片库完整度与最新入库。</p></div><button class="btn gray" onclick="loadDashboard();loadLibraryStats()" data-icon="refresh">刷新总览</button></div>
+        <div class="dash-hero">
+          <div class="dh-main">
+            <div class="dh-label" data-icon="database">两库 STRM 总量</div>
+            <div class="dh-big" id="dash-total">-</div>
+            <div class="dh-split"><i id="dash-split-l" style="width:0"></i><i id="dash-split-s" style="width:0"></i></div>
+            <div class="dh-legend"><span><b class="dd l"></b>本地库 <em id="stat-local">-</em><small id="pct-l"></small></span><span><b class="dd s"></b>分享库 <em id="stat-share">-</em><small id="pct-s"></small></span></div>
+          </div>
+          <div class="dh-nums">
+            <div><span class="l c1">剧集</span><em id="dash-series">-</em></div>
+            <div><span class="l c2">总集数</span><em id="dash-eps">-</em></div>
+            <div><span class="l c3">电影</span><em id="dash-movies">-</em></div>
+          </div>
+          <div class="dh-pills">
+            <div class="dpill"><div><span class="k">Emby</span><small id="svc-emby-host">—</small></div><span id="svc-emby">检查中…</span></div>
+            <div class="dpill"><div><span class="k">TMDB</span><small id="svc-tmdb-sub">—</small></div><span id="svc-tmdb">检查中…</span></div>
+          </div>
+        </div>
+
+        <div class="panel" id="dash-storage-warning" style="display:none" role="status">
+          <h3 class="red">运行数据保存异常</h3>
+          <div id="dash-storage-issues"></div>
+          <p class="muted">请检查数据目录权限、剩余空间或数据库状态；成功重试后提示会消失。</p>
+        </div>
+
+        <div class="panel dashboard-priority">
+          <div class="row-between"><h3 data-icon="scale">治理待办</h3><span class="dash-note" id="dash-plan-note">—</span></div>
+          <p class="section-note">根据最近一次双库扫描生成，点击卡片查看依据和文件范围。</p>
+          <div class="todo-grid">
+            <div class="todo loc" onclick="switchTab('governance')"><span class="k" data-icon="x">本地待清理</span><b id="dash-loc">-</b><small id="dash-loc-files">—</small></div>
+            <div class="todo shr" onclick="switchTab('governance')"><span class="k" data-icon="refresh">分享待清理</span><b id="dash-shr">-</b><small id="dash-shr-files">—</small></div>
+            <div class="todo keep" onclick="switchTab('governance')"><span class="k" data-icon="check">受保护</span><b id="dash-keep">-</b><small id="dash-keep-files">—</small></div>
+            <div class="todo exm" onclick="switchTab('governance')"><span class="k" data-icon="shield">白名单豁免</span><b id="dash-exm">-</b><small id="dash-exm-files">—</small></div>
+          </div>
+        </div>
+
+        <div class="dash-strip">
+          <div class="ds" onclick="switchTab('daily')"><div class="k" data-icon="file">24H 入库</div><div class="v green" id="stat-ingest-mov">-</div><div class="s"><span id="stat-ingest-sub">电影 / 剧集</span> · <span id="stat-ingest-age">—</span></div></div>
+          <div class="ds" onclick="switchTab('subscribe')"><div class="k" data-icon="bell">追更订阅</div><div class="v indigo" id="stat-sub">0 部</div><div class="s" id="stat-sub-sub">点击查看</div></div>
+          <div class="ds" onclick="switchTab('morning')"><div class="k" data-icon="sun">每日晨报</div><div class="v amber" id="stat-morning">未开启</div><div class="s" id="stat-morning-sub">点击设置</div></div>
+          <div class="ds" onclick="switchTab('settings')"><div class="k" data-icon="shield">白名单</div><div class="v" id="dash-exempt">-</div><div class="s">规则设置里维护</div></div>
+        </div>
+
+        <div class="panel" id="dash-gov-reasons-panel">
+          <div class="row-between"><h3 data-icon="scale">治理决策</h3><span class="dash-note" id="dash-gov-reason-note">—</span></div>
+          <div class="gov-reason-grid" id="dash-gov-reasons"><div class="list-empty">尚无治理扫描</div></div>
+        </div>
+
+        <div class="dash-cols">
+          <div class="panel">
+            <h3 data-icon="activity">剧集健康度</h3>
+            <div class="muted" id="dash-library-facts" style="font-size:12px;margin-bottom:12px">暂无片库对照缓存</div>
+            <div class="hl-wrap">
+              <div class="ring" id="dash-ring"><b id="dash-ring-n">—</b><span>完整率</span></div>
+              <div class="hl-legend" id="dash-health"><div class="list-empty">尚无对照缓存，去「片库映射」对照一次</div></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="row-between"><h3 data-icon="alert">优先补齐</h3><span class="dash-note" id="dash-miss-note"></span></div>
+            <div id="dash-missing"><div class="list-empty">尚无对照缓存</div></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="row-between">
+            <h3 data-icon="database">媒体分类分布</h3>
+            <div class="segmented dash-tabs" id="libStatTabs">
+              <button class="active" data-m="all" onclick="setLibStatMode('all')">两库合计</button>
+              <button data-m="local" onclick="setLibStatMode('local')">本地库</button>
+              <button data-m="share" onclick="setLibStatMode('share')">分享库</button>
+            </div>
+          </div>
+          <div id="libStatsSummary" style="font-size:12px;color:var(--text-dim);margin:2px 0 10px">加载中...</div>
+          <div class="cat-bars" id="libStatsGrid"><div class="list-empty">加载中...</div></div>
+        </div>
+
+        <div class="panel overview-actions">
+          <h3 data-icon="zap">治理操作</h3>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn" id="scanBtn" onclick="scanLibrary()" data-icon="refresh">扫描双库</button>
+            <button class="btn gray" onclick="switchTab('governance')" data-icon="scale">查看治理清单</button>
+            <button class="btn gray" onclick="switchTab('settings')" data-icon="gear">规则设置</button>
+            <button class="btn gray" onclick="refreshCaches()" data-icon="database">重建缓存</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h3 data-icon="bookmark">当前治理策略</h3>
+          <div id="strategySnapshot">加载中...</div>
+        </div>
+      </section>
+
+      <!-- 影视探索 -->
+      <section class="tab" id="tab-explore">
+        <div class="search-hero">
+          <input type="text" id="exploreSearch" placeholder="搜索 TMDB 电影/剧集，如「三体」「Oppenheimer」">
+          <button class="search-btn" onclick="doExploreSearch()" data-icon="search">搜索</button>
+        </div>
+
+        <!-- 筛选摘要行（默认收起，点「展开」显示详细筛选） -->
+        <div class="filter-summary" id="filterSummary">
+          <span class="fs-text" id="filterSummaryText">全部地区 · 电影 · 全部年份 · 热度</span>
+          <button class="fs-toggle" onclick="toggleExploreFilters()">
+            <span id="filterToggleText">展开筛选</span>
+            <svg class="ic" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+        </div>
+
+        <div class="panel hidden" style="padding:14px" id="exploreFilters">
+          <div class="filter-row"><span class="filter-label">地区</span>
+            <div class="filter-chips" id="filterRegion">
+              <button data-v="all" class="chip active">全部</button>
+              <button data-v="cn" class="chip">大陆</button>
+              <button data-v="hk" class="chip">香港</button>
+              <button data-v="tw" class="chip">台湾</button>
+              <button data-v="jp" class="chip">日本</button>
+              <button data-v="kr" class="chip">韩国</button>
+              <button data-v="us" class="chip">欧美</button>
+            </div>
+          </div>
+          <div class="filter-row"><span class="filter-label">类型</span>
+            <div class="filter-chips" id="filterMedia">
+              <button data-v="all" class="chip active">全部</button>
+              <button data-v="movie" class="chip">电影</button>
+              <button data-v="tv" class="chip">剧集</button>
+            </div>
+          </div>
+          <div class="filter-row"><span class="filter-label">题材</span>
+            <div class="filter-chips" id="filterGenre">
+              <button data-v="" data-media="both" class="chip active">全部</button>
+              <button data-v="动作" data-media="both" class="chip">动作</button>
+              <button data-v="冒险" data-media="movie" class="chip">冒险</button>
+              <button data-v="喜剧" data-media="both" class="chip">喜剧</button>
+              <button data-v="犯罪" data-media="both" class="chip">犯罪</button>
+              <button data-v="纪录" data-media="both" class="chip">纪录</button>
+              <button data-v="剧情" data-media="both" class="chip">剧情</button>
+              <button data-v="家庭" data-media="both" class="chip">家庭</button>
+              <button data-v="奇幻" data-media="movie" class="chip">奇幻</button>
+              <button data-v="历史" data-media="movie" class="chip">历史</button>
+              <button data-v="恐怖" data-media="movie" class="chip">恐怖</button>
+              <button data-v="音乐" data-media="movie" class="chip">音乐</button>
+              <button data-v="悬疑" data-media="both" class="chip">悬疑</button>
+              <button data-v="爱情" data-media="movie" class="chip">爱情</button>
+              <button data-v="科幻" data-media="both" class="chip">科幻</button>
+              <button data-v="惊悚" data-media="movie" class="chip">惊悚</button>
+              <button data-v="战争" data-media="both" class="chip">战争</button>
+              <button data-v="西部" data-media="both" class="chip">西部</button>
+              <button data-v="动画" data-media="both" class="chip">动画</button>
+              <button data-v="儿童" data-media="tv" class="chip">儿童</button>
+              <button data-v="新闻" data-media="tv" class="chip">新闻</button>
+              <button data-v="真人秀" data-media="tv" class="chip">真人秀</button>
+              <button data-v="肥皂剧" data-media="tv" class="chip">肥皂剧</button>
+              <button data-v="脱口秀" data-media="tv" class="chip">脱口秀</button>
+              <button data-v="电视电影" data-media="movie" class="chip">电视电影</button>
+            </div>
+          </div>
+          <div class="filter-row"><span class="filter-label">年份</span>
+            <div class="filter-chips year-scroll" id="filterYear">
+              <button data-v="" class="chip active">全部</button>
+              <!-- 年份 chip 由 JS 动态生成，支持向前滚动加载更早年份 -->
+            </div>
+            <input type="number" id="filterYearInput" placeholder="或输入年份" min="1900" max="2030"
+                   style="width:130px;flex-shrink:0;font-size:13px;padding:8px 10px">
+          </div>
+          <div class="filter-row"><span class="filter-label">排序</span>
+            <div class="filter-chips" id="filterSort">
+              <button data-v="popularity" class="chip active">热度</button>
+              <button data-v="release" class="chip">最新</button>
+              <button data-v="rating" class="chip">TMDB 评分</button>
+            </div>
+          </div>
+        </div>
+        <div class="poster-grid" id="exploreGrid"><div class="list-empty">正在加载...</div></div>
+        <div class="load-more-footer" id="explorePager">
+          <span id="explorePageInfo" class="load-more-note" aria-live="polite">自动加载，按整行追加</span>
+          <button class="btn" id="exploreMoreBtn" onclick="exploreMore()" hidden>加载更多</button>
+        </div>
+      </section>
+
+      <!-- 双库治理 -->
+      <section class="tab" id="tab-governance">
+        <div class="page-intro"><div><span class="eyebrow">质量对比与去重</span><h1>双库治理</h1><p>扫描生成清单，复核删除范围，再执行清理。</p></div><button class="btn gray" onclick="switchTab('plans')" data-icon="archive">计划存档</button></div>
+        <div class="panel">
+          <div class="row-between">
+            <h3 data-icon="scale">扫描与执行</h3>
+            <div style="display:flex;gap:8px">
+              <button class="btn gray" id="govScanBtn" onclick="scanLibrary()" data-icon="refresh">重新扫描</button>
+              <button class="btn red" id="govExecBtn" onclick="runClean()" disabled data-icon="trash">执行清理</button>
+            </div>
+          </div>
+          <div class="governance-flow"><span><i>1</i>扫描比对</span><span><i>2</i>复核清单</span><span><i>3</i>执行清理</span></div>
+          <p class="section-note">本地库同步清理 NAS 与对应 115 源文件；分享库清理 NAS。逐季匹配只处理选中季。</p>
+          <div class="governance-readiness"><span id="govReadyState">等待扫描</span><span id="govPendingCount">尚无待办</span></div>
+          <div id="govBanner" style="display:none;font-size:12px;margin-top:8px"></div>
+
+        </div>
+        <div class="cards" id="govStats" style="display:none">
+          <div class="card clickable" onclick="setGovFilter('keep')">
+            <div class="label" data-icon="shield">受保护项</div>
+            <div class="value green" id="gov-keep">0</div>
+            <div class="sub">点击查看详情</div>
+          </div>
+          <div class="card clickable" onclick="setGovFilter('loc')">
+            <div class="label" data-icon="download">本地待清理</div>
+            <div class="value amber" id="gov-loc">0</div>
+            <div class="sub">分享画质达标</div>
+          </div>
+          <div class="card clickable" onclick="setGovFilter('shr')">
+            <div class="label" data-icon="trash">分享待清理</div>
+            <div class="value red" id="gov-shr">0</div>
+            <div class="sub">画质次级/落后</div>
+          </div>
+          <div class="card clickable" onclick="setGovFilter('exempt')">
+            <div class="label" data-icon="info">规则豁免</div>
+            <div class="value blue" id="gov-exempt">0</div>
+            <div class="sub">点击查看</div>
+          </div>
+        </div>
+          <details id="govTruth" class="panel governance-evidence" style="display:none">
+            <summary><b>扫描依据与状态</b><span id="govTruthStatus">—</span></summary>
+            <div class="gov-reason-grid" id="govTruthGrid"></div>
+            <div id="govIdentityConflicts" style="display:none;margin-top:12px"></div>
+          </details>
+        <div class="panel">
+          <div class="segmented" id="govFilter" style="margin-bottom:14px">
+            <button class="active" data-f="all" onclick="setGovFilter('all')">全部</button>
+            <button data-f="loc" onclick="setGovFilter('loc')">本地待清理</button>
+            <button data-f="shr" onclick="setGovFilter('shr')">分享待清理</button>
+            <button data-f="keep" onclick="setGovFilter('keep')">受保护</button>
+            <button data-f="exempt" onclick="setGovFilter('exempt')">规则豁免</button>
+          </div>
+          <div id="planList"><div class="list-empty">请点击右上角「重新扫描」开始</div></div>
+        </div>
+      </section>
+
+      <!-- 片库映射 -->
+      <section class="tab" id="tab-mapping">
+        <div class="map-bar">
+          <div class="map-r1">
+            <div class="segmented" id="embyTypeFilter">
+              <button class="active" data-t="series" onclick="setEmbyType('series')">剧集 <i class="n" id="mc-series"></i></button>
+              <button data-t="movies" onclick="setEmbyType('movies')">电影 <i class="n" id="mc-movies"></i></button>
+            </div>
+            <input type="text" id="embySearch" class="map-search" placeholder="搜索片名..." oninput="embyPage = 1; renderEmbyList()">
+            <button class="btn gray" onclick="loadEmbyLibrary(false, true)" data-icon="refresh">读缓存</button>
+            <button class="btn" onclick="loadEmbyLibrary(true, true)" data-icon="refresh">重新对照</button>
+          </div>
+          <div class="map-r2">
+            <div class="segmented" id="embyFilter">
+              <button class="active" data-f="all" onclick="setEmbyFilter('all')">全部 <i class="n" id="mc-all"></i></button>
+              <button data-f="aligned" onclick="setEmbyFilter('aligned')"><b class="dd ok"></b>完整 <i class="n" id="mc-aligned"></i></button>
+              <button data-f="missing" onclick="setEmbyFilter('missing')"><b class="dd err"></b>缺集 <i class="n" id="mc-missing"></i></button>
+              <button data-f="extra" onclick="setEmbyFilter('extra')"><b class="dd warn"></b>超集 <i class="n" id="mc-extra"></i></button>
+              <button data-f="ongoing" onclick="setEmbyFilter('ongoing')"><b class="dd info"></b>在更 <i class="n" id="mc-ongoing"></i></button>
+              <button data-f="unmatched" onclick="setEmbyFilter('unmatched')"><b class="dd dim"></b>未匹配 <i class="n" id="mc-unmatched"></i></button>
+            </div>
+            <div class="segmented" id="embyScopeFilter">
+              <button class="active" data-s="all" onclick="setEmbyScope('all')">本地+分享</button>
+              <button data-s="local" onclick="setEmbyScope('local')">仅本地</button>
+              <button data-s="share" onclick="setEmbyScope('share')">仅分享</button>
+            </div>
+          </div>
+          <div class="cat-chip" id="embyCatChip" hidden><span id="embyCatName"></span><button onclick="clearEmbyCat()" aria-label="清除分类筛选">✕</button></div>
+          <div class="progress-wrap hidden" id="tmdbProgressWrap">
+            <div class="progress-bar"><div class="fill" id="tmdbProgressFill" style="width:0%"></div></div>
+            <div class="progress-info"><span class="stage" id="tmdbProgressStage">准备中...</span><span id="tmdbProgressEta"></span></div>
+          </div>
+        </div>
+        <div class="poster-grid" id="embyList"><div class="list-empty">点击「重新对照」拉取</div></div>
+        <div id="embyLoadMoreWrap" class="load-more-footer" style="display:none">
+          <span id="embyInfText" class="load-more-note" aria-live="polite"></span>
+          <button class="btn" id="embyMoreBtn" onclick="embyMore()">加载更多</button>
+        </div>
+        <div hidden>
+          <span id="embyTitle1"></span><span id="emby-title-count"></span><span id="embyStats"></span><span id="embyTitle2"></span><span id="emby-title-movies"></span><span id="embyStats2"></span>
+          <span id="emby-total"></span><span id="emby-aligned"></span><span id="emby-missing"></span><span id="emby-extra"></span><span id="emby-ongoing"></span><span id="emby-unmatched"></span><span id="emby-movies"></span><span id="emby-tmdb-errors"></span>
+        </div>
+      </section>
+
+      <!-- 追更订阅 -->
+      <section class="tab" id="tab-subscribe">
+        <div class="panel">
+          <div class="row-between">
+            <h3 data-icon="bell">追更订阅</h3>
+            <div style="display:flex;gap:8px">
+              <button class="btn" onclick="checkSubsNow()" data-icon="refresh">立即检查</button>
+            </div>
+          </div>
+          <div class="toggle-row">
+            <div>
+              <div class="lbl">启用订阅轮询</div>
+              <div class="desc">后台定期检查订阅剧集的新集入库</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="subEnabled" onchange="saveSubSettings()"><span class="slider"></span></label>
+          </div>
+          <div class="toggle-row">
+            <div>
+              <div class="lbl">对照 TMDB 检查缺集</div>
+              <div class="desc">同时报告本地比 TMDB 少的集数</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="subCheckTmdb" onchange="saveSubSettings()"><span class="slider"></span></label>
+          </div>
+          <div class="toggle-row">
+            <div>
+              <div class="lbl">轮询间隔（分钟）</div>
+              <div class="desc">建议 30-60 分钟</div>
+            </div>
+            <div style="width:100px">
+              <input type="number" id="subInterval" min="5" max="1440" value="30" onchange="saveSubSettings()">
+            </div>
+          </div>
+          <div class="sub-check-status" id="subCheckStatus">
+            <span id="subCheckState">检查状态：尚未运行</span>
+            <span id="subCheckTime">—</span>
+            <span id="subCheckResult">—</span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="row-between">
+            <h3 data-icon="list">订阅列表 <span id="subCount" style="font-size:12px;font-weight:400;margin-left:6px;color:#9ca3af">0 部</span></h3>
+            <div style="font-size:11px;color:#9ca3af">从「影视探索」点卡片上的「+ 订阅」</div>
+          </div>
+          <div id="subList"><div class="list-empty">暂无订阅</div></div>
+        </div>
+
+        <div class="panel" id="subUpdatesPanel" style="display:none">
+          <h3 data-icon="bell">上次检查 · 变化</h3>
+          <div id="subUpdates"></div>
+        </div>
+      </section>
+
+      <!-- 每日晨报 -->
+      <section class="tab" id="tab-morning">
+        <div class="panel">
+          <div class="row-between">
+            <h3 data-icon="sun">每日晨报</h3>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn gray" onclick="previewMorning(false)" data-icon="info">预览(缓存)</button>
+              <button class="btn gray" onclick="previewMorning(true)" data-icon="refresh">预览(现场扫)</button>
+              <button class="btn" onclick="sendMorningNow()" data-icon="send">立即发送</button>
+            </div>
+          </div>
+          <div class="toggle-row">
+            <div>
+              <div class="lbl">启用每日晨报</div>
+              <div class="desc">每天定时推送统计到 Telegram</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="mrEnabled" onchange="saveMorning()"><span class="slider"></span></label>
+          </div>
+          <div class="toggle-row">
+            <div>
+              <div class="lbl">推送时间</div>
+              <div class="desc" id="mrTzHint">24 小时制</div>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center;width:140px">
+              <input type="number" id="mrHour" min="0" max="23" value="9" style="text-align:center" onchange="saveMorning()">
+              <span style="color:#9ca3af">:</span>
+              <input type="number" id="mrMinute" min="0" max="59" value="0" style="text-align:center" onchange="saveMorning()">
+            </div>
+          </div>
+          <div class="toggle-row">
+            <div>
+              <div class="lbl">提前预扫（分钟）</div>
+              <div class="desc">晨报时间前 N 分钟静默刷新入库缓存，发送时秒出</div>
+            </div>
+            <div style="width:100px">
+              <input type="number" id="mrPrescan" min="0" max="60" value="5" style="text-align:center" onchange="saveMorning()">
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3 data-icon="list">晨报内容</h3>
+          <label class="check-item"><input type="checkbox" id="mrItemStats" onchange="saveMorning()"> 📊 近 24h 入库统计</label>
+          <label class="check-item"><input type="checkbox" id="mrItemSubs" onchange="saveMorning()"> 🔔 订阅更新（新集 / 缺集）</label>
+          <label class="check-item"><input type="checkbox" id="mrItemGap" onchange="saveMorning()"> 📺 Emby 缺集速览</label>
+        </div>
+
+        <div class="panel" id="mrPreviewPanel" style="display:none">
+          <h3 data-icon="info">预览</h3>
+          <pre class="out" id="mrPreview"></pre>
+        </div>
+      </section>
+
+      <!-- 每日汇报 -->
+      <section class="tab" id="tab-daily">
+        <div class="panel">
+          <div class="row-between">
+            <h3 data-icon="file">近 24 小时入库</h3>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn gray" onclick="loadStats(false,false)" data-icon="refresh">读缓存</button>
+              <button class="btn" onclick="loadStats(false,true)" data-icon="refresh">立即扫描</button>
+              <button class="btn gray" onclick="loadStats(true,false)">完整</button>
+            </div>
+          </div>
+          <div style="font-size:11px;color:#9ca3af;margin-bottom:8px" id="statsCacheHint">—</div>
+          <div class="ing" id="statsOut">自动加载中...</div>
+        </div>
+      </section>
+
+      <!-- 治理计划历史 -->
+      <section class="tab" id="tab-plans">
+        <div class="panel">
+          <div class="row-between">
+            <h3 data-icon="bookmark">计划存档</h3>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input type="number" id="plansLimit" value="20" min="1" max="100" style="width:70px;padding:6px 10px">
+              <button class="btn gray" onclick="loadPlans()" data-icon="refresh">刷新</button>
+            </div>
+          </div>
+          <p style="font-size:12px;color:#6b7280;line-height:1.7">
+            治理计划与清理结果集中保存在这里。待执行计划 2 小时内有效；清理结果和已执行计划长期保留，可回看具体明细。
+          </p>
+        </div>
+        <div id="plansList"><div class="list-empty">加载中...</div></div>
+        <div class="panel"><h3>治理与目录清理结果</h3><div id="archiveList"></div></div>
+      </section>
+
+      <!-- 目录清理 -->
+      <section class="tab" id="tab-orphans">
+        <div class="panel">
+          <h3 data-icon="folder">目录清理</h3>
+          <p style="font-size:12px;color:#6b7280;line-height:1.7">
+            只扫描选中目录及其子目录，找出为空或只含 NFO、图片、字幕等已知附属文件的媒体目录（{tmdb-xxx} 命名）。
+            含 STRM、视频、未知文件或软链接的目录会保留；读取失败时扫描会报错。
+            执行清理会一起删除 NAS 和对应 115 的残留，不产生备份，并通知 Emby 刷新；115 有视频或清理失败时，跳过该项并显示原因。
+          </p>
+          <p style="font-size:12px;color:var(--text-dim)">可扫描整个媒体库（本地库＋分享库），也可单独选择一个库、分类或片名目录。</p>
+          <p style="font-size:12px;color:var(--text-dim)">预览只扫描 NAS。本地库执行清理时，通过 CD2 清理对应 115 目录的附属文件与空目录；分享库只清理 NAS。清理完成后可手动再次预览。</p>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px">
+            <input type="hidden" id="emptyDirPath" value="">
+            <input type="hidden" id="emptyDirScope" value="all">
+            <button class="btn gray" id="emptyDirChooseBtn" onclick="openEmptyDirPicker()" data-icon="folder">更换扫描范围</button>
+            <button class="btn" id="emptyDirScanBtn" onclick="scanEmptyDirs()" data-icon="search">预览扫描</button>
+            <button class="btn danger" id="cleanEmptyBtn" onclick="cleanEmptyDirs()" data-icon="trash" style="display:none">执行清理</button>
+          </div>
+          <div id="emptyDirSelectedPath" style="font-size:12px;color:var(--text-dim);overflow-wrap:anywhere;margin-bottom:12px">扫描范围：整个媒体库（本地库＋分享库）</div>
+          <div id="emptyDirTaskStatus" role="status" aria-live="polite" style="font-size:13px;margin-bottom:12px">点击「预览扫描」开始，更换范围只选择目录。</div>
+          <div id="emptyDirsStats" style="display:none"></div>
+          <div id="emptyDirsList"><div class="list-empty">选择整个媒体库、单个库或子目录后预览扫描</div></div>
+        </div>
+      </section>
+
+      <!-- 实时日志 -->
+      <section class="tab" id="tab-history">
+        <div class="panel log-panel">
+          <div class="row-between log-toolbar">
+            <div><h3 data-icon="list">日志中心</h3><div id="logsStatus" class="log-status">追更、入库、扫描与机器人运行日志</div></div>
+            <div class="log-controls">
+              <button class="btn gray sm" id="logPause" onclick="toggleLogPause()">暂停自动刷新</button>
+              <button class="btn gray sm" onclick="loadRecords()" data-icon="refresh">刷新</button>
+              <button class="btn sm" onclick="downloadRuntimeLogs()" data-icon="download">下载日志</button>
+            </div>
+          </div>
+          <div id="recordsList" class="runtime-logs"><div class="list-empty">等待运行日志…</div></div>
+        </div>
+      </section>
+
+      <!-- 规则设置 -->
+      <section class="tab" id="tab-settings">
+
+        <!-- 治理策略 -->
+        <div class="panel">
+          <div class="row-between">
+            <h3 data-icon="bookmark">治理策略</h3>
+          </div>
+          <p style="font-size:12px;color:#6b7280;margin-bottom:12px">决策模型影响本地/分享两库的保留策略</p>
+
+          <div class="strategy-option" data-v="quality_first" onclick="pickStrategy('quality_first')">
+            <div class="t">画质优先（默认）</div>
+            <div class="d">对比两库画质，画质高者胜出；平局按「平局策略」</div>
+          </div>
+          <div class="strategy-option" data-v="keep_local" onclick="pickStrategy('keep_local')">
+            <div class="t">保留本地</div>
+            <div class="d">本地库永远优先，分享库只做补充；电影、特别篇、剧集（两库都有的季）一律删分享</div>
+          </div>
+          <div class="strategy-option" data-v="keep_share" onclick="pickStrategy('keep_share')">
+            <div class="t">保留分享</div>
+            <div class="d">分享库永远优先，省 115 网盘空间；剧集仅当分享这一季覆盖本地全部集时才删本地</div>
+          </div>
+          
+          <div style="margin-top:16px">
+            <div class="lbl" style="margin-bottom:8px">双库配对策略</div>
+            <div style="display:flex;gap:8px">
+              <div class="strategy-option" data-ms="title_year" onclick="pickMatchStrategy('title_year')" style="flex:1;margin:0;padding:10px 8px;text-align:center">
+                <div class="t" style="font-size:12px">剧名+年份</div>
+                <div class="d" style="font-size:10px">安全，不怕 TMDB 写错</div>
+              </div>
+              <div class="strategy-option" data-ms="tmdb_first" onclick="pickMatchStrategy('tmdb_first')" style="flex:1;margin:0;padding:10px 8px;text-align:center">
+                <div class="t" style="font-size:12px">TMDB 优先</div>
+                <div class="d" style="font-size:10px">高召回，冲突回退剧名</div>
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top:16px">
+            <div class="lbl" style="margin-bottom:8px">多季合集保护</div>
+            <div style="display:flex;gap:8px">
+              <div class="strategy-option" data-msp="off" onclick="pickMultiProtect('off')" style="flex:1;margin:0;padding:10px 8px;text-align:center">
+                <div class="t" style="font-size:12px">关闭</div>
+                <div class="d" style="font-size:10px">逐季独立择优</div>
+              </div>
+              <div class="strategy-option" data-msp="compare" onclick="pickMultiProtect('compare')" style="flex:1;margin:0;padding:10px 8px;text-align:center">
+                <div class="t" style="font-size:12px">开启</div>
+                <div class="d" style="font-size:10px">多季剧不掏空任何一方</div>
+              </div>
+            </div>
+          </div>
+          <div class="toggle-row">
+            <div>
+              <div class="lbl">平局保留本地</div>
+              <div class="desc">仅当「画质对比规则」逐维比较后完全打平时才生效：开 = 保留本地，关 = 保留分享。「保留本地 / 保留分享」决策模式下不会用到；剧集逐集对比同样适用（决定该集分享版是否达标）。</div>
+              <button class="btn gray" style="margin-top:6px;min-height:28px;padding:2px 10px;font-size:11px" onclick="goCoverRules()">前往「画质对比规则」设置 →</button>
+            </div>
+            <label class="switch"><input type="checkbox" id="strTieLocal" onchange="onTieLocalToggle(this)"><span class="slider"></span></label>
+          </div>
+          <div style="margin-top:14px">
+            <div class="row-between">
+              <div class="lbl">剧集分享达标率阈值</div>
+              <div id="ratioVal" style="font-weight:600">90%</div>
+            </div>
+            <input type="range" id="strRatio" min="50" max="100" step="5" value="90" oninput="renderRatio()" onchange="onRatioChange()" style="width:100%;margin:8px 0 4px">
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:#9ca3af"><span>50% 宽松</span><span>100% 严格（须全部达标）</span></div>
+            <div class="desc" id="ratioDesc" style="margin-top:6px"></div>
+          </div>
+        </div>
+
+        <!-- 画质对比规则 -->
+        <div class="panel" id="coverPanel">
+          <div class="row-between">
+            <h3 data-icon="scale">画质对比规则 <span style="font-size:10px;font-weight:600;color:#dc2626;border:1px solid #dc2626;border-radius:6px;padding:1px 6px;margin-left:6px">关键策略</span></h3>
+            <span id="coverDirty" style="display:none;font-size:11px;color:#d97706;font-weight:600">● 有未保存的改动</span>
+          </div>
+          <p style="font-size:12px;color:#dc2626;margin-bottom:6px">⚠️ 保存后立即生效（配置热加载），直接决定治理时「删本地还是删分享」。调整顺序/开关只是草稿，点「保存规则」并二次确认后才会生效。</p>
+          <p style="font-size:12px;color:#6b7280;margin-bottom:12px">双库治理比较「分享版 vs 本地版」的唯一依据（没有隐藏打分）。按下方从上到下逐项比较：某一项两边档位不同，排在前面的档位胜出，后面的项不再比较；这一项两边相同或都未识别，才继续看下一项；全部打平交给上面的「平局保留本地」。关闭一项只是跳过它，不会反向优先。无法识别的规格排在该项最后，不会被强行判定为更优。</p>
+          <div id="coverRules"><div class="list-empty">加载中...</div></div>
+          <div style="margin-top:10px;display:flex;gap:8px">
+            <button class="btn" onclick="requestSaveCover()" data-icon="save">保存规则…</button>
+            <button class="btn gray" onclick="discardCoverDraft()">放弃改动</button>
+            <button class="btn gray" onclick="requestResetCover()">恢复默认…</button>
+          </div>
+          <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px">
+            <div class="lbl" style="margin-bottom:6px">对比测试</div>
+            <div style="font-size:11px;color:#6b7280;margin-bottom:8px">填入两个文件名，按「当前已保存」的规则逐项看谁胜、在哪一项决出。</div>
+            <input id="cmpShare" placeholder="分享版文件名，如 Show.S01E01.2160p.WEB-DL.HDR10-HHWEB" style="width:100%;margin-bottom:6px">
+            <input id="cmpLocal" placeholder="本地版文件名，如 Show.S01E01.1080p.BluRay.Remux-CMCT" style="width:100%;margin-bottom:6px">
+            <button class="btn gray" onclick="runCoverCompare()">开始对比</button>
+            <div id="cmpResult" style="margin-top:8px"></div>
+          </div>
+        </div>
+
+        <!-- 特别篇策略 -->
+        <div class="panel">
+          <h3 data-icon="film">特别篇（S00）策略</h3>
+          <p style="font-size:12px;color:#6b7280;margin-bottom:12px">Emby 中的 S00 / Specials 如何处理</p>
+          <div style="display:flex;gap:8px">
+            <div class="strategy-option" data-sp="compare" onclick="pickSpecial('compare')" style="flex:1;margin:0;padding:10px 8px;text-align:center">
+              <div class="t" style="font-size:12px">画质对比</div>
+              <div class="d" style="font-size:10px">多季合集时随合集决定</div>
+            </div>
+            <div class="strategy-option" data-sp="ignore" onclick="pickSpecial('ignore')" style="flex:1;margin:0;padding:10px 8px;text-align:center">
+              <div class="t" style="font-size:12px">忽略</div>
+              <div class="d" style="font-size:10px">S00 不参与治理</div>
+            </div>
+            <div class="strategy-option" data-sp="delete" onclick="pickSpecial('delete')" style="flex:1;margin:0;padding:10px 8px;text-align:center">
+              <div class="t" style="font-size:12px">清理</div>
+              <div class="d" style="font-size:10px">全删本地+分享</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 入库监控 -->
+        <div class="panel">
+          <h3 data-icon="activity">入库监控</h3>
+          <p style="font-size:12px;color:#6b7280;margin-bottom:12px">后台定期刷新 Emby 入库缓存，前端秒回</p>
+          <div class="toggle-row">
+            <div>
+              <div class="lbl">启用后台入库监控</div>
+              <div class="desc">关闭后需手动点「立即扫描」</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="ingEnabled" onchange="saveIngest()"><span class="slider"></span></label>
+          </div>
+          <div class="toggle-row">
+            <div>
+              <div class="lbl">刷新间隔（分钟）</div>
+              <div class="desc">建议 5 分钟</div>
+            </div>
+            <div style="width:100px">
+              <input type="number" id="ingInterval" min="1" max="1440" value="5" onchange="saveIngest()">
+            </div>
+          </div>
+          <div id="ingStatus" style="font-size:11px;color:#9ca3af;margin-top:8px">加载中...</div>
+        </div>
+
+        <!-- 双库治理定时巡检 -->
+        <div class="panel">
+          <h3 data-icon="scale">双库定时巡检</h3>
+          <p style="font-size:12px;color:#6b7280;margin-bottom:12px">后台定期扫描双库，发现待清理项时通过 Telegram Bot 通知你；只扫描不删除，清理需你在 Bot 里点按钮确认</p>
+          <div class="toggle-row">
+            <div>
+              <div class="lbl">启用定时巡检</div>
+              <div class="desc">需已配置 Telegram Bot Token 和 Chat ID</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="govAutoEnabled" onchange="saveGovAuto()"><span class="slider"></span></label>
+          </div>
+          <div class="toggle-row">
+            <div>
+              <div class="lbl">巡检间隔（小时）</div>
+              <div class="desc">1 ~ 168，建议 6</div>
+            </div>
+            <div style="width:100px">
+              <input type="number" id="govAutoInterval" min="1" max="168" value="6" onchange="saveGovAuto()">
+            </div>
+          </div>
+          <div class="toggle-row">
+            <div>
+              <div class="lbl">清单无变化不重复通知</div>
+              <div class="desc">待清理清单与上次通知相同时保持安静</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="govAutoOnChange" onchange="saveGovAuto()"><span class="slider"></span></label>
+          </div>
+          <div class="toggle-row">
+            <div>
+              <div class="lbl">无待清理项也通知</div>
+              <div class="desc">默认只在有待清理项时通知</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="govAutoNotifyClean" onchange="saveGovAuto()"><span class="slider"></span></label>
+          </div>
+          <div id="govAutoStatus" style="font-size:11px;color:#9ca3af;margin-top:8px">加载中...</div>
+        </div>
+
+        <!-- 白名单 -->
+        <div class="panel">
+          <h3 data-icon="shield">白名单（豁免词）</h3>
+          <p style="font-size:12px;color:#6b7280;margin-bottom:12px">
+            命中白名单的剧集：扫描时跳过清理，标记为「豁免」，显示在治理页
+          </p>
+          <div class="tag-input">
+            <input type="text" id="exemptInput" placeholder="输入关键词，如 百家讲坛" onkeydown="if(event.key==='Enter')addExempt()">
+            <button class="btn" onclick="addExempt()" data-icon="plus">添加</button>
+          </div>
+          <div class="tag-list" id="exemptList"></div>
+          <div style="font-size:12px;color:#6b7280;margin-bottom:8px">命中预览：</div>
+          <div style="display:flex;gap:8px;margin-bottom:12px">
+            <button class="btn gray" onclick="scanExempt()" data-icon="search">扫描双库</button>
+          </div>
+          <div id="exemptMatches"></div>
+        </div>
+
+        <!-- 服务配置 -->
+        <div class="panel">
+          <div class="row-between">
+            <h3 data-icon="gear">服务配置</h3>
+            <button class="btn" onclick="loadConfig()" data-icon="refresh">重新加载</button>
+          </div>
+          <p style="font-size:12px;color:#6b7280;line-height:1.7;margin-bottom:16px">
+            配置保存后生效。密钥默认脱敏显示，点右侧 👁 查看完整值。
+          </p>
+
+          <div class="form-row">
+            <label>Emby 服务器地址</label>
+            <input type="text" id="cfg-emby-host" placeholder="http://你的Emby地址:8096">
+          </div>
+          <div class="form-row" id="row-emby-key">
+            <label>Emby API Key</label>
+            <div class="input-row">
+              <input type="text" id="cfg-emby-key">
+              <button class="eye-btn" type="button" onclick="toggleReveal('emby_key')" data-eye="emby_key"><span data-icon="eye">查看</span></button>
+            </div>
+            <div class="masked-hint">⚠️ 当前为脱敏值，保存时会保留原值不变</div>
+            <div style="display:flex;gap:8px;margin-top:6px">
+              <button class="btn gray" onclick="testEmby()" data-icon="flask">测试连接</button>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>Emby 中的本地库路径</label>
+            <input type="text" id="cfg-emby-local-path" placeholder="/strm/115网盘/影视媒体库">
+          </div>
+          <div class="form-row">
+            <label>Emby 中的分享库路径</label>
+            <input type="text" id="cfg-emby-share-path" placeholder="/strm/115网盘/分享影视库">
+            <div class="hint">Emby 媒体库里看到的 STRM 根目录，用于区分本地/分享与单剧删除；不确定时点「测试连接」查看 Emby 报告的路径</div>
+          </div>
+          <div class="form-row" id="row-tmdb-key">
+            <label>TMDB API Key</label>
+            <div class="input-row">
+              <input type="text" id="cfg-tmdb-key">
+              <button class="eye-btn" type="button" onclick="toggleReveal('tmdb_key')" data-eye="tmdb_key"><span data-icon="eye">查看</span></button>
+            </div>
+            <div class="masked-hint">⚠️ 当前为脱敏值，保存时会保留原值不变</div>
+            <div style="display:flex;gap:8px;margin-top:6px">
+              <button class="btn gray" onclick="testTmdb()" data-icon="flask">测试连接</button>
+            </div>
+          </div>
+          <div class="form-row" id="row-tg-token">
+            <label>Telegram Bot Token</label>
+            <div class="input-row">
+              <input type="text" id="cfg-tg-token">
+              <button class="eye-btn" type="button" onclick="toggleReveal('telegram_bot_token')" data-eye="telegram_bot_token"><span data-icon="eye">查看</span></button>
+            </div>
+            <div class="masked-hint">⚠️ 当前为脱敏值，保存时会保留原值不变</div>
+          </div>
+          <div class="form-row">
+            <label>Telegram Chat ID</label>
+            <input type="text" id="cfg-tg-chat">
+            <div style="display:flex;gap:8px;margin-top:6px">
+              <button class="btn gray" onclick="testTelegram()" data-icon="send">发送测试消息</button>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>Telegram 允许用户（白名单）</label>
+            <input type="text" id="cfg-tg-users" placeholder="逗号分隔的 User ID">
+          </div>
+          <div style="display:flex;gap:8px;margin-top:20px">
+            <button class="btn green" onclick="saveConfig()" data-icon="save">保存配置</button>
+            <button class="btn gray" onclick="loadConfig()" data-icon="undo">重置</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3 data-icon="info">Bot 状态</h3>
+          <div id="botStatus" style="font-size:12px;color:#6b7280">加载中...</div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<div class="modal-bg" id="modalBg" onclick="if(event.target===this)closeModal()">
+  <div class="modal" id="modalBody"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="task-hint" id="taskHint"><span class="spin"></span><span id="taskHintText" aria-live="polite">任务中...</span><button type="button" class="task-hint-close" id="taskHintClose" onclick="onTaskHintClose()" aria-label="收起任务提示" title="收起任务提示">✕</button></div>
+
+<!-- 手机端专属 Floating Dock：桌面端不显示；页面底部会自动预留安全空间 -->
+<nav class="mobile-dock" id="mobileDock" aria-label="快速导航">
+  <button type="button" data-dock-tab="dashboard" onclick="switchTab('dashboard')"><span class="dock-icon"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg></span><span>总览</span></button>
+  <button type="button" data-dock-tab="governance" onclick="switchTab('governance')"><span class="dock-icon"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M5 7h14M5 7l-3 6a3 3 0 0 0 6 0l-3-6zM19 7l-3 6a3 3 0 0 0 6 0l-3-6z"/></svg></span><span>治理</span></button>
+  <button type="button" data-dock-tab="history" onclick="switchTab('history')"><span class="dock-icon"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></span><span>执行</span></button>
+  <button type="button" onclick="toggleSidebar(true)"><span class="dock-icon"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></span><span>更多</span></button>
+</nav>
+
+<script defer src="/static/js/icons.js?v=4cd84ed61ca5"></script>
+<script defer src="/static/js/modal.js?v=60e0db6c4ffc"></script>
+<script defer src="/static/js/runtime.js?v=0d44ad2bd1bd"></script>
+<script defer src="/static/js/dashboard.js?v=ac852b89dab9"></script>
+<script defer src="/static/js/governance.js?v=c481cc0c9bfb"></script>
+<script defer src="/static/js/explore.js?v=067f1a33b99a"></script>
+<script defer src="/static/js/mapping.js?v=a1768548705a"></script>
+<script defer src="/static/js/subscriptions.js?v=779193f9e05a"></script>
+<script defer src="/static/js/records.js?v=823e156e2088"></script>
+<script defer src="/static/js/settings.js?v=478a4577da70"></script>
+<script defer src="/static/js/plans.js?v=02b979a10f92"></script>
+<script defer src="/static/js/directory-cleanup.js?v=7bd34b96ca79"></script>
+<script defer src="/static/js/bootstrap.js?v=04997ebd6a94"></script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<script defer src="/static/js/dashboard-layout.js?v=f88465931d91"></script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<script defer src="/static/js/theme-meta.js?v=bcd240190117"></script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+# Private deployment and runtime data
+.env
+.env.*
+!.env.example
+docker-compose.override.yml
+docker-compose.override.yaml
+compose.override.yml
+compose.override.yaml
+data/
+preview-data/
+state/
+records/
+*.db
+*.db-wal
+*.db-shm
+*.log
+*.jsonl
+*.migrated
+
+# Python, editor and build output
+__pycache__/
+.pytest_cache/
+*.py[cod]
+.venv/
+venv/
+.coverage
+htmlcov/
+.DS_Store
+*.tar
+*.tar.gz
+*.tgz
+*.zip

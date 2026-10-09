@@ -1,0 +1,2782 @@
+{
+ "decision_keep_local": [
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 决策「保留本地」 ➔ 清理分享影视库strm",
+   "files": [
+    "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm"
+   ],
+   "kind": "shr",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.720p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.720p.strm"
+    ],
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "decision_keep_local",
+    "reason_label": "保留本地-删分享",
+    "season": 1,
+    "share_count": 2,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm"
+    ],
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (保留本地 → 淘汰分享)"
+  },
+  {
+   "detail": "├─ 📺 《剧 (2020)》S02: 决策「保留本地」 ➔ 清理分享影视库strm",
+   "files": [
+    "<S>/剧 (2020)/Season 02/剧.S02E01.2160p.strm",
+    "<S>/剧 (2020)/Season 02/剧.S02E02.2160p.strm"
+   ],
+   "kind": "shr",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 02/剧.S02E01.720p.strm",
+     "<L>/剧 (2020)/Season 02/剧.S02E02.720p.strm"
+    ],
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "decision_keep_local",
+    "reason_label": "保留本地-删分享",
+    "season": 2,
+    "share_count": 2,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 02/剧.S02E01.2160p.strm",
+     "<S>/剧 (2020)/Season 02/剧.S02E02.2160p.strm"
+    ],
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S02 (保留本地 → 淘汰分享)"
+  }
+ ],
+ "decision_keep_share": [
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 决策「保留分享」 ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E02.2160p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.2160p.strm"
+    ],
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "decision_keep_share",
+    "reason_label": "保留分享-删本地",
+    "season": 1,
+    "share_count": 2,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.720p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.720p.strm"
+    ],
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (保留分享 → 删本地腾网盘)"
+  }
+ ],
+ "decision_keep_share_covers": [
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 决策「保留分享」 ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E02.2160p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.2160p.strm"
+    ],
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "decision_keep_share",
+    "reason_label": "保留分享-删本地",
+    "season": 1,
+    "share_count": 3,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.720p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.720p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E03.720p.strm"
+    ],
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (保留分享 → 删本地腾网盘)"
+  }
+ ],
+ "dup_versions_in_share_season": [
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 分享达标率 100% (2/2集) ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "compare": {
+     "decided_by": "resolution",
+     "decision": "quality_first",
+     "dims": [
+      {
+       "a": "未识别",
+       "b": "未识别",
+       "key": "release_group",
+       "label": "发布组优先级",
+       "reason": "已关闭",
+       "verdict": "skip"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "source",
+       "label": "资源类型优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "2160p / 4K",
+       "b": "1080p",
+       "key": "resolution",
+       "label": "分辨率优先级",
+       "reason": "决胜维度",
+       "verdict": "a"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "dolby",
+       "label": "动态范围优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "bitdepth",
+       "label": "色深优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "audio",
+       "label": "音频规格优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      }
+     ],
+     "episode": 1,
+     "local_name": "剧.S01E01.1080p.strm",
+     "result": 1,
+     "share_name": "剧.S01E01.2160p.strm",
+     "tie_keep_local": false
+    },
+    "identity_source": "filesystem:title+year",
+    "local_better": 0,
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "local_total": 2,
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "share_wins",
+    "reason_label": "分享择优-删本地",
+    "season": 1,
+    "share_better": 2,
+    "share_count": 3,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E01.720p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm"
+    ],
+    "share_tmdb": [],
+    "share_total": 2,
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (分享画质达标 2/2 集 → 删本地腾网盘)"
+  },
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 库内多版本去重（E01留2160p / 4K） ➔ 清理分享影视库低版本strm",
+   "files": [
+    "<S>/剧 (2020)/Season 01/剧.S01E01.720p.strm"
+   ],
+   "kind": "shr",
+   "meta": {
+    "dup_count": 3,
+    "dup_eps": 1,
+    "identity_source": "filesystem:title+year",
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "dup_version_share",
+    "reason_label": "库内多版本-删低版",
+    "season": 1,
+    "share_count": 3,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E01.720p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm"
+    ],
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (同集多版本 1 集 → 各留最优)"
+  }
+ ],
+ "multi_full_not_all_pass_residual": [
+  {
+   "detail": "├─ ⚠️ 《剧 (2020)》S02: 本地中间断层 (缺 E02，疑似被和谐) ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 02/剧.S02E01.1080p.strm",
+    "<L>/剧 (2020)/Season 02/剧.S02E03.1080p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 02/剧.S02E01.1080p.strm",
+     "<L>/剧 (2020)/Season 02/剧.S02E03.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "incomplete_delete_local",
+    "reason_label": "残次品-删本地",
+    "season": 2,
+    "share_count": 3,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 02/剧.S02E01.2160p.strm",
+     "<S>/剧 (2020)/Season 02/剧.S02E02.2160p.strm",
+     "<S>/剧 (2020)/Season 02/剧.S02E03.2160p.strm"
+    ],
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "⚠️ 《剧 (2020)》S02 (残次品：本地中间断层 (缺 E02，疑似被和谐) → 删本地)"
+  },
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 多季保护：分享未全覆盖本地（不替换） ➔ 清理分享影视库strm",
+   "files": [
+    "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm"
+   ],
+   "kind": "shr",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm"
+    ],
+    "local_seasons": 2,
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "multi_protect_partial_share",
+    "reason_label": "多季保护-淘汰分享",
+    "reasons": [],
+    "season": 1,
+    "share_count": 2,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm"
+    ],
+    "share_seasons": 2,
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (多季保护·分享未全覆盖 → 淘汰分享)"
+  },
+  {
+   "detail": "├─ 📺 《剧 (2020)》S02: 多季保护：分享未全覆盖本地（不替换）；本地中间断层 (缺 E02，疑似被和谐) ➔ 清理分享影视库strm",
+   "files": [
+    "<S>/剧 (2020)/Season 02/剧.S02E01.2160p.strm",
+    "<S>/剧 (2020)/Season 02/剧.S02E02.2160p.strm",
+    "<S>/剧 (2020)/Season 02/剧.S02E03.2160p.strm"
+   ],
+   "kind": "shr",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 02/剧.S02E01.1080p.strm",
+     "<L>/剧 (2020)/Season 02/剧.S02E03.1080p.strm"
+    ],
+    "local_seasons": 2,
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "multi_protect_partial_share",
+    "reason_label": "多季保护-淘汰分享",
+    "reasons": [
+     "本地中间断层 (缺 E02，疑似被和谐)"
+    ],
+    "season": 2,
+    "share_count": 3,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 02/剧.S02E01.2160p.strm",
+     "<S>/剧 (2020)/Season 02/剧.S02E02.2160p.strm",
+     "<S>/剧 (2020)/Season 02/剧.S02E03.2160p.strm"
+    ],
+    "share_seasons": 2,
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S02 (多季保护·分享未全覆盖 → 淘汰分享)"
+  }
+ ],
+ "multi_full_share_with_s00": [
+  {
+   "detail": "├─ 🎬 《剧 (2020)》S00: 整剧零和：分享全季达标 ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 00/剧.S00E01.720p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 1,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 00/剧.S00E01.720p.strm"
+    ],
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "multi_full_share",
+    "reason_label": "整剧零和-分享替代",
+    "season": 0,
+    "share_count": 1,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 00/剧.S00E01.2160p.strm"
+    ],
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "🎬 《剧 (2020)》S00 (整剧零和：分享全季达标 → 淘汰本地)"
+  },
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 整剧零和 ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm"
+    ],
+    "local_seasons": 3,
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "multi_full_share",
+    "reason_label": "整剧零和-分享替代",
+    "season": 1,
+    "share_count": 2,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm"
+    ],
+    "share_seasons": 2,
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (整剧零和：分享全季达标 → 删本地)"
+  },
+  {
+   "detail": "├─ 📺 《剧 (2020)》S02: 整剧零和 ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 02/剧.S02E01.1080p.strm",
+    "<L>/剧 (2020)/Season 02/剧.S02E02.1080p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 02/剧.S02E01.1080p.strm",
+     "<L>/剧 (2020)/Season 02/剧.S02E02.1080p.strm"
+    ],
+    "local_seasons": 3,
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "multi_full_share",
+    "reason_label": "整剧零和-分享替代",
+    "season": 2,
+    "share_count": 2,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 02/剧.S02E01.2160p.strm",
+     "<S>/剧 (2020)/Season 02/剧.S02E02.2160p.strm"
+    ],
+    "share_seasons": 2,
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S02 (整剧零和：分享全季达标 → 删本地)"
+  }
+ ],
+ "multi_partial_overlap": [
+  {
+   "detail": "├─ ⚠️ 《剧 (2020)》S02: 本地中间断层 (缺 E02，疑似被和谐) ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 02/剧.S02E01.1080p.strm",
+    "<L>/剧 (2020)/Season 02/剧.S02E03.1080p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 02/剧.S02E01.1080p.strm",
+     "<L>/剧 (2020)/Season 02/剧.S02E03.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "incomplete_delete_local",
+    "reason_label": "残次品-删本地",
+    "season": 2,
+    "share_count": 3,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 02/剧.S02E01.2160p.strm",
+     "<S>/剧 (2020)/Season 02/剧.S02E02.2160p.strm",
+     "<S>/剧 (2020)/Season 02/剧.S02E03.2160p.strm"
+    ],
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "⚠️ 《剧 (2020)》S02 (残次品：本地中间断层 (缺 E02，疑似被和谐) → 删本地)"
+  }
+ ],
+ "multi_partial_share_reasons": [
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 多季保护：分享未全覆盖本地（不替换）；分享副本集数不足 (2/3集) ➔ 清理分享影视库strm",
+   "files": [
+    "<S>/剧 (2020)/Season 01/剧.S01E01.720p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E02.720p.strm"
+   ],
+   "kind": "shr",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 3,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.2160p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E03.2160p.strm"
+    ],
+    "local_seasons": 2,
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "multi_protect_partial_share",
+    "reason_label": "多季保护-淘汰分享",
+    "reasons": [
+     "分享副本集数不足 (2/3集)"
+    ],
+    "season": 1,
+    "share_count": 2,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.720p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.720p.strm"
+    ],
+    "share_seasons": 2,
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (多季保护·分享未全覆盖 → 淘汰分享)"
+  },
+  {
+   "detail": "├─ 📺 《剧 (2020)》S02: 多季保护：分享未全覆盖本地（不替换）；分享缺失前序 (缺 E01) ➔ 清理分享影视库strm",
+   "files": [
+    "<S>/剧 (2020)/Season 02/剧.S02E02.720p.strm"
+   ],
+   "kind": "shr",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 02/剧.S02E01.1080p.strm",
+     "<L>/剧 (2020)/Season 02/剧.S02E02.1080p.strm"
+    ],
+    "local_seasons": 2,
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "multi_protect_partial_share",
+    "reason_label": "多季保护-淘汰分享",
+    "reasons": [
+     "分享缺失前序 (缺 E01)"
+    ],
+    "season": 2,
+    "share_count": 1,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 02/剧.S02E02.720p.strm"
+    ],
+    "share_seasons": 2,
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S02 (多季保护·分享未全覆盖 → 淘汰分享)"
+  }
+ ],
+ "multi_partial_share_with_s00": [
+  {
+   "detail": "├─ 🎬 《剧 (2020)》S00: 多季保护·本地合集优先 ➔ 清理分享影视库strm",
+   "files": [
+    "<S>/剧 (2020)/Season 00/剧.S00E01.2160p.strm"
+   ],
+   "kind": "shr",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 1,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 00/剧.S00E01.720p.strm"
+    ],
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "multi_protect_partial_share",
+    "reason_label": "多季保护-淘汰分享",
+    "season": 0,
+    "share_count": 1,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 00/剧.S00E01.2160p.strm"
+    ],
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "🎬 《剧 (2020)》S00 (多季保护·本地合集优先 → 淘汰分享)"
+  },
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 多季保护：分享未全覆盖本地（不替换） ➔ 清理分享影视库strm",
+   "files": [
+    "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm"
+   ],
+   "kind": "shr",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm"
+    ],
+    "local_seasons": 3,
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "multi_protect_partial_share",
+    "reason_label": "多季保护-淘汰分享",
+    "reasons": [],
+    "season": 1,
+    "share_count": 2,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm"
+    ],
+    "share_seasons": 1,
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (多季保护·分享未全覆盖 → 淘汰分享)"
+  }
+ ],
+ "multi_share_protect_delete_local_with_s00": [
+  {
+   "detail": "├─ 🎬 《剧 (2020)》S00: 多季保护·分享合集优先 ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 00/剧.S00E01.1080p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 1,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 00/剧.S00E01.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "multi_protect_partial_local",
+    "reason_label": "多季保护-淘汰本地",
+    "season": 0,
+    "share_count": 1,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 00/剧.S00E01.2160p.strm"
+    ],
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "🎬 《剧 (2020)》S00 (多季保护·分享合集优先 → 淘汰本地)"
+  },
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 多季保护·分享合集优先，分享 3 季合集保持完整 ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm"
+    ],
+    "local_seasons": 1,
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "multi_protect_partial_local",
+    "reason_label": "多季保护-淘汰本地",
+    "season": 1,
+    "share_count": 2,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm"
+    ],
+    "share_seasons": 3,
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (多季保护·分享合集优先 → 淘汰本地)"
+  }
+ ],
+ "multi_share_protect_fewer": [
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 分享集数不足本地 ➔ 清理分享影视库strm",
+   "files": [
+    "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm"
+   ],
+   "kind": "shr",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 3,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E03.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "local_total": 3,
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "local_wins",
+    "reason_label": "本地更全-删分享",
+    "season": 1,
+    "share_count": 2,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm"
+    ],
+    "share_tmdb": [],
+    "share_total": 2,
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (分享仅 2 集、本地 3 集 → 淘汰分享保留本地)"
+  }
+ ],
+ "multi_share_protect_residual": [
+  {
+   "detail": "├─ ⚠️ 《剧 (2020)》S01: 本地中间断层 (缺 E02，疑似被和谐) ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E03.1080p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E03.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "incomplete_delete_local",
+    "reason_label": "残次品-删本地",
+    "season": 1,
+    "share_count": 3,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E03.2160p.strm"
+    ],
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "⚠️ 《剧 (2020)》S01 (残次品：本地中间断层 (缺 E02，疑似被和谐) → 删本地)"
+  }
+ ],
+ "protect_off_two_seasons": [
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 分享达标率 100% (2/2集) ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "compare": {
+     "decided_by": "resolution",
+     "decision": "quality_first",
+     "dims": [
+      {
+       "a": "未识别",
+       "b": "未识别",
+       "key": "release_group",
+       "label": "发布组优先级",
+       "reason": "已关闭",
+       "verdict": "skip"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "source",
+       "label": "资源类型优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "2160p / 4K",
+       "b": "1080p",
+       "key": "resolution",
+       "label": "分辨率优先级",
+       "reason": "决胜维度",
+       "verdict": "a"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "dolby",
+       "label": "动态范围优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "bitdepth",
+       "label": "色深优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "audio",
+       "label": "音频规格优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      }
+     ],
+     "episode": 1,
+     "local_name": "剧.S01E01.1080p.strm",
+     "result": 1,
+     "share_name": "剧.S01E01.2160p.strm",
+     "tie_keep_local": false
+    },
+    "identity_source": "filesystem:title+year",
+    "local_better": 0,
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "local_total": 2,
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "share_wins",
+    "reason_label": "分享择优-删本地",
+    "season": 1,
+    "share_better": 2,
+    "share_count": 2,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm"
+    ],
+    "share_tmdb": [],
+    "share_total": 2,
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (分享画质达标 2/2 集 → 删本地腾网盘)"
+  },
+  {
+   "detail": "├─ 📺 《剧 (2020)》S02: 本地达标率 100% (2/2集) ➔ 清理分享影视库strm",
+   "files": [
+    "<S>/剧 (2020)/Season 02/剧.S02E01.1080p.strm",
+    "<S>/剧 (2020)/Season 02/剧.S02E02.1080p.strm"
+   ],
+   "kind": "shr",
+   "meta": {
+    "compare": {
+     "decided_by": "resolution",
+     "decision": "quality_first",
+     "dims": [
+      {
+       "a": "未识别",
+       "b": "未识别",
+       "key": "release_group",
+       "label": "发布组优先级",
+       "reason": "已关闭",
+       "verdict": "skip"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "source",
+       "label": "资源类型优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "1080p",
+       "b": "2160p / 4K",
+       "key": "resolution",
+       "label": "分辨率优先级",
+       "reason": "决胜维度",
+       "verdict": "b"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "dolby",
+       "label": "动态范围优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "bitdepth",
+       "label": "色深优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "audio",
+       "label": "音频规格优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      }
+     ],
+     "episode": 1,
+     "local_name": "剧.S02E01.2160p.strm",
+     "result": -1,
+     "share_name": "剧.S02E01.1080p.strm",
+     "tie_keep_local": false
+    },
+    "identity_source": "filesystem:title+year",
+    "local_better": 2,
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 02/剧.S02E01.2160p.strm",
+     "<L>/剧 (2020)/Season 02/剧.S02E02.2160p.strm"
+    ],
+    "local_tmdb": [],
+    "local_total": 2,
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "local_wins",
+    "reason_label": "本地择优-删分享",
+    "season": 2,
+    "share_better": 0,
+    "share_count": 2,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 02/剧.S02E01.1080p.strm",
+     "<S>/剧 (2020)/Season 02/剧.S02E02.1080p.strm"
+    ],
+    "share_tmdb": [],
+    "share_total": 2,
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S02 (本地更优 2/2 集 → 淘汰分享)"
+  }
+ ],
+ "residual_both": [
+  {
+   "detail": "├─ ⚠️ 《剧 (2020)》S01: 分享缺失前序 (缺 E01) ➔ 清理分享影视库strm",
+   "files": [
+    "<S>/剧 (2020)/Season 01/剧.S01E02.1080p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E03.1080p.strm"
+   ],
+   "kind": "shr",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E03.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "incomplete_delete_share",
+    "reason_label": "残次品-删分享",
+    "season": 1,
+    "share_count": 2,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E02.1080p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E03.1080p.strm"
+    ],
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "⚠️ 《剧 (2020)》S01 (残次品：分享缺失前序 (缺 E01) → 删分享)"
+  },
+  {
+   "detail": "├─ ⚠️ 《剧 (2020)》S01: 本地中间断层 (缺 E02，疑似被和谐) ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E03.1080p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E03.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "incomplete_delete_local",
+    "reason_label": "残次品-删本地",
+    "season": 1,
+    "share_count": 2,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E02.1080p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E03.1080p.strm"
+    ],
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "⚠️ 《剧 (2020)》S01 (残次品：本地中间断层 (缺 E02，疑似被和谐) → 删本地)"
+  }
+ ],
+ "residual_local_gap": [
+  {
+   "detail": "├─ ⚠️ 《剧 (2020)》S01: 本地中间断层 (缺 E02，疑似被和谐) ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E03.1080p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E03.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "incomplete_delete_local",
+    "reason_label": "残次品-删本地",
+    "season": 1,
+    "share_count": 3,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.1080p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E03.1080p.strm"
+    ],
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "⚠️ 《剧 (2020)》S01 (残次品：本地中间断层 (缺 E02，疑似被和谐) → 删本地)"
+  }
+ ],
+ "residual_share_head_missing": [
+  {
+   "detail": "├─ ⚠️ 《剧 (2020)》S01: 分享缺失前序 (缺 E01) ➔ 清理分享影视库strm",
+   "files": [
+    "<S>/剧 (2020)/Season 01/剧.S01E02.1080p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E03.1080p.strm"
+   ],
+   "kind": "shr",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 3,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E03.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "incomplete_delete_share",
+    "reason_label": "残次品-删分享",
+    "season": 1,
+    "share_count": 2,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E02.1080p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E03.1080p.strm"
+    ],
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "⚠️ 《剧 (2020)》S01 (残次品：分享缺失前序 (缺 E01) → 删分享)"
+  }
+ ],
+ "single_local_better": [
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 本地达标率 100% (4/4集) ➔ 清理分享影视库strm",
+   "files": [
+    "<S>/剧 (2020)/Season 01/剧.S01E01.720p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E02.720p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E03.720p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E04.720p.strm"
+   ],
+   "kind": "shr",
+   "meta": {
+    "compare": {
+     "decided_by": "resolution",
+     "decision": "quality_first",
+     "dims": [
+      {
+       "a": "未识别",
+       "b": "未识别",
+       "key": "release_group",
+       "label": "发布组优先级",
+       "reason": "已关闭",
+       "verdict": "skip"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "source",
+       "label": "资源类型优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "720p",
+       "b": "2160p / 4K",
+       "key": "resolution",
+       "label": "分辨率优先级",
+       "reason": "决胜维度",
+       "verdict": "b"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "dolby",
+       "label": "动态范围优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "bitdepth",
+       "label": "色深优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "audio",
+       "label": "音频规格优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      }
+     ],
+     "episode": 1,
+     "local_name": "剧.S01E01.2160p.strm",
+     "result": -1,
+     "share_name": "剧.S01E01.720p.strm",
+     "tie_keep_local": false
+    },
+    "identity_source": "filesystem:title+year",
+    "local_better": 4,
+    "local_count": 4,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.2160p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E03.2160p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E04.2160p.strm"
+    ],
+    "local_tmdb": [],
+    "local_total": 4,
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "local_wins",
+    "reason_label": "本地择优-删分享",
+    "season": 1,
+    "share_better": 0,
+    "share_count": 4,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.720p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.720p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E03.720p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E04.720p.strm"
+    ],
+    "share_tmdb": [],
+    "share_total": 4,
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (本地更优 4/4 集 → 淘汰分享)"
+  }
+ ],
+ "single_no_common_eps": [],
+ "single_ratio_at_threshold": [
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 分享达标率 90% (9/10集) ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E03.1080p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E04.1080p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E05.1080p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E06.1080p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E07.1080p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E08.1080p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E09.1080p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E10.1080p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "compare": {
+     "decided_by": "resolution",
+     "decision": "quality_first",
+     "dims": [
+      {
+       "a": "未识别",
+       "b": "未识别",
+       "key": "release_group",
+       "label": "发布组优先级",
+       "reason": "已关闭",
+       "verdict": "skip"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "source",
+       "label": "资源类型优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "2160p / 4K",
+       "b": "1080p",
+       "key": "resolution",
+       "label": "分辨率优先级",
+       "reason": "决胜维度",
+       "verdict": "a"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "dolby",
+       "label": "动态范围优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "bitdepth",
+       "label": "色深优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "audio",
+       "label": "音频规格优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      }
+     ],
+     "episode": 1,
+     "local_name": "剧.S01E01.1080p.strm",
+     "result": 1,
+     "share_name": "剧.S01E01.2160p.strm",
+     "tie_keep_local": false
+    },
+    "identity_source": "filesystem:title+year",
+    "local_better": 1,
+    "local_count": 10,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E03.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E04.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E05.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E06.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E07.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E08.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E09.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E10.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "local_total": 10,
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "share_wins",
+    "reason_label": "分享择优-删本地",
+    "season": 1,
+    "share_better": 9,
+    "share_count": 10,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E03.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E04.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E05.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E06.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E07.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E08.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E09.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E10.720p.strm"
+    ],
+    "share_tmdb": [],
+    "share_total": 10,
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (分享画质达标 9/10 集 → 删本地腾网盘)"
+  }
+ ],
+ "single_ratio_below_threshold": [
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 本地达标率 20% (2/10集) ➔ 清理分享影视库strm",
+   "files": [
+    "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E03.2160p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E04.2160p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E05.2160p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E06.2160p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E07.2160p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E08.2160p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E09.720p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E10.720p.strm"
+   ],
+   "kind": "shr",
+   "meta": {
+    "compare": {
+     "decided_by": "resolution",
+     "decision": "quality_first",
+     "dims": [
+      {
+       "a": "未识别",
+       "b": "未识别",
+       "key": "release_group",
+       "label": "发布组优先级",
+       "reason": "已关闭",
+       "verdict": "skip"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "source",
+       "label": "资源类型优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "2160p / 4K",
+       "b": "1080p",
+       "key": "resolution",
+       "label": "分辨率优先级",
+       "reason": "决胜维度",
+       "verdict": "a"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "dolby",
+       "label": "动态范围优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "bitdepth",
+       "label": "色深优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "audio",
+       "label": "音频规格优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      }
+     ],
+     "episode": 1,
+     "local_name": "剧.S01E01.1080p.strm",
+     "result": 1,
+     "share_name": "剧.S01E01.2160p.strm",
+     "tie_keep_local": false
+    },
+    "identity_source": "filesystem:title+year",
+    "local_better": 2,
+    "local_count": 10,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E03.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E04.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E05.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E06.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E07.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E08.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E09.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E10.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "local_total": 10,
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "local_wins",
+    "reason_label": "本地择优-删分享",
+    "season": 1,
+    "share_better": 8,
+    "share_count": 10,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E03.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E04.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E05.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E06.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E07.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E08.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E09.720p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E10.720p.strm"
+    ],
+    "share_tmdb": [],
+    "share_total": 10,
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (本地更优 2/10 集 → 淘汰分享)"
+  }
+ ],
+ "single_share_better": [
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 分享达标率 100% (4/4集) ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E03.1080p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E04.1080p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "compare": {
+     "decided_by": "resolution",
+     "decision": "quality_first",
+     "dims": [
+      {
+       "a": "未识别",
+       "b": "未识别",
+       "key": "release_group",
+       "label": "发布组优先级",
+       "reason": "已关闭",
+       "verdict": "skip"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "source",
+       "label": "资源类型优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "2160p / 4K",
+       "b": "1080p",
+       "key": "resolution",
+       "label": "分辨率优先级",
+       "reason": "决胜维度",
+       "verdict": "a"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "dolby",
+       "label": "动态范围优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "bitdepth",
+       "label": "色深优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "audio",
+       "label": "音频规格优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      }
+     ],
+     "episode": 1,
+     "local_name": "剧.S01E01.1080p.strm",
+     "result": 1,
+     "share_name": "剧.S01E01.2160p.strm",
+     "tie_keep_local": false
+    },
+    "identity_source": "filesystem:title+year",
+    "local_better": 0,
+    "local_count": 4,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E03.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E04.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "local_total": 4,
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "share_wins",
+    "reason_label": "分享择优-删本地",
+    "season": 1,
+    "share_better": 4,
+    "share_count": 4,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E03.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E04.2160p.strm"
+    ],
+    "share_tmdb": [],
+    "share_total": 4,
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (分享画质达标 4/4 集 → 删本地腾网盘)"
+  }
+ ],
+ "single_share_fewer_eps": [
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 共同 2 集中分享优 2 集，但本地集数更全 ➔ 清理分享影视库strm",
+   "files": [
+    "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm"
+   ],
+   "kind": "shr",
+   "meta": {
+    "compare": {
+     "decided_by": "resolution",
+     "decision": "quality_first",
+     "dims": [
+      {
+       "a": "未识别",
+       "b": "未识别",
+       "key": "release_group",
+       "label": "发布组优先级",
+       "reason": "已关闭",
+       "verdict": "skip"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "source",
+       "label": "资源类型优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "2160p / 4K",
+       "b": "1080p",
+       "key": "resolution",
+       "label": "分辨率优先级",
+       "reason": "决胜维度",
+       "verdict": "a"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "dolby",
+       "label": "动态范围优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "bitdepth",
+       "label": "色深优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "audio",
+       "label": "音频规格优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      }
+     ],
+     "episode": 1,
+     "local_name": "剧.S01E01.1080p.strm",
+     "result": 1,
+     "share_name": "剧.S01E01.2160p.strm",
+     "tie_keep_local": false
+    },
+    "identity_source": "filesystem:title+year",
+    "local_better": 0,
+    "local_count": 3,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E03.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "local_total": 3,
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "local_wins",
+    "reason_label": "本地更全-删分享",
+    "season": 1,
+    "share_better": 2,
+    "share_count": 2,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm"
+    ],
+    "share_tmdb": [],
+    "share_total": 2,
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (分享仅 2 集、本地 3 集 → 淘汰分享保留本地)"
+  }
+ ],
+ "single_share_more_eps": [
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 分享达标率 100% (2/2集) ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "compare": {
+     "decided_by": "resolution",
+     "decision": "quality_first",
+     "dims": [
+      {
+       "a": "未识别",
+       "b": "未识别",
+       "key": "release_group",
+       "label": "发布组优先级",
+       "reason": "已关闭",
+       "verdict": "skip"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "source",
+       "label": "资源类型优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "2160p / 4K",
+       "b": "1080p",
+       "key": "resolution",
+       "label": "分辨率优先级",
+       "reason": "决胜维度",
+       "verdict": "a"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "dolby",
+       "label": "动态范围优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "bitdepth",
+       "label": "色深优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "audio",
+       "label": "音频规格优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      }
+     ],
+     "episode": 1,
+     "local_name": "剧.S01E01.1080p.strm",
+     "result": 1,
+     "share_name": "剧.S01E01.2160p.strm",
+     "tie_keep_local": false
+    },
+    "identity_source": "filesystem:title+year",
+    "local_better": 0,
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "local_total": 2,
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "share_wins",
+    "reason_label": "分享择优-删本地",
+    "season": 1,
+    "share_better": 2,
+    "share_count": 3,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E03.2160p.strm"
+    ],
+    "share_tmdb": [],
+    "share_total": 3,
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (分享画质达标 2/2 集 → 删本地腾网盘)"
+  }
+ ],
+ "single_tie_keep_local": [
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 本地达标率 100% (2/2集) ➔ 清理分享影视库strm",
+   "files": [
+    "<S>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E02.1080p.strm"
+   ],
+   "kind": "shr",
+   "meta": {
+    "compare": {
+     "decided_by": null,
+     "decision": "quality_first",
+     "dims": [
+      {
+       "a": "未识别",
+       "b": "未识别",
+       "key": "release_group",
+       "label": "发布组优先级",
+       "reason": "已关闭",
+       "verdict": "skip"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "source",
+       "label": "资源类型优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "1080p",
+       "b": "1080p",
+       "key": "resolution",
+       "label": "分辨率优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "dolby",
+       "label": "动态范围优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "bitdepth",
+       "label": "色深优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "audio",
+       "label": "音频规格优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      }
+     ],
+     "episode": 1,
+     "local_name": "剧.S01E01.1080p.strm",
+     "result": 0,
+     "share_name": "剧.S01E01.1080p.strm",
+     "tie_keep_local": true
+    },
+    "identity_source": "filesystem:title+year",
+    "local_better": 2,
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "local_total": 2,
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "local_wins",
+    "reason_label": "本地择优-删分享",
+    "season": 1,
+    "share_better": 0,
+    "share_count": 2,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.1080p.strm"
+    ],
+    "share_tmdb": [],
+    "share_total": 2,
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (本地更优 2/2 集 → 淘汰分享)"
+  }
+ ],
+ "single_tie_share_wins": [
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 分享达标率 100% (2/2集) ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+    "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "compare": {
+     "decided_by": null,
+     "decision": "quality_first",
+     "dims": [
+      {
+       "a": "未识别",
+       "b": "未识别",
+       "key": "release_group",
+       "label": "发布组优先级",
+       "reason": "已关闭",
+       "verdict": "skip"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "source",
+       "label": "资源类型优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "1080p",
+       "b": "1080p",
+       "key": "resolution",
+       "label": "分辨率优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "dolby",
+       "label": "动态范围优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "bitdepth",
+       "label": "色深优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "audio",
+       "label": "音频规格优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      }
+     ],
+     "episode": 1,
+     "local_name": "剧.S01E01.1080p.strm",
+     "result": 0,
+     "share_name": "剧.S01E01.1080p.strm",
+     "tie_keep_local": false
+    },
+    "identity_source": "filesystem:title+year",
+    "local_better": 0,
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "local_total": 2,
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "share_wins",
+    "reason_label": "分享择优-删本地",
+    "season": 1,
+    "share_better": 2,
+    "share_count": 2,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.1080p.strm"
+    ],
+    "share_tmdb": [],
+    "share_total": 2,
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (分享画质达标 2/2 集 → 删本地腾网盘)"
+  }
+ ],
+ "special_compare_local_better": [
+  {
+   "detail": "├─ 🎬 《剧 (2020)》S00: 本地画质更优 ➔ 清理分享影视库strm",
+   "files": [
+    "<S>/剧 (2020)/Season 00/剧.S00E01.720p.strm"
+   ],
+   "kind": "shr",
+   "meta": {
+    "compare": {
+     "decided_by": "resolution",
+     "decision": "quality_first",
+     "dims": [
+      {
+       "a": "未识别",
+       "b": "未识别",
+       "key": "release_group",
+       "label": "发布组优先级",
+       "reason": "已关闭",
+       "verdict": "skip"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "source",
+       "label": "资源类型优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "720p",
+       "b": "2160p / 4K",
+       "key": "resolution",
+       "label": "分辨率优先级",
+       "reason": "决胜维度",
+       "verdict": "b"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "dolby",
+       "label": "动态范围优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "bitdepth",
+       "label": "色深优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "audio",
+       "label": "音频规格优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      }
+     ],
+     "local_name": "剧.S00E01.2160p.strm",
+     "result": -1,
+     "share_name": "剧.S00E01.720p.strm",
+     "tie_keep_local": false
+    },
+    "identity_source": "filesystem:title+year",
+    "local_count": 1,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 00/剧.S00E01.2160p.strm"
+    ],
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "special_local_better",
+    "reason_label": "特别篇本地更优",
+    "season": 0,
+    "share_count": 1,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 00/剧.S00E01.720p.strm"
+    ],
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "🎬 《剧 (2020)》S00 (特别篇画质对比 → 删分享)"
+  },
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 分享达标率 100% (1/1集) ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "compare": {
+     "decided_by": null,
+     "decision": "quality_first",
+     "dims": [
+      {
+       "a": "未识别",
+       "b": "未识别",
+       "key": "release_group",
+       "label": "发布组优先级",
+       "reason": "已关闭",
+       "verdict": "skip"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "source",
+       "label": "资源类型优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "1080p",
+       "b": "1080p",
+       "key": "resolution",
+       "label": "分辨率优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "dolby",
+       "label": "动态范围优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "bitdepth",
+       "label": "色深优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "audio",
+       "label": "音频规格优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      }
+     ],
+     "episode": 1,
+     "local_name": "剧.S01E01.1080p.strm",
+     "result": 0,
+     "share_name": "剧.S01E01.1080p.strm",
+     "tie_keep_local": false
+    },
+    "identity_source": "filesystem:title+year",
+    "local_better": 0,
+    "local_count": 1,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "local_total": 1,
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "share_wins",
+    "reason_label": "分享择优-删本地",
+    "season": 1,
+    "share_better": 1,
+    "share_count": 1,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.1080p.strm"
+    ],
+    "share_tmdb": [],
+    "share_total": 1,
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (分享画质达标 1/1 集 → 删本地腾网盘)"
+  }
+ ],
+ "special_compare_share_better": [
+  {
+   "detail": "├─ 🎬 《剧 (2020)》S00: 分享画质达标 ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 00/剧.S00E01.720p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "compare": {
+     "decided_by": "resolution",
+     "decision": "quality_first",
+     "dims": [
+      {
+       "a": "未识别",
+       "b": "未识别",
+       "key": "release_group",
+       "label": "发布组优先级",
+       "reason": "已关闭",
+       "verdict": "skip"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "source",
+       "label": "资源类型优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "2160p / 4K",
+       "b": "720p",
+       "key": "resolution",
+       "label": "分辨率优先级",
+       "reason": "决胜维度",
+       "verdict": "a"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "dolby",
+       "label": "动态范围优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "bitdepth",
+       "label": "色深优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "audio",
+       "label": "音频规格优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      }
+     ],
+     "local_name": "剧.S00E01.720p.strm",
+     "result": 1,
+     "share_name": "剧.S00E01.2160p.strm",
+     "tie_keep_local": false
+    },
+    "identity_source": "filesystem:title+year",
+    "local_count": 1,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 00/剧.S00E01.720p.strm"
+    ],
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "special_share_better",
+    "reason_label": "特别篇分享更优",
+    "season": 0,
+    "share_count": 1,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 00/剧.S00E01.2160p.strm"
+    ],
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "🎬 《剧 (2020)》S00 (特别篇画质对比 → 删本地)"
+  },
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 分享达标率 100% (1/1集) ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "compare": {
+     "decided_by": null,
+     "decision": "quality_first",
+     "dims": [
+      {
+       "a": "未识别",
+       "b": "未识别",
+       "key": "release_group",
+       "label": "发布组优先级",
+       "reason": "已关闭",
+       "verdict": "skip"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "source",
+       "label": "资源类型优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "1080p",
+       "b": "1080p",
+       "key": "resolution",
+       "label": "分辨率优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "dolby",
+       "label": "动态范围优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "bitdepth",
+       "label": "色深优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "audio",
+       "label": "音频规格优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      }
+     ],
+     "episode": 1,
+     "local_name": "剧.S01E01.1080p.strm",
+     "result": 0,
+     "share_name": "剧.S01E01.1080p.strm",
+     "tie_keep_local": false
+    },
+    "identity_source": "filesystem:title+year",
+    "local_better": 0,
+    "local_count": 1,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "local_total": 1,
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "share_wins",
+    "reason_label": "分享择优-删本地",
+    "season": 1,
+    "share_better": 1,
+    "share_count": 1,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.1080p.strm"
+    ],
+    "share_tmdb": [],
+    "share_total": 1,
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (分享画质达标 1/1 集 → 删本地腾网盘)"
+  }
+ ],
+ "special_delete": [
+  {
+   "detail": "├─ 🎬 《剧 (2020)》S00: 特别篇清理 ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 00/剧.S00E01.720p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 1,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 00/剧.S00E01.720p.strm"
+    ],
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "special_delete_local",
+    "reason_label": "特别篇清理-删本地",
+    "season": 0,
+    "share_count": 1,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 00/剧.S00E01.2160p.strm"
+    ],
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "🎬 《剧 (2020)》S00 (特别篇清理 → 删本地)"
+  },
+  {
+   "detail": "├─ 🎬 《剧 (2020)》S00: 特别篇清理 ➔ 清理分享影视库strm",
+   "files": [
+    "<S>/剧 (2020)/Season 00/剧.S00E01.2160p.strm"
+   ],
+   "kind": "shr",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "local_count": 1,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 00/剧.S00E01.720p.strm"
+    ],
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "special_delete_share",
+    "reason_label": "特别篇清理-删分享",
+    "season": 0,
+    "share_count": 1,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 00/剧.S00E01.2160p.strm"
+    ],
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "🎬 《剧 (2020)》S00 (特别篇清理 → 删分享)"
+  },
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 分享达标率 100% (1/1集) ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "compare": {
+     "decided_by": null,
+     "decision": "quality_first",
+     "dims": [
+      {
+       "a": "未识别",
+       "b": "未识别",
+       "key": "release_group",
+       "label": "发布组优先级",
+       "reason": "已关闭",
+       "verdict": "skip"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "source",
+       "label": "资源类型优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "1080p",
+       "b": "1080p",
+       "key": "resolution",
+       "label": "分辨率优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "dolby",
+       "label": "动态范围优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "bitdepth",
+       "label": "色深优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "audio",
+       "label": "音频规格优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      }
+     ],
+     "episode": 1,
+     "local_name": "剧.S01E01.1080p.strm",
+     "result": 0,
+     "share_name": "剧.S01E01.1080p.strm",
+     "tie_keep_local": false
+    },
+    "identity_source": "filesystem:title+year",
+    "local_better": 0,
+    "local_count": 1,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "local_total": 1,
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "share_wins",
+    "reason_label": "分享择优-删本地",
+    "season": 1,
+    "share_better": 1,
+    "share_count": 1,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.1080p.strm"
+    ],
+    "share_tmdb": [],
+    "share_total": 1,
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (分享画质达标 1/1 集 → 删本地腾网盘)"
+  }
+ ],
+ "special_ignore": [
+  {
+   "detail": "├─ 📺 《剧 (2020)》S01: 分享达标率 100% (1/1集) ➔ CD2联动删除115网盘旧源",
+   "files": [
+    "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm"
+   ],
+   "kind": "loc",
+   "meta": {
+    "compare": {
+     "decided_by": null,
+     "decision": "quality_first",
+     "dims": [
+      {
+       "a": "未识别",
+       "b": "未识别",
+       "key": "release_group",
+       "label": "发布组优先级",
+       "reason": "已关闭",
+       "verdict": "skip"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "source",
+       "label": "资源类型优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "1080p",
+       "b": "1080p",
+       "key": "resolution",
+       "label": "分辨率优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "dolby",
+       "label": "动态范围优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "bitdepth",
+       "label": "色深优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "audio",
+       "label": "音频规格优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      }
+     ],
+     "episode": 1,
+     "local_name": "剧.S01E01.1080p.strm",
+     "result": 0,
+     "share_name": "剧.S01E01.1080p.strm",
+     "tie_keep_local": false
+    },
+    "identity_source": "filesystem:title+year",
+    "local_better": 0,
+    "local_count": 1,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "local_total": 1,
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "share_wins",
+    "reason_label": "分享择优-删本地",
+    "season": 1,
+    "share_better": 1,
+    "share_count": 1,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.1080p.strm"
+    ],
+    "share_tmdb": [],
+    "share_total": 1,
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "📺 《剧 (2020)》S01 (分享画质达标 1/1 集 → 删本地腾网盘)"
+  }
+ ],
+ "whitelist_tv": [
+  {
+   "detail": "├─ 🛡️ 《剧 (2020)》S01: 命中白名单 [剧] ➔ 跳过清理",
+   "files": [
+    "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+    "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm"
+   ],
+   "kind": "exempt",
+   "meta": {
+    "identity_source": "filesystem:title+year",
+    "keywords": [
+     "剧"
+    ],
+    "local_count": 2,
+    "local_paths": [
+     "<L>/剧 (2020)/Season 01/剧.S01E01.1080p.strm",
+     "<L>/剧 (2020)/Season 01/剧.S01E02.1080p.strm"
+    ],
+    "local_tmdb": [],
+    "match_basis": "剧名 + 年份",
+    "match_basis_detail": "规范化剧名「剧 (2020)」 + 年份「2020」",
+    "reason": "whitelist",
+    "reason_label": "白名单豁免",
+    "season": 1,
+    "share_count": 2,
+    "share_paths": [
+     "<S>/剧 (2020)/Season 01/剧.S01E01.2160p.strm",
+     "<S>/剧 (2020)/Season 01/剧.S01E02.2160p.strm"
+    ],
+    "share_tmdb": [],
+    "title": "剧 (2020)",
+    "tmdb": [],
+    "tmdb_consistent": true,
+    "tmdb_role": "辅助元数据，不参与跨标题匹配"
+   },
+   "text": "🛡️ 《剧 (2020)》S01 (白名单豁免)"
+  }
+ ]
+}

@@ -1,0 +1,652 @@
+[
+  {
+    "detail": "├─ 🎬 《剧集丁 (2020)》S00: 整剧零和：分享全季达标 ➔ CD2联动删除115网盘旧源",
+    "files": [
+      "<L>/剧集丁 (2020)/Season 00/剧集丁.S00E01.720p.strm"
+    ],
+    "kind": "loc",
+    "meta": {
+      "identity_source": "filesystem:title+year",
+      "local_count": 1,
+      "local_paths": [
+        "<L>/剧集丁 (2020)/Season 00/剧集丁.S00E01.720p.strm"
+      ],
+      "local_tmdb": [],
+      "match_basis": "剧名 + 年份",
+      "match_basis_detail": "规范化剧名「剧集丁 (2020)」 + 年份「2020」",
+      "reason": "multi_full_share",
+      "reason_label": "整剧零和-分享替代",
+      "season": 0,
+      "share_count": 1,
+      "share_paths": [
+        "<S>/剧集丁 (2020)/Season 00/剧集丁.S00E01.2160p.strm"
+      ],
+      "share_tmdb": [],
+      "title": "剧集丁 (2020)",
+      "tmdb": [],
+      "tmdb_consistent": true,
+      "tmdb_role": "辅助元数据，不参与跨标题匹配"
+    },
+    "text": "🎬 《剧集丁 (2020)》S00 (整剧零和：分享全季达标 → 淘汰本地)"
+  },
+  {
+    "detail": "├─ 🎬 《电影丁 (2018)》: 库内多版本去重（保留 2160p / 4K） ➔ CD2联动删除115网盘低版本源",
+    "files": [
+      "<L>/电影丁 (2018)/电影丁.720p.strm"
+    ],
+    "kind": "loc",
+    "meta": {
+      "dup_count": 2,
+      "identity_source": "filesystem:title+year",
+      "keep_label": "2160p / 4K",
+      "local_count": 2,
+      "local_paths": [
+        "<L>/电影丁 (2018)/电影丁.2160p.strm",
+        "<L>/电影丁 (2018)/电影丁.720p.strm"
+      ],
+      "local_tmdb": [],
+      "match_basis": "剧名 + 年份",
+      "match_basis_detail": "规范化剧名「电影丁 (2018)」 + 年份「2018」",
+      "reason": "dup_version_local",
+      "reason_label": "库内多版本-删低版",
+      "share_count": 0,
+      "share_paths": [],
+      "share_tmdb": [],
+      "title": "电影丁 (2018)",
+      "tmdb": [],
+      "tmdb_consistent": true,
+      "tmdb_role": "辅助元数据，不参与跨标题匹配"
+    },
+    "text": "🎬 《电影丁 (2018)》 (同片多版本 2 份 → 留最优删其余)"
+  },
+  {
+    "detail": "├─ 🎬 《电影丙 (2022)》: 分享画质达标 ➔ CD2联动删除115网盘旧源",
+    "files": [
+      "<L>/电影丙 (2022)/电影丙.1080p.strm"
+    ],
+    "kind": "loc",
+    "meta": {
+      "compare": {
+        "decided_by": null,
+        "decision": "quality_first",
+        "dims": [
+          {
+            "a": "未识别",
+            "b": "未识别",
+            "key": "release_group",
+            "label": "发布组优先级",
+            "reason": "已关闭",
+            "verdict": "skip"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "source",
+            "label": "资源类型优先级",
+            "reason": "打平，继续比下一维",
+            "verdict": "tie"
+          },
+          {
+            "a": "1080p",
+            "b": "1080p",
+            "key": "resolution",
+            "label": "分辨率优先级",
+            "reason": "打平，继续比下一维",
+            "verdict": "tie"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "dolby",
+            "label": "动态范围优先级",
+            "reason": "打平，继续比下一维",
+            "verdict": "tie"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "bitdepth",
+            "label": "色深优先级",
+            "reason": "打平，继续比下一维",
+            "verdict": "tie"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "audio",
+            "label": "音频规格优先级",
+            "reason": "打平，继续比下一维",
+            "verdict": "tie"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "fps",
+            "label": "帧率优先级",
+            "reason": "打平，继续比下一维",
+            "verdict": "tie"
+          }
+        ],
+        "local_name": "电影丙.1080p.strm",
+        "result": 0,
+        "share_name": "电影丙.1080p.strm",
+        "tie_keep_local": false
+      },
+      "identity_source": "filesystem:title+year",
+      "local_count": 1,
+      "local_paths": [
+        "<L>/电影丙 (2022)/电影丙.1080p.strm"
+      ],
+      "local_tmdb": [],
+      "match_basis": "剧名 + 年份",
+      "match_basis_detail": "规范化剧名「电影丙 (2022)」 + 年份「2022」",
+      "reason": "share_better",
+      "reason_label": "分享画质达标",
+      "share_count": 1,
+      "share_paths": [
+        "<S>/电影丙 (2022)/电影丙.1080p.strm"
+      ],
+      "share_tmdb": [],
+      "title": "电影丙 (2022)",
+      "tmdb": [],
+      "tmdb_consistent": true,
+      "tmdb_role": "辅助元数据，不参与跨标题匹配"
+    },
+    "text": "🎬 《电影丙 (2022)》 (分享画质达标，穿透删本地腾网盘)"
+  },
+  {
+    "detail": "├─ 🎬 《电影乙 (2021)》: 分享画质次级 ➔ 清理分享影视库strm",
+    "files": [
+      "<S>/电影乙 (2021)/电影乙.720p.strm"
+    ],
+    "kind": "shr",
+    "meta": {
+      "compare": {
+        "decided_by": "resolution",
+        "decision": "quality_first",
+        "dims": [
+          {
+            "a": "未识别",
+            "b": "未识别",
+            "key": "release_group",
+            "label": "发布组优先级",
+            "reason": "已关闭",
+            "verdict": "skip"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "source",
+            "label": "资源类型优先级",
+            "reason": "打平，继续比下一维",
+            "verdict": "tie"
+          },
+          {
+            "a": "720p",
+            "b": "2160p / 4K",
+            "key": "resolution",
+            "label": "分辨率优先级",
+            "reason": "决胜维度",
+            "verdict": "b"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "dolby",
+            "label": "动态范围优先级",
+            "reason": "上一维已分胜负",
+            "verdict": "after"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "bitdepth",
+            "label": "色深优先级",
+            "reason": "上一维已分胜负",
+            "verdict": "after"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "audio",
+            "label": "音频规格优先级",
+            "reason": "上一维已分胜负",
+            "verdict": "after"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "fps",
+            "label": "帧率优先级",
+            "reason": "上一维已分胜负",
+            "verdict": "after"
+          }
+        ],
+        "local_name": "电影乙.2160p.strm",
+        "result": -1,
+        "share_name": "电影乙.720p.strm",
+        "tie_keep_local": false
+      },
+      "identity_source": "filesystem:title+year",
+      "local_count": 1,
+      "local_paths": [
+        "<L>/电影乙 (2021)/电影乙.2160p.strm"
+      ],
+      "local_tmdb": [],
+      "match_basis": "剧名 + 年份",
+      "match_basis_detail": "规范化剧名「电影乙 (2021)」 + 年份「2021」",
+      "reason": "local_better",
+      "reason_label": "本地画质更优",
+      "share_count": 1,
+      "share_paths": [
+        "<S>/电影乙 (2021)/电影乙.720p.strm"
+      ],
+      "share_tmdb": [],
+      "title": "电影乙 (2021)",
+      "tmdb": [],
+      "tmdb_consistent": true,
+      "tmdb_role": "辅助元数据，不参与跨标题匹配"
+    },
+    "text": "🎬 《电影乙 (2021)》 (分享画质劣于本地，淘汰分享)"
+  },
+  {
+    "detail": "├─ 🎬 《电影甲 (2020)》: 分享画质达标 ➔ CD2联动删除115网盘旧源",
+    "files": [
+      "<L>/电影甲 (2020)/电影甲.1080p.strm"
+    ],
+    "kind": "loc",
+    "meta": {
+      "compare": {
+        "decided_by": "resolution",
+        "decision": "quality_first",
+        "dims": [
+          {
+            "a": "未识别",
+            "b": "未识别",
+            "key": "release_group",
+            "label": "发布组优先级",
+            "reason": "已关闭",
+            "verdict": "skip"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "source",
+            "label": "资源类型优先级",
+            "reason": "打平，继续比下一维",
+            "verdict": "tie"
+          },
+          {
+            "a": "2160p / 4K",
+            "b": "1080p",
+            "key": "resolution",
+            "label": "分辨率优先级",
+            "reason": "决胜维度",
+            "verdict": "a"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "dolby",
+            "label": "动态范围优先级",
+            "reason": "上一维已分胜负",
+            "verdict": "after"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "bitdepth",
+            "label": "色深优先级",
+            "reason": "上一维已分胜负",
+            "verdict": "after"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "audio",
+            "label": "音频规格优先级",
+            "reason": "上一维已分胜负",
+            "verdict": "after"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "fps",
+            "label": "帧率优先级",
+            "reason": "上一维已分胜负",
+            "verdict": "after"
+          }
+        ],
+        "local_name": "电影甲.1080p.strm",
+        "result": 1,
+        "share_name": "电影甲.2160p.strm",
+        "tie_keep_local": false
+      },
+      "identity_source": "filesystem:title+year",
+      "local_count": 1,
+      "local_paths": [
+        "<L>/电影甲 (2020)/电影甲.1080p.strm"
+      ],
+      "local_tmdb": [],
+      "match_basis": "剧名 + 年份",
+      "match_basis_detail": "规范化剧名「电影甲 (2020)」 + 年份「2020」",
+      "reason": "share_better",
+      "reason_label": "分享画质达标",
+      "share_count": 1,
+      "share_paths": [
+        "<S>/电影甲 (2020)/电影甲.2160p.strm"
+      ],
+      "share_tmdb": [],
+      "title": "电影甲 (2020)",
+      "tmdb": [],
+      "tmdb_consistent": true,
+      "tmdb_role": "辅助元数据，不参与跨标题匹配"
+    },
+    "text": "🎬 《电影甲 (2020)》 (分享画质达标，穿透删本地腾网盘)"
+  },
+  {
+    "detail": "├─ 📺 《剧集丁 (2020)》S01: 整剧零和 ➔ CD2联动删除115网盘旧源",
+    "files": [
+      "<L>/剧集丁 (2020)/Season 01/剧集丁.S01E01.1080p.strm"
+    ],
+    "kind": "loc",
+    "meta": {
+      "identity_source": "filesystem:title+year",
+      "local_count": 1,
+      "local_paths": [
+        "<L>/剧集丁 (2020)/Season 01/剧集丁.S01E01.1080p.strm"
+      ],
+      "local_seasons": 2,
+      "local_tmdb": [],
+      "match_basis": "剧名 + 年份",
+      "match_basis_detail": "规范化剧名「剧集丁 (2020)」 + 年份「2020」",
+      "reason": "multi_full_share",
+      "reason_label": "整剧零和-分享替代",
+      "season": 1,
+      "share_count": 1,
+      "share_paths": [
+        "<S>/剧集丁 (2020)/Season 01/剧集丁.S01E01.1080p.strm"
+      ],
+      "share_seasons": 1,
+      "share_tmdb": [],
+      "title": "剧集丁 (2020)",
+      "tmdb": [],
+      "tmdb_consistent": true,
+      "tmdb_role": "辅助元数据，不参与跨标题匹配"
+    },
+    "text": "📺 《剧集丁 (2020)》S01 (整剧零和：分享全季达标 → 删本地)"
+  },
+  {
+    "detail": "├─ 📺 《剧集丙 (2019)》S01: 多季保护·分享合集优先，分享 2 季合集保持完整 ➔ CD2联动删除115网盘旧源",
+    "files": [
+      "<L>/剧集丙 (2019)/Season 01/剧集丙.S01E01.1080p.strm"
+    ],
+    "kind": "loc",
+    "meta": {
+      "identity_source": "filesystem:title+year",
+      "local_count": 1,
+      "local_paths": [
+        "<L>/剧集丙 (2019)/Season 01/剧集丙.S01E01.1080p.strm"
+      ],
+      "local_seasons": 1,
+      "local_tmdb": [],
+      "match_basis": "剧名 + 年份",
+      "match_basis_detail": "规范化剧名「剧集丙 (2019)」 + 年份「2019」",
+      "reason": "multi_protect_partial_local",
+      "reason_label": "多季保护-淘汰本地",
+      "season": 1,
+      "share_count": 1,
+      "share_paths": [
+        "<S>/剧集丙 (2019)/Season 01/剧集丙.S01E01.1080p.strm"
+      ],
+      "share_seasons": 2,
+      "share_tmdb": [],
+      "title": "剧集丙 (2019)",
+      "tmdb": [],
+      "tmdb_consistent": true,
+      "tmdb_role": "辅助元数据，不参与跨标题匹配"
+    },
+    "text": "📺 《剧集丙 (2019)》S01 (多季保护·分享合集优先 → 淘汰本地)"
+  },
+  {
+    "detail": "├─ 📺 《剧集乙 (2021)》S01: 本地达标率 100% (2/2集) ➔ 清理分享影视库strm",
+    "files": [
+      "<S>/剧集乙 (2021)/Season 01/剧集乙.S01E01.720p.strm",
+      "<S>/剧集乙 (2021)/Season 01/剧集乙.S01E02.720p.strm"
+    ],
+    "kind": "shr",
+    "meta": {
+      "compare": {
+        "decided_by": "resolution",
+        "decision": "quality_first",
+        "dims": [
+          {
+            "a": "未识别",
+            "b": "未识别",
+            "key": "release_group",
+            "label": "发布组优先级",
+            "reason": "已关闭",
+            "verdict": "skip"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "source",
+            "label": "资源类型优先级",
+            "reason": "打平，继续比下一维",
+            "verdict": "tie"
+          },
+          {
+            "a": "720p",
+            "b": "2160p / 4K",
+            "key": "resolution",
+            "label": "分辨率优先级",
+            "reason": "决胜维度",
+            "verdict": "b"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "dolby",
+            "label": "动态范围优先级",
+            "reason": "上一维已分胜负",
+            "verdict": "after"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "bitdepth",
+            "label": "色深优先级",
+            "reason": "上一维已分胜负",
+            "verdict": "after"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "audio",
+            "label": "音频规格优先级",
+            "reason": "上一维已分胜负",
+            "verdict": "after"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "fps",
+            "label": "帧率优先级",
+            "reason": "上一维已分胜负",
+            "verdict": "after"
+          }
+        ],
+        "episode": 1,
+        "local_name": "剧集乙.S01E01.2160p.strm",
+        "result": -1,
+        "share_name": "剧集乙.S01E01.720p.strm",
+        "tie_keep_local": false
+      },
+      "identity_source": "filesystem:title+year",
+      "local_better": 2,
+      "local_count": 2,
+      "local_paths": [
+        "<L>/剧集乙 (2021)/Season 01/剧集乙.S01E01.2160p.strm",
+        "<L>/剧集乙 (2021)/Season 01/剧集乙.S01E02.2160p.strm"
+      ],
+      "local_tmdb": [],
+      "local_total": 2,
+      "match_basis": "剧名 + 年份",
+      "match_basis_detail": "规范化剧名「剧集乙 (2021)」 + 年份「2021」",
+      "reason": "local_wins",
+      "reason_label": "本地择优-删分享",
+      "season": 1,
+      "share_better": 0,
+      "share_count": 2,
+      "share_paths": [
+        "<S>/剧集乙 (2021)/Season 01/剧集乙.S01E01.720p.strm",
+        "<S>/剧集乙 (2021)/Season 01/剧集乙.S01E02.720p.strm"
+      ],
+      "share_tmdb": [],
+      "share_total": 2,
+      "title": "剧集乙 (2021)",
+      "tmdb": [],
+      "tmdb_consistent": true,
+      "tmdb_role": "辅助元数据，不参与跨标题匹配"
+    },
+    "text": "📺 《剧集乙 (2021)》S01 (本地更优 2/2 集 → 淘汰分享)"
+  },
+  {
+    "detail": "├─ 📺 《剧集甲 (2020)》S01: 分享达标率 100% (2/2集) ➔ CD2联动删除115网盘旧源",
+    "files": [
+      "<L>/剧集甲 (2020)/Season 01/剧集甲.S01E01.1080p.strm",
+      "<L>/剧集甲 (2020)/Season 01/剧集甲.S01E02.1080p.strm"
+    ],
+    "kind": "loc",
+    "meta": {
+      "compare": {
+        "decided_by": "resolution",
+        "decision": "quality_first",
+        "dims": [
+          {
+            "a": "未识别",
+            "b": "未识别",
+            "key": "release_group",
+            "label": "发布组优先级",
+            "reason": "已关闭",
+            "verdict": "skip"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "source",
+            "label": "资源类型优先级",
+            "reason": "打平，继续比下一维",
+            "verdict": "tie"
+          },
+          {
+            "a": "2160p / 4K",
+            "b": "1080p",
+            "key": "resolution",
+            "label": "分辨率优先级",
+            "reason": "决胜维度",
+            "verdict": "a"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "dolby",
+            "label": "动态范围优先级",
+            "reason": "上一维已分胜负",
+            "verdict": "after"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "bitdepth",
+            "label": "色深优先级",
+            "reason": "上一维已分胜负",
+            "verdict": "after"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "audio",
+            "label": "音频规格优先级",
+            "reason": "上一维已分胜负",
+            "verdict": "after"
+          },
+          {
+            "a": "其他 / 未识别",
+            "b": "其他 / 未识别",
+            "key": "fps",
+            "label": "帧率优先级",
+            "reason": "上一维已分胜负",
+            "verdict": "after"
+          }
+        ],
+        "episode": 1,
+        "local_name": "剧集甲.S01E01.1080p.strm",
+        "result": 1,
+        "share_name": "剧集甲.S01E01.2160p.strm",
+        "tie_keep_local": false
+      },
+      "identity_source": "filesystem:title+year",
+      "local_better": 0,
+      "local_count": 2,
+      "local_paths": [
+        "<L>/剧集甲 (2020)/Season 01/剧集甲.S01E01.1080p.strm",
+        "<L>/剧集甲 (2020)/Season 01/剧集甲.S01E02.1080p.strm"
+      ],
+      "local_tmdb": [],
+      "local_total": 2,
+      "match_basis": "剧名 + 年份",
+      "match_basis_detail": "规范化剧名「剧集甲 (2020)」 + 年份「2020」",
+      "reason": "share_wins",
+      "reason_label": "分享择优-删本地",
+      "season": 1,
+      "share_better": 2,
+      "share_count": 2,
+      "share_paths": [
+        "<S>/剧集甲 (2020)/Season 01/剧集甲.S01E01.2160p.strm",
+        "<S>/剧集甲 (2020)/Season 01/剧集甲.S01E02.2160p.strm"
+      ],
+      "share_tmdb": [],
+      "share_total": 2,
+      "title": "剧集甲 (2020)",
+      "tmdb": [],
+      "tmdb_consistent": true,
+      "tmdb_role": "辅助元数据，不参与跨标题匹配"
+    },
+    "text": "📺 《剧集甲 (2020)》S01 (分享画质达标 2/2 集 → 删本地腾网盘)"
+  },
+  {
+    "detail": "├─ 🛡️ 《白名单剧 (2019)》: 命中白名单 [白名单剧] ➔ 跳过清理",
+    "files": [
+      "<L>/白名单剧 (2019)/白名单剧.2160p.strm",
+      "<S>/白名单剧 (2019)/白名单剧.720p.strm"
+    ],
+    "kind": "exempt",
+    "meta": {
+      "identity_source": "filesystem:title+year",
+      "keywords": [
+        "白名单剧"
+      ],
+      "local_count": 1,
+      "local_paths": [
+        "<L>/白名单剧 (2019)/白名单剧.2160p.strm"
+      ],
+      "local_tmdb": [],
+      "match_basis": "剧名 + 年份",
+      "match_basis_detail": "规范化剧名「白名单剧 (2019)」 + 年份「2019」",
+      "reason": "whitelist",
+      "reason_label": "白名单豁免",
+      "share_count": 1,
+      "share_paths": [
+        "<S>/白名单剧 (2019)/白名单剧.720p.strm"
+      ],
+      "share_tmdb": [],
+      "title": "白名单剧 (2019)",
+      "tmdb": [],
+      "tmdb_consistent": true,
+      "tmdb_role": "辅助元数据，不参与跨标题匹配"
+    },
+    "text": "🛡️ 《白名单剧 (2019)》 (白名单豁免)"
+  }
+]

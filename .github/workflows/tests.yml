@@ -1,0 +1,38 @@
+name: checks
+on:
+  push:
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install test dependencies
+        run: pip install -r dev/requirements.txt
+      - name: Static and release boundaries
+        run: |
+          python dev/tools/static_check.py
+          python dev/tools/release_check.py
+      - name: Frontend syntax and regression
+        run: node dev/tools/verify_frontend.cjs
+      - name: Python regression
+        run: pytest dev/tests/ -q
+  production:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build runtime-only image
+        run: docker build -t strimkeep:ci .
+      - name: Historical SQLite compatibility without test packages
+        run: docker run --rm --network none -i --entrypoint python strimkeep:ci - < dev/checks/verify_docs_schema_compat.py
+      - name: Live HTTP, SQLite writes and restart
+        run: docker run --rm --network none -i --entrypoint python strimkeep:ci - < dev/checks/verify_release_startup.py
