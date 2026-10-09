@@ -45,7 +45,7 @@ services:
       # Web 登录账号和密码，部署前请修改
       # Emby、TMDB、Telegram、CD2 等连接参数在 Web 设置中填写
       WEB_USER: admin
-      WEB_PASSWORD: zzx1231230
+      WEB_PASSWORD: 密码
 
       # CD2 挂载等待开关：
       # "1"：启动时等待 CloudDrive2 挂载就绪
