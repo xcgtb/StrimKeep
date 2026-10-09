@@ -56,7 +56,20 @@ def check(root, archive=False):
             errors.append('changelog release version mismatch')
         for name in ('docker-compose.yml', 'dev/docker-compose.build.yml'):
             compose = (root/name).read_text()
-            if not re.search(r'^\s+image: [^\s]+:'+re.escape(version)+r'\s*$', compose, re.M):
+            # 公开部署模板允许 latest；构建模板必须与源码版本一致
+            allowed_tags = (
+                (version, 'latest')
+                if name == 'docker-compose.yml'
+                else (version,)
+            )
+            if not any(
+                re.search(
+                    r'^\s+image: [^\s]+:' + re.escape(tag) + r'\s*$',
+                    compose,
+                    re.M,
+                )
+                for tag in allowed_tags
+            ):
                 errors.append(f'image/source version mismatch: {name}')
             if 'container_name: strimkeep' not in compose:
                 errors.append(f'container name mismatch: {name}')
