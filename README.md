@@ -27,26 +27,67 @@ cd /vol1/1000/docker/StrimKeep
 ```yaml
 services:
   strimkeep:
+    # 镜像版本：固定版本便于管理；改为 latest 可跟随最新发布
     image: ghcr.io/xcgtb/strimkeep:latest
     container_name: strimkeep
+
+    # 容器异常退出或 NAS 重启后自动启动，手动停止后不自动启动
     restart: unless-stopped
+
+    # 使用宿主机网络，无需配置 ports
+    # 默认访问地址：http://你的NAS_IP:8321
     network_mode: host
+
     environment:
+      # 时区，影响日志时间和定时任务
       TZ: Asia/Shanghai
-      WEB_USER: "admin"
-      WEB_PASSWORD: "CHANGE_ME_TO_A_STRONG_PASSWORD"
+
+      # Web 登录账号和密码，部署前请修改
+      # Emby、TMDB、Telegram、CD2 等连接参数在 Web 设置中填写
+      WEB_USER: admin
+      WEB_PASSWORD: zzx1231230
+
+      # CD2 挂载等待开关：
+      # "1"：启动时等待 CloudDrive2 挂载就绪
+      # "0"：跳过启动等待
+      # 此项不是 115 联动删除开关
       ENABLE_CD2_WATCHDOG: "1"
+
     volumes:
+      # 持久化数据：配置、订阅、缓存、日志和计划存档
+      # ./data 表示当前 YML 所在目录下的 data 文件夹
+      # 首次启动自动创建，更新容器时保留此目录
       - ./data:/data
-      - /你的本地STRM库:/media/local:rw
-      - /你的分享STRM库:/media/share:rw
-      - /你的CloudDrive2源文件库:/media/cloud:rslave
+
+      # 以下三个宿主机路径是飞牛示例，请按实际目录修改
+      # 只修改冒号左边；右边的容器路径和挂载参数保持不变
+
+      # 本地 STRM 库：挂载 STRM 根目录，不是视频源目录
+      # 清理本地库时，删除 NAS STRM、附属文件，
+      # 并联动清理对应的 115 源文件和附属文件
+      - /vol1/1000/TgtoDrive/strm/115网盘/影视媒体库:/media/local:rw
+
+      # 分享 STRM 库：挂载分享库的 STRM 根目录
+      # 清理分享库只删除 NAS STRM 和附属文件，不删除远端分享源
+      - /vol1/1000/TgtoDrive/strm/115网盘/分享影视库:/media/share:rw
+
+      # CD2 源文件库：挂载 CloudDrive2 中对应本地 STRM 的 115 目录
+      # 此处应能看到真实视频、字幕等源文件
+      # 两者根目录下的相对层级应对应，例如：剧集/日韩剧集/剧名/Season 1
+      # rslave 用于让宿主机后续的挂载变化传播到容器
+      - /vol1/1000/docker/clouddrive2/CloudDrive/影视媒体库:/media/cloud:rslave
+
     logging:
+      # Docker 控制台日志轮转，避免日志文件持续增长
+      # 此限制不影响应用内 SQLite 日志的保留策略
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+
     healthcheck:
+      # 定期检测应用健康状态
+      # unhealthy 仅标记异常，不会单独触发 Docker 自动重启
       test: ["CMD", "python", "/app/scripts/healthcheck.py"]
       interval: 30s
       timeout: 10s
