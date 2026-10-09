@@ -27,22 +27,20 @@ cd /vol1/1000/docker/StrimKeep
 ```yaml
 services:
   strimkeep:
-    image: ghcr.io/xcgtb/strimkeep:1.0.0
+    image: ghcr.io/xcgtb/strimkeep:latest
     container_name: strimkeep
     restart: unless-stopped
     network_mode: host
     environment:
       TZ: Asia/Shanghai
-      WEB_USER: admin
-      WEB_PASSWORD: CHANGE_ME_TO_A_STRONG_PASSWORD
-      # 只控制启动时等待 CD2 挂载，不关闭联动删除
-      ENABLE_CD2_WATCHDOG: "0"
+      WEB_USER: "admin"
+      WEB_PASSWORD: "CHANGE_ME_TO_A_STRONG_PASSWORD"
+      ENABLE_CD2_WATCHDOG: "1"
     volumes:
       - ./data:/data
-      # 修改冒号左边的三个宿主机路径，右边保持不变
-      - /你的本地影视库:/media/local:rw
-      - /你的分享影视库:/media/share:rw
-      - /你的CloudDrive2影视库:/media/cloud:rslave
+      - /你的本地STRM库:/media/local:rw
+      - /你的分享STRM库:/media/share:rw
+      - /你的CloudDrive2源文件库:/media/cloud:rslave
     logging:
       driver: json-file
       options:
