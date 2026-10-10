@@ -8,9 +8,9 @@
 <link rel="icon" sizes="16x16 32x32 48x48 64x64" href="/static/icons/favicon.ico?v=312b3784ba93">
 <link rel="icon" type="image/svg+xml" sizes="any" href="/static/icons/favicon.svg?v=d6d1a1064986">
 <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png?v=a23c01bd901b">
-<link rel="stylesheet" href="/static/css/app.css?v=c8657efa6efe">
+<link rel="stylesheet" href="/static/css/app.css?v=21dcf5feb8e0">
 <link rel="stylesheet" href="/static/css/overview.css?v=ccd6be9f7ed6">
-<link rel="stylesheet" href="/static/css/glass.css?v=7bbf3c176261">
+<link rel="stylesheet" href="/static/css/glass.css?v=2aa6d6cab791">
 <script>
 /* 尽早设置主题，避免页面闪烁（FOUC） */
 (function(){
@@ -84,10 +84,10 @@ window.addEventListener('unhandledrejection', function(e){
           <div class="cinema-topline"><span>我的媒体库 / 媒体总览</span><div><span id="overviewUpdated" role="status">读取缓存中</span><button type="button" id="overviewRefresh" onclick="refreshOverview()" data-icon="refresh">刷新总览</button></div></div>
           <div class="cinema-title"><span class="cinema-eyebrow">STRIMKEEP · YOUR COLLECTION</span><h1>你的私人片库</h1><p>片库规模、剧集完整度与治理进展，一眼掌握。</p></div>
           <div class="cinema-numbers">
-            <div><span>本地 STRM</span><b id="stat-local">—</b><small>个文件</small></div>
-            <div><span>分享 STRM</span><b id="stat-share">—</b><small>个文件</small></div>
-            <div><span>剧集</span><b id="dash-series">—</b><small>已入库 <span id="dash-eps">—</span> 集</small></div>
-            <div><span>电影</span><b id="dash-movies">—</b><small>部作品</small></div>
+            <div><span>本地片库</span><b><span id="stat-local">—</span><i class="u">个</i></b><small>STRM 文件</small></div>
+            <div><span>分享片库</span><b><span id="stat-share">—</span><i class="u">个</i></b><small>STRM 文件</small></div>
+            <div><span>剧集</span><b id="dash-series">—</b><small>共 <span id="dash-eps">—</span> 集</small></div>
+            <div><span>电影</span><b id="dash-movies">—</b><small>已入库</small></div>
           </div>
         </div>
         <div id="overviewRefreshState" class="cinema-refresh-state" role="status" aria-live="polite"></div>
@@ -772,6 +772,27 @@ window.addEventListener('unhandledrejection', function(e){
           <h3 data-icon="info">Bot 状态</h3>
           <div id="botStatus" style="font-size:12px;color:#6b7280">加载中...</div>
         </div>
+        <div class="panel appearance-settings">
+          <h3 data-icon="image">界面背景</h3>
+          <p class="hint">手机和电脑共用，切换主题时自动使用对应背景。填写图床的图片直链，留空使用内置背景。</p>
+          <div class="appearance-grid">
+            <div class="form-row">
+              <label for="background-light-url">浅色模式背景</label>
+              <input type="url" id="background-light-url" oninput="appearanceRevision++" placeholder="https://你的图床/浅色背景.jpg" maxlength="2048" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="form-row">
+              <label for="background-dark-url">深色模式背景</label>
+              <input type="url" id="background-dark-url" oninput="appearanceRevision++" placeholder="https://你的图床/深色背景.jpg" maxlength="2048" autocomplete="off" spellcheck="false">
+            </div>
+          </div>
+          <p class="hint">建议使用横向高清图片和 HTTPS 地址，图片需能直接打开。预览只影响当前页面，保存后生效。</p>
+          <div class="appearance-actions">
+            <button type="button" class="btn gray" id="backgroundPreviewBtn" onclick="previewAppearance()" data-icon="image">预览背景</button>
+            <button type="button" class="btn" id="backgroundSaveBtn" onclick="saveAppearance()" data-icon="save">保存背景</button>
+            <button type="button" class="btn gray" id="backgroundResetBtn" onclick="resetAppearance()" data-icon="undo">恢复内置背景</button>
+          </div>
+          <p class="hint" id="backgroundResult" role="status" aria-live="polite"></p>
+        </div>
       </section>
 
     </div>
@@ -793,16 +814,16 @@ window.addEventListener('unhandledrejection', function(e){
   <button type="button" onclick="toggleSidebar(true)"><span class="dock-icon"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></span><span>更多</span></button>
 </nav>
 
-<script defer src="/static/js/icons.js?v=4cd84ed61ca5"></script>
+<script defer src="/static/js/icons.js?v=98af288253ca"></script>
 <script defer src="/static/js/modal.js?v=60e0db6c4ffc"></script>
-<script defer src="/static/js/runtime.js?v=5fba97aadd75"></script>
+<script defer src="/static/js/runtime.js?v=e33ec13a026a"></script>
 <script defer src="/static/js/dashboard.js?v=a51e30eb85fe"></script>
 <script defer src="/static/js/governance.js?v=46dc287f6b42"></script>
 <script defer src="/static/js/explore.js?v=34fa83fdf4cd"></script>
 <script defer src="/static/js/mapping.js?v=505a4e51bb09"></script>
 <script defer src="/static/js/subscriptions.js?v=d419bd118a94"></script>
 <script defer src="/static/js/records.js?v=823e156e2088"></script>
-<script defer src="/static/js/settings.js?v=9a2a168f7bcf"></script>
+<script defer src="/static/js/settings.js?v=cf397f4ab917"></script>
 <script defer src="/static/js/plans.js?v=02b979a10f92"></script>
 <script defer src="/static/js/directory-cleanup.js?v=7bd34b96ca79"></script>
 <script defer src="/static/js/bootstrap.js?v=dff82f7d3da8"></script>
@@ -852,6 +873,6 @@ window.addEventListener('unhandledrejection', function(e){
 
 
 
-<script defer src="/static/js/theme-meta.js?v=e08f7ff2e625"></script>
+<script defer src="/static/js/theme-meta.js?v=332736edb11d"></script>
 </body>
 </html>

@@ -7,7 +7,7 @@
   --border-input:rgba(55,118,162,.26);--fill:rgba(151,192,220,.22);--fill-soft:rgba(179,212,235,.2);
   --seg-active:rgba(255,255,255,.7);--glass-edge:rgba(255,255,255,.7);
   --glass-shadow:0 8px 28px rgba(48,101,140,.06);--glass-blur:18px;
-  --glass-backdrop:linear-gradient(rgba(213,238,254,.18),rgba(225,244,255,.38)),url('/static/images/sky-city.webp');
+  --glass-backdrop:linear-gradient(rgba(213,238,254,.18),rgba(225,244,255,.38)),var(--glass-light-image,url('/static/images/sky-city.webp'));
   --glass-position:68% center;--glass-overlay:rgba(32,54,75,.24);
   --glass-hero:linear-gradient(90deg,rgba(231,246,255,.24),rgba(241,250,255,.02));
   --glass-ink:#16334b;--glass-muted:#48677e;--glass-line:rgba(46,106,149,.19);
@@ -20,7 +20,7 @@ html[data-theme="dark"]{
   --border-input:rgba(170,195,222,.24);--fill:rgba(139,169,204,.15);--fill-soft:rgba(125,158,192,.1);
   --seg-active:rgba(79,107,144,.42);--glass-edge:rgba(202,224,248,.12);
   --glass-shadow:0 10px 35px rgba(0,0,0,.14);
-  --glass-backdrop:linear-gradient(rgba(10,17,25,.47),rgba(10,17,25,.72)),url('/static/images/overview-hero.webp');
+  --glass-backdrop:linear-gradient(rgba(10,17,25,.47),rgba(10,17,25,.72)),var(--glass-dark-image,url('/static/images/overview-hero.webp'));
   --glass-overlay:rgba(4,10,17,.42);
   --glass-hero:linear-gradient(90deg,rgba(16,23,32,.36),rgba(16,23,32,.02));
   --glass-ink:#f3f4f6;--glass-muted:#b0bdcb;--glass-line:rgba(208,221,240,.16);
@@ -33,7 +33,7 @@ html[data-theme="dark"]{
   --border-input:rgba(170,195,222,.24);--fill:rgba(139,169,204,.15);--fill-soft:rgba(125,158,192,.1);
   --seg-active:rgba(79,107,144,.42);--glass-edge:rgba(202,224,248,.12);
   --glass-shadow:0 10px 35px rgba(0,0,0,.14);
-  --glass-backdrop:linear-gradient(rgba(10,17,25,.47),rgba(10,17,25,.72)),url('/static/images/overview-hero.webp');
+  --glass-backdrop:linear-gradient(rgba(10,17,25,.47),rgba(10,17,25,.72)),var(--glass-dark-image,url('/static/images/overview-hero.webp'));
   --glass-overlay:rgba(4,10,17,.42);
   --glass-hero:linear-gradient(90deg,rgba(16,23,32,.36),rgba(16,23,32,.02));
   --glass-ink:#f3f4f6;--glass-muted:#b0bdcb;--glass-line:rgba(208,221,240,.16);
@@ -94,3 +94,9 @@ html .cinema-topline button{background:var(--surface-solid);border-color:var(--g
 @media(prefers-reduced-transparency:reduce){
   html :is(.sidebar,.header,.mobile-dock,.map-bar,.subnav,.filter-summary,.save-bar,.panel,.card,.poster-card,.emby-card,.search-hero,.filter-panel,.runtime-panel,.modal,.ui-modal-box,.task-hint,.toast,.cinema-health,.cinema-workspace,.poster-card .info){background:var(--bg);backdrop-filter:none;-webkit-backdrop-filter:none}
 }
+
+.appearance-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.appearance-grid .form-row{min-width:0}
+.appearance-actions{display:flex;flex-wrap:wrap;gap:8px}
+.appearance-settings .hint{color:var(--text-dim);line-height:1.7}
+@media(max-width:760px){.appearance-grid{grid-template-columns:1fr;gap:0}}

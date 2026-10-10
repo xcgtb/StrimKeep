@@ -1,6 +1,7 @@
 
 /* ═══════════ SVG 图标库 ═══════════ */
 var ICONS = {
+  image:'<svg class="ic" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 6-6 4 4 3-3 5 5"/></svg>',
   archive:'<svg class="ic" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M9.5 13h5"/></svg>',
   grid:'<svg class="ic" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>',
   film:'<svg class="ic" viewBox="0 0 24 24"><rect x="2.5" y="3" width="19" height="18" rx="2"/><path d="M7 3v18M17 3v18M2.5 9.5h4.5M2.5 14.5h4.5M17 9.5h4.5M17 14.5h4.5"/></svg>',

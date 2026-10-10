@@ -21,7 +21,7 @@ function groupOf(id){
   return id;
 }
 var SET_GROUPS = [['rules','治理规则','策略 · 特别篇 · 白名单'],['auto','自动任务','入库监控 · 定时巡检'],['conn','服务连接','Emby · TMDB · Telegram']];
-var SET_MAP = ['rules','rules','rules','auto','auto','rules','conn','conn'];
+var SET_MAP = ['rules','rules','rules','auto','auto','rules','conn','conn','conn'];
 function buildSubnavs(){
   Object.keys(GROUPS).forEach(function(g){
     GROUPS[g].forEach(function(cur){
@@ -427,6 +427,7 @@ function toggleTheme(){
 function initTheme(){
   // <head> 里的内联脚本已经设了 data-theme（防闪烁），这里只更新图标
   updateThemeIcon();
+  if (typeof loadAppearance === 'function') loadAppearance();
   // 监听系统主题变化（仅在用户未手动选择时生效）
   if (window.matchMedia) {
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(){

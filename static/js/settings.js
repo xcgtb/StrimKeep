@@ -458,6 +458,7 @@ async function saveGovAuto(){
 
 /* ═══════════ 服务配置 ═══════════ */
 async function loadConfig(){
+  if (typeof loadAppearance === 'function') loadAppearance(true);
   try {
     revealed = {};
     var r = await api('/api/config');

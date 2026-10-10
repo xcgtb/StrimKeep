@@ -351,7 +351,7 @@ html[data-theme="dark"] .card::before{opacity:.15}
 .btn.sm{padding:5px 11px;font-size:11px;border-radius:8px}
 
 /* ═══════════ 输入框 ═══════════ */
-input[type=text],input[type=number],input[type=password],select,textarea{
+input[type=text],input[type=url],input[type=number],input[type=password],select,textarea{
   border:1px solid var(--border-input);border-radius:10px;
   background:var(--surface-solid);color:var(--text);
   padding:9px 12px;font-size:13.5px;outline:none;width:100%;font-family:inherit;
@@ -884,7 +884,7 @@ pre.out{
   .panel .row-between h3{margin:0}
 
   /* 输入框加大 */
-  input[type=text],input[type=number],input[type=password]{padding:10px 12px;font-size:14px;min-height:40px}
+  input[type=text],input[type=url],input[type=number],input[type=password]{padding:10px 12px;font-size:14px;min-height:40px}
 
   /* 搜索框 */
   .search-hero{padding:5px 5px 5px 12px}
@@ -1621,7 +1621,7 @@ body::before,.tab.active::before,.panel::before,.card::before{display:none}
 .btn.primary,.btn.brand{background:var(--accent);color:#fff;border:0;box-shadow:none}
 
 /* 输入 */
-input[type=text],input[type=number],input[type=password],input[type=search],input[type=time],select,textarea{
+input[type=text],input[type=url],input[type=number],input[type=password],input[type=search],input[type=time],select,textarea{
   background:var(--fill-soft);color:var(--text);
   border:1px solid transparent;border-radius:10px;padding:9px 12px;font-size:14px;
   transition:border-color .15s var(--ease),box-shadow .15s var(--ease);

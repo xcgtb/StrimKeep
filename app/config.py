@@ -26,6 +26,8 @@ DEFAULTS = {
     'http_proxy_url':         '',
     'http_proxy_username':    '',
     'http_proxy_password':    '',
+    'background_light_url':   '',
+    'background_dark_url':    '',
     # Emby 媒体库里看到的 STRM 根目录（Emby 容器内路径），用于区分本地/分享与单剧删除
     'emby_local_path':        os.environ.get('EMBY_LOCAL_PATH',        '/strm/115网盘/影视媒体库'),
     'emby_share_path':        os.environ.get('EMBY_SHARE_PATH',        '/strm/115网盘/分享影视库'),

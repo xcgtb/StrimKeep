@@ -20,6 +20,46 @@ except ImportError:
 router = APIRouter()
 
 
+BACKGROUND_KEYS = ('background_light_url', 'background_dark_url')
+
+
+def _background_config(body=None, saved=None):
+    saved = load_config() if saved is None else saved
+    body = body or {}
+    result = {}
+    for key in BACKGROUND_KEYS:
+        value = body.get(key, saved.get(key, ''))
+        if not isinstance(value, str):
+            raise HTTPException(400, '背景地址必须是图片直链或留空')
+        value = value.strip()
+        if value:
+            try:
+                url = urllib.parse.urlsplit(value)
+                valid = (len(value) <= 2048 and url.scheme in ('http', 'https') and
+                         url.hostname and url.username is None and url.password is None and
+                         not any(c.isspace() or ord(c) < 32 or c in '\\"<>\x7f' for c in value))
+                if not valid or (url.port is not None and not 1 <= url.port <= 65535):
+                    raise ValueError()
+            except ValueError:
+                raise HTTPException(400, '请填写有效的 HTTP/HTTPS 图片直链；留空使用内置背景')
+        result[key] = value
+    return result
+
+
+@router.get('/api/appearance', dependencies=[Depends(auth)])
+def api_get_appearance():
+    return {'status': 'success', 'appearance': _background_config()}
+
+
+@router.post('/api/appearance', dependencies=[Depends(auth)])
+def api_set_appearance(body: dict = None):
+    cfg = load_config()
+    appearance = _background_config(body, saved=cfg)
+    cfg.update(appearance)
+    save_config(cfg)
+    return {'status': 'success', 'appearance': appearance}
+
+
 @router.get('/api/strategy', dependencies=[Depends(auth)])
 def api_get_strategy():
     return {'status': 'success', 'strategy': get_strategy()}
@@ -128,6 +168,7 @@ def api_get_config(reveal: int = 0):
 def api_set_config(body: dict = None):
     body = body or {}
     cfg = load_config()
+    appearance = _background_config(body, saved=cfg)
     try:
         proxy = network.proxy_config(body, saved=cfg)
     except ValueError as error:
@@ -145,6 +186,7 @@ def api_set_config(body: dict = None):
             continue
         cfg[k] = new_val
     cfg.update({k: proxy.get(k, '') for k in network.PROXY_KEYS})
+    cfg.update(appearance)
     saved = save_config(cfg)
     engine.reload_config()
     try: bot.restart()
