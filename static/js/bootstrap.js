@@ -43,7 +43,6 @@ document.addEventListener('DOMContentLoaded', async function(){
     loadDashboard();
   }
   setupPosterAutoLoad();
-  loadLibraryStats();
   pollTmdbProgress();
   startRuntimeStatus();
 });

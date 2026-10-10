@@ -79,6 +79,39 @@ def start_and_check(data, expected_interval, update=False):
             assert favicon == request(port, '/static/icons/favicon.ico', False, binary=True)
             assert favicon.startswith(bytes([0, 0, 1, 0])), 'invalid ICO header'
             if update:
+                # Actual cache lifecycle through production HTTP routes, not a
+                # TestClient/fixture: warm, force refresh after an added file,
+                # persist and reuse the same snapshot on the next process.
+                overview_deadline = time.monotonic() + 8
+                while True:
+                    snapshot = json.loads(request(port, '/api/overview'))
+                    if snapshot['status'] == 'success' and not snapshot['refresh']['running']:
+                        break
+                    if time.monotonic() >= overview_deadline:
+                        raise AssertionError('initial overview refresh timed out')
+                    time.sleep(.05)
+                assert snapshot['dashboard']['localCount'] == '0'
+                (data / 'L_ROOT' / 'new.strm').write_text('https://example.invalid/media')
+                job = json.loads(request(port, '/api/overview/refresh', body={}))['refresh']
+                assert job['id'] >= 1
+                overview_deadline = time.monotonic() + 8
+                while True:
+                    snapshot = json.loads(request(port, '/api/overview'))
+                    if snapshot['refresh']['id'] >= job['id'] and not snapshot['refresh']['running']:
+                        break
+                    if time.monotonic() >= overview_deadline:
+                        raise AssertionError('forced overview refresh timed out')
+                    time.sleep(.05)
+                assert not snapshot['refresh']['error'], snapshot['refresh']
+            else:
+                snapshot = json.loads(request(port, '/api/overview'))
+                assert not snapshot['refresh']['running'], 'restart re-scanned a fresh persistent snapshot'
+            assert snapshot['dashboard']['localCount'] == '1'
+            assert snapshot['library_stats']['local_total'] == 1
+            assert json.loads(request(port, '/api/overview/recommendations'))['status'] == 'error'
+            assert request(port, '/static/images/overview-hero.webp', False, binary=True)[:4] == b'RIFF'
+            overview_ts = snapshot['ts']
+            if update:
                 result = json.loads(request(port, '/api/config', body={'subscribe_interval_min':'42'}))
                 assert result['status'] == 'success'
                 assert json.loads(request(port, '/api/config'))['config']['subscribe_interval_min'] == '42'
@@ -92,6 +125,7 @@ def start_and_check(data, expected_interval, update=False):
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
+    return overview_ts
 
 
 def main():
@@ -107,13 +141,13 @@ def main():
                     con.execute('CREATE TABLE docs(name TEXT PRIMARY KEY,payload TEXT NOT NULL,'
                                 'version INTEGER NOT NULL,updated_at REAL NOT NULL)')
                     con.execute("INSERT INTO docs VALUES('retained','{}',7,1)")
-            start_and_check(data, '41', update=True)
-            start_and_check(data, '42')
+            overview_ts = start_and_check(data, '41', update=True)
+            assert start_and_check(data, '42') == overview_ts, 'restart replaced the fresh persisted overview'
             with sqlite3.connect(data/'state/strimkeep.db') as con:
                 assert con.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
                 if historical: assert con.execute("SELECT version FROM docs WHERE name='retained'").fetchone()[0] == 7
             assert json.loads((data/'config.json').read_text())['subscribe_interval_min'] == '41'
-            print('PASS %s: live HTTP, authentication, assets, SQLite-only save and restart' %
+            print('PASS %s: live HTTP, authentication, assets, forced overview refresh, SQLite-only save and cache reuse after restart' %
                   ('historical required-version schema' if historical else 'fresh database'))
     print('PASS 2/2; real local HTTP servers, temporary data/media, no external API or messages')
     print('httpx installed: %s (not required by this verifier)' % (importlib.util.find_spec('httpx') is not None))

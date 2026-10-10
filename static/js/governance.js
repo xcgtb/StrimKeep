@@ -1,15 +1,4 @@
 /* ═══════════ 扫描 ═══════════ */
-async function refreshCaches(){
-  try {
-    var r = await api('/api/cache/refresh', { method: 'POST' });
-    if (r.status !== 'success') throw new Error(r.message || '失败');
-    toast('缓存已清除，后台重建中', 'success');
-    loadDashboard();
-  } catch(e){
-    toast('刷新失败: ' + e.message, 'error');
-  }
-}
-
 async function scanLibrary(){
   if (__scanBusy) return;
   __scanBusy = true;

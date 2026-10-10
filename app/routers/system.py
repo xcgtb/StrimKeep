@@ -2,6 +2,7 @@
 """系统：健康 / 任务查询 / 仪表盘 / 一致性 / 缓存 / Bot 状态"""
 import time, threading
 from fastapi import APIRouter, Depends, HTTPException
+from app import overview
 
 try:
     from app.routers.deps import auth, engine, bot, tasks, _current_task_dict, APP_VERSION
@@ -13,6 +14,24 @@ except ImportError:
     import storage
 
 router = APIRouter()
+
+
+@router.get('/api/overview', dependencies=[Depends(auth)])
+def api_overview():
+    return overview.get_overview()
+
+
+@router.post('/api/overview/refresh', dependencies=[Depends(auth)])
+def api_overview_refresh():
+    return {'status': 'success', 'refresh': overview.request_refresh(force=True)}
+
+
+@router.get('/api/overview/recommendations', dependencies=[Depends(auth)])
+def api_overview_recommendations(media: str = 'movie', retry: int = 0):
+    try:
+        return overview.recommendations(media, retry=bool(retry))
+    except ValueError:
+        raise HTTPException(400, '无效推荐类型')
 
 
 @router.get('/api/runtime/status', dependencies=[Depends(auth)])
@@ -170,17 +189,8 @@ def cancel_task(tid: str):
 
 @router.post('/api/cache/refresh', dependencies=[Depends(auth)])
 def api_cache_refresh():
-    """清除全部内存缓存并触发后台重建（STRM 计数 / 片库映射 / 统计 / 分集 / Emby 索引）。
-    磁盘缓存文件保留作为兜底，后台重建完成后自动覆盖。"""
-    try:
-        engine.invalidate_media_caches()
-        threading.Thread(target=engine._overview_bg_refresh, daemon=True,
-                         name='cache-refresh-overview').start()
-        threading.Thread(target=engine._strm_count_bg_refresh, daemon=True,
-                         name='cache-refresh-strm').start()
-        return {'status': 'success', 'message': '缓存已清除，后台正在重建'}
-    except Exception as e:
-        return {'status': 'error', 'message': str(e)}
+    """Compatibility route; the Web has one overview refresh action."""
+    return api_overview_refresh()
 
 
 @router.get('/api/bot/status', dependencies=[Depends(auth)])

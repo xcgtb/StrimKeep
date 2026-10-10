@@ -935,7 +935,7 @@ pre.out{
    ============================================================ */
 
 /* 1. 关掉背景网格纹理 */
-body::before { display: none !important; }
+body::before { display: none; }
 
 /* 2. 简化背景：去掉多层 radial-gradient 光晕（糊感主因） */
 body {
@@ -950,20 +950,7 @@ body {
 /* 4. 关掉每个 tab 顶部的紫光晕条 */
 .tab.active::before { display: none !important; }
 
-/* 5. 全局关闭 backdrop-filter（手机 GPU 杀手） */
-.panel,
-.card,
-.poster-card,
-.emby-card,
-.sidebar,
-.header,
-.search-hero,
-.filter-summary,
-.modal,
-.toast {
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
+/* Glass surfaces are managed by glass.css; rows do not each create a blur layer. */
 
 /* ============================================================
    UI Modal v1 - custom dialogs
@@ -1029,7 +1016,7 @@ body {
 
 
 /* ===== 仪表盘分类卡片（强制） ===== */
-body::before { display: none !important; }
+body::before { display: none; }
 .panel::before, .card::before { display: none !important; }
 .tab.active::before { display: none !important; }
 .main { max-width: none !important; }

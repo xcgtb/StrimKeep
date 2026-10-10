@@ -1,0 +1,96 @@
+/* Shared glass surfaces across every page. Backgrounds stay fixed while content scrolls. */
+:root{
+  --bg:#e4f2fc;--bg-soft:rgba(245,252,255,.72);--bg-dim:rgba(176,204,225,.27);
+  --surface:rgba(246,252,255,.62);--surface-solid:rgba(248,253,255,.8);--bar:rgba(243,250,255,.66);
+  --text:#16334b;--text-mid:#365772;--text-dim:#526e85;--accent:#087cbe;
+  --accent-soft:rgba(17,134,208,.13);--border:rgba(66,122,165,.18);--border-strong:rgba(42,106,149,.3);
+  --border-input:rgba(55,118,162,.26);--fill:rgba(151,192,220,.22);--fill-soft:rgba(179,212,235,.2);
+  --seg-active:rgba(255,255,255,.7);--glass-edge:rgba(255,255,255,.7);
+  --glass-shadow:0 8px 28px rgba(48,101,140,.06);--glass-blur:18px;
+  --glass-backdrop:linear-gradient(rgba(213,238,254,.18),rgba(225,244,255,.38)),url('/static/images/sky-city.webp');
+  --glass-position:68% center;--glass-overlay:rgba(32,54,75,.24);
+  --glass-hero:linear-gradient(90deg,rgba(231,246,255,.24),rgba(241,250,255,.02));
+  --glass-ink:#16334b;--glass-muted:#48677e;--glass-line:rgba(46,106,149,.19);
+}
+html[data-theme="dark"]{
+  --bg:#101419;--bg-soft:rgba(24,31,40,.78);--bg-dim:rgba(42,53,67,.6);
+  --surface:rgba(21,29,38,.64);--surface-solid:rgba(24,32,42,.85);--bar:rgba(20,27,36,.69);
+  --text:#f3f4f6;--text-mid:#ccd4df;--text-dim:#a2b0c0;--accent:#4ba4ff;
+  --accent-soft:rgba(38,136,237,.18);--border:rgba(192,214,242,.14);--border-strong:rgba(192,214,242,.24);
+  --border-input:rgba(170,195,222,.24);--fill:rgba(139,169,204,.15);--fill-soft:rgba(125,158,192,.1);
+  --seg-active:rgba(79,107,144,.42);--glass-edge:rgba(202,224,248,.12);
+  --glass-shadow:0 10px 35px rgba(0,0,0,.14);
+  --glass-backdrop:linear-gradient(rgba(10,17,25,.47),rgba(10,17,25,.72)),url('/static/images/overview-hero.webp');
+  --glass-overlay:rgba(4,10,17,.42);
+  --glass-hero:linear-gradient(90deg,rgba(16,23,32,.36),rgba(16,23,32,.02));
+  --glass-ink:#f3f4f6;--glass-muted:#b0bdcb;--glass-line:rgba(208,221,240,.16);
+}
+@media(prefers-color-scheme:dark){html:not([data-theme]){
+  --bg:#101419;--bg-soft:rgba(24,31,40,.78);--bg-dim:rgba(42,53,67,.6);
+  --surface:rgba(21,29,38,.64);--surface-solid:rgba(24,32,42,.85);--bar:rgba(20,27,36,.69);
+  --text:#f3f4f6;--text-mid:#ccd4df;--text-dim:#a2b0c0;--accent:#4ba4ff;
+  --accent-soft:rgba(38,136,237,.18);--border:rgba(192,214,242,.14);--border-strong:rgba(192,214,242,.24);
+  --border-input:rgba(170,195,222,.24);--fill:rgba(139,169,204,.15);--fill-soft:rgba(125,158,192,.1);
+  --seg-active:rgba(79,107,144,.42);--glass-edge:rgba(202,224,248,.12);
+  --glass-shadow:0 10px 35px rgba(0,0,0,.14);
+  --glass-backdrop:linear-gradient(rgba(10,17,25,.47),rgba(10,17,25,.72)),url('/static/images/overview-hero.webp');
+  --glass-overlay:rgba(4,10,17,.42);
+  --glass-hero:linear-gradient(90deg,rgba(16,23,32,.36),rgba(16,23,32,.02));
+  --glass-ink:#f3f4f6;--glass-muted:#b0bdcb;--glass-line:rgba(208,221,240,.16);
+}}
+/* A fixed paint layer avoids background-attachment issues on mobile Safari. */
+html body::before{
+  display:block;content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
+  background-image:var(--glass-backdrop);background-position:var(--glass-position);background-size:cover;
+  background-repeat:no-repeat;mask-image:none;-webkit-mask-image:none;
+}
+html .app-wrap{background:transparent;position:relative;z-index:1}
+html .app-wrap>main,html .main{background:transparent}
+/* An opacity animation with fill-mode:both creates a backdrop root and hides the scenery from panels. */
+html .tab.active{animation:none}
+/* Main surfaces only: nested rows and inputs share a tint without extra blur layers. */
+html :is(.sidebar,.header,.mobile-dock,.map-bar,.subnav,.filter-summary,.save-bar){
+  background:var(--bar);backdrop-filter:blur(var(--glass-blur)) saturate(125%);
+  -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(125%);border-color:var(--glass-edge);
+}
+html :is(.panel,.card,.emby-card,.search-hero,.filter-panel,.runtime-panel,.modal,.ui-modal-box,.task-hint,.toast){
+  background:var(--surface);backdrop-filter:blur(var(--glass-blur)) saturate(120%);
+  -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(120%);
+  border:1px solid var(--glass-edge);box-shadow:var(--glass-shadow);
+}
+html :is(.modal,.ui-modal-box,.runtime-panel){background:var(--surface-solid)}
+html .poster-card{background:var(--surface);border-color:var(--glass-edge)}
+html :is(.poster-card .info,.emby-card .info){background:var(--surface);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+html :is(.modal-bg,.ui-modal-bg,.mask){background:var(--glass-overlay)}
+html .toast{background:var(--surface-solid);color:var(--text)}
+html .subnav button.on,html .segmented button.active{background:var(--seg-active)}
+html #govTruthGrid .meta-row{background:var(--fill-soft)}
+html select option{background:var(--bg);color:var(--text)}
+/* Overview remains an open canvas, grouped into two large translucent surfaces. */
+html .cinema-overview{--cinema-ink:var(--glass-ink);--cinema-muted:var(--glass-muted);--cinema-line:var(--glass-line)}
+html .cinema-hero:before{background-image:var(--glass-hero);background-position:var(--glass-position);inset:0 -30px 0;opacity:.85}
+html .cinema-health,html .cinema-workspace{
+  background:var(--surface);border:1px solid var(--glass-edge);border-radius:22px;
+  backdrop-filter:blur(var(--glass-blur)) saturate(120%);-webkit-backdrop-filter:blur(var(--glass-blur)) saturate(120%);
+  box-shadow:var(--glass-shadow);
+}
+html .cinema-health{padding:22px 24px 18px;margin:18px 0 24px}
+html .cinema-workspace{padding:24px}
+html .cinema-title h1{color:var(--glass-ink)}
+html .cinema-title p{color:var(--glass-muted)}
+html .cinema-topline button{background:var(--surface-solid);border-color:var(--glass-edge)}
+@media(max-width:999px){html .cinema-hero:before{inset:0 -18px 0}}
+@media(max-width:760px){
+  :root{--glass-position:65% center;--glass-blur:12px}
+  html .cinema-hero:before{inset:0 -14px 0}
+  html .cinema-health{padding:16px 14px;margin:12px 0 18px;border-radius:18px}
+  html .cinema-workspace{padding:18px 14px;border-radius:20px}
+  html .cinema-health-legend{gap:6px 9px}
+}
+/* Readable fallback for browsers without either form of backdrop-filter. */
+@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
+  html :is(.sidebar,.header,.mobile-dock,.map-bar,.subnav,.filter-summary,.save-bar,.panel,.card,.poster-card,.emby-card,.search-hero,.filter-panel,.runtime-panel,.modal,.ui-modal-box,.task-hint,.toast,.cinema-health,.cinema-workspace){background:var(--bg)}
+}
+@media(prefers-reduced-transparency:reduce){
+  html :is(.sidebar,.header,.mobile-dock,.map-bar,.subnav,.filter-summary,.save-bar,.panel,.card,.poster-card,.emby-card,.search-hero,.filter-panel,.runtime-panel,.modal,.ui-modal-box,.task-hint,.toast,.cinema-health,.cinema-workspace,.poster-card .info){background:var(--bg);backdrop-filter:none;-webkit-backdrop-filter:none}
+}

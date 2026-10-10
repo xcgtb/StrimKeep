@@ -1,213 +1,76 @@
-/* ═══════════ 治理总览 ═══════════ */
-/* 后端 /api/dashboard、/api/library_stats 本身已经带缓存了（5分钟/30秒 TTL），
-   但前端每次打开页面都是先显示"-"/"检查中..."占位符，等接口返回才填真实值，
-   视觉上像是"每次都在重新刷新"。这里加一层本地缓存，页面一打开就先用上次的
-   数据瞬间填满（不再有占位符闪烁），网络请求仍然照常发，回来后静默更新即可。 */
+/* Media overview: cache-first, one refresh action, isolated recommendations. */
+var overviewControl={timer:null,promise:null,refreshId:0,noticeId:0,lastAt:0};
+var overviewData=null,libStatMode='all';
+var overviewHot={media:'movie',timer:null,promise:null,generation:0,rows:{movie:[],tv:[]},signature:'',lastAt:0};
+function overviewActive(){return !document.hidden && window.__activeTab==='dashboard';}
+function overviewStore(key,value){try{localStorage.setItem(key,JSON.stringify(value));}catch(e){}}
+function overviewCached(key){try{return JSON.parse(localStorage.getItem(key)||'null');}catch(e){return null;}}
 function saveDashboardCache(d){
   try { var cached = Object.assign({},d); delete cached.storage; localStorage.setItem('dashboardCache', JSON.stringify(cached)); } catch(e){}
 }
-function saveLibStatsCache(r){
-  try { localStorage.setItem('libStatsCache', JSON.stringify(r)); } catch(e){}
-}
+function saveLibStatsCache(r){overviewStore('libStatsCache',r);}
 function hydrateDashboardFromCache(){
-  try { var raw3 = localStorage.getItem('dashEmbyCache'); if (raw3) renderDashEmby(JSON.parse(raw3)); } catch(e){}
-  try {
-    var raw = localStorage.getItem('dashboardCache');
-    if (raw) renderDashboard(JSON.parse(raw));
-  } catch(e){}
-  try {
-    var raw2 = localStorage.getItem('libStatsCache');
-    if (raw2) renderLibraryStats(JSON.parse(raw2));
-  } catch(e){}
-}
-
-async function loadLibraryStats(){
-  try {
-    var r = await api('/api/library_stats');
-    if (r.status !== 'success') throw new Error(r.message || '\u5931\u8d25');
-    renderLibraryStats(r);
-    saveLibStatsCache(r);
-  } catch(e){
-    // 有缓存的话保留缓存显示的内容，不要用错误信息把已经填好的数据覆盖掉
-    if (!localStorage.getItem('libStatsCache')) {
-      $('libStatsGrid').innerHTML = '<div class="list-empty">\u52a0\u8f7d\u5931\u8d25: ' + esc(e.message) + '</div>';
-    }
+  var saved=overviewCached('overviewCache');
+  if(saved&&saved.dashboard){overviewData=saved;renderOverview(saved);}
+  else{
+    var d=overviewCached('dashboardCache'),lib=overviewCached('libStatsCache'),health=overviewCached('dashEmbyCache');
+    if(d)renderDashboard(d);if(lib)renderLibraryStats(lib);if(health)renderDashEmby(health);
   }
+  var rows=overviewCached('overviewHot-'+overviewHot.media);if(Array.isArray(rows)&&rows.length){overviewHot.rows[overviewHot.media]=rows;renderOverviewRecommendations(rows);}
 }
-var libStatMode = 'all';
 function setLibStatMode(m){
-  libStatMode = m;
-  document.querySelectorAll('#libStatTabs button').forEach(function(b){ b.classList.toggle('active', b.dataset.m === m); });
-  if (window.__libStats) renderLibraryStats(window.__libStats);
+  libStatMode=m;
+  document.querySelectorAll('#libStatTabs button').forEach(function(b){b.classList.toggle('active',b.dataset.m===m);});
+  if(window.__libStats)renderLibraryStats(window.__libStats);
+  // Completeness is an identity-union fact, not a count of duplicated files.
 }
 function renderLibraryStats(r){
-  window.__libStats = r;
-  var m = libStatMode;
-  var rows = (r.rows || []).map(function(x){
-    return { name: x.name, n: m === 'local' ? x.local : m === 'share' ? x.share : x.total, l: x.local, s: x.share };
-  }).filter(function(x){ return x.n > 0; }).sort(function(a, b){ return b.n - a.n; });
-  var max = rows.length ? rows[0].n : 1;
-  $('libStatsGrid').innerHTML = rows.map(function(row){
-    var bar = m === 'all'
-      ? '<i class="l" style="width:' + (row.l / max * 100) + '%"></i><i class="s" style="width:' + (row.s / max * 100) + '%"></i>'
-      : '<i class="' + (m === 'share' ? 's' : 'l') + '" style="width:' + (row.n / max * 100) + '%"></i>';
-    return '<button type="button" class="overview-category" data-name="' + esc(row.name) + '" data-scope="' + m + '" onclick="dashOpenCat(this.dataset.name, this.dataset.scope)">'
-      + '<span class="nm">' + esc(row.name) + '</span><span class="ct">' + row.n.toLocaleString() + '</span>'
-      + '<span class="tr" aria-hidden="true">' + bar + '</span><span class="go">↗</span></button>';
-  }).join('') || '<div class="list-empty">暂无数据</div>';
-  var local = Number(r.local_total) || 0, share = Number(r.share_total) || 0;
-  var scopeTotal = m === 'local' ? local : m === 'share' ? share : local + share;
-  var other = m === 'local' ? Number(r.local_other) || 0 : m === 'share' ? Number(r.share_other) || 0 : (Number(r.local_other) || 0) + (Number(r.share_other) || 0);
-  var summary = (m === 'all' ? '两库合计' : m === 'local' ? '本地库' : '分享库') + ' ' + scopeTotal.toLocaleString() + ' 个 STRM';
-  if (m === 'all') summary += ' · 本地 ' + local.toLocaleString() + ' / 分享 ' + share.toLocaleString();
-  if (other > 0) summary += ' · 未分类 ' + other.toLocaleString();
-  $('libStatsSummary').textContent = summary;
+  window.__libStats=r;
+  var m=libStatMode,rows=(r.rows||[]).map(function(x){return{name:x.name,n:Number(m==='local'?x.local:m==='share'?x.share:x.total)||0};}).filter(function(x){return x.n>0;}).sort(function(a,b){return b.n-a.n;});
+  var max=rows.length?rows[0].n:1;
+  $('libStatsGrid').innerHTML=rows.map(function(row,i){
+    return '<button type="button" class="cinema-category" data-name="'+esc(row.name)+'" data-scope="'+m+'" onclick="dashOpenCat(this.dataset.name,this.dataset.scope)"><span class="cinema-category-dot tone-'+(i%5)+'"></span><span class="nm">'+esc(row.name)+'</span><span class="tr" aria-hidden="true"><i class="tone-'+(i%5)+'" style="width:'+(row.n/max*100)+'%"></i></span><b>'+row.n.toLocaleString()+'</b></button>';
+  }).join('')||'<div class="list-empty">暂无分类数据</div>';
+  var l=Number(r.local_total)||0,s=Number(r.share_total)||0,other=Number(m==='local'?r.local_other:m==='share'?r.share_other:(Number(r.local_other)||0)+(Number(r.share_other)||0))||0;
+  $('libStatsSummary').textContent=(m==='local'?'本地库':m==='share'?'分享库':'两库合计')+' '+(m==='local'?l:m==='share'?s:l+s).toLocaleString()+' 个 STRM'+(other?' · 未分类 '+other.toLocaleString():'');
 }
-
-function dashTotals(d){
-  var l = Number(String(d.localCount||0).replace(/[,\s]/g,''))||0, s = Number(String(d.shareCount||0).replace(/[,\s]/g,''))||0, t = l + s;
-  $('stat-local').textContent = l.toLocaleString();
-  $('stat-share').textContent = s.toLocaleString();
-  $('dash-total').textContent = t.toLocaleString();
-  $('dash-split-l').style.width = t ? (l / t * 100) + '%' : '0';
-  $('dash-split-s').style.width = t ? (s / t * 100) + '%' : '0';
-  $('pct-l').textContent = t ? Math.round(l / t * 100) + '%' : '';
-  $('pct-s').textContent = t ? Math.round(s / t * 100) + '%' : '';
-}
-function fmtBig(n){ return n >= 10000 ? (n / 10000).toFixed(2) + '<i class="u">万</i>' : (n || 0).toLocaleString(); }
-function fmtUnit(n, u){ return (n || 0).toLocaleString() + '<i class="u">' + u + '</i>'; }
+async function loadLibraryStats(){if(overviewData&&overviewData.library_stats)renderLibraryStats(overviewData.library_stats);else return loadDashboard();}
+function fmtBig(n){return(n||0).toLocaleString();}
+function fmtUnit(n,u){return(n||0).toLocaleString()+'<i class="u">'+u+'</i>';}
 function renderDashEmby(x){
-  var note = $('dash-library-facts');
-  if (note) {
-    var factsTs = x.facts_ts || x.ts || 0;
-    var factsTime = factsTs ? new Date(factsTs * 1000).toLocaleString() : '';
-    var compareTime = x.ts ? new Date(x.ts * 1000).toLocaleString() : '';
-    var stale = x.stale || (x.ts && Date.now() / 1000 - x.ts > 1800);
-    var summary = $('dash-facts-summary');
-    if (summary) summary.textContent = stale ? '对照缓存已过期 · 查看更新时间' : '数据更新时间';
-    note.textContent = factsTime ? '片库缓存 · 集数更新 ' + factsTime
-      + (compareTime ? ' · TMDB 对照 ' + compareTime + (stale ? '（已过期）' : '') : '') : '片库缓存 · 更新时间未知';
-  }
-  $('dash-series').innerHTML = fmtUnit(x.series, '部');
-  $('dash-eps').innerHTML = fmtBig(x.eps);
-  $('dash-movies').innerHTML = fmtUnit(x.movies, '部');
-  var st = x.st || {}, total = x.series || 0;
-  var pct = total ? Math.round((st.aligned || 0) / total * 100) : 0;
-  $('dash-ring').style.setProperty('--p', pct);
-  $('dash-ring-n').textContent = total ? pct + '%' : '—';
-  var rows = [['完整', 'ok', st.aligned], ['缺集', 'err', st.missing], ['超集', 'warn', st.extra], ['在更', 'info', st.ongoing], ['未匹配', 'dim', st.unmatched]];
-  $('dash-health').innerHTML = rows.map(function(r){
-    var n = r[2] || 0;
-    return '<div class="overview-health-row"><b class="dd ' + r[1] + '"></b><span class="label">' + r[0] + '</span><span class="cnt">' + n.toLocaleString() + '</span><span class="pc">' + (total ? (n / total * 100).toFixed(1) : '0.0') + '%</span></div>';
-  }).join('');
-  var top = x.top || [];
-  $('dash-miss-note').textContent = st.missing ? ('共 ' + st.missing + ' 部缺集') : '';
-  $('dash-missing').innerHTML = top.length ? top.map(function(t){
-    var p = t.tot ? Math.max(0, Math.min(100, t.have / t.tot * 100)) : 0;
-    return '<button type="button" class="overview-missing-card" data-name="' + esc(t.name) + '" onclick="dashOpenSeries(this.dataset.name)">'
-      + '<span class="overview-missing-title">' + esc(t.name) + '</span><span class="overview-missing-year">' + esc(t.year || '年份未知') + '</span>'
-      + '<span class="overview-missing-count">缺 ' + esc(t.diff) + ' 集</span><span class="overview-missing-progress">' + esc(t.have) + ' / ' + esc(t.tot) + ' 集</span>'
-      + '<span class="overview-missing-bar" aria-hidden="true"><i style="width:' + p + '%"></i></span></button>';
-  }).join('') : '<div class="list-empty">没有缺集的剧集</div>';
-}
-function dashOpenSeries(name){
-  $('embySearch').value = name; embyPage = 1;
-  switchTab('mapping');
-  if (embyLoaded) renderEmbyList();
+  var factsTs=x.facts_ts||x.ts||0;
+  var stale=x.stale||(x.ts&&Date.now()/1000-x.ts>1800);
+  $('dash-facts-summary').textContent=stale?'对照缓存已过期':'数据更新时间';
+  $('dash-library-facts').textContent=factsTs?'集数更新 '+new Date(factsTs*1000).toLocaleString('zh-CN')+(x.ts?' · TMDB 对照 '+new Date(x.ts*1000).toLocaleString('zh-CN')+(stale?'（已过期）':''):' · 尚无完整 TMDB 对照'):'暂无片库对照缓存';
+  $('dash-series').innerHTML=fmtUnit(x.series,'部');$('dash-movies').innerHTML=fmtUnit(x.movies,'部');$('dash-eps').innerHTML=fmtBig(x.eps);
+  var st=x.st||{},rows=[['完整','ok',st.aligned],['缺集','err',st.missing],['超集','warn',st.extra],['在更','info',st.ongoing],['未匹配','dim',(st.unmatched||0)+(st.no_tmdb||0)]];
+  var sum=rows.reduce(function(n,r){return n+(Number(r[2])||0);},0);
+  $('dash-health-bar').innerHTML=rows.map(function(r){return '<i class="'+r[1]+'" style="flex-grow:'+(Number(r[2])||0)+'"></i>';}).join('');
+  $('dash-health-bar').classList.toggle('empty',!sum);
+  $('dash-health').innerHTML=rows.map(function(r){return '<button type="button" data-filter="'+({ok:'aligned',err:'missing',warn:'extra',info:'ongoing',dim:'unmatched'}[r[1]])+'" onclick="overviewOpenHealth(this.dataset.filter)"><i class="dd '+r[1]+'"></i><span>'+r[0]+'</span><b>'+(Number(r[2])||0).toLocaleString()+'</b></button>';}).join('');
 }
 async function loadDashEmby(){
-  var src = null;
-  try {
-    var r = await api('/api/library/health');
-    if (r && r.status === 'success') {
-      src = { series: r.series || [], movies: r.movies || [], stats: r.stats || {}, episodes: r.episodes || 0, top_missing: r.top_missing || [],
-              ts:r.ts, facts_ts:r.facts_ts, facts_version:r.facts_version, source:r.source, stale:r.stale };
-    }
-  } catch(e){}
-  if (!src && embyLoaded) src = { series: embyData.series, movies: embyData.movies, stats: embyData.stats };
-  if (!src) {
-    try {
-      var r2 = await api('/api/emby/library?force=0&with_tmdb=1&cache_only=1');
-      if (r2 && r2.status === 'success') src = { series: r2.series || [], movies: r2.movies || [], stats: md_sync(r2.series || [], r2.stats || {}) };
-    } catch(e){}
-  }
-  if (!src) return;
-  var top = src.top_missing || src.series.filter(function(s){ return (s.tmdb_info || {}).match_status === 'missing'; })
-    .sort(function(a, b){ return Math.abs((b.tmdb_info || {}).diff || 0) - Math.abs((a.tmdb_info || {}).diff || 0); })
-    .slice(0, 6).map(function(s){
-      var ti = s.tmdb_info || {};
-      return { name: s.name, year: s.year, diff: Math.abs(ti.diff || 0), tot: ti.tmdb_total || 0, have: s.have_eps != null ? s.have_eps : (s.total_episodes || 0) };
-    });
-  var st = src.stats || {};
-  var sum = { series: st.total_series || src.series.length, movies: st.total_movies || src.movies.length, eps: src.episodes != null ? src.episodes : src.series.reduce(function(n,s){ return n + (s.have_eps != null ? s.have_eps : (s.total_episodes || 0)); },0),
-              ts:src.ts, facts_ts:src.facts_ts, facts_version:src.facts_version, source:src.source, stale:src.stale,
-              st: { aligned: st.aligned || 0, missing: st.missing || 0, extra: st.extra || 0, ongoing: st.ongoing || 0, unmatched: (st.unmatched || 0) + (st.no_tmdb || 0) }, top: top };
-  renderDashEmby(sum);
-  try { localStorage.setItem('dashEmbyCache', JSON.stringify(sum)); } catch(e){}
+  // Existing mapping updates call this hook; reuse the shared health facts.
+  try{var r=await api('/api/library/health',{timeoutMs:8000});if(r.status!=='success')return;
+    var st=r.stats||{},sum={series:st.total_series||((r.series||[]).length),movies:st.total_movies||((r.movies||[]).length),eps:r.episodes!=null?r.episodes:0,st:st,ts:r.ts,facts_ts:r.facts_ts,facts_version:r.facts_version,stale:r.stale};
+    renderDashEmby(sum);overviewStore('dashEmbyCache',sum);
+  }catch(e){if(typeof embyLoaded!=='undefined'&&embyLoaded){var rows=embyData.series||[];renderDashEmby({series:rows.length,movies:(embyData.movies||[]).length,eps:rows.reduce(function(n,s){return n+(s.have_eps!=null?s.have_eps:(s.total_episodes||0));},0),st:embyData.stats||{}});}}
 }
-
+function overviewOpenHealth(filter){switchTab('mapping');setEmbyType('series');setEmbyScope('all');setEmbyFilter(filter);}
 function renderDashPlanFromDashboard(d){
-  try {
-    var x = d && d.lastScan;
-    if (x) {
-      $('dash-loc').textContent = (x.local || 0).toLocaleString();
-      $('dash-shr').textContent = (x.share || 0).toLocaleString();
-      $('dash-keep').textContent = (x.protected || 0).toLocaleString();
-      $('dash-exm').textContent = (x.exempted || 0).toLocaleString();
-      $('dash-loc-files').textContent = (x.local_files || 0).toLocaleString() + ' 个 STRM';
-      $('dash-shr-files').textContent = (x.share_files || 0).toLocaleString() + ' 个 STRM';
-      $('dash-keep-files').textContent = '保护项';
-      $('dash-exm-files').textContent = (x.quiet_skipped || 0).toLocaleString() + ' 项静默';
-      $('dash-plan-note').textContent = '扫描于 ' + fmtGovAgo(x.age_sec || 0);
-      var rc = x.reason_counts || {};
-      var labels = {
-        share_better:'分享画质更优', local_better:'本地画质更优', share_wins:'分享择优', local_wins:'本地择优',
-        special_share_better:'特别篇分享更优', special_local_better:'特别篇本地更优', special_delete_local:'特别篇清理·本地', special_delete_share:'特别篇清理·分享',
-        dup_version_local:'本地多版本', dup_version_share:'分享多版本', incomplete_delete_local:'本地残次品', incomplete_delete_share:'分享残次品',
-        multi_full_share:'整剧零和·分享替代', multi_protect_partial_share:'多季保护·淘汰分享', multi_protect_partial_local:'多季保护·淘汰本地', decision_keep_local:'保留本地·删分享', decision_keep_share:'保留分享·删本地', whitelist:'白名单豁免', protected:'受保护', exempt:'白名单豁免', unknown:'其他'
-      };
-      var rows = Object.keys(rc).filter(function(k){ return rc[k] > 0; }).sort(function(a,b){ return rc[b]-rc[a]; }).slice(0,8);
-      var totalDecisions = Object.keys(rc).reduce(function(n,k){ return n + (+rc[k] || 0); }, 0);
-      $('dash-gov-reason-note').textContent = rows.length ? ('共 ' + totalDecisions + ' 项决策') : '—';
-      $('dash-gov-reasons').innerHTML = rows.length ? rows.map(function(k){
-        return '<div class="overview-reason"><span>' + esc(labels[k] || k) + '</span><b>' + (+rc[k] || 0).toLocaleString() + '</b></div>';
-      }).join('') : '<div class="list-empty">本次扫描没有治理动作</div>';
-    } else {
-      ['dash-loc','dash-shr','dash-keep','dash-exm'].forEach(function(id){ $(id).textContent = '—'; });
-      ['dash-loc-files','dash-shr-files','dash-keep-files','dash-exm-files'].forEach(function(id){ $(id).textContent = '等待扫描'; });
-      $('dash-plan-note').textContent = '暂无治理扫描';
-      $('dash-gov-reasons').innerHTML = '<div class="list-empty">尚无治理扫描</div>';
-    }
-  } catch(e){}
+  var x=d.lastScan;
+  $('overviewGovRecent').innerHTML=x?'<span class="cinema-recent-icon">'+icon('check')+'</span><div><b>双库扫描完成</b><span>本地待处理 '+(x.local||0)+' 项 · 分享待处理 '+(x.share||0)+' 项 · 受保护 '+(x.protected||0)+' 项</span></div><time>'+esc(x.time||'')+'</time>':'<span class="muted">暂无治理扫描 · 前往双库治理生成清单</span>';
+  var rc=x&&x.reason_counts||{},labels={share_better:'分享画质更优',local_better:'本地画质更优',share_wins:'分享择优',local_wins:'本地择优',whitelist:'白名单豁免',protected:'受保护',exempt:'白名单豁免',decision_keep_local:'保留本地',decision_keep_share:'保留分享'};
+  var rows=Object.keys(rc).filter(function(k){return rc[k]>0;}).sort(function(a,b){return rc[b]-rc[a];}).slice(0,8);
+  $('dash-gov-reason-note').textContent=x?'扫描于 '+fmtGovAgo(x.age_sec||0):'';
+  $('dash-gov-reasons').innerHTML=rows.map(function(k){return '<div class="overview-reason"><span>'+esc(labels[k]||k)+'</span><b>'+rc[k]+'</b></div>';}).join('')||'<div class="list-empty">暂无治理决策</div>';
 }
-async function loadDashboard(){
-  loadStorageStatus();
-  loadDashEmby();
-  /* 策略快照数据量极小，与 dashboard 并行加载——
-     /api/dashboard 要统计全库 STRM（大库较慢），串行会拖得策略快照一直"加载中" */
-  var pStrategy = api('/api/strategy').catch(function(e){ console.warn('strategy 失败', e); return null; });
-  var pDash = api('/api/dashboard').catch(function(e){ console.warn('dashboard 失败', e); return null; });
-
-  var st = await pStrategy;
-  if (st && st.strategy) {
-    var s = st.strategy;
-    var decisionLabel = { quality_first: '画质优先', keep_local: '保留本地', keep_share: '保留分享', balanced: '严格画质' }[s.decision] || s.decision;
-    var spLabel = { keep: '保留', ignore: '忽略', delete: '清理' }[s.special_action] || '保留';
-    var mspLabel = { off: '关闭', compare: '开启' }[s.multi_season_protect] || '开启';
-    var ex = s.exempt_keywords || [];
-    var chips = [['决策', decisionLabel, 'ok'], ['多季保护', mspLabel, 'info'], ['特别篇', spLabel, 'brand'], ['平局', s.tie_keep_local ? '保留本地' : '保留分享', 'dim'], ['剧集达标率', Math.round((Number(s.season_replace_ratio) || 0.9) * 100) + '%', 'dim']];
-    $('strategySnapshot').innerHTML = '<dl class="overview-strategy-list">' + chips.map(function(c){
-      return '<div><dt>' + esc(c[0]) + '</dt><dd class="' + c[2] + '">' + esc(c[1]) + '</dd></div>';
-    }).join('') + '</dl>' + (ex.length ? '<div class="overview-whitelist">白名单：' + ex.map(function(k){ return esc(k); }).join('、') + '</div>' : '');
-    $('dash-exempt').textContent = ex.length + ' 条';
-  }
-
-  var d = await pDash;
-  if (d) {
-    renderDashboard(d);
-    renderDashPlanFromDashboard(d);
-    saveDashboardCache(d);
-  }
+function renderOverviewStrategy(s){
+  if(!s)return;
+  var decision={quality_first:'画质优先',keep_local:'保留本地',keep_share:'保留分享',balanced:'严格画质'}[s.decision]||s.decision||'画质优先';
+  var multi=s.multi_season_protect==='off'?'多季保护关闭':'多季保护';
+  var special={keep:'保留特别篇',ignore:'忽略特别篇',delete:'清理特别篇'}[s.special_action]||'保留特别篇';
+  $('strategySnapshot').innerHTML='<div class="cinema-strategy-tags"><span class="primary">'+esc(decision)+'</span><span>'+multi+'</span><span>'+special+'</span></div><p>平局'+(s.tie_keep_local?'保留本地':'保留分享')+' · 达标率 <b>'+Math.round(Number(s.season_replace_ratio==null?0.9:s.season_replace_ratio)*100)+'%</b></p>'+(s.exempt_keywords&&s.exempt_keywords.length?'<small>白名单：'+s.exempt_keywords.map(esc).join('、')+'</small>':'');
 }
 function renderStorageStatus(status){
   var panel = $('dash-storage-warning'), list = $('dash-storage-issues');
@@ -235,51 +98,88 @@ function renderStorageStatus(status){
   }).join('');
 }
 async function loadStorageStatus(){
-  try { var r = await api('/api/storage/status'); if (r.status === 'success') renderStorageStatus(r.storage); } catch(e){}
+  try { var r = await api('/api/storage/status',{timeoutMs:5000}); if (r.status === 'success') renderStorageStatus(r.storage); } catch(e){}
 }
 function renderDashboard(d){
-    renderSidebarServices(d.services);
-    if (d.storage) renderStorageStatus(d.storage);
-    $('stat-local').textContent = d.localCount || '-';
-    $('stat-share').textContent = d.shareCount || '-';
-    dashTotals(d);
-    /* 侧边栏版本号跟随后端（之前硬编码 V1.1 不同步） */
-    if (d.version) {
-      var sv = $('sideVersion'); if (sv) sv.textContent = 'V' + d.version;
-      var hv = $('headerVersion'); if (hv) hv.textContent = 'v' + d.version;
-    }
-    var embyOk = d.services && d.services.emby && d.services.emby.ok;
-    $('svc-emby').innerHTML = embyOk ? statusOk('在线') : statusNo('离线');
-    $('svc-emby-host').textContent = (d.services && d.services.emby && d.services.emby.host) || '—';
-    /* 缓存 Emby 主机地址，供 showEmbyDetailById 里的"在 Emby 中打开"链接使用 */
-    if (d.services && d.services.emby && d.services.emby.host) {
-      window.__embyHost = d.services.emby.host;
-    }
-    var tmdbOk = d.services && d.services.tmdb && d.services.tmdb.ok;
-    $('svc-tmdb').innerHTML = tmdbOk ? statusOk('已配置') : statusNo('未配置');
-    $('svc-tmdb-sub').textContent = tmdbOk ? '影视探索可用' : '去「规则设置」配置';
-
-    if (d.subscriptions) {
-      var ss = d.subscriptions;
-      $('stat-sub').textContent = (ss.enabled || 0) + ' / ' + (ss.total || 0) + ' 部';
-      $('stat-sub-sub').textContent = ({running:'检查中',error:'检查失败',partial:'部分失败',disabled:'已停用',success:'最近检查正常'})[(ss.check || {}).status] || ((ss.enabled || 0) > 0 ? '等待检查' : '点击查看');
-    }
-    if (d.morningReport) {
-      var mr = d.morningReport;
-      $('stat-morning').textContent = mr.enabled ? mr.time : '未开启';
-      $('stat-morning-sub').textContent = mr.last_date ? ('上次 ' + mr.last_date) : ('预扫 ' + (mr.prescan_min || 5) + ' 分钟');
-    }
-    if (d.ingest) {
-      var ing = d.ingest;
-      $('stat-ingest-mov').textContent = (ing.movies || 0) + ' / ' + (ing.series || 0) + ' 部';
-      var age = ing.cache_age_sec;
-      if (age == null) $('stat-ingest-age').textContent = '无缓存';
-      else if (age < 60) $('stat-ingest-age').textContent = age + ' 秒前';
-      else if (age < 3600) $('stat-ingest-age').textContent = Math.floor(age/60) + ' 分钟前';
-      else $('stat-ingest-age').textContent = Math.floor(age/3600) + ' 小时前';
-    }
+  renderSidebarServices(d.services); if (d.storage) renderStorageStatus(d.storage);
+  $('stat-local').textContent=d.localCount==null?'—':d.localCount;$('stat-share').textContent=d.shareCount==null?'—':d.shareCount;
+  if(d.version){if($('sideVersion'))$('sideVersion').textContent=d.version;if($('headerVersion'))$('headerVersion').textContent=d.version;}
+  if(d.services){var e=d.services.emby||{},t=d.services.tmdb||{};$('svc-emby').textContent=e.ok?'在线':'离线';$('overviewEmbyDot').classList.toggle('ok',!!e.ok);$('svc-tmdb').textContent=t.ok?'已配置':'未配置';if(e.host)window.__embyHost=e.host;}
+  if(d.libraryHealth){var h=d.libraryHealth,st=h.stats||{},sum={series:st.total_series||0,movies:st.total_movies||0,eps:h.episodes||0,st:st,ts:h.ts,facts_ts:h.facts_ts,facts_version:h.facts_version,stale:h.stale};renderDashEmby(sum);overviewStore('dashEmbyCache',sum);}
+  if(d.subscriptions){var ss=d.subscriptions;$('stat-sub').textContent=(ss.enabled||0)+' / '+(ss.total||0)+' 部';$('stat-sub-sub').textContent={running:'检查中',error:'检查失败',partial:'部分失败',disabled:'已停用',success:'最近检查正常'}[(ss.check||{}).status]||'点击查看';}
+  if(d.morningReport){var mr=d.morningReport;$('stat-morning').textContent=mr.enabled?mr.time:'未开启';$('stat-morning-sub').textContent=mr.last_date?'上次 '+mr.last_date:'预扫 '+(mr.prescan_min||5)+' 分钟';}
+  if(d.ingest){var ing=d.ingest;$('stat-ingest-mov').textContent=(ing.movies||0)+' / '+(ing.series||0)+' 部';$('stat-ingest-age').textContent=ing.cache_age_sec==null?'暂无缓存':Math.floor(ing.cache_age_sec/60)+' 分钟前 · 电影 / 剧集';}
+  renderDashPlanFromDashboard(d);
 }
-
+function renderOverview(r){
+  if(r.dashboard)renderDashboard(r.dashboard);if(r.library_stats&&r.library_stats.rows)renderLibraryStats(r.library_stats);renderOverviewStrategy(r.strategy);
+  $('overviewUpdated').textContent=r.ts?'更新于 '+new Date(r.ts*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}):'等待首次更新';
+  var job=r.refresh||{},btn=$('overviewRefresh');btn.disabled=!!job.running;btn.innerHTML=(job.running?'<span class="spin"></span>':icon('refresh'))+(job.running?'正在刷新':'刷新总览');
+  var message=job.running?(job.phase||'正在刷新总览')+' · 完成后自动更新':job.error||((job.warnings||[]).join('；'))||'';
+  $('overviewRefreshState').textContent=message;$('overviewRefreshState').classList.toggle('warning',!!job.error||(job.warnings||[]).length>0);
+  if(overviewControl.refreshId&&job.id>=overviewControl.refreshId&&!job.running){
+    if(overviewControl.noticeId!==job.id){overviewControl.noticeId=job.id;toast(job.error||((job.warnings||[]).length?'总览已更新，部分服务未能刷新':'总览已更新为最新数据'),job.error?'error':(job.warnings||[]).length?'':'success');}
+    overviewControl.refreshId=0;
+  }
+}
+function scheduleOverview(ms){clearTimeout(overviewControl.timer);if(overviewActive())overviewControl.timer=setTimeout(function(){loadDashboard(true);},ms);}
+async function loadDashboard(recheck){
+  if(overviewControl.promise)return overviewControl.promise;
+  if(!recheck&&overviewData&&Date.now()-overviewControl.lastAt<10000){renderOverview(overviewData);scheduleOverview(overviewData.refresh&&overviewData.refresh.running?1500:30000);loadOverviewRecommendations();return;}
+  overviewControl.promise=(async function(){
+    try{var r=await api('/api/overview',{timeoutMs:8000});if(r.status==='error')throw new Error(r.message||'读取失败');overviewData=r;overviewControl.lastAt=Date.now();renderOverview(r);if(r.dashboard)overviewStore('overviewCache',r);scheduleOverview(r.refresh&&r.refresh.running?1500:30000);}
+    catch(e){$('overviewRefreshState').textContent='连接失败，保留缓存，稍后自动重试';scheduleOverview(15000);}
+    finally{overviewControl.promise=null;}
+  })();
+  loadStorageStatus();loadOverviewRecommendations();return overviewControl.promise;
+}
+async function refreshOverview(){
+  if($('overviewRefresh').disabled)return;
+  $('overviewRefresh').disabled=true;$('overviewRefreshState').textContent='正在清理总览缓存并获取最新数据…';
+  try{var r=await api('/api/overview/refresh',{method:'POST',timeoutMs:8000});if(r.status!=='success')throw new Error(r.message||'刷新失败');overviewControl.refreshId=r.refresh.id;['overviewCache','dashboardCache','libStatsCache','dashEmbyCache'].forEach(function(k){try{localStorage.removeItem(k);}catch(e){}});if(overviewData){overviewData.refresh=r.refresh;renderOverview(overviewData);}await loadDashboard(true);scheduleOverview(1500);}
+  catch(e){$('overviewRefresh').disabled=false;$('overviewRefreshState').textContent='刷新未能启动，请重试';toast(e.message,'error');}
+}
+function pauseOverview(){clearTimeout(overviewControl.timer);clearTimeout(overviewHot.timer);overviewHot.generation++;}
+function setOverviewMedia(media){if(media===overviewHot.media)return;overviewHot.media=media;overviewHot.generation++;overviewHot.signature='';overviewHot.lastAt=0;clearTimeout(overviewHot.timer);document.querySelectorAll('#overviewHotTabs button').forEach(function(b){b.classList.toggle('active',b.dataset.media===media);});renderOverviewRecommendations(overviewHot.rows[media]||overviewCached('overviewHot-'+media)||[]);$('overviewHotShelf').scrollLeft=0;loadOverviewRecommendations(true);}
+function scrollOverviewShelf(dir){var el=$('overviewHotShelf');el.scrollBy({left:dir*el.clientWidth*0.85,behavior:window.matchMedia('(prefers-reduced-motion:reduce)').matches?'auto':'smooth'});}
+function overviewMoreRecommendations(){
+  exploreState.media=overviewHot.media;exploreState.q='';exploreState.page=1;
+  $('exploreSearch').value='';
+  document.querySelectorAll('#filterMedia .chip').forEach(function(b){b.classList.toggle('active',b.dataset.v===overviewHot.media);});
+  refreshGenreChipsForMedia(overviewHot.media);updateFilterSummaryText();
+  switchTab('explore');
+}
+function renderOverviewRecommendations(rows){
+  overviewHot.rows[overviewHot.media]=rows;
+  var signature=JSON.stringify(rows);if(signature===overviewHot.signature)return;overviewHot.signature=signature;
+  var shelf=$('overviewHotShelf'),left=shelf.scrollLeft;
+  shelf.innerHTML=rows.length?rows.map(function(c,i){var known=c.library_status==='available',badge=c.in_emby?'已在库':known?'未入库':'待同步';
+    return '<button type="button" class="cinema-film" onclick="openOverviewRecommendation('+i+')" aria-label="'+esc(c.title)+'"><span class="poster-wrap">'+(c.poster?'<span class="poster-loading">海报加载中</span><img data-emby-src="'+esc(c.poster)+'" alt="'+esc(c.title)+'" loading="lazy" decoding="async" onload="clearPosterLoading(this)">':'<span class="no-img">暂无海报</span>')+'<span class="cinema-rating">★ '+(Number(c.rating)||0).toFixed(1)+'</span><span class="cinema-inlibrary '+(c.in_emby?'in':'')+'">'+badge+'</span></span><b>'+esc(c.title)+'</b><small>'+esc(c.year||'年份未知')+' · '+(c.type==='tv'?'剧集':'电影')+'</small></button>';
+  }).join(''):'<div class="cinema-recommendation-empty">暂无热门推荐</div>';
+  shelf.scrollLeft=left;hydratePosters(shelf);
+}
+async function loadOverviewRecommendations(retry){
+  if(!overviewActive())return;
+  if(overviewHot.promise){overviewHot.promise.then(function(){if(overviewActive()&&overviewHot.lastAt===0)loadOverviewRecommendations(retry);});return;}
+  if(!retry&&Date.now()-overviewHot.lastAt<30000)return;
+  var generation=overviewHot.generation,media=overviewHot.media;
+  overviewHot.promise=(async function(){
+    var delay=60000;
+    try{var r=await api('/api/overview/recommendations?media='+media+(retry?'&retry=1':''),{timeoutMs:8000});if(generation!==overviewHot.generation||!overviewActive())return;
+      overviewHot.lastAt=Date.now();
+      if(r.status==='success'){renderOverviewRecommendations(r.cards||[]);overviewStore('overviewHot-'+media,r.cards||[]);$('overviewHotNote').textContent=r.refresh_error?'推荐更新失败，展示缓存，稍后重试':'TMDB 本周热度 · '+(r.page_ts?new Date(r.page_ts*1000).toLocaleDateString('zh-CN'):'');if(r.refreshing)delay=2000;}
+      else if(r.status==='pending'){if(!overviewHot.rows[media].length)$('overviewHotShelf').innerHTML='<div class="cinema-recommendation-empty">正在获取本周热门…</div>';delay=2000;}
+      else{$('overviewHotNote').innerHTML=esc(r.message||'推荐暂不可用')+' <button type="button" onclick="loadOverviewRecommendations(true)">重试</button>';delay=15000;}
+    }catch(e){if(generation===overviewHot.generation)$('overviewHotNote').innerHTML='推荐暂不可用，不影响片库统计 <button type="button" onclick="loadOverviewRecommendations(true)">重试</button>';delay=15000;}
+    finally{overviewHot.promise=null;if(generation===overviewHot.generation&&overviewActive()){clearTimeout(overviewHot.timer);overviewHot.timer=setTimeout(function(){overviewHot.lastAt=0;loadOverviewRecommendations();},delay);}}
+  })();return overviewHot.promise;
+}
+function openOverviewRecommendation(i){
+  var c=overviewHot.rows[overviewHot.media][i];if(!c)return;
+  var canSub=c.type==='tv',subs=typeof _subscribedTmdbIds==='function'?_subscribedTmdbIds():{};
+  openModal('<div class="cinema-film-detail"><div class="mapping-detail-header"><div class="mapping-detail-poster">'+(c.poster?'<img data-emby-src="'+esc(c.poster)+'" alt="" onload="clearPosterLoading(this)">':'暂无海报')+'</div><div class="mapping-detail-info"><h3>'+esc(c.title)+'</h3><p>'+esc(c.year||'年份未知')+' · '+(canSub?'剧集':'电影')+' · ★ '+Number(c.rating||0).toFixed(1)+'</p><p>'+(c.in_emby?'已在库':c.library_status==='available'?'未入库':'片库状态待同步')+'</p></div></div><div class="cinema-detail-actions">'+(canSub?'<button type="button" class="sub-btn '+(subs[c.tmdb_id]?'on':'')+'" data-tmdb="'+esc(c.tmdb_id)+'" data-title="'+esc(c.title)+'" data-poster="'+esc(c.poster||'')+'">'+(subs[c.tmdb_id]?'✓ 已订阅':'+ 订阅追更')+'</button>':'')+'<a class="btn gray" href="https://www.themoviedb.org/'+(canSub?'tv/':'movie/')+encodeURIComponent(c.tmdb_id)+'" target="_blank" rel="noopener noreferrer">查看影视详情 ↗</a></div></div>');hydratePosters($('modalBody'));
+}
+document.addEventListener('visibilitychange',function(){if(document.hidden)pauseOverview();else if(overviewActive()){overviewHot.lastAt=0;loadDashboard(true);}});
 
 /* Lightweight live status; this endpoint never starts a scan or remote check. */
 var runtimeStatusControl = {timer:null,busy:false};

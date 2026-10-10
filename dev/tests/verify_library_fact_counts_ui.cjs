@@ -3,13 +3,15 @@ const fs=require('fs'),vm=require('vm'),assert=require('assert'),path=require('p
 const html=require('./frontend_source.cjs').loadFrontend();
 const nodes=new Map();let response,fail=false;const saved=new Map();
 const node=id=>{
- if(!nodes.has(id))nodes.set(id,{textContent:'',innerHTML:'',style:{setProperty(){}},value:''});return nodes.get(id);
+ if(!nodes.has(id))nodes.set(id,{textContent:'',innerHTML:'',style:{setProperty(){}},classList:{toggle(){}},value:''});return nodes.get(id);
 };
 const ctx=vm.createContext({$:node,Date,Math,JSON,esc:String,
  api:async()=>{if(fail)throw new Error('offline');return response;},
  embyLoaded:false,embyData:{series:[],movies:[],stats:{}},md_sync:(s,stats)=>stats,
- localStorage:{setItem:(k,v)=>saved.set(k,v)},switchTab(){},renderEmbyList(){}});
-vm.runInContext(html.slice(html.indexOf('function fmtBig('),html.indexOf('function renderDashPlanFromDashboard(')),ctx);
+ localStorage:{setItem:(k,v)=>saved.set(k,v),getItem:k=>saved.get(k)||null},
+ document:{hidden:false,addEventListener(){},querySelectorAll(){return [];}},switchTab(){},renderEmbyList(){}});
+ctx.window=ctx;
+vm.runInContext(html.slice(html.indexOf('/* Media overview:'),html.indexOf('/* Lightweight live status;')),ctx);
 async function main(){
  const now=Date.now()/1000;
  response={status:'success',ts:now-4000,facts_ts:now,facts_version:'v13',episodes:13,

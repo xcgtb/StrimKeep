@@ -116,6 +116,8 @@ def _recompute_all_stats():
         'share_other': out['share_other'],
     }
     now = time.time()
+    result['ts'] = now
+    _state.save(_eng().STATE_DIR / 'library_stats_cache.json', result)
     _eng()._lib_stats_cache['ts'] = now
     _eng()._lib_stats_cache['data'] = result
     # 同一次遍历的总数同步写入 STRM 计数缓存（内存+磁盘），两处数字永远一致
@@ -128,7 +130,17 @@ def action_library_stats(args):
     now = time.time()
     if _eng()._lib_stats_cache['data'] is not None and (now - _eng()._lib_stats_cache['ts']) < _eng()._CACHE_TTL:
         return _eng()._lib_stats_cache['data']
-    return _recompute_all_stats()
+    disk = _state.read(_eng().STATE_DIR / 'library_stats_cache.json', {})
+    if isinstance(disk, dict) and isinstance(disk.get('rows'), list):
+        _eng()._lib_stats_cache.update(ts=disk.get('ts', 0), data=disk)
+        if now - float(disk.get('ts') or 0) >= _eng()._CACHE_TTL:
+            threading.Thread(target=_strm_count_bg_refresh, daemon=True,
+                             name='library-stats-refresh').start()
+        return disk
+    with _eng()._strm_count_refreshing:
+        if _eng()._lib_stats_cache['data'] is not None and now - _eng()._lib_stats_cache['ts'] < _eng()._CACHE_TTL:
+            return _eng()._lib_stats_cache['data']
+        return _recompute_all_stats()
 
 def _load_strm_count_disk():
     try:

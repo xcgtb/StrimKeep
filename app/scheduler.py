@@ -14,7 +14,7 @@ import threading
 import time
 from argparse import Namespace
 
-from app import engine, bot, tasks
+from app import engine, bot, tasks, overview
 from app import config as _cfg
 
 TICK_SEC = 30
@@ -159,6 +159,13 @@ def gov_auto_update(body: dict) -> dict:
 def _tick(now: float):
     """每 30 秒一次，决定是否触发：入库缓存刷新 / 订阅检查 / 巡检 / 晨报预扫 / 晨报发送"""
     cfg = _cfg.load_config()
+
+    # Keep the existing five-minute count TTL even when no browser is open.
+    # request_refresh is cache-first/single-flight and never blocks this tick.
+    try:
+        overview.request_refresh()
+    except Exception as e:
+        engine.log.warning('总览定时刷新未启动: %s', e)
 
     # ── 入库监控（默认 5 分钟） ──
     try:

@@ -587,6 +587,7 @@ function switchTab(id){
     if (!confirm('「画质对比规则」有未保存的改动，离开将丢弃。\n\n确定离开？')) return;
   }
   if (window.__activeTab === 'explore' && id !== 'explore') pauseExplore();
+  if (window.__activeTab === 'dashboard' && id !== 'dashboard' && typeof pauseOverview === 'function') pauseOverview();
   window.__activeTab = id;
   if (id !== 'history' && typeof stopLogCenter === 'function') stopLogCenter();
   document.querySelectorAll('.sidebar nav a').forEach(function(a){

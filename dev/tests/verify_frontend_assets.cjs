@@ -41,12 +41,12 @@ assert.equal(Object.keys(context.__taskHintControl||{}).length,0);
 console.log('PASS scripts evaluate in delivery order, retain global handlers and register initialization once');
 (async()=>{
   const calls=[];
-  for(const name of ['initTheme','injectIcons','renderMenu','switchExploreTab_init','buildSubnavs','hydrateDashboardFromCache','loadDashboard','setupPosterAutoLoad','loadLibraryStats','pollTmdbProgress','startRuntimeStatus'])
+  for(const name of ['initTheme','injectIcons','renderMenu','switchExploreTab_init','buildSubnavs','hydrateDashboardFromCache','loadDashboard','setupPosterAutoLoad','pollTmdbProgress','startRuntimeStatus'])
     context[name]=()=>calls.push(name);
   let resolveSubscriptions;
   context.api=()=>new Promise(resolve=>{resolveSubscriptions=resolve;});
   await events.DOMContentLoaded[0]();
-  assert.deepEqual(calls,['initTheme','injectIcons','renderMenu','switchExploreTab_init','buildSubnavs','hydrateDashboardFromCache','loadDashboard','setupPosterAutoLoad','loadLibraryStats','pollTmdbProgress','startRuntimeStatus']);
+  assert.deepEqual(calls,['initTheme','injectIcons','renderMenu','switchExploreTab_init','buildSubnavs','hydrateDashboardFromCache','loadDashboard','setupPosterAutoLoad','pollTmdbProgress','startRuntimeStatus']);
   assert.equal(context.window.__activeTab,'dashboard');
   resolveSubscriptions({status:'success',subscriptions:[]});
   await context.exploreSubscriptionsPromise;
