@@ -53,10 +53,10 @@ class TestQualityCompare:
     def test_identical_is_tie(self):
         assert quality.compare_cover('a.1080p.strm', 'a.1080p.strm', self.COVER) == 0
 
-    def test_source_outranks_resolution_in_default_order(self):
-        # 默认顺序 source 先于 resolution：Remux 1080p 胜 WEB-DL 2160p?  以实际行为为准，这里只锁定与 explain 一致
+    def test_default_skips_source_in_comparison_and_explanation(self):
         a, b = 'a.1080p.BluRay.strm', 'a.2160p.WEB-DL.strm'
         r = quality.compare_cover(a, b, self.COVER)
+        assert r == -1
         assert quality.explain_compare(a, b, self.COVER)['result'] == r
 
     def test_dolby_vision_profile_ordering(self):

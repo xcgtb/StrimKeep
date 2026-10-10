@@ -199,14 +199,14 @@ docker compose ps
 | 默认顺序 | 维度 | 说明 |
 |---|---|---|
 | 1 | 发布组 | 按你维护的发布组列表比较（取自文件名末尾「-组名」）；**默认关闭**，列表为空时不参与 |
-| 2 | 资源类型 | UHD Remux > Remux > UHD BluRay > BluRay > WEB-DL > WEBRip > HDTV > DVD |
+| 2 | 资源类型 | **默认关闭，可自行启用**；UHD Remux > Remux > UHD BluRay > BluRay > WEB-DL > WEBRip > HDTV > DVD |
 | 3 | 分辨率 | 8K > 4K > 2K > 1080p > 720p > SD |
 | 4 | 动态范围 | Dolby Vision（P7 > P5 > P8 > 未识别）> HDR10+ > HDR Vivid > HDR10 > HDR / HLG > SDR |
-| 5 | 色深 | 12bit > 10bit > 8bit |
-| 6 | 音频规格 | TrueHD Atmos / DTS:X > TrueHD / DTS-HD MA > LPCM / FLAC > Audio Vivid > DD+ Atmos > DD+ > DTS > AC3 > AAC |
-| 7 | 帧率 | 60 > 50 > 30 > 25 > 24 fps（59.94 / 29.97 / 23.976 分别归入 60 / 30 / 24 档） |
+| 5 | 帧率 | 60 > 50 > 30 > 25 > 24 fps（59.94 / 29.97 / 23.976 分别归入 60 / 30 / 24 档） |
+| 6 | 色深 | 12bit > 10bit > 8bit |
+| 7 | 音频规格 | TrueHD Atmos / DTS:X > TrueHD / DTS-HD MA > LPCM / FLAC > Audio Vivid > DD+ Atmos > DD+ > DTS > AC3 > AAC |
 
-> 注意：默认顺序下**资源类型排在分辨率之前**，所以 1080p BluRay 会被认为优于 4K WEB-DL。如果你更看重分辨率，把「分辨率」上移到第一位即可。
+默认发布组、资源类型关闭，其余五项开启，先比较分辨率。例如 4K WEB-DL 默认优于 1080p BluRay；如果启用资源类型并保持它在分辨率之前，则先按资源类型决定。升级保留用户已保存的规则；新配置及「恢复默认」使用上表的顺序与开关。
 
 **关键策略，保存要二次确认**：规则保存后立即生效（配置热加载），直接决定「删本地还是删分享」，所以编辑只是草稿——页面会提示「有未保存的改动」，点「保存规则」会弹窗列出本次改动明细，等几秒后才能确认；「恢复默认」同样要确认；有未保存改动时切换页签或刷新页面会被拦截。规则指纹改变后旧治理计划不可执行，需要重新扫描。
 

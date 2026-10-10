@@ -24,7 +24,7 @@ def _cover_change(change):
     if change == 'order':
         cover['rules'][0], cover['rules'][1] = cover['rules'][1], cover['rules'][0]
     elif change == 'enabled':
-        cover['rules'][1]['enabled'] = False
+        cover['rules'][1]['enabled'] = not cover['rules'][1]['enabled']
     elif change == 'tiers':
         tiers = cover['rules'][2]['tiers']
         tiers[0], tiers[1] = tiers[1], tiers[0]

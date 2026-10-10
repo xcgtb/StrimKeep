@@ -301,7 +301,7 @@ def get_ingest_cfg() -> dict:
 
 # ═══════════ 画质对比规则（7 维；双库治理比较版本的唯一依据） ═══════════
 def get_cover_strategy() -> dict:
-    """读取画质对比规则；无配置/解析失败时回退默认，并规范成完整 8 条。"""
+    """读取已保存的画质规则；无配置/解析失败时回退默认，并规范成完整 7 条。"""
     raw = load_config().get('strategy_cover') or ''
     try:
         data = json.loads(raw) if raw else None

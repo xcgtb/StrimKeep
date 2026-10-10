@@ -963,8 +963,10 @@ class TestCoverRulesInGovernance:
         import subprocess
         code = (
             "import app.governance as g, app.config as c;"
-            "assert g._cmp_versions('a.1080p.BluRay.mkv','a.2160p.WEB-DL.mkv')==1;"
-            "assert len(c.get_cover_strategy()['rules'])==7;print('ok')")
+            "assert g._cmp_versions('a.1080p.BluRay.mkv','a.2160p.WEB-DL.mkv')==-1;"
+            "cover=c.get_cover_strategy();assert len(cover['rules'])==7;"
+            "cover['rules'][1]['enabled']=True;c.get_cover_strategy=lambda:cover;"
+            "assert g._cmp_versions('a.1080p.BluRay.mkv','a.2160p.WEB-DL.mkv')==1;print('ok')")
         r = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True,
                            cwd=str(Path(__file__).parents[2]),
                            env=dict(os.environ, AGENT_DATA=str(_TMP / 'data')))

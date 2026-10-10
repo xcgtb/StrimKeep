@@ -164,8 +164,8 @@
        "b": "其他 / 未识别",
        "key": "source",
        "label": "资源类型优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
+       "reason": "已关闭",
+       "verdict": "skip"
       },
       {
        "a": "2160p / 4K",
@@ -186,6 +186,14 @@
       {
        "a": "其他 / 未识别",
        "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
        "key": "bitdepth",
        "label": "色深优先级",
        "reason": "上一维已分胜负",
@@ -196,14 +204,6 @@
        "b": "其他 / 未识别",
        "key": "audio",
        "label": "音频规格优先级",
-       "reason": "上一维已分胜负",
-       "verdict": "after"
-      },
-      {
-       "a": "其他 / 未识别",
-       "b": "其他 / 未识别",
-       "key": "fps",
-       "label": "帧率优先级",
        "reason": "上一维已分胜负",
        "verdict": "after"
       }
@@ -842,8 +842,8 @@
        "b": "其他 / 未识别",
        "key": "source",
        "label": "资源类型优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
+       "reason": "已关闭",
+       "verdict": "skip"
       },
       {
        "a": "2160p / 4K",
@@ -864,6 +864,14 @@
       {
        "a": "其他 / 未识别",
        "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
        "key": "bitdepth",
        "label": "色深优先级",
        "reason": "上一维已分胜负",
@@ -874,14 +882,6 @@
        "b": "其他 / 未识别",
        "key": "audio",
        "label": "音频规格优先级",
-       "reason": "上一维已分胜负",
-       "verdict": "after"
-      },
-      {
-       "a": "其他 / 未识别",
-       "b": "其他 / 未识别",
-       "key": "fps",
-       "label": "帧率优先级",
        "reason": "上一维已分胜负",
        "verdict": "after"
       }
@@ -946,8 +946,8 @@
        "b": "其他 / 未识别",
        "key": "source",
        "label": "资源类型优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
+       "reason": "已关闭",
+       "verdict": "skip"
       },
       {
        "a": "1080p",
@@ -968,6 +968,14 @@
       {
        "a": "其他 / 未识别",
        "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
        "key": "bitdepth",
        "label": "色深优先级",
        "reason": "上一维已分胜负",
@@ -978,14 +986,6 @@
        "b": "其他 / 未识别",
        "key": "audio",
        "label": "音频规格优先级",
-       "reason": "上一维已分胜负",
-       "verdict": "after"
-      },
-      {
-       "a": "其他 / 未识别",
-       "b": "其他 / 未识别",
-       "key": "fps",
-       "label": "帧率优先级",
        "reason": "上一维已分胜负",
        "verdict": "after"
       }
@@ -1194,8 +1194,8 @@
        "b": "其他 / 未识别",
        "key": "source",
        "label": "资源类型优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
+       "reason": "已关闭",
+       "verdict": "skip"
       },
       {
        "a": "720p",
@@ -1216,6 +1216,14 @@
       {
        "a": "其他 / 未识别",
        "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
        "key": "bitdepth",
        "label": "色深优先级",
        "reason": "上一维已分胜负",
@@ -1226,14 +1234,6 @@
        "b": "其他 / 未识别",
        "key": "audio",
        "label": "音频规格优先级",
-       "reason": "上一维已分胜负",
-       "verdict": "after"
-      },
-      {
-       "a": "其他 / 未识别",
-       "b": "其他 / 未识别",
-       "key": "fps",
-       "label": "帧率优先级",
        "reason": "上一维已分胜负",
        "verdict": "after"
       }
@@ -1313,8 +1313,8 @@
        "b": "其他 / 未识别",
        "key": "source",
        "label": "资源类型优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
+       "reason": "已关闭",
+       "verdict": "skip"
       },
       {
        "a": "2160p / 4K",
@@ -1335,6 +1335,14 @@
       {
        "a": "其他 / 未识别",
        "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
        "key": "bitdepth",
        "label": "色深优先级",
        "reason": "上一维已分胜负",
@@ -1345,14 +1353,6 @@
        "b": "其他 / 未识别",
        "key": "audio",
        "label": "音频规格优先级",
-       "reason": "上一维已分胜负",
-       "verdict": "after"
-      },
-      {
-       "a": "其他 / 未识别",
-       "b": "其他 / 未识别",
-       "key": "fps",
-       "label": "帧率优先级",
        "reason": "上一维已分胜负",
        "verdict": "after"
       }
@@ -1443,8 +1443,8 @@
        "b": "其他 / 未识别",
        "key": "source",
        "label": "资源类型优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
+       "reason": "已关闭",
+       "verdict": "skip"
       },
       {
        "a": "2160p / 4K",
@@ -1465,6 +1465,14 @@
       {
        "a": "其他 / 未识别",
        "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
        "key": "bitdepth",
        "label": "色深优先级",
        "reason": "上一维已分胜负",
@@ -1475,14 +1483,6 @@
        "b": "其他 / 未识别",
        "key": "audio",
        "label": "音频规格优先级",
-       "reason": "上一维已分胜负",
-       "verdict": "after"
-      },
-      {
-       "a": "其他 / 未识别",
-       "b": "其他 / 未识别",
-       "key": "fps",
-       "label": "帧率优先级",
        "reason": "上一维已分胜负",
        "verdict": "after"
       }
@@ -1567,8 +1567,8 @@
        "b": "其他 / 未识别",
        "key": "source",
        "label": "资源类型优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
+       "reason": "已关闭",
+       "verdict": "skip"
       },
       {
        "a": "2160p / 4K",
@@ -1589,6 +1589,14 @@
       {
        "a": "其他 / 未识别",
        "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
        "key": "bitdepth",
        "label": "色深优先级",
        "reason": "上一维已分胜负",
@@ -1599,14 +1607,6 @@
        "b": "其他 / 未识别",
        "key": "audio",
        "label": "音频规格优先级",
-       "reason": "上一维已分胜负",
-       "verdict": "after"
-      },
-      {
-       "a": "其他 / 未识别",
-       "b": "其他 / 未识别",
-       "key": "fps",
-       "label": "帧率优先级",
        "reason": "上一维已分胜负",
        "verdict": "after"
       }
@@ -1677,8 +1677,8 @@
        "b": "其他 / 未识别",
        "key": "source",
        "label": "资源类型优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
+       "reason": "已关闭",
+       "verdict": "skip"
       },
       {
        "a": "2160p / 4K",
@@ -1699,6 +1699,14 @@
       {
        "a": "其他 / 未识别",
        "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
        "key": "bitdepth",
        "label": "色深优先级",
        "reason": "上一维已分胜负",
@@ -1709,14 +1717,6 @@
        "b": "其他 / 未识别",
        "key": "audio",
        "label": "音频规格优先级",
-       "reason": "上一维已分胜负",
-       "verdict": "after"
-      },
-      {
-       "a": "其他 / 未识别",
-       "b": "其他 / 未识别",
-       "key": "fps",
-       "label": "帧率优先级",
        "reason": "上一维已分胜负",
        "verdict": "after"
       }
@@ -1784,8 +1784,8 @@
        "b": "其他 / 未识别",
        "key": "source",
        "label": "资源类型优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
+       "reason": "已关闭",
+       "verdict": "skip"
       },
       {
        "a": "2160p / 4K",
@@ -1806,6 +1806,14 @@
       {
        "a": "其他 / 未识别",
        "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
        "key": "bitdepth",
        "label": "色深优先级",
        "reason": "上一维已分胜负",
@@ -1816,14 +1824,6 @@
        "b": "其他 / 未识别",
        "key": "audio",
        "label": "音频规格优先级",
-       "reason": "上一维已分胜负",
-       "verdict": "after"
-      },
-      {
-       "a": "其他 / 未识别",
-       "b": "其他 / 未识别",
-       "key": "fps",
-       "label": "帧率优先级",
        "reason": "上一维已分胜负",
        "verdict": "after"
       }
@@ -1891,8 +1891,8 @@
        "b": "其他 / 未识别",
        "key": "source",
        "label": "资源类型优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
+       "reason": "已关闭",
+       "verdict": "skip"
       },
       {
        "a": "1080p",
@@ -1913,6 +1913,14 @@
       {
        "a": "其他 / 未识别",
        "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
        "key": "bitdepth",
        "label": "色深优先级",
        "reason": "打平，继续比下一维",
@@ -1923,14 +1931,6 @@
        "b": "其他 / 未识别",
        "key": "audio",
        "label": "音频规格优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
-      },
-      {
-       "a": "其他 / 未识别",
-       "b": "其他 / 未识别",
-       "key": "fps",
-       "label": "帧率优先级",
        "reason": "打平，继续比下一维",
        "verdict": "tie"
       }
@@ -1997,8 +1997,8 @@
        "b": "其他 / 未识别",
        "key": "source",
        "label": "资源类型优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
+       "reason": "已关闭",
+       "verdict": "skip"
       },
       {
        "a": "1080p",
@@ -2019,6 +2019,14 @@
       {
        "a": "其他 / 未识别",
        "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
        "key": "bitdepth",
        "label": "色深优先级",
        "reason": "打平，继续比下一维",
@@ -2029,14 +2037,6 @@
        "b": "其他 / 未识别",
        "key": "audio",
        "label": "音频规格优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
-      },
-      {
-       "a": "其他 / 未识别",
-       "b": "其他 / 未识别",
-       "key": "fps",
-       "label": "帧率优先级",
        "reason": "打平，继续比下一维",
        "verdict": "tie"
       }
@@ -2102,8 +2102,8 @@
        "b": "其他 / 未识别",
        "key": "source",
        "label": "资源类型优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
+       "reason": "已关闭",
+       "verdict": "skip"
       },
       {
        "a": "720p",
@@ -2124,6 +2124,14 @@
       {
        "a": "其他 / 未识别",
        "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
        "key": "bitdepth",
        "label": "色深优先级",
        "reason": "上一维已分胜负",
@@ -2134,14 +2142,6 @@
        "b": "其他 / 未识别",
        "key": "audio",
        "label": "音频规格优先级",
-       "reason": "上一维已分胜负",
-       "verdict": "after"
-      },
-      {
-       "a": "其他 / 未识别",
-       "b": "其他 / 未识别",
-       "key": "fps",
-       "label": "帧率优先级",
        "reason": "上一维已分胜负",
        "verdict": "after"
       }
@@ -2198,8 +2198,8 @@
        "b": "其他 / 未识别",
        "key": "source",
        "label": "资源类型优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
+       "reason": "已关闭",
+       "verdict": "skip"
       },
       {
        "a": "1080p",
@@ -2220,6 +2220,14 @@
       {
        "a": "其他 / 未识别",
        "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
        "key": "bitdepth",
        "label": "色深优先级",
        "reason": "打平，继续比下一维",
@@ -2230,14 +2238,6 @@
        "b": "其他 / 未识别",
        "key": "audio",
        "label": "音频规格优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
-      },
-      {
-       "a": "其他 / 未识别",
-       "b": "其他 / 未识别",
-       "key": "fps",
-       "label": "帧率优先级",
        "reason": "打平，继续比下一维",
        "verdict": "tie"
       }
@@ -2301,8 +2301,8 @@
        "b": "其他 / 未识别",
        "key": "source",
        "label": "资源类型优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
+       "reason": "已关闭",
+       "verdict": "skip"
       },
       {
        "a": "2160p / 4K",
@@ -2323,6 +2323,14 @@
       {
        "a": "其他 / 未识别",
        "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "上一维已分胜负",
+       "verdict": "after"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
        "key": "bitdepth",
        "label": "色深优先级",
        "reason": "上一维已分胜负",
@@ -2333,14 +2341,6 @@
        "b": "其他 / 未识别",
        "key": "audio",
        "label": "音频规格优先级",
-       "reason": "上一维已分胜负",
-       "verdict": "after"
-      },
-      {
-       "a": "其他 / 未识别",
-       "b": "其他 / 未识别",
-       "key": "fps",
-       "label": "帧率优先级",
        "reason": "上一维已分胜负",
        "verdict": "after"
       }
@@ -2397,8 +2397,8 @@
        "b": "其他 / 未识别",
        "key": "source",
        "label": "资源类型优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
+       "reason": "已关闭",
+       "verdict": "skip"
       },
       {
        "a": "1080p",
@@ -2419,6 +2419,14 @@
       {
        "a": "其他 / 未识别",
        "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
        "key": "bitdepth",
        "label": "色深优先级",
        "reason": "打平，继续比下一维",
@@ -2429,14 +2437,6 @@
        "b": "其他 / 未识别",
        "key": "audio",
        "label": "音频规格优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
-      },
-      {
-       "a": "其他 / 未识别",
-       "b": "其他 / 未识别",
-       "key": "fps",
-       "label": "帧率优先级",
        "reason": "打平，继续比下一维",
        "verdict": "tie"
       }
@@ -2560,8 +2560,8 @@
        "b": "其他 / 未识别",
        "key": "source",
        "label": "资源类型优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
+       "reason": "已关闭",
+       "verdict": "skip"
       },
       {
        "a": "1080p",
@@ -2582,6 +2582,14 @@
       {
        "a": "其他 / 未识别",
        "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
        "key": "bitdepth",
        "label": "色深优先级",
        "reason": "打平，继续比下一维",
@@ -2592,14 +2600,6 @@
        "b": "其他 / 未识别",
        "key": "audio",
        "label": "音频规格优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
-      },
-      {
-       "a": "其他 / 未识别",
-       "b": "其他 / 未识别",
-       "key": "fps",
-       "label": "帧率优先级",
        "reason": "打平，继续比下一维",
        "verdict": "tie"
       }
@@ -2663,8 +2663,8 @@
        "b": "其他 / 未识别",
        "key": "source",
        "label": "资源类型优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
+       "reason": "已关闭",
+       "verdict": "skip"
       },
       {
        "a": "1080p",
@@ -2685,6 +2685,14 @@
       {
        "a": "其他 / 未识别",
        "b": "其他 / 未识别",
+       "key": "fps",
+       "label": "帧率优先级",
+       "reason": "打平，继续比下一维",
+       "verdict": "tie"
+      },
+      {
+       "a": "其他 / 未识别",
+       "b": "其他 / 未识别",
        "key": "bitdepth",
        "label": "色深优先级",
        "reason": "打平，继续比下一维",
@@ -2695,14 +2703,6 @@
        "b": "其他 / 未识别",
        "key": "audio",
        "label": "音频规格优先级",
-       "reason": "打平，继续比下一维",
-       "verdict": "tie"
-      },
-      {
-       "a": "其他 / 未识别",
-       "b": "其他 / 未识别",
-       "key": "fps",
-       "label": "帧率优先级",
        "reason": "打平，继续比下一维",
        "verdict": "tie"
       }

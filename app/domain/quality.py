@@ -19,7 +19,7 @@ RE_DV = re.compile(r'(?<![A-Z0-9])(?:DV|DOVI)(?![A-Z0-9])|DOLBY[ ._-]?VISION')
 # 没有任何隐藏打分：能影响结果的只有「规则顺序 / 启用开关 / 档位顺序 / 发布组列表」。
 # 全部规则打平 = 平局，由「平局保留本地/分享」开关决定，这里不兜底。
 COVER_RULE_ORDER = ['release_group', 'source', 'resolution', 'dolby',
-                    'bitdepth', 'audio', 'fps']
+                    'fps', 'bitdepth', 'audio']
 
 COVER_RULE_META = {
     'release_group': {'label': '发布组优先级',
@@ -51,7 +51,7 @@ COVER_TIERS_DEFAULT = {
 }
 
 COVER_ENABLED_DEFAULT = {
-    'release_group': False, 'source': True, 'resolution': True, 'dolby': True,
+    'release_group': False, 'source': False, 'resolution': True, 'dolby': True,
     'bitdepth': True, 'audio': True, 'fps': True,
 }
 
@@ -64,7 +64,7 @@ def _cover_rule(key, enabled=None, tiers=None, groups=None):
 
 
 def cover_default_strategy():
-    """默认画质对比规则：顺序/开关/档位全部对齐上游 TgtoDrive。"""
+    """默认前两项关闭，其余按分辨率、动态范围、帧率、色深、音频依次比较。"""
     return {'rules': [_cover_rule(k) for k in COVER_RULE_ORDER]}
 
 

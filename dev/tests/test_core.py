@@ -119,9 +119,16 @@ class TestCoverCompare:
                 r['enabled'] = over[r['key']]
         return c
 
-    def test_default_source_before_resolution(self):
-        # 上游默认顺序：资源类型在分辨率之前，1080p BluRay > 4K WEB-DL
-        assert core.compare_cover('a.1080p.BluRay.mkv', 'a.2160p.WEB-DL.mkv', self.cov()) == 1
+    def test_default_skips_source_and_prefers_resolution(self):
+        assert core.compare_cover('a.1080p.BluRay.mkv', 'a.2160p.WEB-DL.mkv', self.cov()) == -1
+
+    def test_source_can_be_enabled_before_resolution(self):
+        assert core.compare_cover('a.1080p.BluRay.mkv', 'a.2160p.WEB-DL.mkv', self.cov(source=True)) == 1
+
+    def test_default_fps_before_bitdepth_and_audio(self):
+        c = self.cov()
+        assert core.compare_cover('a.2160p.SDR.60fps.8bit.AAC.mkv',
+                                  'a.2160p.SDR.24fps.12bit.TrueHD.mkv', c) == 1
 
     def test_resolution_when_source_disabled(self):
         c = self.cov(source=False)
@@ -165,7 +172,7 @@ class TestCoverCompare:
         e = core.explain_compare('a.2160p.WEB-DL.mkv', 'a.1080p.WEB-DL.mkv', core.cover_default_strategy())
         assert e['result'] == 1 and e['decided_by'] == 'resolution'
         v = {d['key']: d['verdict'] for d in e['dims']}
-        assert v['source'] == 'tie' and v['resolution'] == 'a' and v['dolby'] == 'after'
+        assert v['source'] == 'skip' and v['resolution'] == 'a' and v['dolby'] == 'after'
         assert v['release_group'] == 'skip' and 'filesize' not in v
 
     def test_normalize_repairs_partial_config(self):
