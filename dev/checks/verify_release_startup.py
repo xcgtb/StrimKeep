@@ -18,7 +18,7 @@ import urllib.request
 REPO = Path.cwd() if __file__ == '<stdin>' else Path(__file__).resolve().parents[2]
 
 
-def request(port, endpoint, auth=True, body=None):
+def request(port, endpoint, auth=True, body=None, binary=False):
     headers = {}
     if auth:
         headers['Authorization'] = 'Basic ' + base64.b64encode(b'admin:isolated-only').decode()
@@ -27,7 +27,8 @@ def request(port, endpoint, auth=True, body=None):
         body = json.dumps(body).encode()
     req = urllib.request.Request(f'http://127.0.0.1:{port}{endpoint}', data=body, headers=headers)
     with urllib.request.urlopen(req, timeout=3) as result:
-        return result.read().decode()
+        content = result.read()
+        return content if binary else content.decode('utf-8')
 
 
 def start_and_check(data, expected_interval, update=False):
@@ -71,7 +72,12 @@ def start_and_check(data, expected_interval, update=False):
             assert '<title>StrimKeep</title>' in html
             assets = re.findall(r'(?:src|href)="(/static/[^\"]+)"', html)
             assert assets
-            for url in assets: assert request(port, url, False)
+            for url in assets:
+                content = request(port, url, False, binary=True)
+                assert content, url
+            favicon = request(port, '/favicon.ico', False, binary=True)
+            assert favicon == request(port, '/static/icons/favicon.ico', False, binary=True)
+            assert favicon.startswith(bytes([0, 0, 1, 0])), 'invalid ICO header'
             if update:
                 result = json.loads(request(port, '/api/config', body={'subscribe_interval_min':'42'}))
                 assert result['status'] == 'success'
