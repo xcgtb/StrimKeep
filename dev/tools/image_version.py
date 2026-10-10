@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resolve CI image version without editing tracked source files."""
+"""Resolve CI image version from Git tags; never use the local source fallback."""
 import os
 from pathlib import Path
 import re
@@ -25,11 +25,7 @@ def resolve(root, ref_type, ref_name):
     base = next((RELEASE_TAG.fullmatch(tag)[1] for tag in tags
                  if RELEASE_TAG.fullmatch(tag)), None)
     if base is None:
-        source = (Path(root)/'app/version.py').read_text()
-        match = re.search(r"__version__\s*=\s*['\"]([^'\"]+)['\"]", source)
-        if not match:
-            raise ValueError('Missing source fallback version')
-        base = match[1]
+        raise ValueError('No reachable release tag (vX.Y.Z). Fetch tags or create the first release tag before CI image publishing.')
     return base
 
 

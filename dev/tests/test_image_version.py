@@ -39,9 +39,10 @@ def test_invalid_release_tag_rejected(tmp_path, tag):
         versions.resolve(tmp_path, 'tag', tag)
 
 
-def test_main_build_uses_source_fallback_without_tags(tmp_path):
+def test_main_build_without_release_tags_fails_closed(tmp_path):
     root = repo(tmp_path)
-    assert versions.resolve(root, 'branch', 'main') == '1.0.2'
+    with pytest.raises(ValueError, match='No reachable release tag'):
+        versions.resolve(root, 'branch', 'main')
 
 
 def test_main_build_uses_latest_merged_release(tmp_path):

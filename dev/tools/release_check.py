@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Source/release checks: version agreement and private deployment boundaries."""
+"""Source/release checks: Git-injected versions and private deployment boundaries."""
 import argparse
 import os
 from pathlib import Path
@@ -49,19 +49,30 @@ def check(root, archive=False):
                     if match and not placeholder(match[2]):
                         errors.append(f'non-placeholder credential: {rel}: {match[1]}')
     try:
-        version = re.search(r"__version__\s*=\s*['\"]([^'\"]+)['\"]", (root/'app/version.py').read_text())[1]
-        dockerfile = (root/'Dockerfile').read_text()
+        source = (root/'app/version.py').read_text(encoding='utf-8')
+        match = re.search(r"__version__\s*=\s*['\"]([^'\"]+)['\"]", source)
+        if not match or match[1] != '0.0.0+local':
+            errors.append('source version must be non-release fallback 0.0.0+local')
+        dockerfile = (root/'Dockerfile').read_text(encoding='utf-8')
         for line in dockerfile.splitlines():
             if re.match(r'^\s*(?:ARG|ENV)\s+APP_VERSION\b', line) and line.strip() not in {
                     'ARG APP_VERSION', 'ENV APP_VERSION=${APP_VERSION}'}:
                 errors.append('Docker APP_VERSION must be supplied by CI, not hardcoded')
-        if not (root/'CHANGELOG.md').read_text().startswith('# 版本日志\n\n## '+version+'（'):
-            errors.append('changelog release version mismatch')
+        changelog = (root/'CHANGELOG.md').read_text(encoding='utf-8')
+        versions = re.findall(r'^## (\d+\.\d+\.\d+)（', changelog, re.M)
+        if not changelog.startswith('# 版本日志\n\n## 未发布\n\n'):
+            errors.append('CHANGELOG must begin with an 未发布 section')
+        if not versions or len(set(versions)) != len(versions):
+            errors.append('CHANGELOG needs unique released version headings')
+        if os.environ.get('GITHUB_REF_TYPE') == 'tag':
+            release_tag = os.environ.get('GITHUB_REF_NAME', '')
+            if not re.fullmatch(r'v\d+\.\d+\.\d+', release_tag) or release_tag[1:] not in versions:
+                errors.append('release tag must have a matching CHANGELOG entry')
         for name in ('docker-compose.yml', 'dev/docker-compose.build.yml'):
-            compose = (root/name).read_text()
-            # 正式部署允许固定版本或 latest；本地构建名称不携带发布版本。
+            compose = (root/name).read_text(encoding='utf-8')
+            # Public deployments may pin a documented release or use moving latest.
             allowed_tags = (
-                (version, 'latest')
+                tuple(versions) + ('latest',)
                 if name == 'docker-compose.yml'
                 else ('local',)
             )
@@ -90,7 +101,7 @@ def main():
     if errors:
         print('\n'.join(errors))
         raise SystemExit(1)
-    print('release check: OK; source version, deployment templates and private-file boundaries')
+    print('release check: OK; Git release boundaries, CHANGELOG and private-file boundaries')
 
 
 if __name__ == '__main__':

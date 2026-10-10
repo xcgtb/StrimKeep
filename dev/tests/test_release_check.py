@@ -55,9 +55,22 @@ def test_docker_version_override_rejected(tmp_path):
 
 def test_release_bump_needs_no_docker_or_compose_edits(tmp_path):
     root = base(tmp_path)
-    (root/'app/version.py').write_text("__version__ = '9.8.7'\n")
-    (root/'CHANGELOG.md').write_text('# 版本日志\n\n## 9.8.7（测试）\n')
+    change = root/'CHANGELOG.md'
+    change.write_text(change.read_text().replace('## 1.0.3（', '## 9.8.7（', 1))
     assert checker.check(root) == []
+
+
+def test_source_fallback_must_not_look_like_release(tmp_path):
+    root = base(tmp_path)
+    (root/'app/version.py').write_text("__version__ = '1.0.3'\n")
+    assert any('source version must be non-release fallback' in x for x in checker.check(root))
+
+
+def test_changelog_requires_unreleased_section(tmp_path):
+    root = base(tmp_path)
+    changelog = root/'CHANGELOG.md'
+    changelog.write_text(changelog.read_text().replace('## 未发布\n\n', '', 1))
+    assert any('CHANGELOG must begin with' in x for x in checker.check(root))
 
 
 def test_stale_public_image_and_versioned_local_image_rejected(tmp_path):
