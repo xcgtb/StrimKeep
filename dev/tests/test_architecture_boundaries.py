@@ -89,13 +89,19 @@ page = client.get('/')
 assert page.status_code == 200
 assert 'no-store' in page.headers['cache-control']
 urls = re.findall(r'(?:src|href)="(/static/[^"]+)"', page.text)
-assert len(urls) == 16 and len(set(urls)) == 16
+assert len(urls) == 19 and len(set(urls)) == 19
 for url in urls:
     response = client.get(url)
     assert response.status_code == 200, url
-    kind = 'css' if '.css?' in url else 'javascript'
+    kind = {'css': 'css', 'js': 'javascript', 'svg': 'image/svg+xml',
+            'png': 'image/png', 'ico': 'image/'}.get(urlsplit(url).path.rsplit('.', 1)[-1])
     assert kind in response.headers['content-type'], url
     assert parse_qs(urlsplit(url).query)['v'][0] == hashlib.sha256(response.content).hexdigest()[:12], url
 assert client.get('/static/js/missing-file.js').status_code == 404
+icon = client.get('/favicon.ico')
+assert icon.status_code == 200 and icon.headers['content-type'] == 'image/vnd.microsoft.icon'
+assert icon.content == client.get('/static/icons/favicon.ico').content
+assert icon.content.startswith(bytes([0, 0, 1, 0]))
+assert '/favicon.ico' not in app.openapi()['paths']
 '''
     isolated(tmp_path, code)

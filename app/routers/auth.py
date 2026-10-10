@@ -55,3 +55,10 @@ def index():
         'Pragma': 'no-cache',
         'Expires': '0',
     })
+
+
+@router.get('/favicon.ico', include_in_schema=False)
+def favicon():
+    """浏览器自动发现的收藏夹图标，登录前也可访问。"""
+    return FileResponse(STATIC_DIR / 'icons/favicon.ico', media_type='image/vnd.microsoft.icon',
+                        headers={'Cache-Control': 'public, max-age=86400'})
