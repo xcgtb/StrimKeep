@@ -124,6 +124,91 @@ function doExploreSearch(){
   if (exploreFiltersOpen) toggleExploreFilters();
   return loadExplore(false, retry);
 }
+// Library badges have their own lightweight lifecycle, independent of TMDB page loading.
+var exploreLibrarySync = {timer:null, job:null, notice:'', lastAt:0};
+function exploreLibraryActive(){
+  var tab = $('tab-explore');
+  return typeof document !== 'undefined' && !document.hidden && tab && tab.classList.contains('active');
+}
+function stopExploreLibrarySync(){
+  if (exploreLibrarySync.timer !== null) clearTimeout(exploreLibrarySync.timer);
+  exploreLibrarySync.timer = null;
+  var job = exploreLibrarySync.job;
+  exploreLibrarySync.job = null;
+  if (job && job.controller) job.controller.abort();
+}
+function exploreStatusTargets(){
+  var grid = $('exploreGrid'), nodes = grid ? grid.querySelectorAll('.poster-card') : [];
+  return exploreShownCards.filter(function(card, index){
+    if (!nodes[index] || !nodes[index].getBoundingClientRect) return true;
+    var rect = nodes[index].getBoundingClientRect();
+    return rect.bottom >= -600 && rect.top <= window.innerHeight + 900;
+  }).slice(0, 200);
+}
+function ensureExploreLibrarySync(immediate){
+  if (!exploreLibraryActive() || !exploreShownCards.length || exploreLibrarySync.job) return;
+  if (exploreLibrarySync.timer !== null) {
+    if (!immediate) return;
+    clearTimeout(exploreLibrarySync.timer);
+  }
+  exploreLibrarySync.timer = setTimeout(function(){
+    exploreLibrarySync.timer = null;
+    pollExploreLibraryStatus();
+  }, immediate ? Math.max(100, 2000 - (Date.now() - exploreLibrarySync.lastAt)) : 2000);
+}
+async function pollExploreLibraryStatus(){
+  if (!exploreLibraryActive() || exploreLibrarySync.job) return;
+  var cards = exploreStatusTargets();
+  if (!cards.length) return;
+  var job = {generation:exploreGeneration, controller:typeof AbortController === 'function' ? new AbortController() : null};
+  exploreLibrarySync.job = job;
+  exploreLibrarySync.lastAt = Date.now();
+  var delay = 10000;
+  try {
+    var r = await api('/api/explore/library-status', {
+      method:'POST', body:JSON.stringify({cards:cards.map(function(c){return {type:c.type,tmdb_id:c.tmdb_id};})}),
+      timeoutMs:8000, signal:job.controller ? job.controller.signal : undefined
+    });
+    if (exploreLibrarySync.job !== job || job.generation !== exploreGeneration || !exploreLibraryActive()) return;
+    if (r.status !== 'success') throw new Error(r.message || '片库状态更新失败');
+    var updates = {};
+    (r.cards || []).forEach(function(c){updates[c.type + ':' + c.tmdb_id] = c;});
+    Object.keys(explorePages).forEach(function(page){
+      explorePages[page] = explorePages[page].map(function(card){
+        var update = updates[card.type + ':' + card.tmdb_id];
+        if (!update) return card;
+        // Keep title, poster, order and pagination intact; only library facts change.
+        var next = Object.assign({}, card);
+        ['in_emby','in_local','in_share','emby_id','eps','eps_source','library_status',
+         'facts_version','facts_ts','facts_stale'].forEach(function(key){next[key] = update[key];});
+        return next;
+      });
+    });
+    renderExploreBuffered();
+    var pending = cards.some(function(c){var u=updates[c.type + ':' + c.tmdb_id];return u && u.library_status !== 'available';});
+    exploreLibrarySync.notice = r.library_error ? '片库同步失败，稍后自动重试' :
+      (r.library_refreshing || pending ? '片库状态后台同步中' : '');
+    if (r.library_refreshing || pending) delay = r.library_error ? 15000 : 2000;
+    updateExplorePageInfo();
+  } catch(e){
+    if (exploreLibrarySync.job !== job || job.generation !== exploreGeneration) return;
+    exploreLibrarySync.notice = '片库状态更新失败，稍后自动重试';
+    delay = 15000;
+    updateExplorePageInfo();
+  } finally {
+    if (exploreLibrarySync.job === job) {
+      exploreLibrarySync.job = null;
+      if (exploreLibraryActive() && job.generation === exploreGeneration) {
+        exploreLibrarySync.timer = setTimeout(function(){exploreLibrarySync.timer=null;pollExploreLibraryStatus();},delay);
+      }
+    }
+  }
+}
+if (typeof document !== 'undefined') document.addEventListener('visibilitychange', function(){
+  if (document.hidden) stopExploreLibrarySync();
+  else ensureExploreLibrarySync(true);
+});
+
 function posterColumns(grid){
   if (!grid) return 1;
   var columns = getComputedStyle(grid).gridTemplateColumns.trim().split(/\s+/).filter(Boolean);
@@ -141,6 +226,7 @@ function cancelExploreRefreshes(){
   exploreRefreshJobs = {};
 }
 function pauseExplore(){
+  stopExploreLibrarySync();
   exploreSavedScroll = window.scrollY || 0;
   exploreGeneration += 1;
   if (exploreRequestController) exploreRequestController.abort();
@@ -156,6 +242,7 @@ function ensureExploreLoaded(){
   // 返回同一筛选时保留卡片、海报和游标；不反复请求第一页或重建整个墙。
   if (exploreLoadedKey === exploreQuery(1) && Date.now() - exploreLoadedAt < 180000 && Object.keys(explorePages).length) {
     updateExploreLoadMore();
+    ensureExploreLibrarySync(true);
     ensureExplorePrefetch();
     requestAnimationFrame(function(){window.scrollTo(0, exploreSavedScroll);schedulePosterAutoLoad();});
     return;
@@ -230,6 +317,7 @@ function renderExploreBuffered(){
   var cards = all.slice(0, count);
   syncExploreCards(cards, exploreShownCards);
   exploreShownCards = cards;
+  ensureExploreLibrarySync();
   return cards;
 }
 function exploreMore(){
@@ -254,7 +342,8 @@ function updateExplorePageInfo(result){
   if (exploreLoading) label += ' · 正在加载下一批…';
   else if (exploreMoreFailed) label += ' · 加载失败，点击重试';
   else label += exploreHasMore() ? ' · 下滑加载更多' : ' · 已全部加载';
-  if (result && result.refresh_error) label += ' · 更新失败，显示缓存';
+  if (typeof exploreLibrarySync !== 'undefined' && exploreLibrarySync.notice) label += ' · ' + exploreLibrarySync.notice;
+  if (result && result.refresh_error && !result.library_error) label += ' · 更新失败，显示缓存';
   else if (Object.keys(exploreRefreshJobs).length) label += ' · 片库状态后台更新中';
   $('explorePageInfo').textContent = label;
 }
@@ -290,6 +379,8 @@ async function loadExplore(append, retry){
   var requestedPage = exploreState.page;
   var previousPages = explorePages;
   if (!append) {
+    stopExploreLibrarySync();
+    exploreLibrarySync.notice = '';
     if (exploreRequestController) exploreRequestController.abort();
     if (explorePrefetch && explorePrefetch.controller) explorePrefetch.controller.abort();
     cancelExploreRefreshes();
@@ -341,7 +432,7 @@ async function loadExplore(append, retry){
       if (generation !== exploreGeneration) return;
       if (r.status === 'success') {
         showPage(r);
-        if (r.refreshing && !r.refresh_error) refreshExplorePage(requestedPage, qs, generation);
+        if ((r.page_refreshing === undefined ? r.refreshing : r.page_refreshing) && !r.refresh_error) refreshExplorePage(requestedPage, qs, generation);
         return; // 可见结果到达就释放加载锁，状态更新在独立任务里完成。
       } else if (r.status !== 'pending') {
         throw new Error(r.message || '加载失败');
@@ -498,7 +589,7 @@ function setupPosterAutoLoad(){
     var observer=new IntersectionObserver(schedulePosterAutoLoad,{rootMargin:'900px 0px',threshold:0});
     ['explorePager','embyLoadMoreWrap'].forEach(function(id){var footer=$(id);if(footer)observer.observe(footer);});
   }
-  window.addEventListener('scroll',schedulePosterAutoLoad,{passive:true});
+  window.addEventListener('scroll',function(){schedulePosterAutoLoad();ensureExploreLibrarySync(true);},{passive:true});
   window.addEventListener('resize',schedulePosterAutoLoad,{passive:true});
 }
 

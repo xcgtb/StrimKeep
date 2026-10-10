@@ -1,7 +1,7 @@
 // Run the real polling and DOM-update decision code. No live browser visual validation.
 const fs=require('fs'),vm=require('vm'),assert=require('assert'),path=require('path');
 const html=require('./frontend_source.cjs').loadFrontend();
-const source=html.slice(html.indexOf('function posterColumns(grid){'),html.indexOf('\nfunction appendExploreCards(cards){'));
+const source=html.slice(html.indexOf('var exploreLibrarySync ='),html.indexOf('\nfunction appendExploreCards(cards){'));
 let now=0,renderCount=0,appendCount=0,updates=0,requests=0,queries=0;
 const posters=[{id:'existing-poster-node'}];
 const badges=[{set outerHTML(value){updates++;this.value=value;}}];

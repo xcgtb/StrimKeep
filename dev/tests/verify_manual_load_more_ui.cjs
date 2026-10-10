@@ -50,7 +50,7 @@ async function completeFrame(){assert.equal(frames.length,1);frames.shift()();aw
   api:async url=>{apiCalls++;assert(url.includes('page=2')&&url.includes('q=query'));return new Promise(r=>apiResolve=r);},
   renderExploreCards:cards=>rendered.push(cards),appendExploreCards:cards=>rendered.push(cards),
   exploreStatus:()=>({status:'fixed',cls:'ok'})});
- vm.runInContext(html.slice(html.indexOf('function posterColumns(grid){'),html.indexOf('\nfunction appendExploreCards(cards){')),explore);explore.ensureExplorePrefetch=()=>{};
+ vm.runInContext(html.slice(html.indexOf('var exploreLibrarySync ='),html.indexOf('\nfunction appendExploreCards(cards){')),explore);explore.ensureExplorePrefetch=()=>{};
  task=explore.exploreMore();assert(enodes.exploreMoreBtn.disabled&&explore.exploreLoading);
  explore.exploreMore();assert.equal(apiCalls,1);
  apiResolve({status:'success',cards:[{type:'tv',tmdb_id:'2',title:'two'}],total_pages:3});await task;

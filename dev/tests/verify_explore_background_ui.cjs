@@ -1,7 +1,7 @@
 // Actual frontend functions with deterministic API/timer substitutes. No browser visual claim.
 const fs=require('fs'),vm=require('vm'),assert=require('assert'),path=require('path');
 const html=require('./frontend_source.cjs').loadFrontend();
-const source=html.slice(html.indexOf('function posterColumns(grid){'),html.indexOf('\nfunction syncExploreCards(cards, previous){'));
+const source=html.slice(html.indexOf('var exploreLibrarySync ='),html.indexOf('\nfunction syncExploreCards(cards, previous){'));
 function environment(api){
   let now=0; const boxes={exploreGrid:{innerHTML:''},explorePageInfo:{textContent:''}};
   const renders=[],toasts=[],requests=[];

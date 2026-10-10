@@ -190,14 +190,22 @@ async function loadEmbyLibrary(force, withTmdb, cacheOnly){
   var msg = cacheOnly ? '正在读取片库缓存...' : (withTmdb ? '正在拉取 Emby + TMDB（首次可能较慢）...' : '正在拉取 Emby 库...');
   if (!embyLoaded) $('embyList').innerHTML = '<div class="list-empty">' + msg + '</div>';
   try {
-    var url = '/api/emby/library?force=' + (force ? 1 : 0) + '&with_tmdb=' + (withTmdb ? 1 : 0) + (cacheOnly ? '&cache_only=1' : '');
+    var url = '/api/emby/library?force=' + (force ? 1 : 0) + '&with_tmdb=' + (withTmdb ? 1 : 0) + (cacheOnly ? '&cache_only=1' : '') + '&web=1';
     var r = await api(url);
     if (generation !== embyLibraryGeneration) return;
     // 没有对照缓存（首次使用 / 缓存太旧）：退回快速模式，只拉 Emby 库，不触发 TMDB 对照
     if (cacheOnly && r.status === 'nocache') return loadEmbyLibrary(false, false);
     if (r.status !== 'success') throw new Error(r.message || '失败');
     if (cacheOnly && r.ts) toast('已载入片库缓存（' + fmtAgo(r.ts) + '对照），需要最新数据请点「对照 TMDB」', 'success', 3200);
-    await mdLoad();
+    // Web responses include authoritative manual marks, so cached cards need one request.
+    if (r.manual_done && typeof r.manual_done === 'object') {
+      window.__mdSet = r.manual_done;
+      var legacyManual = null;
+      try { legacyManual = localStorage.getItem('manualDone'); } catch(e){}
+      if (legacyManual) await mdLoad(); // Preserve one-time migration from old browsers.
+    } else {
+      await mdLoad(); // Legacy/basic response compatibility.
+    }
     if (generation !== embyLibraryGeneration) return;
     embyPage = 1;
     embyShown = 0;

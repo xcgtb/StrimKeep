@@ -1,7 +1,7 @@
 // Real frontend functions, deterministic DOM/network substitutes; not a browser visual test.
 const fs=require('fs'),vm=require('vm'),assert=require('assert'),path=require('path');
 const html=require('./frontend_source.cjs').loadFrontend();
-const exploreSource=html.slice(html.indexOf('function posterColumns(grid){'),html.indexOf('\nfunction appendExploreCards(cards){'));
+const exploreSource=html.slice(html.indexOf('var exploreLibrarySync ='),html.indexOf('\nfunction appendExploreCards(cards){'));
 const mappingSource=html.slice(html.indexOf('var embyMoreLoading = false;'),html.indexOf('function updateEmbyChips(){'));
 const autoSource=html.slice(html.indexOf('var posterAutoFrame = null;'),html.indexOf('function _subscribedTmdbIds(){'));
 const cards=(start,count)=>Array.from({length:count},(_,i)=>({tmdb_id:String(start+i),type:'movie',title:'Film '+(start+i),poster:'/p'+(start+i)+'.jpg'}));
@@ -71,7 +71,7 @@ function ids(e){return Array.from(e.ctx.exploreShownCards,x=>x.tmdb_id);}
  const m=vm.createContext({Math,Promise,embyView:{arr:items,fn:x=>x+','},embyPage:1,embyShown:39,
   $:id=>mNodes[id],getComputedStyle:()=>({gridTemplateColumns:Array(cols).fill('100px').join(' ')}),
   hydratePosters(){},prefetchMappingPosters(){},schedulePosterAutoLoad(){},toast(){},requestAnimationFrame:fn=>frames.push(fn),setTimeout:fn=>fn()});
- vm.runInContext(html.slice(html.indexOf('function posterColumns(grid){'),html.indexOf('function exploreAllCards(){'))+mappingSource,m);
+ vm.runInContext(html.slice(html.indexOf('var exploreLibrarySync ='),html.indexOf('function exploreAllCards(){'))+mappingSource,m);
  let task=m.embyMore();m.embyMore();assert.equal(frames.length,1);frames.shift()();await task;assert.equal(m.embyShown,78);
  cols=4;task=m.embyMore();frames.shift()();await task;assert.equal(m.embyShown,97);
  assert.equal(insertions.join(''),items.slice(39).map(x=>x+',').join(''));assert(mNodes.embyMoreBtn.hidden);

@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """片库：入库 / 统计 / Emby / 搜索 / 日志 / 删除 / 探索"""
 import time, json, threading, sqlite3, urllib.parse, urllib.request
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from app import runtime_logs
-from app import posters
+from app import posters, tmdb, library_response
 
 try:
     from app.routers.deps import auth, engine, logger, Args
@@ -163,16 +163,41 @@ def api_explore(region: str = 'all', year: str = '', sort: str = 'popularity',
         return {'status': 'error', 'message': str(e)}
 
 
+@router.post('/api/explore/library-status', dependencies=[Depends(auth)])
+def api_explore_library_status(body: dict):
+    cards = body.get('cards')
+    if not isinstance(cards, list) or len(cards) > 200:
+        raise HTTPException(400, '每次最多更新 200 张卡片')
+    identities = []
+    for card in cards:
+        if not isinstance(card, dict) or card.get('type') not in ('movie', 'tv'):
+            raise HTTPException(400, '无效媒体类型')
+        tid = str(card.get('tmdb_id', ''))
+        if not tid.isascii() or not tid.isdigit() or not 1 <= len(tid) <= 20:
+            raise HTTPException(400, '无效 TMDB 编号')
+        identities.append({'type': card['type'], 'tmdb_id': tid})
+    if not identities:
+        return {'status': 'success', 'cards': [], 'library_refreshing': False, 'library_error': None}
+    result = tmdb._explore_library_status(identities)
+    for card in result['cards']:
+        card.pop('_emby_has_image', None)
+    return result
+
+
 @router.get('/api/tmdb/progress', dependencies=[Depends(auth)])
 def api_tmdb_progress():
     return {'status': 'success', 'progress': engine.get_tmdb_scan_progress()}
 
 
 @router.get('/api/emby/library', dependencies=[Depends(auth)])
-def api_emby_library(force: int = 0, with_tmdb: int = 1, cache_only: int = 0):
+def api_emby_library(force: int = 0, with_tmdb: int = 1, cache_only: int = 0,
+                     web: int = 0, request: Request = None):
     # 打开页面只读与健康汇总/探索相同的事实；陈旧缓存仍返回并标记。
     if cache_only or (with_tmdb and not force):
-        cached = engine.cached_library_view()
+        if web:
+            cached = library_response.cached_mapping_response(request.headers.get('accept-encoding', '') if request else '')
+        else:
+            cached = engine.cached_library_view()
         if cached is not None:
             return cached
         if cache_only:

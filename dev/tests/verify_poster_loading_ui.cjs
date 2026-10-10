@@ -14,7 +14,7 @@ function exploreEnv(){
   getComputedStyle:()=>({gridTemplateColumns:'100px 100px 100px'}),schedulePosterAutoLoad(){},warmPosterUrls(){},
   renderExploreCards:cards=>paints.push(cards),appendExploreCards:cards=>paints.push(cards),exploreStatus:()=>({status:'fixed'}),toast(){},
   setTimeout:fn=>fn(),api:async(url,opts)=>{requests.push({url,opts});return pages[Number(new URL(url,'http://fixture').searchParams.get('page'))];}});
- vm.runInContext(html.slice(html.indexOf('function posterColumns(grid){'),html.indexOf('\nfunction appendExploreCards(cards){')),ctx);
+ vm.runInContext(html.slice(html.indexOf('var exploreLibrarySync ='),html.indexOf('\nfunction appendExploreCards(cards){')),ctx);
  return {ctx,nodes,requests,paints,frames,scrolls};
 }
 (async()=>{

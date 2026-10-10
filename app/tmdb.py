@@ -447,6 +447,71 @@ def _explore_page(path, params, media, retry=False):
             return None, meta
         return row['data'], meta
 
+def _explore_library_status(cards):
+    """Reapply shared cached facts without discovery/TMDB requests or per-card scans."""
+    emby_index = emby_library_index()
+    index_cache = _eng()._emby_index_cache
+    index_known = index_cache.get('data') is not None
+    index_stale = time.time() - index_cache.get('ts', 0) >= 300
+    refreshing = _eng()._emby_index_refresh_lock.locked()
+    refresh_error = None
+    if index_cache.get('error_ts') and index_stale:
+        refresh_error = ('片库索引更新失败，保留上次完整索引' if index_known else '片库索引更新失败，暂未取得完整索引')
+    # 集数和对照数据与片库映射/详情共用同一批事实，不再逐卡覆盖。
+    facts = _eng().cached_library_view() if any(c['type'] == 'tv' for c in cards) else None
+    rows_by_tmdb = defaultdict(list)
+    for row in (facts or {}).get('series') or []:
+        if row.get('tmdb_id'):
+            rows_by_tmdb[str(row['tmdb_id'])].append(row)
+    updates = []
+    for card in cards:
+        item_media, tmdb_id = card['type'], str(card['tmdb_id'])
+        emby_hit = emby_index.get(item_media + ':' + tmdb_id)
+        in_emby = emby_hit is not None
+        in_local = bool(emby_hit and emby_hit.get('in_local'))
+        in_share = bool(emby_hit and emby_hit.get('in_share'))
+
+        eps = None
+        eps_source = None
+        if item_media == 'tv':
+            rows = rows_by_tmdb.get(tmdb_id) or []
+            eps_source = 'ambiguous' if len(rows) > 1 else 'unavailable'
+            if len(rows) == 1:
+                row = rows[0]
+                info = row.get('tmdb_info') or {}
+                have = row.get('have_eps')
+                if have is None:
+                    have = row.get('total_episodes', 0)
+                total = info.get('declared_total')
+                if total is None:
+                    total = info.get('tmdb_total')
+                eps = {'local': int(row.get('local_eps') or 0),
+                       'share': int(row.get('share_eps') or 0),
+                       'have': int(have or 0), 'total': total,
+                       'match_status': info.get('match_status', 'unmatched'),
+                       'manual_done': bool(row.get('_md'))}
+                eps_source = 'shared_cache'
+                in_emby = True
+                in_local = bool(row.get('in_local', eps['local'] > 0))
+                in_share = bool(row.get('in_share', eps['share'] > 0))
+                emby_hit = dict(emby_hit or {}, id=row.get('id'))
+
+        updates.append({'type': item_media, 'tmdb_id': tmdb_id,
+            'in_emby': in_emby, 'in_local': in_local, 'in_share': in_share,
+            'emby_id': emby_hit['id'] if emby_hit else None,
+            '_emby_has_image': bool(emby_hit and emby_hit.get('has_image')),
+            'eps': eps, 'eps_source': eps_source,
+            'library_status': ('stale' if index_stale else 'available') if index_known else ('available' if in_emby else 'unavailable'),
+            'facts_version': (facts or {}).get('facts_version'),
+            'facts_ts': (facts or {}).get('facts_ts'),
+            'facts_stale': (facts or {}).get('stale', True),
+        })
+    return {'status': 'success', 'cards': updates,
+            'library_refreshing': refreshing, 'library_error': refresh_error,
+            'facts_version': (facts or {}).get('facts_version'),
+            'facts_ts': (facts or {}).get('facts_ts')}
+
+
 def action_explore(args):
     region = getattr(args, 'region', 'all') or 'all'
     year = (getattr(args, 'year', '') or '').strip()
@@ -482,88 +547,36 @@ def action_explore(args):
     if res is None:
         return page_meta
 
-    emby_index = emby_library_index()
-    index_cache = _eng()._emby_index_cache
-    index_known = index_cache.get('data') is not None
-    index_stale = time.time() - index_cache.get('ts', 0) >= 300
-    page_meta['refreshing'] = page_meta['refreshing'] or _eng()._emby_index_refresh_lock.locked()
-    if index_cache.get('error_ts') and index_stale:
-        page_meta['refresh_error'] = page_meta.get('refresh_error') or ('片库索引更新失败，保留上次完整索引' if index_known else '片库索引更新失败，暂未取得完整索引')
-    # 集数和对照数据与片库映射/详情共用同一批事实，不再逐卡覆盖。
-    facts = _eng().cached_library_view() if media != 'movie' else None
-    rows_by_tmdb = defaultdict(list)
-    for row in (facts or {}).get('series') or []:
-        if row.get('tmdb_id'):
-            rows_by_tmdb[str(row['tmdb_id'])].append(row)
-    page_items = (res.get('results') or [])[:20]
-
     cards = []
-    for item in page_items:
-        # multi 搜索时每张卡的类型来自 media_type（'movie'/'tv'/'person'），discover 用全局 media
+    for item in (res.get('results') or [])[:20]:
         item_media = item.get('media_type') or media
         if item_media == 'person':
-            continue  # /search/multi 会返回人物，探索页不展示
+            continue
         if item_media not in ('movie', 'tv'):
             item_media = media
-        tmdb_id = str(item.get('id', ''))
-        title = item.get('title') or item.get('name') or ''
-        date_str = item.get('release_date') or item.get('first_air_date') or ''
-        year_str = date_str[:4] if date_str else ''
-        rating = item.get('vote_average') or 0
         poster = item.get('poster_path')
-        emby_hit = emby_index.get(item_media + ':' + tmdb_id)
-        in_emby = emby_hit is not None
-        in_local = bool(emby_hit and emby_hit.get('in_local'))
-        in_share = bool(emby_hit and emby_hit.get('in_share'))
-        if poster: poster_url = '/api/tmdb/poster/' + poster.lstrip('/')
-        elif in_emby and emby_hit.get('has_image'): poster_url = f'/api/emby/poster/{emby_hit["id"]}'
-        else: poster_url = ''
+        rating = item.get('vote_average') or 0
+        cards.append({'type': item_media, 'tmdb_id': str(item.get('id', '')),
+                      'title': item.get('title') or item.get('name') or '',
+                      'year': (item.get('release_date') or item.get('first_air_date') or '')[:4],
+                      'rating': round(rating, 1) if rating else None,
+                      'poster': '/api/tmdb/poster/' + poster.lstrip('/') if poster else ''})
+    library = _explore_library_status(cards)
+    for card, update in zip(cards, library['cards']):
+        card.update(update)
+        if not card['poster'] and card.pop('_emby_has_image', False) and card['emby_id']:
+            card['poster'] = '/api/emby/poster/' + str(card['emby_id'])
+        card.pop('_emby_has_image', None)
+    page_meta['page_refreshing'] = page_meta['refreshing']
+    page_meta['library_error'] = library['library_error']
+    page_meta['refreshing'] = page_meta['refreshing'] or library['library_refreshing']
+    page_meta['refresh_error'] = page_meta.get('refresh_error') or library['library_error']
+    return dict(page_meta, status='success', page=page,
+                total_pages=min(res.get('total_pages', 1), 500),
+                total_results=res.get('total_results', 0), cards=cards, is_search=bool(query),
+                facts_version=library['facts_version'], facts_ts=library['facts_ts'],
+                tmdb_calls=0, tmdb_hits=0)
 
-        eps = None
-        eps_source = None
-        if item_media == 'tv':
-            rows = rows_by_tmdb.get(tmdb_id) or []
-            eps_source = 'ambiguous' if len(rows) > 1 else 'unavailable'
-            if len(rows) == 1:
-                row = rows[0]
-                info = row.get('tmdb_info') or {}
-                have = row.get('have_eps')
-                if have is None:
-                    have = row.get('total_episodes', 0)
-                total = info.get('declared_total')
-                if total is None:
-                    total = info.get('tmdb_total')
-                eps = {'local': int(row.get('local_eps') or 0),
-                       'share': int(row.get('share_eps') or 0),
-                       'have': int(have or 0), 'total': total,
-                       'match_status': info.get('match_status', 'unmatched'),
-                       'manual_done': bool(row.get('_md'))}
-                eps_source = 'shared_cache'
-                in_emby = True
-                in_local = bool(row.get('in_local', eps['local'] > 0))
-                in_share = bool(row.get('in_share', eps['share'] > 0))
-                emby_hit = dict(emby_hit or {}, id=row.get('id'))
-
-        cards.append({
-            'tmdb_id': tmdb_id, 'title': title, 'year': year_str,
-            'rating': round(rating, 1) if rating else None, 'poster': poster_url,
-            'in_emby': in_emby, 'in_local': in_local, 'in_share': in_share,
-            'emby_id': emby_hit['id'] if emby_hit else None,
-            'type': item_media,
-            'eps': eps, 'eps_source': eps_source,
-            'library_status': ('stale' if index_stale else 'available') if index_known else ('available' if in_emby else 'unavailable'),
-            'facts_version': (facts or {}).get('facts_version'),
-            'facts_ts': (facts or {}).get('facts_ts'),
-            'facts_stale': (facts or {}).get('stale', True),
-        })
-
-    return dict(page_meta, status='success', page=page, **{
-            'total_pages': min(res.get('total_pages', 1), 500),
-            'total_results': res.get('total_results', 0),
-            'cards': cards, 'is_search': bool(query),
-            'facts_version': (facts or {}).get('facts_version'),
-            'facts_ts': (facts or {}).get('facts_ts'),
-            'tmdb_calls': 0, 'tmdb_hits': 0})
 
 def classify_series_by_tmdb(local_seasons, tmdb_info):
     """按 TMDB 已播集数对照片库，避免连载未播集造成假缺集。"""
