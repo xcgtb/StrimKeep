@@ -38,7 +38,7 @@ jobs:
             type=raw,value=${{ steps.ver.outputs.value }},enable=${{ github.ref_type == 'tag' }}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ github.ref_type == 'tag' || github.ref == 'refs/heads/main' }}
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           build-args: |
