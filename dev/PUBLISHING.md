@@ -44,4 +44,6 @@ git push origin v1.0.2
 
 固定版本地址为 `ghcr.io/xcgtb/strimkeep:1.0.2`，日常部署模板继续使用 `latest`。实际发布流程按 GitHub 仓库名生成小写镜像地址。如果更换账号或仓库名，同步修改公共 YML、开发 YML、README 和 Dockerfile 的 source 标签。发布后将 GHCR 包设为公开，普通用户才能不登录直接拉取。
 
-以后升级同步修改 `app/version.py`、Dockerfile 的 `APP_VERSION`、两份 YML 的镜像版本、README 的部署示例和 CHANGELOG，再运行发布检查。已推送的版本标签不覆盖。
+以后升级只需修改 `app/version.py` 的版本号，并更新 CHANGELOG 的版本记录，再运行发布检查和创建对应 Git 标签。Dockerfile 不写版本号，应用直接读取源码版本；开发 Compose 固定使用 `strimkeep:local`，公共部署模板继续使用 `latest`。若文档另有固定版本示例，同步更新示例。已发布成功的版本标签不覆盖。
+
+覆盖源码包时，`dev/docker-compose.build.yml` 是需要一起更新的开发模板。只保护实际部署目录里的配置、密码和数据；不要排除开发模板。推送前运行 `python3 dev/tools/release_check.py`，避免将版本不一致的文件推送到 CI。

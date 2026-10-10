@@ -50,17 +50,18 @@ def check(root, archive=False):
                         errors.append(f'non-placeholder credential: {rel}: {match[1]}')
     try:
         version = re.search(r"__version__\s*=\s*['\"]([^'\"]+)['\"]", (root/'app/version.py').read_text())[1]
-        docker_version = re.search(r'^ARG APP_VERSION=(\S+)', (root/'Dockerfile').read_text(), re.M)[1]
-        if version != docker_version: errors.append('Docker/source version mismatch')
+        dockerfile = (root/'Dockerfile').read_text()
+        if re.search(r'^\s*(?:ARG|ENV)\s+APP_VERSION\b', dockerfile, re.M):
+            errors.append('Docker version must come from app/version.py, not ARG/ENV APP_VERSION')
         if not (root/'CHANGELOG.md').read_text().startswith('# 版本日志\n\n## '+version+'（'):
             errors.append('changelog release version mismatch')
         for name in ('docker-compose.yml', 'dev/docker-compose.build.yml'):
             compose = (root/name).read_text()
-            # 公开部署模板允许 latest；构建模板必须与源码版本一致
+            # 正式部署允许固定版本或 latest；本地构建名称不携带发布版本。
             allowed_tags = (
                 (version, 'latest')
                 if name == 'docker-compose.yml'
-                else (version,)
+                else ('local',)
             )
             if not any(
                 re.search(

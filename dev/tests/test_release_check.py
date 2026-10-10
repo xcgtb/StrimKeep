@@ -45,10 +45,30 @@ def test_secret_report_does_not_echo_value(tmp_path):
     assert all(value not in issue for issue in issues)
 
 
-def test_version_mismatch_rejected(tmp_path):
+def test_docker_version_override_rejected(tmp_path):
     root = base(tmp_path)
     (root/'Dockerfile').write_text('ARG APP_VERSION=0.0.0\n')
-    assert 'Docker/source version mismatch' in checker.check(root)
+    assert any('Docker version must come from app/version.py' in issue for issue in checker.check(root))
+    (root/'Dockerfile').write_text('ENV APP_VERSION=0.0.0\n')
+    assert any('Docker version must come from app/version.py' in issue for issue in checker.check(root))
+
+
+def test_release_bump_needs_no_docker_or_compose_edits(tmp_path):
+    root = base(tmp_path)
+    (root/'app/version.py').write_text("__version__ = '9.8.7'\n")
+    (root/'CHANGELOG.md').write_text('# 版本日志\n\n## 9.8.7（测试）\n')
+    assert checker.check(root) == []
+
+
+def test_stale_public_image_and_versioned_local_image_rejected(tmp_path):
+    root = base(tmp_path)
+    public = root/'docker-compose.yml'
+    public.write_text(public.read_text().replace(':latest', ':0.0.0'))
+    local = root/'dev/docker-compose.build.yml'
+    local.write_text(local.read_text().replace(':local', ':0.0.0'))
+    issues = checker.check(root)
+    for name in ('docker-compose.yml', 'dev/docker-compose.build.yml'):
+        assert f'image/source version mismatch: {name}' in issues
 
 
 def test_public_compose_rejects_real_password(tmp_path):

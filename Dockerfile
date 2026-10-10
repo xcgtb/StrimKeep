@@ -7,9 +7,7 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     TZ=Asia/Shanghai
 
-# 与 app/version.py 一致；GitHub 标签必须匹配源码版本。
-ARG APP_VERSION=1.0.2
-ENV APP_VERSION=${APP_VERSION}
+# 应用直接读取 app/version.py；发布标签由 CI 校验。
 
 WORKDIR /app
 
