@@ -51,10 +51,16 @@ function renderLibraryStats(r){
     var bar = m === 'all'
       ? '<i class="l" style="width:' + (row.l / max * 100) + '%"></i><i class="s" style="width:' + (row.s / max * 100) + '%"></i>'
       : '<i class="' + (m === 'share' ? 's' : 'l') + '" style="width:' + (row.n / max * 100) + '%"></i>';
-    return '<div class="cb" data-name="' + esc(row.name) + '" data-scope="' + m + '" onclick="dashOpenCat(this.dataset.name, this.dataset.scope)"><span class="nm">' + esc(row.name) + '</span><span class="tr">' + bar + '</span><span class="ct">' + row.n.toLocaleString() + '</span><span class="go">›</span></div>';
+    return '<button type="button" class="overview-category" data-name="' + esc(row.name) + '" data-scope="' + m + '" onclick="dashOpenCat(this.dataset.name, this.dataset.scope)">'
+      + '<span class="nm">' + esc(row.name) + '</span><span class="ct">' + row.n.toLocaleString() + '</span>'
+      + '<span class="tr" aria-hidden="true">' + bar + '</span><span class="go">↗</span></button>';
   }).join('') || '<div class="list-empty">暂无数据</div>';
-  var summary = '共 ' + (r.local_total + r.share_total).toLocaleString() + ' 个 STRM · 本地 ' + r.local_total.toLocaleString() + ' / 分享 ' + r.share_total.toLocaleString();
-  if (r.local_other + r.share_other > 0) summary += '（未分类 ' + (r.local_other + r.share_other).toLocaleString() + '）';
+  var local = Number(r.local_total) || 0, share = Number(r.share_total) || 0;
+  var scopeTotal = m === 'local' ? local : m === 'share' ? share : local + share;
+  var other = m === 'local' ? Number(r.local_other) || 0 : m === 'share' ? Number(r.share_other) || 0 : (Number(r.local_other) || 0) + (Number(r.share_other) || 0);
+  var summary = (m === 'all' ? '两库合计' : m === 'local' ? '本地库' : '分享库') + ' ' + scopeTotal.toLocaleString() + ' 个 STRM';
+  if (m === 'all') summary += ' · 本地 ' + local.toLocaleString() + ' / 分享 ' + share.toLocaleString();
+  if (other > 0) summary += ' · 未分类 ' + other.toLocaleString();
   $('libStatsSummary').textContent = summary;
 }
 
@@ -77,6 +83,8 @@ function renderDashEmby(x){
     var factsTime = factsTs ? new Date(factsTs * 1000).toLocaleString() : '';
     var compareTime = x.ts ? new Date(x.ts * 1000).toLocaleString() : '';
     var stale = x.stale || (x.ts && Date.now() / 1000 - x.ts > 1800);
+    var summary = $('dash-facts-summary');
+    if (summary) summary.textContent = stale ? '对照缓存已过期 · 查看更新时间' : '数据更新时间';
     note.textContent = factsTime ? '片库缓存 · 集数更新 ' + factsTime
       + (compareTime ? ' · TMDB 对照 ' + compareTime + (stale ? '（已过期）' : '') : '') : '片库缓存 · 更新时间未知';
   }
@@ -90,16 +98,16 @@ function renderDashEmby(x){
   var rows = [['完整', 'ok', st.aligned], ['缺集', 'err', st.missing], ['超集', 'warn', st.extra], ['在更', 'info', st.ongoing], ['未匹配', 'dim', st.unmatched]];
   $('dash-health').innerHTML = rows.map(function(r){
     var n = r[2] || 0;
-    return '<div class="hl-row"><b class="dd ' + r[1] + '"></b>' + r[0] + '<span class="cnt">' + n.toLocaleString() + '</span><span class="pc">' + (total ? (n / total * 100).toFixed(1) : '0.0') + '%</span></div>';
+    return '<div class="overview-health-row"><b class="dd ' + r[1] + '"></b><span class="label">' + r[0] + '</span><span class="cnt">' + n.toLocaleString() + '</span><span class="pc">' + (total ? (n / total * 100).toFixed(1) : '0.0') + '%</span></div>';
   }).join('');
   var top = x.top || [];
   $('dash-miss-note').textContent = st.missing ? ('共 ' + st.missing + ' 部缺集') : '';
   $('dash-missing').innerHTML = top.length ? top.map(function(t){
-    var p = t.tot ? Math.min(100, t.have / t.tot * 100) : 0;
-    return '<div class="miss" data-name="' + esc(t.name) + '" onclick="dashOpenSeries(this.dataset.name)">'
-      + '<div style="flex:1;min-width:0"><div class="nm">' + esc(t.name) + (t.year ? ' (' + t.year + ')' : '') + '</div>'
-      + '<div class="bar"><i style="width:' + p + '%"></i></div></div>'
-      + '<div class="df">缺 ' + t.diff + ' 集<small>' + t.have + '/' + t.tot + '</small></div></div>';
+    var p = t.tot ? Math.max(0, Math.min(100, t.have / t.tot * 100)) : 0;
+    return '<button type="button" class="overview-missing-card" data-name="' + esc(t.name) + '" onclick="dashOpenSeries(this.dataset.name)">'
+      + '<span class="overview-missing-title">' + esc(t.name) + '</span><span class="overview-missing-year">' + esc(t.year || '年份未知') + '</span>'
+      + '<span class="overview-missing-count">缺 ' + esc(t.diff) + ' 集</span><span class="overview-missing-progress">' + esc(t.have) + ' / ' + esc(t.tot) + ' 集</span>'
+      + '<span class="overview-missing-bar" aria-hidden="true"><i style="width:' + p + '%"></i></span></button>';
   }).join('') : '<div class="list-empty">没有缺集的剧集</div>';
 }
 function dashOpenSeries(name){
@@ -162,11 +170,11 @@ function renderDashPlanFromDashboard(d){
       var totalDecisions = Object.keys(rc).reduce(function(n,k){ return n + (+rc[k] || 0); }, 0);
       $('dash-gov-reason-note').textContent = rows.length ? ('共 ' + totalDecisions + ' 项决策') : '—';
       $('dash-gov-reasons').innerHTML = rows.length ? rows.map(function(k){
-        return '<div class="gov-reason"><span>' + esc(labels[k] || k) + '</span><b>' + (+rc[k] || 0).toLocaleString() + '</b></div>';
+        return '<div class="overview-reason"><span>' + esc(labels[k] || k) + '</span><b>' + (+rc[k] || 0).toLocaleString() + '</b></div>';
       }).join('') : '<div class="list-empty">本次扫描没有治理动作</div>';
     } else {
       ['dash-loc','dash-shr','dash-keep','dash-exm'].forEach(function(id){ $(id).textContent = '—'; });
-      ['dash-loc-files','dash-shr-files','dash-keep-files','dash-exm-files'].forEach(function(id){ $(id).textContent = '—'; });
+      ['dash-loc-files','dash-shr-files','dash-keep-files','dash-exm-files'].forEach(function(id){ $(id).textContent = '等待扫描'; });
       $('dash-plan-note').textContent = '暂无治理扫描';
       $('dash-gov-reasons').innerHTML = '<div class="list-empty">尚无治理扫描</div>';
     }
@@ -188,8 +196,9 @@ async function loadDashboard(){
     var mspLabel = { off: '关闭', compare: '开启' }[s.multi_season_protect] || '开启';
     var ex = s.exempt_keywords || [];
     var chips = [['决策', decisionLabel, 'ok'], ['多季保护', mspLabel, 'info'], ['特别篇', spLabel, 'brand'], ['平局', s.tie_keep_local ? '保留本地' : '保留分享', 'dim'], ['剧集达标率', Math.round((Number(s.season_replace_ratio) || 0.9) * 100) + '%', 'dim']];
-    $('strategySnapshot').innerHTML = '<div class="chips">' + chips.map(function(c){ return '<span class="sch ' + c[2] + '"><em>' + c[0] + '</em>' + c[1] + '</span>'; }).join('') + '</div>'
-      + (ex.length ? '<div class="sch-ex">白名单：' + ex.map(function(k){ return esc(k); }).join('、') + '</div>' : '');
+    $('strategySnapshot').innerHTML = '<dl class="overview-strategy-list">' + chips.map(function(c){
+      return '<div><dt>' + esc(c[0]) + '</dt><dd class="' + c[2] + '">' + esc(c[1]) + '</dd></div>';
+    }).join('') + '</dl>' + (ex.length ? '<div class="overview-whitelist">白名单：' + ex.map(function(k){ return esc(k); }).join('、') + '</div>' : '');
     $('dash-exempt').textContent = ex.length + ' 条';
   }
 

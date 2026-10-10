@@ -27,7 +27,8 @@ vm.runInContext(fs.readFileSync(path.join(__dirname,'../../static/js/dashboard.j
  console.log('PASS hidden pages suspend the lightweight status loop');
  const html=fs.readFileSync(path.join(__dirname,'../../static/index.html'),'utf8');
  assert(html.includes('<title>StrimKeep</title>'));
- assert(html.indexOf('dashboard-priority')<html.indexOf('class="dash-strip"'));
+ assert(html.includes('overview-governance') && html.includes('id="scanBtn"'));
+ assert(html.includes('overview-workspace') && html.includes('overview-main-column') && html.includes('overview-side-column'));
  assert(html.includes('<details id="govTruth"')&&html.includes('id="sideStorage"'));
  console.log('PASS the product brand, overview priority and expandable governance evidence are present');
  console.log('PASS 5/5; real shipped handlers with DOM substitutes only');

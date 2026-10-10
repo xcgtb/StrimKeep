@@ -4,7 +4,7 @@ const {asset}=require('./frontend_source.cjs');
 const html=fs.readFileSync(path.join(__dirname,'../../static/index.html'),'utf8');
 const scripts=Array.from(html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g));
 const urls=scripts.map(m=>m[1].match(/src="([^"]+)"/)).filter(Boolean).map(m=>m[1]);
-assert.equal(urls.length,15);
+assert.equal(urls.length,14);
 for(const url of urls.concat(Array.from(html.matchAll(/<link\b[^>]*href="([^"]+)"/g),m=>m[1]))){
   const content=asset(url),version=new URL(url,'http://fixture').searchParams.get('v');
   assert.equal(version,crypto.createHash('sha256').update(content).digest('hex').slice(0,12));
@@ -33,7 +33,7 @@ for(const [i,m] of scripts.entries()){
   const src=m[1].match(/src="([^"]+)"/),code=src?asset(src[1]):m[2];
   vm.runInContext(code,context,{filename:src?src[1]:'inline-'+i});
 }
-assert.equal(events.DOMContentLoaded.length,2); // Main initialization + dashboard layout.
+assert.equal(events.DOMContentLoaded.length,1); // Main initialization; CSS owns dashboard layout.
 for(const name of ['scanLibrary','onTaskHintClose','loadExplore','exploreMore','loadEmbyLibrary','embyMore','scanEmptyDirs','cleanEmptyDirs','toggleSubscribe','loadRecords','saveConfig','switchTab']){
   assert.equal(typeof context[name],'function',name+' must stay reachable by HTML events');
 }

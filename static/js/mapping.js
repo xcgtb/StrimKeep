@@ -512,10 +512,10 @@ function showEmbyDetailById(id){
   if (!s) return;
   var ti = s.tmdb_info || {};
   var mst = ti.match_status || 'unmatched';
-  var html = '';
+  var html = '<div class="mapping-detail">';
 
-  html += '<div style="display:flex;gap:16px;margin-bottom:16px">';
-  html += '<div style="width:110px;height:165px;border-radius:8px;background:#f3f4f6;overflow:hidden;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:#9ca3af;font-size:11px">';
+  html += '<div class="mapping-detail-header">';
+  html += '<div class="mapping-detail-poster">';
   /* TMDB poster_path 优先（上游海报对照逻辑），Emby 缓存图兜底 */
   html += ti.poster
     ? '<img src="https://image.tmdb.org/t/p/w500' + esc(ti.poster) + '" style="width:100%;height:100%;object-fit:cover" onerror="this.onerror=null;this.style.display=\'none\';">'
@@ -523,8 +523,8 @@ function showEmbyDetailById(id){
       ? '<img data-emby-src="/api/emby/poster/' + esc(s.id) + '" style="width:100%;height:100%;object-fit:cover">'
       : '无图');
   html += '</div>';
-  html += '<div style="flex:1;min-width:0">';
-  html += '<h3 style="margin:0 0 8px;font-size:16px;line-height:1.3;word-break:break-word">' + esc(s.name || '?') + '</h3>';
+  html += '<div class="mapping-detail-info">';
+  html += '<h3>' + esc(s.name || '?') + '</h3>';
   html += '<div class="emby-badges">';
   if (s.in_local && s.in_share) html += '<span class="emby-badge loc">本地+分享</span>';
   else if (s.in_local) html += '<span class="emby-badge loc">Emby</span>';
@@ -539,7 +539,7 @@ function showEmbyDetailById(id){
   else if (mst === 'pending') html += '<span class="emby-badge gen">待对照</span>';
   if (s.year) html += '<span class="emby-badge gen">' + s.year + '</span>';
   html += '</div>';
-  html += '<div style="margin-top:8px;font-size:13px;line-height:1.5;color:var(--text-mid)">';
+  html += '<div class="mapping-detail-facts">';
   if (libraryEpisodeTotal(ti) > 0) {
     var have = libraryEpisodeCount(s);
     html += '已入库 ' + have + '/' + libraryEpisodeTotal(ti) + ' 集';
@@ -553,57 +553,21 @@ function showEmbyDetailById(id){
   html += '</div>';
   html += '</div></div>';
 
-  if (false) {
-    html += '<h4 style="margin:16px 0 8px;font-size:13px;color:#374151">季集对比</h4>';
-    html += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
-    html += '<thead><tr style="color:#6b7280"><th style="text-align:left;padding:6px 4px">季</th><th style="text-align:right;padding:6px 4px">本地</th><th style="text-align:right;padding:6px 4px">TMDB</th><th style="text-align:right;padding:6px 4px">差异</th><th style="text-align:left;padding:6px 4px">状态</th></tr></thead><tbody>';
-    ti.seasons.forEach(function(se){
-      var cls = se.status === 'aligned' ? '#10b981' : (se.status === 'missing' ? '#ef4444' : '#f59e0b');
-      var statusTxt = '';
-      if (se.tmdb == null) statusTxt = '—';
-      else if (se.diff === 0) statusTxt = '✓ 完整';
-      else if (se.diff > 0) statusTxt = '超 ' + se.diff;
-      else statusTxt = '缺 ' + Math.abs(se.diff);
-      var diffTxt = (se.diff == null) ? '—' : (se.diff > 0 ? '+' + se.diff : '' + se.diff);
-      html += '<tr style="border-top:1px solid #f3f4f6">';
-      html += '<td style="padding:6px 4px;font-weight:600">S' + String(se.season).padStart(2, '0') + '</td>';
-      html += '<td style="text-align:right;padding:6px 4px">' + se.local + '</td>';
-      html += '<td style="text-align:right;padding:6px 4px">' + (se.tmdb != null ? se.tmdb : '?') + '</td>';
-      html += '<td style="text-align:right;padding:6px 4px;color:' + cls + '">' + diffTxt + '</td>';
-      html += '<td style="padding:6px 4px;color:' + cls + '">' + statusTxt + '</td>';
-      html += '</tr>';
-    });
-    html += '</tbody></table>';
-  }
-
-  if (false) {
-    var missingHtml = '';
-    ti.seasons.forEach(function(se){
-      if (se.missing && se.missing.length) {
-        missingHtml += '<div style="font-size:12px;color:#991b1b;margin:4px 0">S' + String(se.season).padStart(2,'0') + ' 缺 ' + se.missing.map(function(n){return 'E' + String(n).padStart(2,'0')}).join(', ') + '</div>';
-      }
-    });
-    if (missingHtml) {
-      html += '<h4 style="margin:16px 0 8px;font-size:13px;color:#374151">缺集详情</h4>';
-      html += '<div style="background:#fef2f2;border:1px solid #fee2e2;border-radius:8px;padding:10px">' + missingHtml + '</div>';
-    }
-  }
-
   if (s._md) html += '<div style="margin-top:12px;font-size:12px;color:var(--text-dim)">已手动标记为完结：不再计入缺集 / 在更，下方两库分集明细仍按 TMDB 原始数据显示。标记保存在服务器，所有设备通用。</div>';
   html += '<div id="libBreakdown" class="lib-breakdown">正在读取两库分集...</div>';
 
   /* "在 Emby 中打开"链接改为读配置，不再硬编码 IP */
   var embyHost = (window.__embyHost || '').replace(/\/+$/, '');
-  html += '<div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">';
+  html += '<div class="mapping-detail-actions">';
   if (s._md) html += '<button class="btn gray" onclick="toggleManualDone(' + jsarg(s.id) + ')">取消完结</button>';
   else if (mst === 'missing' || mst === 'ongoing') html += '<button class="btn" onclick="toggleManualDone(' + jsarg(s.id) + ')">手动完结</button>';
-  html += '<button class="btn red" onclick="deleteSeriesFromLib(' + jsarg(s.id) + ',\'local\',' + jsarg(s.name || '') + ')">删除本地库</button>';
-  html += '<button class="btn red" onclick="deleteSeriesFromLib(' + jsarg(s.id) + ',\'share\',' + jsarg(s.name || '') + ')">删除分享库</button>';
+  html += '<button class="btn mapping-delete" onclick="deleteSeriesFromLib(' + jsarg(s.id) + ',\'local\',' + jsarg(s.name || '') + ')">删除本地库</button>';
+  html += '<button class="btn mapping-delete" onclick="deleteSeriesFromLib(' + jsarg(s.id) + ',\'share\',' + jsarg(s.name || '') + ')">删除分享库</button>';
   if (s.id && embyHost) {
     html += '<a href="' + esc(embyHost) + '/web/index.html#!/item?id=' + esc(s.id) + '" target="_blank" rel="noopener" style="text-decoration:none" class="btn gray">在 Emby 中打开</a>';
   }
   html += '<button class="btn gray" onclick="closeModal()">关闭</button>';
-  html += '</div>';
+  html += '</div></div>';
 
   openModal(html);
   hydratePosters($('modalBody'));
@@ -722,26 +686,28 @@ function loadLibBreakdown(series, ti){
   seasons.forEach(function(se){ bySeason[se.season] = se; });
   var allSeasons = Array.from(new Set(Object.keys(bySeason).concat(Object.keys(tmdbMap)))).map(Number).sort(function(a,b){return a-b;});
   if (!allSeasons.length) { box.innerHTML = '<span>无分集数据</span>'; return; }
-  function libraryCell(have, total){
+  function libraryCell(have, total, name, tone){
     var kind = 'unknown', label = '待对照';
     if (total != null) {
       var diff = have - total;
       kind = diff === 0 ? 'complete' : (diff < 0 ? 'missing' : 'extra');
       label = diff === 0 ? '✓ 完整' : (diff < 0 ? '缺 ' + Math.abs(diff) + ' 集' : '超 ' + diff + ' 集');
     }
-    return '<td><span class="lib-season-count">' + esc(have) + '</span>'
-      + '<span class="lib-season-status ' + kind + '">' + esc(label) + '</span></td>';
+    var pct = total > 0 ? Math.max(0, Math.min(100, have / total * 100)) : (total === 0 && have === 0 ? 100 : 0);
+    return '<div class="lib-season-library ' + tone + '"><div class="lib-season-library-heading"><span>' + name + '</span><b class="lib-season-count">' + esc(have) + '<small> 集</small></b></div>'
+      + '<div class="lib-season-progress" aria-hidden="true"><i style="width:' + pct + '%"></i></div>'
+      + '<span class="lib-season-status ' + kind + '">' + esc(label) + '</span></div>';
   }
-  var html = '<div class="lib-breakdown-title">两库分集明细</div>';
-  html += '<div class="lib-breakdown-scroll"><table class="lib-breakdown-table"><colgroup><col style="width:17%"><col style="width:23%"><col style="width:30%"><col style="width:30%"></colgroup><thead><tr><th>季</th><th>TMDB<br>已播</th><th>本地库</th><th>分享库</th></tr></thead><tbody>';
+  var html = '<div class="lib-breakdown-heading"><h4>两库分集</h4><span>' + allSeasons.length + ' 季 · TMDB 已播对照</span></div><div class="lib-season-list">';
   allSeasons.forEach(function(sn){
     var se = bySeason[sn] || {local_eps:0,share_eps:0};
     var total = tmdbMap[sn];
-    html += '<tr><td>S'
-      + String(sn).padStart(2,'0') + '</td><td>' + (total != null ? esc(total) : '?')
-      + '</td>' + libraryCell(se.local_eps, total) + libraryCell(se.share_eps, total) + '</tr>';
+    html += '<section class="lib-season-card" aria-label="' + (sn === 0 ? '特别篇' : '第 ' + sn + ' 季') + '">'
+      + '<div class="lib-season-heading"><b>' + (sn === 0 ? '特别篇' : 'S' + String(sn).padStart(2,'0')) + '</b><span>已播 <strong>' + (total != null ? esc(total) : '—') + '</strong> 集</span></div>'
+      + libraryCell(se.local_eps, total, '本地库', 'local') + libraryCell(se.share_eps, total, '分享库', 'share') + '</section>';
   });
-  box.innerHTML = html + '</tbody></table></div>';
+  box.innerHTML = html + '</div>';
+
 }
 
 function renderMovieCard(m){

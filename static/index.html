@@ -6,6 +6,7 @@
 <meta name="theme-color" content="#F2F2F7">
 <title>StrimKeep</title>
 <link rel="stylesheet" href="/static/css/app.css?v=ede181463269">
+<link rel="stylesheet" href="/static/css/overview.css?v=f0b9a85d824e">
 <script>
 /* 尽早设置主题，避免页面闪烁（FOUC） */
 (function(){
@@ -75,94 +76,80 @@ window.addEventListener('unhandledrejection', function(e){
 
       <!-- 媒体总览 -->
       <section class="tab active" id="tab-dashboard">
-        <div class="page-intro"><div><span class="eyebrow">媒体库管理</span><h1>媒体总览</h1><p>先看待处理事项，再了解片库完整度与最新入库。</p></div><button class="btn gray" onclick="loadDashboard();loadLibraryStats()" data-icon="refresh">刷新总览</button></div>
-        <div class="dash-hero">
-          <div class="dh-main">
-            <div class="dh-label" data-icon="database">两库 STRM 总量</div>
-            <div class="dh-big" id="dash-total">-</div>
-            <div class="dh-split"><i id="dash-split-l" style="width:0"></i><i id="dash-split-s" style="width:0"></i></div>
-            <div class="dh-legend"><span><b class="dd l"></b>本地库 <em id="stat-local">-</em><small id="pct-l"></small></span><span><b class="dd s"></b>分享库 <em id="stat-share">-</em><small id="pct-s"></small></span></div>
+        <div class="page-intro overview-heading">
+          <div><span class="eyebrow">我的媒体库</span><h1>媒体总览</h1><p>片库规模、剧集完整度与治理进展，一眼掌握。</p></div>
+          <button type="button" class="btn gray" onclick="loadDashboard();loadLibraryStats()" data-icon="refresh">刷新总览</button>
+        </div>
+        <div class="overview-summary">
+          <div class="overview-total">
+            <div class="overview-label" data-icon="database">两库 STRM 总量</div>
+            <div class="overview-total-value" id="dash-total">—</div>
+            <div class="overview-split" aria-hidden="true"><i id="dash-split-l" style="width:0"></i><i id="dash-split-s" style="width:0"></i></div>
+            <div class="overview-library-counts"><span><i class="dd l"></i>本地 <b id="stat-local">—</b><small id="pct-l"></small></span><span><i class="dd s"></i>分享 <b id="stat-share">—</b><small id="pct-s"></small></span></div>
           </div>
-          <div class="dh-nums">
-            <div><span class="l c1">剧集</span><em id="dash-series">-</em></div>
-            <div><span class="l c2">总集数</span><em id="dash-eps">-</em></div>
-            <div><span class="l c3">电影</span><em id="dash-movies">-</em></div>
+          <div class="overview-numbers">
+            <div><span data-icon="film">剧集</span><b id="dash-series">—</b><small>片库剧集数</small></div>
+            <div><span data-icon="list">总集数</span><b id="dash-eps">—</b><small>已入库分集</small></div>
+            <div><span data-icon="film">电影</span><b id="dash-movies">—</b><small>片库电影数</small></div>
           </div>
-          <div class="dh-pills">
-            <div class="dpill"><div><span class="k">Emby</span><small id="svc-emby-host">—</small></div><span id="svc-emby">检查中…</span></div>
-            <div class="dpill"><div><span class="k">TMDB</span><small id="svc-tmdb-sub">—</small></div><span id="svc-tmdb">检查中…</span></div>
+          <div class="overview-services">
+            <div><b>Emby</b><span id="svc-emby">检查中…</span><small id="svc-emby-host">—</small></div>
+            <div><b>TMDB</b><span id="svc-tmdb">检查中…</span><small id="svc-tmdb-sub">—</small></div>
           </div>
         </div>
-
         <div class="panel" id="dash-storage-warning" style="display:none" role="status">
-          <h3 class="red">运行数据保存异常</h3>
-          <div id="dash-storage-issues"></div>
+          <h3 class="red">运行数据保存异常</h3><div id="dash-storage-issues"></div>
           <p class="muted">请检查数据目录权限、剩余空间或数据库状态；成功重试后提示会消失。</p>
         </div>
-
-        <div class="panel dashboard-priority">
-          <div class="row-between"><h3 data-icon="scale">治理待办</h3><span class="dash-note" id="dash-plan-note">—</span></div>
-          <p class="section-note">根据最近一次双库扫描生成，点击卡片查看依据和文件范围。</p>
-          <div class="todo-grid">
-            <div class="todo loc" onclick="switchTab('governance')"><span class="k" data-icon="x">本地待清理</span><b id="dash-loc">-</b><small id="dash-loc-files">—</small></div>
-            <div class="todo shr" onclick="switchTab('governance')"><span class="k" data-icon="refresh">分享待清理</span><b id="dash-shr">-</b><small id="dash-shr-files">—</small></div>
-            <div class="todo keep" onclick="switchTab('governance')"><span class="k" data-icon="check">受保护</span><b id="dash-keep">-</b><small id="dash-keep-files">—</small></div>
-            <div class="todo exm" onclick="switchTab('governance')"><span class="k" data-icon="shield">白名单豁免</span><b id="dash-exm">-</b><small id="dash-exm-files">—</small></div>
+        <div class="overview-activity">
+          <button type="button" onclick="switchTab('daily')"><span class="overview-label" data-icon="file">24H 入库</span><b id="stat-ingest-mov">—</b><small><span id="stat-ingest-sub">电影 / 剧集</span> · <span id="stat-ingest-age">—</span></small></button>
+          <button type="button" onclick="switchTab('subscribe')"><span class="overview-label" data-icon="bell">追更订阅</span><b id="stat-sub">—</b><small id="stat-sub-sub">点击查看</small></button>
+          <button type="button" onclick="switchTab('morning')"><span class="overview-label" data-icon="sun">每日晨报</span><b id="stat-morning">—</b><small id="stat-morning-sub">点击设置</small></button>
+          <button type="button" onclick="switchTab('settings')"><span class="overview-label" data-icon="shield">白名单</span><b id="dash-exempt">—</b><small>规则设置里维护</small></button>
+        </div>
+        <div class="overview-workspace">
+          <div class="overview-main-column">
+            <section class="overview-panel overview-health" aria-labelledby="overviewHealthTitle">
+              <div class="overview-panel-heading"><div><span class="overview-kicker">片库状态</span><h3 id="overviewHealthTitle">剧集完整度</h3></div><button type="button" class="overview-link" onclick="switchTab('mapping')">片库映射 ↗</button></div>
+              <div class="overview-health-body"><div class="overview-ring" id="dash-ring"><b id="dash-ring-n">—</b><span>完整率</span></div><div class="overview-health-legend" id="dash-health"><div class="list-empty">暂无对照缓存</div></div></div>
+              <details class="overview-facts"><summary id="dash-facts-summary">数据更新时间</summary><div id="dash-library-facts">暂无片库对照缓存</div></details>
+            </section>
+            <section class="overview-panel overview-missing-panel" aria-labelledby="overviewMissingTitle">
+              <div class="overview-panel-heading"><div><span class="overview-kicker">需要关注</span><h3 id="overviewMissingTitle">优先补齐</h3></div><span class="overview-note" id="dash-miss-note"></span></div>
+              <div class="overview-missing-grid" id="dash-missing"><div class="list-empty">尚无对照缓存</div></div>
+            </section>
+            <section class="overview-panel overview-category-panel" aria-labelledby="overviewCategoryTitle">
+              <div class="overview-panel-heading"><div><span class="overview-kicker">媒体构成</span><h3 id="overviewCategoryTitle">分类分布</h3></div>
+                <div class="segmented dash-tabs" id="libStatTabs"><button type="button" class="active" data-m="all" onclick="setLibStatMode('all')">合计</button><button type="button" data-m="local" onclick="setLibStatMode('local')">本地</button><button type="button" data-m="share" onclick="setLibStatMode('share')">分享</button></div>
+              </div>
+              <div class="overview-note overview-category-summary" id="libStatsSummary">加载中…</div>
+              <div class="overview-categories" id="libStatsGrid"><div class="list-empty">加载中…</div></div>
+            </section>
           </div>
-        </div>
-
-        <div class="dash-strip">
-          <div class="ds" onclick="switchTab('daily')"><div class="k" data-icon="file">24H 入库</div><div class="v green" id="stat-ingest-mov">-</div><div class="s"><span id="stat-ingest-sub">电影 / 剧集</span> · <span id="stat-ingest-age">—</span></div></div>
-          <div class="ds" onclick="switchTab('subscribe')"><div class="k" data-icon="bell">追更订阅</div><div class="v indigo" id="stat-sub">0 部</div><div class="s" id="stat-sub-sub">点击查看</div></div>
-          <div class="ds" onclick="switchTab('morning')"><div class="k" data-icon="sun">每日晨报</div><div class="v amber" id="stat-morning">未开启</div><div class="s" id="stat-morning-sub">点击设置</div></div>
-          <div class="ds" onclick="switchTab('settings')"><div class="k" data-icon="shield">白名单</div><div class="v" id="dash-exempt">-</div><div class="s">规则设置里维护</div></div>
-        </div>
-
-        <div class="panel" id="dash-gov-reasons-panel">
-          <div class="row-between"><h3 data-icon="scale">治理决策</h3><span class="dash-note" id="dash-gov-reason-note">—</span></div>
-          <div class="gov-reason-grid" id="dash-gov-reasons"><div class="list-empty">尚无治理扫描</div></div>
-        </div>
-
-        <div class="dash-cols">
-          <div class="panel">
-            <h3 data-icon="activity">剧集健康度</h3>
-            <div class="muted" id="dash-library-facts" style="font-size:12px;margin-bottom:12px">暂无片库对照缓存</div>
-            <div class="hl-wrap">
-              <div class="ring" id="dash-ring"><b id="dash-ring-n">—</b><span>完整率</span></div>
-              <div class="hl-legend" id="dash-health"><div class="list-empty">尚无对照缓存，去「片库映射」对照一次</div></div>
-            </div>
+          <div class="overview-side-column">
+            <section class="overview-panel overview-governance" aria-labelledby="overviewGovernanceTitle">
+              <div class="overview-panel-heading"><div><span class="overview-kicker">双库治理</span><h3 id="overviewGovernanceTitle">治理待办</h3></div><span class="overview-note" id="dash-plan-note">—</span></div>
+              <div class="overview-todos">
+                <button type="button" class="loc" onclick="switchTab('governance')"><span data-icon="x">本地待清理</span><b id="dash-loc">—</b><small id="dash-loc-files">等待扫描</small></button>
+                <button type="button" class="shr" onclick="switchTab('governance')"><span data-icon="refresh">分享待清理</span><b id="dash-shr">—</b><small id="dash-shr-files">等待扫描</small></button>
+                <button type="button" class="keep" onclick="switchTab('governance')"><span data-icon="check">受保护</span><b id="dash-keep">—</b><small id="dash-keep-files">等待扫描</small></button>
+                <button type="button" class="exm" onclick="switchTab('governance')"><span data-icon="shield">白名单豁免</span><b id="dash-exm">—</b><small id="dash-exm-files">等待扫描</small></button>
+              </div>
+              <div class="overview-governance-actions"><button type="button" class="btn" id="scanBtn" onclick="scanLibrary()" data-icon="refresh">扫描双库</button><button type="button" class="btn gray" onclick="switchTab('governance')">查看清单 ↗</button></div>
+              <p class="overview-note">待办来自最近一次扫描，查看清单了解依据与文件范围。</p>
+              <details class="overview-decisions" id="dash-gov-reasons-panel"><summary>治理决策<span id="dash-gov-reason-note">—</span></summary><div class="overview-reasons" id="dash-gov-reasons"><div class="list-empty">尚无治理扫描</div></div></details>
+            </section>
+            <section class="overview-panel overview-strategy" aria-labelledby="overviewStrategyTitle">
+              <div class="overview-panel-heading"><div><span class="overview-kicker">规则快照</span><h3 id="overviewStrategyTitle">当前治理策略</h3></div><button type="button" class="overview-link" onclick="switchTab('settings')">设置 ↗</button></div>
+              <div id="strategySnapshot">加载中…</div>
+            </section>
+            <section class="overview-panel overview-tools" aria-labelledby="overviewToolsTitle">
+              <div class="overview-panel-heading"><div><span class="overview-kicker">快捷入口</span><h3 id="overviewToolsTitle">片库管理</h3></div></div>
+              <button type="button" onclick="switchTab('explore')"><span data-icon="film">影视探索<small>寻找下一部想看的影视</small></span><i>↗</i></button>
+              <button type="button" onclick="switchTab('mapping')"><span data-icon="map">片库映射<small>查看分集与 TMDB 对照</small></span><i>↗</i></button>
+              <button type="button" onclick="refreshCaches()"><span data-icon="database">重建缓存<small>更新媒体统计缓存</small></span><i>↗</i></button>
+            </section>
           </div>
-          <div class="panel">
-            <div class="row-between"><h3 data-icon="alert">优先补齐</h3><span class="dash-note" id="dash-miss-note"></span></div>
-            <div id="dash-missing"><div class="list-empty">尚无对照缓存</div></div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="row-between">
-            <h3 data-icon="database">媒体分类分布</h3>
-            <div class="segmented dash-tabs" id="libStatTabs">
-              <button class="active" data-m="all" onclick="setLibStatMode('all')">两库合计</button>
-              <button data-m="local" onclick="setLibStatMode('local')">本地库</button>
-              <button data-m="share" onclick="setLibStatMode('share')">分享库</button>
-            </div>
-          </div>
-          <div id="libStatsSummary" style="font-size:12px;color:var(--text-dim);margin:2px 0 10px">加载中...</div>
-          <div class="cat-bars" id="libStatsGrid"><div class="list-empty">加载中...</div></div>
-        </div>
-
-        <div class="panel overview-actions">
-          <h3 data-icon="zap">治理操作</h3>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn" id="scanBtn" onclick="scanLibrary()" data-icon="refresh">扫描双库</button>
-            <button class="btn gray" onclick="switchTab('governance')" data-icon="scale">查看治理清单</button>
-            <button class="btn gray" onclick="switchTab('settings')" data-icon="gear">规则设置</button>
-            <button class="btn gray" onclick="refreshCaches()" data-icon="database">重建缓存</button>
-          </div>
-        </div>
-        <div class="panel">
-          <h3 data-icon="bookmark">当前治理策略</h3>
-          <div id="strategySnapshot">加载中...</div>
         </div>
       </section>
 
@@ -822,10 +809,10 @@ window.addEventListener('unhandledrejection', function(e){
 <script defer src="/static/js/icons.js?v=4cd84ed61ca5"></script>
 <script defer src="/static/js/modal.js?v=60e0db6c4ffc"></script>
 <script defer src="/static/js/runtime.js?v=0d44ad2bd1bd"></script>
-<script defer src="/static/js/dashboard.js?v=ac852b89dab9"></script>
+<script defer src="/static/js/dashboard.js?v=d4c25a9c2982"></script>
 <script defer src="/static/js/governance.js?v=c481cc0c9bfb"></script>
 <script defer src="/static/js/explore.js?v=e65ce5f7deb8"></script>
-<script defer src="/static/js/mapping.js?v=c56e3ae27d4d"></script>
+<script defer src="/static/js/mapping.js?v=74ab2c273061"></script>
 <script defer src="/static/js/subscriptions.js?v=779193f9e05a"></script>
 <script defer src="/static/js/records.js?v=823e156e2088"></script>
 <script defer src="/static/js/settings.js?v=478a4577da70"></script>
@@ -858,7 +845,7 @@ window.addEventListener('unhandledrejection', function(e){
 
 
 
-<script defer src="/static/js/dashboard-layout.js?v=f88465931d91"></script>
+
 
 
 

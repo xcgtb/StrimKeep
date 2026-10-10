@@ -21,10 +21,10 @@ c.eps={have:13,total:null,match_status:'unmatched'};assert(!ctx.exploreStatus(c)
 console.log('PASS missing facts, identity conflict, explicit zero and unknown TMDB total are distinct');
 ctx.loadLibBreakdown({seasons:[{season:1,local_eps:1,share_eps:2},{season:2,local_eps:1,share_eps:0}]},
  {seasons:[{season:1,tmdb:2},{season:2,tmdb:1}]});
-assert(box.innerHTML.includes('S01') && box.innerHTML.includes('S02') && box.innerHTML.includes('<td>2</td>'));
-assert(box.innerHTML.includes('lib-season-count">1</span>') && box.innerHTML.includes('lib-season-count">2</span>'));
+assert(box.innerHTML.includes('S01') && box.innerHTML.includes('S02') && box.innerHTML.includes('已播 <strong>2</strong>'));
+assert(box.innerHTML.includes('lib-season-count">1<small>') && box.innerHTML.includes('lib-season-count">2<small>'));
 assert(box.innerHTML.includes('lib-season-status missing">缺 1 集') && box.innerHTML.includes('lib-season-status complete">✓ 完整'));
-assert(box.innerHTML.includes('lib-breakdown-table') && box.innerHTML.includes('lib-breakdown-scroll'));
+assert(box.innerHTML.includes('lib-season-card') && !box.innerHTML.includes('<table'));
 ctx.loadLibBreakdown({seasons:[{season:1,local_eps:13,share_eps:0}]},{seasons:[{season:1,tmdb:12}]});
 assert(box.innerHTML.includes('lib-season-status extra">超 1 集') && box.innerHTML.includes('缺 12 集'));
 ctx.loadLibBreakdown({seasons:[{season:1,local_eps:13,share_eps:0}]},{});

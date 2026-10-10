@@ -29,7 +29,7 @@ docker compose up -d strimkeep
 
 部署配置需使用 `ghcr.io/xcgtb/strimkeep:latest`。仅重启容器不会更新镜像。可以在 Actions 手动运行 `publish-image` 并选择 `main`，重建 latest。
 
-日常 main 构建只更新 latest，不覆盖正式版本号镜像。应用自动显示最近已合入版本加提交标识，例如 `1.0.2-dev.abcdef123456`，便于确认已拉到新构建。
+日常 main 构建只更新 latest，不覆盖正式版本号镜像。应用自动显示最近已合入的正式版本，例如 `1.0.2`。提交编号保留在镜像标签和元数据中，不添加到 Web 版本号。
 
 ## 正式版本发布
 
