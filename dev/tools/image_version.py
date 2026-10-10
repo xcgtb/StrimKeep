@@ -30,8 +30,7 @@ def resolve(root, ref_type, ref_name):
         if not match:
             raise ValueError('Missing source fallback version')
         base = match[1]
-    sha = git(root, 'rev-parse', '--short=12', 'HEAD')
-    return f'{base}-dev.{sha}'
+    return base
 
 
 if __name__ == '__main__':

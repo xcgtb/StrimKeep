@@ -41,7 +41,7 @@ def test_invalid_release_tag_rejected(tmp_path, tag):
 
 def test_main_build_uses_source_fallback_without_tags(tmp_path):
     root = repo(tmp_path)
-    assert versions.resolve(root, 'branch', 'main') == '1.0.2-dev.'+git(root, 'rev-parse', '--short=12', 'HEAD')
+    assert versions.resolve(root, 'branch', 'main') == '1.0.2'
 
 
 def test_main_build_uses_latest_merged_release(tmp_path):
@@ -54,4 +54,4 @@ def test_main_build_uses_latest_merged_release(tmp_path):
     git(root, 'commit', '-qm', 'other')
     git(root, 'tag', 'v9.0.0')
     git(root, 'checkout', '-q', '-')
-    assert versions.resolve(root, 'branch', 'main').startswith('1.0.10-dev.')
+    assert versions.resolve(root, 'branch', 'main') == '1.0.10'
