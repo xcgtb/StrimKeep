@@ -175,8 +175,14 @@ class TestMovieDeleteEndpoint:
         p.write_text('x', encoding='utf-8')
         return p
 
-    def test_exact_tmdb_match_and_busy_lock(self):
+    def test_exact_tmdb_match_and_busy_lock(self, tmp_path, monkeypatch):
         import fcntl
+        # This endpoint must use its own library even if another module imported
+        # the shared engine before this module configured the environment.
+        for name, leaf in [('L_ROOT', 'local'), ('S_ROOT', 'share'),
+                           ('CLOUD_L_ROOT', 'cloud'), ('DATA_DIR', 'data')]:
+            monkeypatch.setattr(main.engine, name, tmp_path / leaf)
+        monkeypatch.setattr(main.engine, 'LOCK_FILE', tmp_path / 'data/agent.lock')
         self._mk('电影/外语电影/片A {tmdb-77}/片A.strm')
         self._mk('电影/外语电影/片B {tmdb-777}/片B.strm')
         c = TestClient(main.app)

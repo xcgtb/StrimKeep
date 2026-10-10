@@ -1,9 +1,5 @@
 """Background settings persist without changing connection or governance configuration."""
-import os
-import tempfile
 import pytest
-os.environ.setdefault('WEB_PASSWORD', 'test-pass-123')
-os.environ.setdefault('AGENT_DATA', tempfile.mkdtemp(prefix='strimkeep-appearance-tests-'))
 from fastapi.testclient import TestClient
 from app import config
 from app.main import app
