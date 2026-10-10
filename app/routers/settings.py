@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """规则设置 / 服务连接"""
 import os, json, logging, urllib.parse, urllib.request
+from app import network
 from fastapi import APIRouter, Depends, HTTPException
 
 try:
@@ -127,6 +128,10 @@ def api_get_config(reveal: int = 0):
 def api_set_config(body: dict = None):
     body = body or {}
     cfg = load_config()
+    try:
+        proxy = network.proxy_config(body, saved=cfg)
+    except ValueError as error:
+        raise HTTPException(400, str(error))
     env_overridden = set(_env_overridden_keys())
     skipped_env = []
     for k in EDITABLE_KEYS:
@@ -139,6 +144,7 @@ def api_set_config(body: dict = None):
         if k in SENSITIVE_KEYS and is_masked_value(new_val):
             continue
         cfg[k] = new_val
+    cfg.update({k: proxy.get(k, '') for k in network.PROXY_KEYS})
     saved = save_config(cfg)
     engine.reload_config()
     try: bot.restart()
@@ -221,7 +227,7 @@ def api_test_tmdb(body: dict = None):
         else: params['api_key'] = key
         url = 'https://api.themoviedb.org/3/configuration?' + urllib.parse.urlencode(params)
         req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with network.open_external(req, timeout=10, config=network.proxy_config(body, saved=load_config())) as r:
             data = json.loads(r.read().decode('utf-8'))
         img = (data.get('images') or {}).get('secure_base_url', '?')
         return {'status': 'success', 'message': f'✅ TMDB Key 有效\n图片 CDN: {img}'}
@@ -243,9 +249,28 @@ def api_test_telegram(body: dict = None):
         url = f'https://api.telegram.org/bot{token}/sendMessage'
         data = urllib.parse.urlencode({'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'}).encode()
         req = urllib.request.Request(url, data=data, method='POST')
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with network.open_external(req, timeout=10, config=network.proxy_config(body, saved=load_config())) as r:
             resp = json.loads(r.read().decode('utf-8'))
         if resp.get('ok'): return {'status': 'success', 'message': '✅ 已发送测试消息，请查看 Telegram'}
         return {'status': 'error', 'message': f"❌ 发送失败: {resp.get('description', '未知错误')}"}
     except Exception as e:
         return {'status': 'error', 'message': f'❌ 发送失败: {e}'}
+
+
+@router.post('/api/config/test/proxy', dependencies=[Depends(auth)])
+def api_test_proxy(body: dict = None):
+    try:
+        cfg = network.proxy_config(body, saved=load_config())
+        if cfg['http_proxy_enabled'] != '1':
+            return {'status': 'error', 'message': '请先开启 HTTP 代理，再测试连接'}
+        request = urllib.request.Request('https://api.themoviedb.org/3/configuration')
+        try:
+            with network.open_external(request, timeout=10, config=cfg) as response:
+                response.read(1024)
+        except urllib.error.HTTPError as error:
+            if error.code != 401:
+                raise
+            error.close()
+        return {'status': 'success', 'message': '已通过 HTTP 代理连接 TMDB，HTTPS 连接正常；可继续测试 TMDB 密钥'}
+    except Exception as error:
+        return {'status': 'error', 'message': str(error)}

@@ -36,14 +36,15 @@ async function loadSubscriptions(){
       $('subList').innerHTML = '<div class="list-empty">暂无订阅。去「影视探索」搜索剧集，点「+ 订阅」</div>';
     } else {
       $('subList').innerHTML = currentSubs.map(function(s, i){
-        /* 订阅卡的海报也可能是 Emby poster URL，走 data-emby-src；TMDB 图片直接 src */
+        /* 旧订阅的 TMDB CDN 地址也转到同源、带鉴权的海报接口。 */
+        var posterUrl = (s.poster || '').replace(/^https:\/\/image\.tmdb\.org\/t\/p\/[^/]+\//, '/api/tmdb/poster/');
         var poster;
-        if (!s.poster) {
+        if (!posterUrl) {
           poster = '';
-        } else if (s.poster.indexOf('/api/emby/poster/') === 0) {
-          poster = '<img data-emby-src="' + esc(s.poster) + '" loading="lazy">';
+        } else if ((/^\/api\/(?:emby|tmdb)\/poster\//).test(posterUrl)) {
+          poster = '<img data-emby-src="' + esc(posterUrl) + '" loading="lazy">';
         } else {
-          poster = '<img src="' + esc(s.poster) + '" loading="lazy" onerror="this.style.display=\'none\'">';
+          poster = '<img src="' + esc(posterUrl) + '" loading="lazy" onerror="this.style.display=\'none\'">';
         }
         var subTot = s.tmdb_declared != null ? s.tmdb_declared : s.tmdb_total;
         var tmdbExtra = subTot != null ? ' · TMDB ' + subTot + ' 集' : ' · TMDB 待同步';

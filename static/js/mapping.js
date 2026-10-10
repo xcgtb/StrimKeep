@@ -393,9 +393,9 @@ function renderSeriesCard(s){
   else if (s.in_share) libTag = '分享';
 
   /* 照搬上游 TgtoDrive 海报对照逻辑：TMDB poster_path 优先（官方最新图），Emby 缓存图兜底 */
-  var tposter = ti && ti.poster ? 'https://image.tmdb.org/t/p/w500' + ti.poster : '';
+  var tposter = ti && ti.poster ? '/api/tmdb/poster' + ti.poster : '';
   var poster = tposter
-    ? '<div class="poster-loading">海报加载中</div><img src="' + esc(tposter) + '" loading="lazy" decoding="async" onload="clearPosterLoading(this)" onerror="clearPosterLoading(this);this.onerror=null;this.style.display=\'none\';var n=this.nextElementSibling;if(n)n.style.display=\'flex\';"><div class="no-img" style="display:none">暂无海报</div>'
+    ? '<div class="poster-loading">海报加载中</div><img data-emby-src="' + esc(tposter) + '" loading="lazy" decoding="async" onload="clearPosterLoading(this)" onerror="clearPosterLoading(this);this.onerror=null;this.style.display=\'none\';var n=this.nextElementSibling;if(n)n.style.display=\'flex\';"><div class="no-img" style="display:none">暂无海报</div>'
     : (s.has_image
       ? '<div class="poster-loading">海报加载中</div><img data-emby-src="/api/emby/poster/' + esc(s.id) + '" loading="lazy" decoding="async" onload="clearPosterLoading(this)">'
       : '<div class="no-img">暂无海报</div>');
@@ -432,9 +432,9 @@ function showMovieDetailById(id){
   html += '<div style="display:flex;gap:16px;margin-bottom:16px">';
   html += '<div style="width:110px;height:165px;border-radius:8px;background:#f3f4f6;overflow:hidden;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:#9ca3af;font-size:11px">';
   /* TMDB poster_path 优先（上游海报对照逻辑），Emby 缓存图兜底 */
-  var mtp = m.poster_tmdb ? 'https://image.tmdb.org/t/p/w500' + m.poster_tmdb : '';
+  var mtp = m.poster_tmdb ? '/api/tmdb/poster' + m.poster_tmdb : '';
   html += mtp
-    ? '<img src="' + esc(mtp) + '" style="width:100%;height:100%;object-fit:cover" onerror="this.onerror=null;this.style.display=\'none\';">'
+    ? '<img data-emby-src="' + esc(mtp) + '" style="width:100%;height:100%;object-fit:cover" onerror="this.onerror=null;this.style.display=\'none\';">'
     : (m.has_image ? '<img data-emby-src="/api/emby/poster/' + esc(m.id) + '" style="width:100%;height:100%;object-fit:cover">' : '\u65e0\u56fe');
   html += '</div>';
   html += '<div style="flex:1;min-width:0">';
@@ -518,7 +518,7 @@ function showEmbyDetailById(id){
   html += '<div class="mapping-detail-poster">';
   /* TMDB poster_path 优先（上游海报对照逻辑），Emby 缓存图兜底 */
   html += ti.poster
-    ? '<img src="https://image.tmdb.org/t/p/w500' + esc(ti.poster) + '" style="width:100%;height:100%;object-fit:cover" onerror="this.onerror=null;this.style.display=\'none\';">'
+    ? '<img data-emby-src="/api/tmdb/poster' + esc(ti.poster) + '" style="width:100%;height:100%;object-fit:cover" onerror="this.onerror=null;this.style.display=\'none\';">'
     : (s.has_image
       ? '<img data-emby-src="/api/emby/poster/' + esc(s.id) + '" style="width:100%;height:100%;object-fit:cover">'
       : '无图');
@@ -717,9 +717,9 @@ function renderMovieCard(m){
   else if (m.in_share) libTag = '分享';
 
   /* TMDB poster_path 优先（上游海报对照逻辑），Emby 缓存图兜底 */
-  var mtp = m.poster_tmdb ? 'https://image.tmdb.org/t/p/w500' + m.poster_tmdb : '';
+  var mtp = m.poster_tmdb ? '/api/tmdb/poster' + m.poster_tmdb : '';
   var poster = mtp
-    ? '<div class="poster-loading">海报加载中</div><img src="' + esc(mtp) + '" loading="lazy" decoding="async" onload="clearPosterLoading(this)" onerror="clearPosterLoading(this);this.onerror=null;this.style.display=\'none\';var n=this.nextElementSibling;if(n)n.style.display=\'flex\';"><div class="no-img" style="display:none">暂无海报</div>'
+    ? '<div class="poster-loading">海报加载中</div><img data-emby-src="' + esc(mtp) + '" loading="lazy" decoding="async" onload="clearPosterLoading(this)" onerror="clearPosterLoading(this);this.onerror=null;this.style.display=\'none\';var n=this.nextElementSibling;if(n)n.style.display=\'flex\';"><div class="no-img" style="display:none">暂无海报</div>'
     : (m.has_image
       ? '<div class="poster-loading">海报加载中</div><img data-emby-src="/api/emby/poster/' + esc(m.id) + '" loading="lazy" decoding="async" onload="clearPosterLoading(this)">'
       : '<div class="no-img">暂无海报</div>');

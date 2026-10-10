@@ -22,6 +22,10 @@ DEFAULTS = {
     'emby_host':              os.environ.get('EMBY_HOST',              'http://127.0.0.1:8096'),
     'emby_key':               os.environ.get('EMBY_KEY',               ''),
     'tmdb_key':               os.environ.get('TMDB_KEY',               ''),
+    'http_proxy_enabled':     '0',
+    'http_proxy_url':         '',
+    'http_proxy_username':    '',
+    'http_proxy_password':    '',
     # Emby 媒体库里看到的 STRM 根目录（Emby 容器内路径），用于区分本地/分享与单剧删除
     'emby_local_path':        os.environ.get('EMBY_LOCAL_PATH',        '/strm/115网盘/影视媒体库'),
     'emby_share_path':        os.environ.get('EMBY_SHARE_PATH',        '/strm/115网盘/分享影视库'),
@@ -85,7 +89,7 @@ ENV_OVERRIDE_KEYS = {
 INTERNAL_KEYS = {'tmdb_scan_last_ts', 'morning_prescan_last_date',
                  'morning_report_last_date', 'subscriptions'}
 EDITABLE_KEYS = [k for k in DEFAULTS if k not in INTERNAL_KEYS]
-SENSITIVE_KEYS = ['emby_key', 'tmdb_key', 'telegram_bot_token']
+SENSITIVE_KEYS = ['emby_key', 'tmdb_key', 'telegram_bot_token', 'http_proxy_password']
 ALL_SENSITIVE = SENSITIVE_KEYS
 
 
@@ -99,7 +103,7 @@ def mask_value(v: str, head: int = 4, tail: int = 4) -> str:
 def mask_config(cfg: dict) -> dict:
     out = dict(cfg)
     for k in ALL_SENSITIVE:
-        if k in out and out[k]: out[k] = mask_value(out[k])
+        if k in out and out[k]: out[k] = '********' if k == 'http_proxy_password' else mask_value(out[k])
     return out
 
 

@@ -375,6 +375,14 @@ input:focus,select:focus,textarea:focus{
 
 /* ═══════════ 表单 ═══════════ */
 .form-row{margin-bottom:14px}
+.proxy-settings{border:1px solid var(--border);border-radius:12px;padding:16px;margin:20px 0}
+.proxy-settings h4{margin:0 0 14px;font-size:14px}
+.proxy-settings .proxy-switch{display:flex;align-items:center;gap:8px}
+.proxy-settings input[type=checkbox]{width:auto}
+.proxy-auth-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;min-width:0}
+.proxy-auth-grid .form-row{min-width:0}
+.proxy-settings .hint{font-size:11px;color:var(--text-dim);line-height:1.65;margin-top:6px}
+@media(max-width:600px){.proxy-auth-grid{grid-template-columns:1fr;gap:0}}
 .form-row label{
   display:block;font-size:12px;color:var(--text-mid);font-weight:600;
   margin-bottom:6px;display:flex;align-items:center;gap:6px;

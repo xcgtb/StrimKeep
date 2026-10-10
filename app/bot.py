@@ -18,10 +18,12 @@ from argparse import Namespace
 try:
     from . import engine, tasks
     from . import config as _cfg
+    from . import network as _network
     from .config import load_config
 except ImportError:
     import engine, tasks
     import config as _cfg
+    import network as _network
     from config import load_config
 
 log = logging.getLogger('strimkeep.bot')
@@ -56,7 +58,7 @@ def _api(token, method, params=None, timeout=35):
     url = _API.format(token=token, method=method)
     data = urllib.parse.urlencode(params or {}).encode()
     req = urllib.request.Request(url, data=data, method='POST')
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with _network.open_external(req, timeout=timeout) as r:
         return json.loads(r.read().decode('utf-8'))
 
 

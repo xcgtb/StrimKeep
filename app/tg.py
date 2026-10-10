@@ -8,6 +8,10 @@ import datetime
 import logging
 import urllib.parse
 import urllib.request
+try:
+    from . import network as _network
+except ImportError:
+    import network as _network
 
 log = logging.getLogger('strimkeep')
 
@@ -98,7 +102,7 @@ def notify_telegram(text, chat_id=None):
             data = urllib.parse.urlencode({'chat_id': cid, 'text': part, 'parse_mode': 'HTML',
                                            'disable_web_page_preview': 'true'}).encode()
             req = urllib.request.Request(url, data=data, method='POST')
-            with urllib.request.urlopen(req, timeout=10) as r:
+            with _network.open_external(req, timeout=10) as r:
                 ok_all = ok_all and (200 <= r.status < 300)
         except Exception as e:
             log.warning('Telegram 推送失败: %s', e)

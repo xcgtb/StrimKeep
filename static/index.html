@@ -8,7 +8,7 @@
 <link rel="icon" sizes="16x16 32x32 48x48 64x64" href="/static/icons/favicon.ico?v=312b3784ba93">
 <link rel="icon" type="image/svg+xml" sizes="any" href="/static/icons/favicon.svg?v=d6d1a1064986">
 <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png?v=a23c01bd901b">
-<link rel="stylesheet" href="/static/css/app.css?v=ede181463269">
+<link rel="stylesheet" href="/static/css/app.css?v=b30c9f9911a7">
 <link rel="stylesheet" href="/static/css/overview.css?v=f0b9a85d824e">
 <script>
 /* 尽早设置主题，避免页面闪烁（FOUC） */
@@ -759,6 +759,31 @@ window.addEventListener('unhandledrejection', function(e){
               <button class="btn gray" onclick="testTmdb()" data-icon="flask">测试连接</button>
             </div>
           </div>
+          <div class="proxy-settings">
+            <h4>外部服务 HTTP 代理</h4>
+            <div class="form-row">
+              <label class="proxy-switch"><input type="checkbox" id="cfg-proxy-enabled">启用 HTTP 代理</label>
+              <div class="hint">用于 TMDB 查询、海报和 Telegram。Emby 不使用这项代理；保存后新请求立即生效。</div>
+            </div>
+            <div class="form-row">
+              <label for="cfg-proxy-url">代理地址</label>
+              <input type="text" id="cfg-proxy-url" placeholder="http://192.168.1.2:7890" autocomplete="off" spellcheck="false">
+              <div class="hint">填写 NAS 能访问的 HTTP / 混合代理端口，不是 SOCKS5 端口。代理在其他设备上时，使用该设备的局域网 IP，并开启允许局域网连接。</div>
+            </div>
+            <div class="proxy-auth-grid">
+              <div class="form-row">
+                <label for="cfg-proxy-user">用户名（可选）</label>
+                <input type="text" id="cfg-proxy-user" autocomplete="off">
+              </div>
+              <div class="form-row">
+                <label for="cfg-proxy-password">密码（可选）</label>
+                <input type="password" id="cfg-proxy-password" autocomplete="new-password">
+                <div class="hint">已保存密码以掩码显示，原样保存会保留；无需鉴权时留空。</div>
+              </div>
+            </div>
+            <button type="button" class="btn gray" id="proxyTestBtn" onclick="testHttpProxy()" data-icon="flask">测试代理连接</button>
+            <p class="hint" id="proxyTestResult" role="status" aria-live="polite"></p>
+          </div>
           <div class="form-row" id="row-tg-token">
             <label>Telegram Bot Token</label>
             <div class="input-row">
@@ -814,11 +839,11 @@ window.addEventListener('unhandledrejection', function(e){
 <script defer src="/static/js/runtime.js?v=0d44ad2bd1bd"></script>
 <script defer src="/static/js/dashboard.js?v=d4c25a9c2982"></script>
 <script defer src="/static/js/governance.js?v=c481cc0c9bfb"></script>
-<script defer src="/static/js/explore.js?v=e13704fbf6ac"></script>
-<script defer src="/static/js/mapping.js?v=74ab2c273061"></script>
-<script defer src="/static/js/subscriptions.js?v=779193f9e05a"></script>
+<script defer src="/static/js/explore.js?v=a324fd8871bf"></script>
+<script defer src="/static/js/mapping.js?v=af03e77841c1"></script>
+<script defer src="/static/js/subscriptions.js?v=d419bd118a94"></script>
 <script defer src="/static/js/records.js?v=823e156e2088"></script>
-<script defer src="/static/js/settings.js?v=478a4577da70"></script>
+<script defer src="/static/js/settings.js?v=9a2a168f7bcf"></script>
 <script defer src="/static/js/plans.js?v=02b979a10f92"></script>
 <script defer src="/static/js/directory-cleanup.js?v=7bd34b96ca79"></script>
 <script defer src="/static/js/bootstrap.js?v=bb5e863a0c88"></script>

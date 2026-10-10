@@ -467,6 +467,11 @@ async function loadConfig(){
     $('cfg-emby-local-path').value = c.emby_local_path || '';
     $('cfg-emby-share-path').value = c.emby_share_path || '';
     $('cfg-tmdb-key').value  = c.tmdb_key || '';
+    $('cfg-proxy-enabled').checked = c.http_proxy_enabled === '1';
+    $('cfg-proxy-url').value = c.http_proxy_url || '';
+    $('cfg-proxy-user').value = c.http_proxy_username || '';
+    $('cfg-proxy-password').value = c.http_proxy_password || '';
+    $('proxyTestResult').textContent = '';
     $('cfg-tg-token').value  = c.telegram_bot_token || '';
     $('cfg-tg-chat').value   = c.telegram_chat_id || '';
     $('cfg-tg-users').value  = c.telegram_allowed_users || '';
@@ -552,6 +557,7 @@ async function saveConfig(){
     telegram_chat_id:       $('cfg-tg-chat').value.trim(),
     telegram_allowed_users: $('cfg-tg-users').value.trim(),
   };
+  Object.assign(body, proxyConfigBody());
   try {
     var r = await api('/api/config', { method: 'POST', body: JSON.stringify(body) });
     if (r.status === 'success') {
@@ -571,15 +577,32 @@ async function testEmby(){
 async function testTmdb(){
   toast('测试中...');
   try {
-    var r = await api('/api/config/test/tmdb', { method: 'POST', body: JSON.stringify({ tmdb_key: $('cfg-tmdb-key').value.trim() }) });
+    var r = await api('/api/config/test/tmdb', { method: 'POST', body: JSON.stringify(Object.assign({ tmdb_key: $('cfg-tmdb-key').value.trim() }, proxyConfigBody())) });
     alert(r.message);
   } catch(e){ alert(e.message); }
 }
 async function testTelegram(){
   toast('发送中...');
   try {
-    var r = await api('/api/config/test/telegram', { method: 'POST', body: JSON.stringify({ telegram_bot_token: $('cfg-tg-token').value.trim(), telegram_chat_id: $('cfg-tg-chat').value.trim() }) });
+    var r = await api('/api/config/test/telegram', { method: 'POST', body: JSON.stringify(Object.assign({ telegram_bot_token: $('cfg-tg-token').value.trim(), telegram_chat_id: $('cfg-tg-chat').value.trim() }, proxyConfigBody())) });
     alert(r.message);
   } catch(e){ alert(e.message); }
+}
+
+function proxyConfigBody(){
+  return {http_proxy_enabled:$('cfg-proxy-enabled').checked ? '1' : '0',
+    http_proxy_url:$('cfg-proxy-url').value.trim(),
+    http_proxy_username:$('cfg-proxy-user').value.trim(),
+    http_proxy_password:$('cfg-proxy-password').value};
+}
+async function testHttpProxy(){
+  var button=$('proxyTestBtn'), result=$('proxyTestResult');
+  button.disabled=true;result.textContent='正在通过代理连接 TMDB…';
+  try {
+    var r=await api('/api/config/test/proxy',{method:'POST',body:JSON.stringify(proxyConfigBody()),timeoutMs:13000});
+    result.textContent=r.message || '测试完成';
+    result.style.color=r.status==='success' ? 'var(--ok)' : 'var(--warn)';
+  } catch(e){result.textContent=e.message;result.style.color='var(--warn)';}
+  finally{button.disabled=false;}
 }
 

@@ -418,7 +418,7 @@ function appendExploreCards(cards){
     var posterHtml;
     if (!c.poster) {
       posterHtml = '<div class="no-img">暂无海报</div>';
-    } else if (c.poster.indexOf('/api/emby/poster/') === 0) {
+    } else if ((/^\/api\/(?:emby|tmdb)\/poster\//).test(c.poster)) {
       posterHtml = '<div class="poster-loading">海报加载中</div><img data-emby-src="' + esc(c.poster) + '" alt="" loading="lazy" decoding="async" onload="clearPosterLoading(this)">';
     } else {
       posterHtml = '<div class="poster-loading">海报加载中</div><img src="' + esc(c.poster) + '" alt="" loading="lazy" decoding="async" onload="clearPosterLoading(this)" onerror="posterImageError(this)">';
@@ -452,7 +452,7 @@ function warmPosterUrls(urls, active){
     while (next < urls.length && active()) {
       var url = urls[next++];
       try {
-        if (url.indexOf('/api/emby/poster/') === 0) {
+        if ((/^\/api\/(?:emby|tmdb)\/poster\//).test(url)) {
           await posterFetch(url);
         } else {
           await new Promise(function(resolve){
@@ -473,7 +473,7 @@ function prefetchMappingPosters(){
   mappingPrefetch={view:view,from:from};
   var urls=view.arr.slice(from, Math.min(view.arr.length,posterNextCount(from,$('embyList')))).map(function(item){
     var poster=item.poster_tmdb || ((item.tmdb_info || {}).poster);
-    return poster ? 'https://image.tmdb.org/t/p/w500' + poster : (item.has_image ? '/api/emby/poster/' + item.id : '');
+    return poster ? '/api/tmdb/poster' + poster : (item.has_image ? '/api/emby/poster/' + item.id : '');
   });
   warmPosterUrls(urls,function(){return embyView === view && embyShown === from;});
 }
@@ -565,7 +565,7 @@ function renderExploreCards(cards){
     var posterHtml;
     if (!c.poster) {
       posterHtml = '<div class="no-img">暂无海报</div>';
-    } else if (c.poster.indexOf('/api/emby/poster/') === 0) {
+    } else if ((/^\/api\/(?:emby|tmdb)\/poster\//).test(c.poster)) {
       posterHtml = '<div class="poster-loading">海报加载中</div><img data-emby-src="' + esc(c.poster) + '" alt="" loading="lazy" decoding="async" onload="clearPosterLoading(this)">';
     } else {
       posterHtml = '<div class="poster-loading">海报加载中</div><img src="' + esc(c.poster) + '" alt="" loading="lazy" decoding="async" onload="clearPosterLoading(this)" onerror="posterImageError(this)">';

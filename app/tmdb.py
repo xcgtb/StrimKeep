@@ -30,9 +30,11 @@ except ImportError:
 try:
     from . import config as _cfg
     from . import logger
+    from . import network as _network
 except ImportError:
     import config as _cfg
     import logger
+    import network as _network
 
 
 def _eng():
@@ -137,7 +139,7 @@ class Tmdb:
                 raise TmdbError('TMDB 查询超过本次等待预算')
             delay = 1.5
             try:
-                with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=min(socket_timeout, remaining)) as r:
+                with _network.open_external(urllib.request.Request(url, headers=headers), timeout=min(socket_timeout, remaining)) as r:
                     data = json.loads(r.read().decode('utf-8'))
                 break
             except urllib.error.HTTPError as e:
@@ -328,6 +330,8 @@ def _explore_failure(error):
     while cause is not None and id(cause) not in seen:
         seen.add(id(cause))
         if isinstance(cause, urllib.error.HTTPError):
+            if cause.code == 407:
+                return 'proxy', 'HTTP 代理认证失败，请在服务连接中检查用户名和密码'
             if cause.code in (401, 403):
                 return 'auth', 'TMDB 密钥无效或无权限，请在规则设置中检查 TMDB 配置'
             if cause.code == 429:
@@ -337,6 +341,8 @@ def _explore_failure(error):
                                                isinstance(cause.reason, TimeoutError)):
             return 'timeout', '连接 TMDB 超时，请检查 NAS 网络或代理后重试'
         if isinstance(cause, (urllib.error.URLError, OSError)):
+            if 'HTTP 代理' in str(getattr(cause, 'reason', cause)):
+                return 'proxy', 'HTTP 代理连接失败，请在服务连接中检查地址、端口和鉴权'
             return 'network', '无法连接 TMDB，请检查 NAS 网络、DNS 或代理后重试'
         cause = cause.__cause__ or cause.__context__
     if isinstance(error, TmdbError) and '预算' in str(error):
@@ -509,7 +515,7 @@ def action_explore(args):
         in_emby = emby_hit is not None
         in_local = bool(emby_hit and emby_hit.get('in_local'))
         in_share = bool(emby_hit and emby_hit.get('in_share'))
-        if poster: poster_url = f'{_eng().TMDB_IMG}{poster}'
+        if poster: poster_url = '/api/tmdb/poster/' + poster.lstrip('/')
         elif in_emby and emby_hit.get('has_image'): poster_url = f'/api/emby/poster/{emby_hit["id"]}'
         else: poster_url = ''
 

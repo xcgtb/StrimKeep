@@ -4,6 +4,7 @@ import time, json, threading, sqlite3, urllib.parse, urllib.request
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from app import runtime_logs
+from app import posters
 
 try:
     from app.routers.deps import auth, engine, logger, Args
@@ -136,6 +137,19 @@ def api_emby_poster(item_id: str):
         })
     except Exception as e:
         raise HTTPException(404, str(e))
+
+
+@router.get('/api/tmdb/poster/{filename}', dependencies=[Depends(auth)])
+def api_tmdb_poster(filename: str):
+    try:
+        data, content_type = posters.get_tmdb_poster(filename)
+        return Response(data, media_type=content_type, headers={
+            'Cache-Control': 'private, max-age=86400', 'Vary': 'Authorization',
+            'X-Content-Type-Options': 'nosniff'})
+    except ValueError as error:
+        raise HTTPException(400, str(error))
+    except Exception:
+        raise HTTPException(502, 'TMDB 海报加载失败，请检查网络或 HTTP 代理')
 
 
 @router.get('/api/explore', dependencies=[Depends(auth)])
