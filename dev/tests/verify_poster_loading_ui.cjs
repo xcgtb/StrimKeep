@@ -5,8 +5,8 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
 function box(){return {innerHTML:'',textContent:'',style:{},querySelectorAll:()=>[],hidden:false};}
 function exploreEnv(){
  const nodes={exploreGrid:box(),exploreMoreBtn:box(),explorePageInfo:box()},requests=[],paints=[],frames=[],scrolls=[];
- const pages={1:{status:'success',cards:Array.from({length:40},(_,id)=>({type:'movie',tmdb_id:id+1,title:'title'+id})),total_pages:2},
-  2:{status:'success',cards:Array.from({length:40},(_,id)=>({type:'movie',tmdb_id:id+31,title:'title'+(id+30)})),total_pages:2}};
+ const pages={1:{status:'success',cards:Array.from({length:20},(_,id)=>({type:'movie',tmdb_id:id+1,title:'title'+id})),total_pages:2},
+  2:{status:'success',cards:Array.from({length:20},(_,id)=>({type:'movie',tmdb_id:id+16,title:'title'+(id+15)})),total_pages:2}};
  const ctx=vm.createContext({AbortController,Date,Object,Number,Math,JSON,Promise,Set,encodeURIComponent,esc:String,
   exploreState:{page:1,totalPages:1,region:'all',media:'movie',q:''},exploreGeneration:0,explorePages:{},exploreShownCards:[],
   exploreLoading:false,exploreMoreFailed:false,exploreVisibleLimit:40,explorePrefetch:null,$:id=>nodes[id],
@@ -19,7 +19,7 @@ function exploreEnv(){
 }
 (async()=>{
  let e=exploreEnv();await e.ctx.loadExplore();await e.ctx.exploreMore();
- assert.equal(e.ctx.exploreShownCards.length,70);assert.equal(new Set(e.ctx.exploreShownCards.map(c=>c.tmdb_id)).size,70);
+ assert.equal(e.ctx.exploreShownCards.length,35);assert.equal(new Set(e.ctx.exploreShownCards.map(c=>c.tmdb_id)).size,35);
  const count=e.requests.length,paint=e.paints.length,shown=e.ctx.exploreShownCards;
  e.ctx.pauseExplore();e.ctx.ensureExploreLoaded();e.frames.shift()();
  assert.equal(e.requests.length,count);assert.equal(e.paints.length,paint);assert.strictEqual(e.ctx.exploreShownCards,shown);assert.deepEqual(e.scrolls,[350]);

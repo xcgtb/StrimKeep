@@ -13,13 +13,14 @@ let response=()=>({status:'success',cards:[clone()],total_pages:2,total_results:
 const ctx=vm.createContext({Date:{now:()=>now},Object,Number,Math,Promise,JSON,encodeURIComponent,esc:String,
   exploreState:{region:'all',year:'',sort:'popularity',media:'tv',genre:'',page:1,totalPages:1,q:''},
   exploreGeneration:0,explorePages:{},exploreShownCards:[],exploreVisibleLimit:40,explorePrefetch:null,exploreLoading:false,
-    getComputedStyle:()=>({gridTemplateColumns:'100px'}),schedulePosterAutoLoad(){},updateExploreLoadMore(){},$:id=>id==='exploreGrid'?grid:pageInfo,
+    getComputedStyle:()=>({gridTemplateColumns:'100px'}),schedulePosterAutoLoad(){},updateExploreLoadMore(){},$:id=>id==='exploreGrid'?grid:(id==='explorePageInfo'?pageInfo:null),
   api:async()=>{requests++;return response();},setTimeout(fn,ms){now+=ms;fn();},
   renderExploreCards(){renderCount++;},appendExploreCards(){appendCount++;},
   exploreStatus:c=>({status:'已入库 '+c.eps.have,cls:'partial',tip:' title="固定提示"'}),toast(){}});
 vm.runInContext(source,ctx);ctx.ensureExplorePrefetch=()=>{};
 (async()=>{
  await ctx.loadExplore();
+ await Promise.all(Object.values(ctx.exploreRefreshJobs).map(j=>j.promise));
  assert.equal(requests,4);assert.equal(renderCount,1);assert.equal(updates,0);assert.equal(queries,0);
  console.log('PASS repeated identical poll responses render the poster grid only once');
  const previous=clone(),metadata=clone();metadata.facts_ts=200;metadata.facts_version='changed';
@@ -38,7 +39,9 @@ vm.runInContext(source,ctx);ctx.ensureExplorePrefetch=()=>{};
  console.log('PASS genuine card order or identity changes still render the new results');
  requests=0;now=0;renderCount=0;updates=0;
  response=()=>{const c=clone();if(requests>=3)c.eps.have=14;return {status:'success',cards:[c],refreshing:requests<4};};
- await ctx.loadExplore();assert.equal(requests,4);assert.equal(renderCount,1);assert.equal(updates,1);
+ await ctx.loadExplore();
+ await Promise.all(Object.values(ctx.exploreRefreshJobs).map(j=>j.promise));
+ assert.equal(requests,4);assert.equal(renderCount,1);assert.equal(updates,1);
  console.log('PASS a background count update is applied once during polling, without repeating image renders');
  ctx.syncExploreCards([clone()],[]);assert.equal(renderCount,2);
  console.log('PASS a refreshed empty result replaces its placeholder when new cards arrive');

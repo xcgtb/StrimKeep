@@ -9,8 +9,8 @@ function node(){return {hidden:false,disabled:false,style:{},textContent:'',inne
 function environment(columns=3){
  let cols=columns,now=0;const requests=[],warm=[],paint=[],toasts=[];
  const nodes={exploreGrid:node(),exploreMoreBtn:node(),explorePageInfo:node()};
- const pages={1:{status:'success',cards:cards(0,40),total_pages:2,total_results:80},2:{status:'success',cards:cards(40,40),total_pages:2,total_results:80}};
- const ctx=vm.createContext({Object,Number,Math,JSON,Promise,encodeURIComponent,esc:String,Date:{now:()=>now},
+ const pages={1:{status:'success',cards:cards(0,20),total_pages:2,total_results:40},2:{status:'success',cards:cards(20,20),total_pages:2,total_results:40}};
+ const ctx=vm.createContext({Object,Number,Math,JSON,Promise,encodeURIComponent,esc:String,window:{},Date:{now:()=>now},
   exploreState:{page:1,totalPages:1,region:'all',year:'',sort:'popularity',media:'movie',genre:'',q:''},
   exploreGeneration:0,explorePages:{},exploreShownCards:[],exploreVisibleLimit:40,explorePrefetch:null,exploreLoading:false,exploreMoreFailed:false,
   $:id=>nodes[id],getComputedStyle:()=>({gridTemplateColumns:Array(cols).fill('100px').join(' ')}),
@@ -28,27 +28,27 @@ function ids(e){return Array.from(e.ctx.exploreShownCards,x=>x.tmdb_id);}
  assert(!rules.some(r=>r.split('{')[0].includes('#explorePager')&&/display\s*:\s*none\s*!important/.test(r)));
  assert(html.includes('setupPosterAutoLoad();')&&html.includes('id="exploreMoreBtn"')&&html.includes('id="embyMoreBtn"'));
  console.log('PASS the exploration footer has no late stylesheet hiding rule and both manual fallbacks remain');
- for(const [cols,shown] of [[3,39],[4,40],[7,35]]){
+ for(const [cols,shown] of [[3,18],[4,20],[7,14]]){
   const e=environment(cols);await e.ctx.loadExplore();assert.equal(ids(e).length,shown);assert.equal(ids(e).length%cols,0);
-  assert.equal(e.ctx.exploreAllCards().length,40);assert(!e.nodes.exploreMoreBtn.hidden);
+  assert.equal(e.ctx.exploreAllCards().length,20);assert(!e.nodes.exploreMoreBtn.hidden);
  }
  console.log('PASS real 3, 4 and 7 column layouts render full initial rows while retaining unused cards');
  let e=environment();await e.ctx.loadExplore();await e.ctx.explorePrefetch.promise;
- assert.equal(e.requests.length,2);assert(e.requests[1].url.includes('page=2'));assert.equal(e.warm.length,1);assert.equal(ids(e).length,39);
+ assert.equal(e.requests.length,2);assert(e.requests[1].url.includes('page=2'));assert.equal(e.warm.length,1);assert.equal(ids(e).length,18);
  const entry=e.ctx.explorePrefetch;e.ctx.ensureExplorePrefetch();assert.strictEqual(e.ctx.explorePrefetch,entry);assert.equal(e.requests.length,2);
  console.log('PASS one lookahead request warms next-page posters without displaying them or duplicating prefetch');
- await e.ctx.exploreMore();assert.equal(e.requests.length,2);assert.equal(ids(e).length,78);
- assert.deepEqual(ids(e),cards(0,78).map(x=>x.tmdb_id));assert.equal(e.paint.filter(x=>x.kind==='render').length,1);
+ await e.ctx.exploreMore();assert.equal(e.requests.length,2);assert.equal(ids(e).length,36);
+ assert.deepEqual(ids(e),cards(0,36).map(x=>x.tmdb_id));assert.equal(e.paint.filter(x=>x.kind==='render').length,1);
  assert.equal(e.paint.at(-1).kind,'append');assert(!e.nodes.exploreMoreBtn.hidden);
- await e.ctx.exploreMore();assert.deepEqual(ids(e),cards(0,80).map(x=>x.tmdb_id));assert(e.nodes.exploreMoreBtn.hidden);
+ await e.ctx.exploreMore();assert.deepEqual(ids(e),cards(0,40).map(x=>x.tmdb_id));assert(e.nodes.exploreMoreBtn.hidden);
  await e.ctx.exploreMore();assert.equal(e.requests.length,2);
  console.log('PASS prefetched data appends without a cold request or redraw, and final remainder loses no cards or adds fake ones');
- e=environment();e.pages[1].total_pages=3;e.pages[2].total_pages=3;e.pages[3]={status:'success',cards:cards(80,13),total_pages:3,total_results:93};
- await e.ctx.loadExplore();await e.ctx.exploreMore();assert.equal(ids(e).length,78);
- await e.ctx.exploreMore();assert.deepEqual(ids(e),cards(0,93).map(x=>x.tmdb_id));assert.equal(e.requests.length,3);
+ e=environment();e.pages[1].total_pages=3;e.pages[2].total_pages=3;e.pages[3]={status:'success',cards:cards(40,13),total_pages:3,total_results:53};
+ await e.ctx.loadExplore();await e.ctx.exploreMore();assert.equal(ids(e).length,36);
+ await e.ctx.exploreMore();assert.deepEqual(ids(e),cards(0,53).map(x=>x.tmdb_id));assert.equal(e.requests.length,3);
  console.log('PASS retained boundary cards carry into later pages and the real final short batch remains complete');
- e=environment();await e.ctx.loadExplore();e.setColumns(4);await e.ctx.exploreMore();assert.equal(ids(e).length,76);assert.equal(ids(e).length%4,0);
- await e.ctx.exploreMore();assert.equal(ids(e).length,80);
+ e=environment();await e.ctx.loadExplore();e.setColumns(4);await e.ctx.exploreMore();assert.equal(ids(e).length,36);assert.equal(ids(e).length%4,0);
+ await e.ctx.exploreMore();assert.equal(ids(e).length,40);
  console.log('PASS the next append adapts to resized columns without dropping previously shown cards');
  e=environment();let resolve;e.ctx.exploreState.q='old search';e.ctx.api=async url=>{e.requests.push({url});return new Promise(r=>resolve=r);};
  e.ctx.exploreState.totalPages=2;e.ctx.ensureExplorePrefetch();const old=e.ctx.explorePrefetch;
@@ -56,11 +56,11 @@ function ids(e){return Array.from(e.ctx.exploreShownCards,x=>x.tmdb_id);}
  assert.equal(stale.status,'cancelled');assert.equal(e.warm.length,0);assert.equal(ids(e).length,0);assert(e.requests[0].url.includes('q=old%20search'));
  console.log('PASS prefetch captures its filters and superseded results cannot warm or replace the new view');
  e=environment();e.pages[2]={status:'error',message:'fixture failure'};await e.ctx.loadExplore();await e.ctx.exploreMore();
- assert.equal(e.ctx.exploreState.page,1);assert.equal(ids(e).length,39);assert(e.ctx.exploreMoreFailed);assert(e.nodes.exploreMoreBtn.textContent.includes('重试'));
- e.pages[2]={status:'success',cards:cards(40,40),total_pages:2};await e.ctx.exploreMore();assert.equal(e.ctx.exploreState.page,2);assert.equal(ids(e).length,78);
+ assert.equal(e.ctx.exploreState.page,1);assert.equal(ids(e).length,18);assert(e.ctx.exploreMoreFailed);assert(e.nodes.exploreMoreBtn.textContent.includes('重试'));
+ e.pages[2]={status:'success',cards:cards(20,20),total_pages:2};await e.ctx.exploreMore();assert.equal(e.ctx.exploreState.page,2);assert.equal(ids(e).length,36);
  console.log('PASS failed prefetch preserves the same page and visible list, then manual retry loads that page');
- e=environment();e.pages[1].cards=[];await e.ctx.loadExplore();assert.equal(ids(e).length,0);await e.ctx.exploreMore();assert.equal(ids(e).length,39);
- await e.ctx.exploreMore();assert.equal(ids(e).length,40);
+ e=environment();e.pages[1].cards=[];await e.ctx.loadExplore();assert.equal(ids(e).length,0);await e.ctx.exploreMore();assert.equal(ids(e).length,18);
+ await e.ctx.exploreMore();assert.equal(ids(e).length,20);
  console.log('PASS sparse or empty early pages do not hide the next page or discard a queued tail');
  e=environment();e.ctx.exploreState.totalPages=2;e.ctx.api=async()=>{e.requests.push({});return {status:'pending'};};
  e.ctx.ensureExplorePrefetch();const waiting=await e.ctx.explorePrefetch.promise;assert.equal(waiting.status,'error');assert(e.requests.length<=25);assert.equal(ids(e).length,0);

@@ -22,10 +22,14 @@ const success=(cards,more={})=>Object.assign({status:'success',cards,total_pages
   assert.equal(e.ctx.exploreLoading,false);assert(e.requests.every(x=>x[1].timeoutMs<=8000));
   console.log('PASS cold pages poll asynchronously and stop loading after success');
   n=0;e=environment(()=>++n===1?success([card(1)],{refreshing:true}):success([card(2)]));
-  await e.ctx.loadExplore();assert.equal(e.renders.length,2);assert.equal(e.renders[0][0].tmdb_id,'1');
+  await e.ctx.loadExplore();assert.equal(e.ctx.exploreLoading,false);
+  await Promise.all(Object.values(e.ctx.exploreRefreshJobs).map(j=>j.promise));
+  assert.equal(e.renders.length,2);assert.equal(e.renders[0][0].tmdb_id,'1');
   assert.equal(e.renders[1][0].tmdb_id,'2');
   e.ctx.exploreState.page=2;n=0;
-  e.ctx.exploreVisibleLimit=80;await e.ctx.loadExplore(true);assert.deepEqual(e.renders.at(-1).map(c=>c.tmdb_id),['2']);
+  e.ctx.exploreVisibleLimit=80;await e.ctx.loadExplore(true);
+  await Promise.all(Object.values(e.ctx.exploreRefreshJobs).map(j=>j.promise));
+  assert.deepEqual(e.renders.at(-1).map(c=>c.tmdb_id),['2']);
   assert.equal(Object.keys(e.ctx.explorePages).length,2);
   console.log('PASS stale cache renders first, refreshed pages replace their own page without duplicate appends');
   e=environment(()=>({status:'pending'}));await e.ctx.loadExplore();

@@ -618,6 +618,14 @@ html[data-theme="dark"] .list-item.exempt{color:#93c5fd}
 .list-empty{color:var(--text-dim);font-size:13px;text-align:center;padding:32px 0}
 /* 提示文字放进海报网格时要横跨整行，否则只占一格 */
 .poster-grid > .list-empty{grid-column:1/-1}
+.explore-skeleton .poster-wrap,.explore-skeleton .skeleton-title,.explore-skeleton .skeleton-meta{
+  background:linear-gradient(100deg,var(--bg-dim) 25%,var(--surface-solid) 50%,var(--bg-dim) 75%);
+  background-size:200% 100%;animation:exploreShimmer 1.6s ease-in-out infinite;
+}
+.explore-skeleton .skeleton-title{height:14px;width:80%;border-radius:4px;margin-bottom:10px}
+.explore-skeleton .skeleton-meta{height:11px;width:50%;border-radius:4px}
+@keyframes exploreShimmer{to{background-position:-200% 0}}
+@media(prefers-reduced-motion:reduce){.explore-skeleton .poster-wrap,.explore-skeleton .skeleton-title,.explore-skeleton .skeleton-meta{animation:none}}
 .list-empty::before{
   content:"";display:block;width:44px;height:44px;margin:0 auto 12px;
   border-radius:50%;

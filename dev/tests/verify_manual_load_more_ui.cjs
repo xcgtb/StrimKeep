@@ -42,7 +42,7 @@ async function completeFrame(){assert.equal(frames.length,1);frames.shift()();aw
  let apiResolve,apiCalls=0,rendered=[];
  const enodes={exploreMoreBtn:box(),exploreGrid:box(),explorePageInfo:box()};
  const c={type:'tv',tmdb_id:'1',title:'one'};
- const explore=vm.createContext({Object,JSON,Number,Math,Promise,Date,encodeURIComponent,esc:String,
+ const explore=vm.createContext({Object,JSON,Number,Math,Promise,Date,encodeURIComponent,esc:String,window:{},
   exploreState:{page:1,totalPages:3,region:'all',media:'tv',year:'',sort:'popularity',genre:'',q:'query'},
   exploreGeneration:0,explorePages:{1:[c]},exploreShownCards:[c],exploreVisibleLimit:40,explorePrefetch:null,exploreLoading:false,
   getComputedStyle:()=>({gridTemplateColumns:"100px"}),schedulePosterAutoLoad(){},exploreMoreFailed:false,

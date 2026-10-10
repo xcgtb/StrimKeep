@@ -5,9 +5,10 @@ var exploreGeneration = 0;
 var explorePages = {};
 var exploreMoreFailed = false;
 var exploreShownCards = [];
-var exploreVisibleLimit = 40;
+var exploreVisibleLimit = 20;
 var explorePrefetch = null;
 var exploreFiltersOpen = false;
+var exploreSubscriptionsPromise = null;
 
 var REGION_LABEL = { all: '全部地区', cn: '大陆', hk: '香港', tw: '台湾', jp: '日本', kr: '韩国', us: '欧美' };
 var MEDIA_LABEL  = { all: '全部', movie: '电影', tv: '剧集' };
@@ -104,6 +105,7 @@ function setupChipGroup(id, key){
     el.querySelectorAll('.chip').forEach(function(b){ b.classList.remove('active'); });
     btn.classList.add('active');
     exploreState[key] = btn.dataset.v;
+    if (key === 'media') refreshGenreChipsForMedia(exploreState.media);
     exploreState.page = 1;
     exploreState.q = '';
     $('exploreSearch').value = '';
@@ -128,6 +130,15 @@ function posterColumns(grid){
 }
 var exploreRequestController = null;
 var exploreLoadedKey = '', exploreLoadedAt = 0, exploreSavedScroll = 0;
+var exploreRefreshJobs = {};
+var exploreLastResult = null;
+function cancelExploreRefreshes(){
+  Object.keys(exploreRefreshJobs).forEach(function(page){
+    var job = exploreRefreshJobs[page];
+    if (job.controller) job.controller.abort();
+  });
+  exploreRefreshJobs = {};
+}
 function pauseExplore(){
   exploreSavedScroll = window.scrollY || 0;
   exploreGeneration += 1;
@@ -135,6 +146,9 @@ function pauseExplore(){
   if (explorePrefetch && explorePrefetch.controller) explorePrefetch.controller.abort();
   exploreRequestController = null;
   explorePrefetch = null;
+  cancelExploreRefreshes();
+  // 追加请求取消后，游标仍指向最后成功的页，返回时不会跳过一页。
+  exploreState.page = Math.max(1, ...Object.keys(explorePages).map(Number));
   exploreLoading = false;
 }
 function ensureExploreLoaded(){
@@ -148,9 +162,9 @@ function ensureExploreLoaded(){
   exploreState.page = 1;
   return loadExplore();
 }
-function posterNextCount(shown, grid){
+function posterNextCount(shown, grid, batchSize){
   var columns = posterColumns(grid);
-  return Math.max(shown + 1, Math.floor((shown + 40) / columns) * columns);
+  return Math.max(shown + columns, Math.floor((shown + (batchSize || 40)) / columns) * columns);
 }
 function exploreAllCards(){
   var cards = [], seen = new Set();
@@ -169,7 +183,8 @@ function updateExploreLoadMore(){
   var button = $('exploreMoreBtn');
   if (!button) return;
   var ready = Object.keys(explorePages).length > 0;
-  button.hidden = !ready || !exploreHasMore();
+  // 自动加载为主；错误时提供明确重试，无 Observer 的浏览器保留按钮。
+  button.hidden = !ready || !exploreHasMore() || (!exploreMoreFailed && !!window.IntersectionObserver);
   button.disabled = exploreLoading;
   button.textContent = exploreLoading ? '加载中...' : (exploreMoreFailed ? '重试加载下一批' : '加载更多');
 }
@@ -206,7 +221,11 @@ function ensureExplorePrefetch(){
 function renderExploreBuffered(){
   var all = exploreAllCards(), columns = posterColumns($('exploreGrid'));
   var count = Math.min(exploreVisibleLimit, all.length);
-  if (exploreState.page < exploreState.totalPages || count < all.length) count -= count % columns;
+  if (exploreState.page < exploreState.totalPages || count < all.length) {
+    // 人物过滤/去重可能留下不足一行的结果，仍要显示而非空白。
+    var fullRows = count - count % columns;
+    if (fullRows) count = fullRows;
+  }
   var cards = all.slice(0, count);
   syncExploreCards(cards, exploreShownCards);
   exploreShownCards = cards;
@@ -214,18 +233,54 @@ function renderExploreBuffered(){
 }
 function exploreMore(){
   if (exploreLoading || !Object.keys(explorePages).length || !exploreHasMore()) return;
-  exploreVisibleLimit = posterNextCount(exploreShownCards.length, $('exploreGrid'));
+  exploreVisibleLimit = posterNextCount(exploreShownCards.length, $('exploreGrid'), 20);
   var all = exploreAllCards();
   if (all.length >= exploreVisibleLimit || exploreState.page >= exploreState.totalPages) {
     var cards = renderExploreBuffered();
-    $('explorePageInfo').textContent = '已显示 ' + cards.length + ' 部 · 按整行追加'
-      + (!exploreHasMore() ? ' · 已加载完当前分页' : '');
+    updateExplorePageInfo();
     updateExploreLoadMore();
     schedulePosterAutoLoad();
     return;
   }
   exploreState.page += 1;
   return loadExplore(true);
+}
+function updateExplorePageInfo(result){
+  if (result) exploreLastResult = result;
+  result = result || exploreLastResult;
+  var label = '已显示 ' + exploreShownCards.length + ' 部';
+  if (exploreLoading) label += ' · 正在加载下一批…';
+  else if (exploreMoreFailed) label += ' · 加载失败，点击重试';
+  else label += exploreHasMore() ? ' · 下滑加载更多' : ' · 已全部加载';
+  if (result && result.refresh_error) label += ' · 更新失败，显示缓存';
+  else if (Object.keys(exploreRefreshJobs).length) label += ' · 片库状态后台更新中';
+  $('explorePageInfo').textContent = label;
+}
+function refreshExplorePage(page, qs, generation){
+  if (exploreRefreshJobs[page]) return;
+  var job = {controller:typeof AbortController === 'function' ? new AbortController() : null};
+  exploreRefreshJobs[page] = job;
+  job.promise = (async function(){
+    var deadline = Date.now() + 25000;
+    while (generation === exploreGeneration && Date.now() < deadline) {
+      await new Promise(function(resolve){setTimeout(resolve, 1000);});
+      if (generation !== exploreGeneration || Date.now() >= deadline) return;
+      var r = await api('/api/explore?' + qs, {timeoutMs:Math.min(8000, deadline - Date.now()), signal:job.controller ? job.controller.signal : undefined});
+      if (generation !== exploreGeneration) return;
+      if (r.status !== 'success') return;
+      if (r.total_pages) exploreState.totalPages = r.total_pages;
+      explorePages[page] = r.cards || [];
+      renderExploreBuffered();
+      updateExplorePageInfo(r);
+      if (!r.refreshing || r.refresh_error) return;
+    }
+  })().catch(function(){ /* 保留已显示卡片；后台失败不打断浏览。 */ }).finally(function(){
+    if (generation !== exploreGeneration) return;
+    if (exploreRefreshJobs[page] === job) delete exploreRefreshJobs[page];
+    updateExplorePageInfo();
+    updateExploreLoadMore();
+    schedulePosterAutoLoad();
+  });
 }
 async function loadExplore(append){
   if (append && exploreLoading) return;
@@ -235,20 +290,28 @@ async function loadExplore(append){
   if (!append) {
     if (exploreRequestController) exploreRequestController.abort();
     if (explorePrefetch && explorePrefetch.controller) explorePrefetch.controller.abort();
+    cancelExploreRefreshes();
     explorePages = {};
     exploreShownCards = [];
     explorePrefetch = null;
-    exploreVisibleLimit = posterNextCount(0, $('exploreGrid'));
+    exploreLastResult = null;
+    exploreVisibleLimit = posterNextCount(0, $('exploreGrid'), 20);
   }
-  var controller = typeof AbortController === 'function' ? new AbortController() : null;
+  var prefetched = append && explorePrefetch && explorePrefetch.generation === generation && explorePrefetch.page === requestedPage ? explorePrefetch : null;
+  // 被消费的预取请求仍由前台持有，切页/离开时也能中止。
+  var controller = prefetched ? prefetched.controller : (typeof AbortController === 'function' ? new AbortController() : null);
   exploreRequestController = controller;
   exploreLoading = true;
   exploreMoreFailed = false;
   updateExploreLoadMore();
   var grid = $('exploreGrid');
   if (!append) {
-    grid.innerHTML = '<div class="list-empty">正在加载探索结果...</div>';
-    $('explorePageInfo').textContent = '加载中 · 自动加载，按整行追加';
+    grid.innerHTML = Array.from({length:exploreVisibleLimit}, function(){
+      return '<div class="poster-card explore-skeleton" aria-hidden="true"><div class="poster-wrap"></div><div class="info"><div class="skeleton-title"></div><div class="skeleton-meta"></div></div></div>';
+    }).join('');
+    $('explorePageInfo').textContent = '正在加载探索结果…';
+  } else {
+    updateExplorePageInfo();
   }
   var qs = exploreQuery(requestedPage);
   var rendered = false;
@@ -260,14 +323,10 @@ async function loadExplore(append){
     explorePages[requestedPage] = r.cards || [];
     var cards = renderExploreBuffered();
     rendered = true;
-    var label = '已显示 ' + cards.length + ' 部 · 按整行追加'
-      + (!exploreHasMore() ? ' · 已加载完当前分页' : '');
-    var state = r.refresh_error ? ' · 更新失败，显示缓存' : (r.refreshing ? ' · 显示缓存，后台更新中' : '');
-    $('explorePageInfo').textContent = label + ' · 共 ' + (r.total_results || 0) + ' 条' + state;
+    updateExplorePageInfo(r);
     updateExploreLoadMore();
     ensureExplorePrefetch();
   }
-  var prefetched = append && explorePrefetch && explorePrefetch.generation === generation && explorePrefetch.page === requestedPage ? explorePrefetch : null;
   if (prefetched) explorePrefetch = null;
   try {
     while (generation === exploreGeneration) {
@@ -278,7 +337,8 @@ async function loadExplore(append){
       if (generation !== exploreGeneration) return;
       if (r.status === 'success') {
         showPage(r);
-        if (!r.refreshing || r.refresh_error) return;
+        if (r.refreshing && !r.refresh_error) refreshExplorePage(requestedPage, qs, generation);
+        return; // 可见结果到达就释放加载锁，状态更新在独立任务里完成。
       } else if (r.status !== 'pending') {
         throw new Error(r.message || '加载失败');
       }
@@ -310,6 +370,7 @@ async function loadExplore(append){
       if (exploreRequestController === controller) exploreRequestController = null;
       exploreLoading = false;
       updateExploreLoadMore();
+      if (rendered || append) updateExplorePageInfo();
       schedulePosterAutoLoad();
     }
   }
@@ -440,6 +501,16 @@ function _subscribedTmdbIds(){
   currentSubs.forEach(function(s){ if (s.tmdb_id) set[String(s.tmdb_id)] = true; });
   return set;
 }
+function refreshExploreSubscriptionButtons(){
+  var grid = $('exploreGrid');
+  if (!grid) return;
+  var subscribed = _subscribedTmdbIds();
+  grid.querySelectorAll('.sub-btn').forEach(function(button){
+    var on = !!subscribed[button.dataset.tmdb];
+    button.classList.toggle('on', on);
+    button.textContent = on ? '✓ 已订阅' : '+ 订阅';
+  });
+}
 function libraryEpisodeTotal(info){
   return info.declared_total != null ? info.declared_total : info.tmdb_total;
 }
@@ -512,6 +583,15 @@ function renderExploreCards(cards){
   hydratePosters(grid);
 }
 async function toggleSubscribe(tmdbId, title, poster){
+  // 首屏不等订阅列表，但写入整份订阅前必须取得列表，防止覆盖已有订阅。
+  try {
+    if (exploreSubscriptionsPromise && !await exploreSubscriptionsPromise) {
+      var initial = await api('/api/subscriptions', {timeoutMs:8000});
+      if (initial.status !== 'success') throw new Error(initial.message || '订阅列表加载失败');
+      currentSubs = initial.subscriptions || [];
+      exploreSubscriptionsPromise = Promise.resolve(true);
+    }
+  } catch(e){ toast('加载订阅失败: ' + e.message, 'error'); return; }
   var idx = currentSubs.findIndex(function(s){ return String(s.tmdb_id) === String(tmdbId); });
   if (idx >= 0) {
     if (!(confirm('取消订阅《' + title + '》？'))) return;
@@ -522,7 +602,7 @@ async function toggleSubscribe(tmdbId, title, poster){
   }
   try {
     await api('/api/subscriptions', { method: 'POST', body: JSON.stringify({ subscriptions: currentSubs }) });
-    loadExplore();
+    refreshExploreSubscriptionButtons();
   } catch(e){ toast('保存失败: ' + e.message, 'error'); }
 }
 function switchExploreTab_init(){
@@ -533,11 +613,6 @@ function switchExploreTab_init(){
   setupChipGroup('filterYear', 'year');
   setupChipGroup('filterSort', 'sort');
   setupChipGroup('filterGenre', 'genre');
-  var mediaEl = $('filterMedia');
-  if (mediaEl) mediaEl.addEventListener('click', function(e){
-    var btn = e.target.closest('.chip');
-    if (btn && btn.dataset.v) refreshGenreChipsForMedia(btn.dataset.v);
-  });
   var yi = $('filterYearInput');
   if (yi) {
     yi.addEventListener('keydown', function(e){

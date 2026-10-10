@@ -326,19 +326,15 @@ def _refresh_explore_page(state, key, path, params, client_key):
         client = _eng().Tmdb()
         client.key = client_key
         client.cache_file = state['path'].parent / 'tmdb_cache.json'
-        page1 = int(params['page']) * 2 - 1
-        first = client.get(path, **dict(params, page=page1))
+        first = client.get(path, **params)
         if not isinstance(first, dict) or not isinstance(first.get('results'), list):
             raise TmdbError('TMDB 探索返回不完整')
-        total_pages = int(first.get('total_pages') or 2)
-        second = client.get(path, **dict(params, page=page1 + 1)) if total_pages > page1 else {'results': []}
-        if not isinstance(second, dict) or not isinstance(second.get('results'), list):
-            raise TmdbError('TMDB 探索返回不完整')
-        if any(not isinstance(item, dict) or not item.get('id') for item in first['results'] + second['results']):
+        total_pages = int(first.get('total_pages') or 1)
+        if any(not isinstance(item, dict) or not item.get('id') for item in first['results']):
             raise TmdbError('TMDB 探索条目不完整')
         data = {'results': [{k: item[k] for k in _EXPLORE_FIELDS if k in item}
-                            for item in (first['results'] + second['results'])[:40] if isinstance(item, dict)],
-                'total_pages': max(1, (total_pages + 1) // 2),
+                            for item in first['results'][:20]],
+                'total_pages': max(1, min(total_pages, 500)),
                 'total_results': int(first.get('total_results') or 0)}
         if client.calls:
             client.save()
@@ -354,7 +350,7 @@ def _refresh_explore_page(state, key, path, params, client_key):
             except OSError as error:
                 log.warning('探索分页缓存保存失败: %s', error)
     except Exception as error:
-        # 不缓存半页，也不把失败写成成功空结果。错误文本不含请求 URL 或密钥。
+        # 不把失败写成成功空结果。错误文本不含请求 URL 或密钥。
         with _explore_page_lock:
             state['errors'][key] = {'ts': time.time(), 'message': 'TMDB 探索刷新失败，请稍后重试'}
             while len(state['errors']) > EXPLORE_PAGE_LIMIT:
@@ -373,7 +369,8 @@ def _explore_page(path, params, media):
     if not light.key:
         return None, {'status': 'error', 'message': '未配置 TMDB_KEY'}
     params = dict(params, language=_eng().TMDB_LANG)
-    identity = [path, params, media, _eng().TMDB_BASE, light.key]
+    # 新分页协议独立键，避免旧的双页合并缓存造成跳页和重复。
+    identity = ['single-page-v1', path, params, media, _eng().TMDB_BASE, light.key]
     key = hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     state = _explore_state()
     with _explore_page_lock:
@@ -405,7 +402,7 @@ def action_explore(args):
     year = (getattr(args, 'year', '') or '').strip()
     sort = getattr(args, 'sort', 'popularity') or 'popularity'
     media = getattr(args, 'media', 'movie') or 'movie'
-    page = int(getattr(args, 'page', 1) or 1)
+    page = max(1, min(int(getattr(args, 'page', 1) or 1), 500))
     query = (getattr(args, 'q', '') or '').strip()
     genre = (getattr(args, 'genre', '') or '').strip()
 
@@ -448,7 +445,7 @@ def action_explore(args):
     for row in (facts or {}).get('series') or []:
         if row.get('tmdb_id'):
             rows_by_tmdb[str(row['tmdb_id'])].append(row)
-    page_items = (res.get('results') or [])[:40]
+    page_items = (res.get('results') or [])[:20]
 
     cards = []
     for item in page_items:
@@ -511,7 +508,7 @@ def action_explore(args):
         })
 
     return dict(page_meta, status='success', page=page, **{
-            'total_pages': min(res.get('total_pages', 1), 20),
+            'total_pages': min(res.get('total_pages', 1), 500),
             'total_results': res.get('total_results', 0),
             'cards': cards, 'is_search': bool(query),
             'facts_version': (facts or {}).get('facts_version'),

@@ -64,3 +64,58 @@ def test_truncated_emby_identity_response_is_not_success(monkeypatch):
     monkeypatch.setattr(engine,'emby_request',lambda *a,**kw:{'Items':[],'TotalRecordCount':1})
     with pytest.raises(RuntimeError, match='身份索引拉取失败'):
         tmdb._build_emby_library_index()
+
+
+def test_each_explore_page_makes_one_request_without_waiting_for_the_next(tmp_path, monkeypatch):
+    import threading
+    from app import engine, tmdb
+    calls = []
+    class Client:
+        key = 'fake'; calls = 0; hits = 0
+        def get(self, path, **params):
+            calls.append(params['page'])
+            # Page 3 is deliberately unavailable: page 2 must still be usable.
+            assert params['page'] == 2
+            return {'results': [{'id': i} for i in range(21, 41)],
+                    'total_pages': 1000, 'total_results': 20000}
+    monkeypatch.setattr(engine, 'STATE_DIR', tmp_path)
+    monkeypatch.setattr(engine, 'Tmdb', Client)
+    slots = threading.BoundedSemaphore(2)
+    monkeypatch.setattr(tmdb, '_explore_slots', slots)
+    state = {'path': tmp_path/'explore_pages.json', 'pages': {}, 'errors': {}, 'jobs': {'page2'}}
+    assert slots.acquire(blocking=False)
+    tmdb._refresh_explore_page(state, 'page2', '/discover/tv', {'page': 2}, 'fake')
+    assert calls == [2]
+    assert [r['id'] for r in state['pages']['page2']['data']['results']] == list(range(21, 41))
+    assert state['pages']['page2']['data']['total_pages'] == 500
+    assert not state['errors'] and not state['jobs']
+
+
+def test_legacy_double_page_cache_is_not_used_by_single_page_protocol(tmp_path, monkeypatch):
+    import hashlib
+    import json
+    import threading
+    import time
+    from app import engine, tmdb
+    calls = []
+    class Client:
+        key = 'fake'; calls = 0; hits = 0
+        def __init__(self, cache=None): pass
+        def get(self, path, **params):
+            calls.append(params['page'])
+            return {'results': [{'id': 21}], 'total_pages': 3}
+    monkeypatch.setattr(engine, 'STATE_DIR', tmp_path)
+    monkeypatch.setattr(engine, 'Tmdb', Client)
+    monkeypatch.setattr(tmdb, '_explore_page_state', None)
+    monkeypatch.setattr(tmdb, '_explore_slots', threading.BoundedSemaphore(2))
+    params = {'page': 2, 'language': engine.TMDB_LANG}
+    identity = ['/discover/tv', params, 'tv', engine.TMDB_BASE, 'fake']
+    legacy_key = hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    tmdb._explore_state()['pages'][legacy_key] = {'ts': time.time(), 'data': {'results': [{'id': 41}]}}
+    data, meta = tmdb._explore_page('/discover/tv', {'page': 2}, 'tv')
+    assert data is None and meta['status'] == 'pending'
+    for _ in range(200):
+        if not tmdb._explore_state()['jobs']: break
+        time.sleep(.005)
+    data, meta = tmdb._explore_page('/discover/tv', {'page': 2}, 'tv')
+    assert data['results'] == [{'id': 21}] and calls == [2]

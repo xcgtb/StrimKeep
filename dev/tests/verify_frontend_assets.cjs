@@ -43,10 +43,13 @@ console.log('PASS scripts evaluate in delivery order, retain global handlers and
   const calls=[];
   for(const name of ['initTheme','injectIcons','renderMenu','switchExploreTab_init','buildSubnavs','hydrateDashboardFromCache','loadDashboard','setupPosterAutoLoad','loadLibraryStats','pollTmdbProgress','startRuntimeStatus'])
     context[name]=()=>calls.push(name);
-  context.api=async()=>({subscriptions:[]});
+  let resolveSubscriptions;
+  context.api=()=>new Promise(resolve=>{resolveSubscriptions=resolve;});
   await events.DOMContentLoaded[0]();
   assert.deepEqual(calls,['initTheme','injectIcons','renderMenu','switchExploreTab_init','buildSubnavs','hydrateDashboardFromCache','loadDashboard','setupPosterAutoLoad','loadLibraryStats','pollTmdbProgress','startRuntimeStatus']);
   assert.equal(context.window.__activeTab,'dashboard');
-  console.log('PASS startup waits for the page modules and retains initial dashboard and poster initialization');
+  resolveSubscriptions({status:'success',subscriptions:[]});
+  await context.exploreSubscriptionsPromise;
+  console.log('PASS startup loads the dashboard and poster handlers without waiting for the subscription request');
   console.log('PASS 3/3; full shipped script order with DOM substitutes only');
 })().catch(e=>{console.error(e);process.exitCode=1;});

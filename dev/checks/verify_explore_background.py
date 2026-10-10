@@ -23,7 +23,7 @@ def main():
         from app import engine, tmdb
         entered = threading.Event(); release = threading.Event()
         calls = []
-        mode = {'fail_second': False, 'empty': False, 'block': True}
+        mode = {'fail': False, 'empty': False, 'block': True}
         class FakeTmdb:
             key = 'isolated-dummy-key'; calls = 0; hits = 0
             def __init__(self, cache=None): pass
@@ -32,9 +32,9 @@ def main():
                 entered.set()
                 if mode['block']:
                     assert release.wait(5), 'test worker not released'
-                if mode['fail_second'] and params['page'] % 2 == 0:
+                if mode['fail']:
                     raise OSError('fake service failure')
-                return {'results': [] if mode['empty'] or params['page'] % 2 == 0 else [{'id':100,'name':'临时剧','overview':'not persisted'}],
+                return {'results': [] if mode['empty'] else [{'id':100,'name':'临时剧','overview':'not persisted'}],
                         'total_pages':3,'total_results':1}
             def save(self): raise AssertionError('fake client has no writes')
         def forbidden(*a, **kw): raise AssertionError('real APIs or media scan forbidden')
@@ -66,23 +66,22 @@ def main():
             assert engine.action_explore(third)['status'] == 'pending'
             assert len(state['jobs']) == 2
             release.set(); finish_jobs(state); mode['block'] = False
-            assert len(calls) == 4 and not any(p['query']=='third' for _,p in calls if 'query' in p)
+            assert len(calls) == 2 and not any(p['query']=='third' for _,p in calls if 'query' in p)
             print('PASS at most two distinct refreshes run and excess requests create no waiting jobs')
             result = engine.action_explore(args)
-            assert result['status'] == 'success' and result['total_pages'] == 2
+            assert result['status'] == 'success' and result['total_pages'] == 3
             assert result['cards'][0]['eps']['have'] == 13
             facts['series'][0]['have_eps'] = 14; facts['facts_version'] = 'second'
             assert engine.action_explore(args)['cards'][0]['eps']['have'] == 14
             assert engine.action_explore(args)['facts_version'] == 'second'
-            assert len(calls) == 4
+            assert len(calls) == 2
             assert 'overview' not in json.dumps(state['pages']) and 'isolated-dummy-key' not in json.dumps(_state.read(state['path']))
             print('PASS cached discovery pages use current library facts and persist no API key or unused payload')
-            # Stale page must survive a partial refresh failure; it must not become a one-page success.
-            key = next(k for k,v in state['pages'].items() if v['data']['results'])
+            # Failed refresh must retain the last complete single-page result.
             # Both fake queries have same cards; expire all to select the exact requested key safely.
             before = {k: json.dumps(v['data']) for k,v in state['pages'].items()}
             for row in state['pages'].values(): row['ts'] = 1
-            mode['fail_second'] = True
+            mode['fail'] = True
             assert engine.action_explore(args)['status'] == 'success'
             finish_jobs(state)
             result = engine.action_explore(args)
@@ -91,8 +90,8 @@ def main():
             for _ in range(10): engine.action_explore(args)
             assert len(calls) == count
             assert all(json.dumps(state['pages'][k]['data']) == v for k,v in before.items())
-            print('PASS partial TMDB failure preserves the last complete page and cooldown prevents retry storms')
-            mode.update(fail_second=False,empty=True)
+            print('PASS TMDB failure preserves the last complete page and cooldown prevents retry storms')
+            mode.update(fail=False,empty=True)
             empty_args = SimpleNamespace(media='tv',q='empty')
             engine.action_explore(empty_args); finish_jobs(state)
             assert engine.action_explore(empty_args)['cards'] == []

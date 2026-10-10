@@ -1,6 +1,7 @@
 name: publish-image
 on:
   push:
+    branches: ['main']
     tags: ['v*']
   workflow_dispatch:
 permissions:
@@ -36,9 +37,9 @@ jobs:
         with:
           images: ${{ steps.ver.outputs.image }}
           tags: |
-            type=raw,value=${{ steps.ver.outputs.value }}
+            type=raw,value=${{ steps.ver.outputs.value }},enable=${{ github.ref_type == 'tag' }}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' || github.ref == 'refs/heads/main' }}
       - uses: docker/build-push-action@v6
         with:
           context: .
