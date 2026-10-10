@@ -51,8 +51,10 @@ def check(root, archive=False):
     try:
         version = re.search(r"__version__\s*=\s*['\"]([^'\"]+)['\"]", (root/'app/version.py').read_text())[1]
         dockerfile = (root/'Dockerfile').read_text()
-        if re.search(r'^\s*(?:ARG|ENV)\s+APP_VERSION\b', dockerfile, re.M):
-            errors.append('Docker version must come from app/version.py, not ARG/ENV APP_VERSION')
+        for line in dockerfile.splitlines():
+            if re.match(r'^\s*(?:ARG|ENV)\s+APP_VERSION\b', line) and line.strip() not in {
+                    'ARG APP_VERSION', 'ENV APP_VERSION=${APP_VERSION}'}:
+                errors.append('Docker APP_VERSION must be supplied by CI, not hardcoded')
         if not (root/'CHANGELOG.md').read_text().startswith('# 版本日志\n\n## '+version+'（'):
             errors.append('changelog release version mismatch')
         for name in ('docker-compose.yml', 'dev/docker-compose.build.yml'):

@@ -48,9 +48,9 @@ def test_secret_report_does_not_echo_value(tmp_path):
 def test_docker_version_override_rejected(tmp_path):
     root = base(tmp_path)
     (root/'Dockerfile').write_text('ARG APP_VERSION=0.0.0\n')
-    assert any('Docker version must come from app/version.py' in issue for issue in checker.check(root))
+    assert any('Docker APP_VERSION must be supplied by CI' in issue for issue in checker.check(root))
     (root/'Dockerfile').write_text('ENV APP_VERSION=0.0.0\n')
-    assert any('Docker version must come from app/version.py' in issue for issue in checker.check(root))
+    assert any('Docker APP_VERSION must be supplied by CI' in issue for issue in checker.check(root))
 
 
 def test_release_bump_needs_no_docker_or_compose_edits(tmp_path):

@@ -29,21 +29,21 @@ docker compose up -d strimkeep
 
 部署配置需使用 `ghcr.io/xcgtb/strimkeep:latest`。仅重启容器不会更新镜像。可以在 Actions 手动运行 `publish-image` 并选择 `main`，重建 latest。
 
-日常 main 构建只更新 latest，不覆盖正式版本号镜像。应用版本号仅在正式发版时升级。
+日常 main 构建只更新 latest，不覆盖正式版本号镜像。应用自动显示最近已合入版本加提交标识，例如 `1.0.2-dev.abcdef123456`，便于确认已拉到新构建。
 
 ## 正式版本发布
 
-当前源码版本为 1.0.2。源码推送完成后创建并推送对应标签：
+版本由 Git 标签自动注入镜像，无需手动修改源码版本号。源码推送完成后创建并推送下一版本标签，例如：
 
 ```bash
-git tag v1.0.2
-git push origin v1.0.2
+git tag v1.0.3
+git push origin v1.0.3
 ```
 
-`publish-image` 先执行 Python、前端和生产镜像检查，再发布 amd64/arm64 镜像。标签须与 `app/version.py` 一致；失败时先修复检查，不绕过 CI。
+`publish-image` 先执行 Python、前端和生产镜像检查，再发布 amd64/arm64 镜像。标签必须使用 `v数字.数字.数字` 格式；`v1.0.3` 自动生成 `1.0.3` 镜像并让 Web 显示 `1.0.3`。失败时先修复检查，不绕过 CI。
 
 固定版本地址为 `ghcr.io/xcgtb/strimkeep:1.0.2`，日常部署模板继续使用 `latest`。实际发布流程按 GitHub 仓库名生成小写镜像地址。如果更换账号或仓库名，同步修改公共 YML、开发 YML、README 和 Dockerfile 的 source 标签。发布后将 GHCR 包设为公开，普通用户才能不登录直接拉取。
 
-以后升级只需修改 `app/version.py` 的版本号，并更新 CHANGELOG 的版本记录，再运行发布检查和创建对应 Git 标签。Dockerfile 不写版本号，应用直接读取源码版本；开发 Compose 固定使用 `strimkeep:local`，公共部署模板继续使用 `latest`。若文档另有固定版本示例，同步更新示例。已发布成功的版本标签不覆盖。
+以后正式升级只需选择新 Git 标签，CI 自动确定版本，无需修改 Dockerfile、Compose 或 `app/version.py`。`app/version.py` 仅是直接运行源码和本地构建时的默认版本；其对应的 CHANGELOG 条目继续保留。发版时建议补充新版本记录，并同步文档中的固定版本示例。开发 Compose 固定使用 `strimkeep:local`，公共部署模板继续使用 `latest`。已发布成功的版本标签不覆盖。
 
 覆盖源码包时，`dev/docker-compose.build.yml` 是需要一起更新的开发模板。只保护实际部署目录里的配置、密码和数据；不要排除开发模板。推送前运行 `python3 dev/tools/release_check.py`，避免将版本不一致的文件推送到 CI。

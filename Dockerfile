@@ -7,7 +7,9 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     TZ=Asia/Shanghai
 
-# 应用直接读取 app/version.py；发布标签由 CI 校验。
+# CI 自动注入发布/开发版本；本地构建留空时使用源码默认版本。
+ARG APP_VERSION
+ENV APP_VERSION=${APP_VERSION}
 
 WORKDIR /app
 

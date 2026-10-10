@@ -30,7 +30,7 @@
 
 ## 2026-10-10：影视探索无限滚动优化
 
-基线提交：`14d4dfb`；开发分支：`feat/explore-infinite-scroll`。源码与 CHANGELOG 已统一为 1.0.2。应用和 CI 从 `app/version.py` 读取版本；Dockerfile 不重复定义版本，开发 Compose 使用固定的 `strimkeep:local`。公共部署 Compose 继续使用 latest。
+基线提交：`14d4dfb`；开发分支：`feat/explore-infinite-scroll`。源码默认版本为 1.0.2；正式镜像版本由 Git 标签自动注入，main 镜像显示最近已合入版本和提交标识。Dockerfile 不重复定义版本，开发 Compose 使用固定的 `strimkeep:local`。公共部署 Compose 继续使用 latest。
 
 - TMDB 每次请求一页（最多 20 条），不再等待两页合并；分页支持到 500 页。缓存键增加协议标记，旧合并分页缓存不会造成跳页。
 - 接近底部自动追加，下一页预取并预热少量海报；保留跨页去重、最后一页余数和失败后的手动重试。

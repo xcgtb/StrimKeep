@@ -15,14 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - id: ver
-        name: Validate release tag against source version
+        name: Resolve image version from Git
         run: |
-          VERSION="$(python3 -c 'from app.version import __version__; print(__version__)')"
-          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
-            echo 'Release tag does not match app/version.py' >&2
-            exit 1
-          fi
+          VERSION="$(python3 dev/tools/image_version.py)"
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v3
@@ -43,6 +41,8 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
+          build-args: |
+            APP_VERSION=${{ steps.ver.outputs.value }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
