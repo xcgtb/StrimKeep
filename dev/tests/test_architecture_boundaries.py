@@ -89,7 +89,13 @@ page = client.get('/')
 assert page.status_code == 200
 assert 'no-store' in page.headers['cache-control']
 urls = re.findall(r'(?:src|href)="(/static/[^"]+)"', page.text)
-assert len(urls) == 19 and len(set(urls)) == 19
+assert urls and len(set(urls)) == len(urls), 'missing or duplicate static assets'
+paths = {urlsplit(url).path for url in urls}
+required = {'/static/css/app.css', '/static/css/overview.css', '/static/css/glass.css',
+            '/static/js/bootstrap.js', '/static/js/theme-meta.js',
+            '/static/icons/favicon.ico', '/static/icons/favicon.svg',
+            '/static/icons/apple-touch-icon.png'}
+assert required <= paths, ('missing required assets', required - paths)
 for url in urls:
     response = client.get(url)
     assert response.status_code == 200, url
