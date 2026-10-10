@@ -118,10 +118,11 @@ function setupChipGroup(id, key){
 }
 function doExploreSearch(){
   var q = $('exploreSearch').value.trim();
+  var retry = q === exploreState.q;
   exploreState.q = q; exploreState.page = 1;
   // 搜索时始终收起筛选栏
   if (exploreFiltersOpen) toggleExploreFilters();
-  loadExplore();
+  return loadExplore(false, retry);
 }
 function posterColumns(grid){
   if (!grid) return 1;
@@ -242,8 +243,9 @@ function exploreMore(){
     schedulePosterAutoLoad();
     return;
   }
+  var retry = exploreMoreFailed;
   exploreState.page += 1;
-  return loadExplore(true);
+  return loadExplore(true, retry);
 }
 function updateExplorePageInfo(result){
   if (result) exploreLastResult = result;
@@ -282,7 +284,7 @@ function refreshExplorePage(page, qs, generation){
     schedulePosterAutoLoad();
   });
 }
-async function loadExplore(append){
+async function loadExplore(append, retry){
   if (append && exploreLoading) return;
   var generation = append ? exploreGeneration : ++exploreGeneration;
   var requestedPage = exploreState.page;
@@ -315,7 +317,7 @@ async function loadExplore(append){
   }
   var qs = exploreQuery(requestedPage);
   var rendered = false;
-  var deadline = Date.now() + 25000;
+  var deadline = Date.now() + (exploreState.q ? 15000 : 25000);
   function showPage(r){
     exploreLoadedKey = exploreQuery(1);
     exploreLoadedAt = Date.now();
@@ -332,7 +334,9 @@ async function loadExplore(append){
     while (generation === exploreGeneration) {
       var remaining = deadline - Date.now();
       if (remaining <= 0) break;
-      var r = prefetched ? await prefetched.promise : await api('/api/explore?' + qs, {timeoutMs: Math.min(8000, remaining), signal:controller ? controller.signal : undefined});
+      var requestQuery = qs + (retry ? '&retry=1' : '');
+      retry = false; // 仅用户主动重试的首个请求跳过失败冷却，轮询不重复发起刷新。
+      var r = prefetched ? await prefetched.promise : await api('/api/explore?' + requestQuery, {timeoutMs: Math.min(8000, remaining), signal:controller ? controller.signal : undefined});
       prefetched = null;
       if (generation !== exploreGeneration) return;
       if (r.status === 'success') {
@@ -342,6 +346,7 @@ async function loadExplore(append){
       } else if (r.status !== 'pending') {
         throw new Error(r.message || '加载失败');
       }
+      if (!append && r.message) $('explorePageInfo').textContent = r.message;
       await new Promise(function(resolve){setTimeout(resolve, 1000);});
     }
     if (generation !== exploreGeneration) return;
@@ -361,8 +366,9 @@ async function loadExplore(append){
         exploreMoreFailed = true;
         toast(e.message, 'error', 4000);
       } else {
+        $('explorePageInfo').textContent = '';
         grid.innerHTML = '<div class="list-empty">' + esc(e.message)
-          + '<br><button class="btn btn-ghost" onclick="loadExplore()">重新加载</button></div>';
+          + '<br><button class="btn btn-ghost" onclick="loadExplore(false,true)">重新加载</button></div>';
       }
     }
   } finally {

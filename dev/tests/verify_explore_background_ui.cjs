@@ -35,6 +35,7 @@ const success=(cards,more={})=>Object.assign({status:'success',cards,total_pages
   e=environment(()=>({status:'pending'}));await e.ctx.loadExplore();
   assert(e.requests.length<=25 && e.boxes.exploreGrid.innerHTML.includes('重新加载'));
   assert.equal(e.ctx.exploreLoading,false);
+  assert.equal(e.boxes.explorePageInfo.textContent,'');
   console.log('PASS slow-service waiting is bounded and offers an explicit retry');
   let oldResolve,newResolve;e=environment(url=>new Promise(resolve=>{
     if(url.includes('q=new'))newResolve=resolve;else oldResolve=resolve;
@@ -58,5 +59,17 @@ const success=(cards,more={})=>Object.assign({status:'success',cards,total_pages
   assert.equal(statusCtx.exploreStatus({type:'movie',library_status:'available'}).status,'未入库');
   assert.equal(statusCtx.exploreStatus({type:'tv',library_status:'unavailable',eps:{have:0,total:20}}).status,'未入库');
   console.log('PASS unavailable identity data differs from a confirmed absence or zero episode count');
-  console.log('PASS 6/6; DOM-substitute behavior checks only');
+  n=0;e=environment(()=>++n===1?{status:'pending',message:'正在搜索 TMDB…'}:success([card(1)]));
+  e.ctx.exploreState.q='新剧';await e.ctx.loadExplore(false,true);
+  assert(e.requests[0][0].includes('&retry=1'));
+  assert(!e.requests[1][0].includes('&retry=1'));
+  e=environment(()=>({status:'error',message:'连接 TMDB 超时'}));
+  await e.ctx.loadExplore();assert(!e.ctx.exploreLoading);
+  assert(e.boxes.exploreGrid.innerHTML.includes('loadExplore(false,true)'));
+  assert.equal(e.boxes.explorePageInfo.textContent,'');
+  e=environment(()=>({status:'pending'}));e.ctx.exploreState.q='慢查询';
+  await e.ctx.loadExplore();assert(e.requests.length<=15);
+  assert.equal(e.boxes.explorePageInfo.textContent,'');
+  console.log('PASS search waits are bounded, errors clear loading text, and manual retry resets only the first poll');
+  console.log('PASS 7/7; DOM-substitute behavior checks only');
 })().catch(e=>{console.error(e);process.exitCode=1;});

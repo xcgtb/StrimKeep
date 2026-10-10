@@ -19,6 +19,7 @@ def test_page_cache_memory_and_disk_limit(tmp_path, monkeypatch):
     from app import engine, tmdb
     class Client:
         key = 'fake'; calls = 0; hits = 0
+        def __init__(self, cache=None): pass
         def get(self, path, **params): return {'results': [], 'total_pages': 1}
     monkeypatch.setattr(engine, 'STATE_DIR', tmp_path)
     monkeypatch.setattr(engine, 'Tmdb', Client)
@@ -72,6 +73,7 @@ def test_each_explore_page_makes_one_request_without_waiting_for_the_next(tmp_pa
     calls = []
     class Client:
         key = 'fake'; calls = 0; hits = 0
+        def __init__(self, cache=None): pass
         def get(self, path, **params):
             calls.append(params['page'])
             # Page 3 is deliberately unavailable: page 2 must still be usable.

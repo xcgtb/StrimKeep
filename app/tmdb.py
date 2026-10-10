@@ -294,6 +294,8 @@ EXPLORE_PAGE_TTL = 6 * 3600
 _explore_page_lock = threading.RLock()
 _explore_page_state = None
 _explore_slots = threading.BoundedSemaphore(2)
+# 浏览/预取最多占一个名额，避免占满首屏搜索名额。
+_explore_background_slots = threading.BoundedSemaphore(1)
 _EXPLORE_FIELDS = ('id', 'title', 'name', 'release_date', 'first_air_date',
                    'vote_average', 'poster_path', 'media_type')
 
@@ -319,13 +321,37 @@ def _explore_state():
         return _explore_page_state
 
 
-def _refresh_explore_page(state, key, path, params, client_key):
-    token = _explore_request_window.set({'deadline': time.monotonic() + 20,
-                                         'attempts': 2, 'timeout': 8.0})
+def _explore_failure(error):
+    """只返回固定错误分类，urllib 异常中的 URL / API key 不进入页面或日志。"""
+    cause = error
+    seen = set()
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        if isinstance(cause, urllib.error.HTTPError):
+            if cause.code in (401, 403):
+                return 'auth', 'TMDB 密钥无效或无权限，请在规则设置中检查 TMDB 配置'
+            if cause.code == 429:
+                return 'rate_limit', 'TMDB 请求限流，请稍后重试'
+            return 'http', 'TMDB 服务暂时不可用（HTTP %s），请稍后重试' % cause.code
+        if isinstance(cause, TimeoutError) or (isinstance(cause, urllib.error.URLError) and
+                                               isinstance(cause.reason, TimeoutError)):
+            return 'timeout', '连接 TMDB 超时，请检查 NAS 网络或代理后重试'
+        if isinstance(cause, (urllib.error.URLError, OSError)):
+            return 'network', '无法连接 TMDB，请检查 NAS 网络、DNS 或代理后重试'
+        cause = cause.__cause__ or cause.__context__
+    if isinstance(error, TmdbError) and '预算' in str(error):
+        return 'timeout', 'TMDB 响应超时，请稍后重试'
+    return 'response', 'TMDB 返回异常，暂时无法加载，请稍后重试'
+
+
+def _refresh_explore_page(state, key, path, params, client_key, slots=None, background_slot=None):
+    slots = slots if slots is not None else _explore_slots
+    token = _explore_request_window.set({'deadline': time.monotonic() + 10,
+                                         'attempts': 2, 'timeout': 4.0})
     try:
-        client = _eng().Tmdb()
+        # 分页已有独立小缓存：搜索不读取/回写整个 TMDB 明细缓存。
+        client = _eng().Tmdb(cache={})
         client.key = client_key
-        client.cache_file = state['path'].parent / 'tmdb_cache.json'
         first = client.get(path, **params)
         if not isinstance(first, dict) or not isinstance(first.get('results'), list):
             raise TmdbError('TMDB 探索返回不完整')
@@ -336,8 +362,6 @@ def _refresh_explore_page(state, key, path, params, client_key):
                             for item in first['results'][:20]],
                 'total_pages': max(1, min(total_pages, 500)),
                 'total_results': int(first.get('total_results') or 0)}
-        if client.calls:
-            client.save()
         with _explore_page_lock:
             state['pages'][key] = {'ts': time.time(), 'data': data}
             state['errors'].pop(key, None)
@@ -351,19 +375,22 @@ def _refresh_explore_page(state, key, path, params, client_key):
                 log.warning('探索分页缓存保存失败: %s', error)
     except Exception as error:
         # 不把失败写成成功空结果。错误文本不含请求 URL 或密钥。
+        code, message = _explore_failure(error)
         with _explore_page_lock:
-            state['errors'][key] = {'ts': time.time(), 'message': 'TMDB 探索刷新失败，请稍后重试'}
+            state['errors'][key] = {'ts': time.time(), 'message': message, 'code': code}
             while len(state['errors']) > EXPLORE_PAGE_LIMIT:
                 del state['errors'][next(iter(state['errors']))]
-        log.warning('探索后台刷新失败，保留上次分页结果 (%s)', type(error).__name__)
+        log.warning('探索后台刷新失败，保留上次分页结果 (%s: %s)', code, message)
     finally:
         _explore_request_window.reset(token)
         with _explore_page_lock:
             state['jobs'].discard(key)
-        _explore_slots.release()
+        slots.release()
+        if background_slot is not None:
+            background_slot.release()
 
 
-def _explore_page(path, params, media):
+def _explore_page(path, params, media, retry=False):
     # 轻客户端只取配置，不在 HTTP 线程读取整份 TMDB 缓存。
     light = _eng().Tmdb(cache={})
     if not light.key:
@@ -377,23 +404,40 @@ def _explore_page(path, params, media):
         row = state['pages'].get(key)
         stale = row is None or time.time() - row['ts'] >= EXPLORE_PAGE_TTL
         error = state['errors'].get(key)
+        if retry and key not in state['jobs']:
+            state['errors'].pop(key, None)
+            error = None
         cooling = error and time.time() - error['ts'] < 30
-        if stale and key not in state['jobs'] and not cooling and _explore_slots.acquire(blocking=False):
+        slots = _explore_slots
+        background_slot = None if path.startswith('/search/') and params.get('page', 1) == 1 else _explore_background_slots
+        acquired = False
+        if stale and key not in state['jobs'] and not cooling:
+            background_acquired = background_slot is None or background_slot.acquire(blocking=False)
+            if background_acquired:
+                acquired = slots.acquire(blocking=False)
+                if not acquired and background_slot is not None:
+                    background_slot.release()
+        if acquired:
             state['jobs'].add(key)
             try:
                 threading.Thread(target=_refresh_explore_page,
-                                 args=(state, key, path, params, light.key),
+                                 args=(state, key, path, params, light.key, slots, background_slot),
                                  daemon=True, name='explore-page-refresh').start()
             except Exception:
                 state['jobs'].discard(key)
-                _explore_slots.release()
+                slots.release()
+                if background_slot is not None:
+                    background_slot.release()
                 raise
         meta = {'page_ts': row['ts'] if row else None, 'page_stale': stale,
                 'refreshing': key in state['jobs'], 'refresh_error': error['message'] if cooling else None,
                 'retry_after': 1}
         if row is None:
             meta.update(status='error' if cooling else 'pending',
-                        message=error['message'] if cooling else '正在后台加载探索结果')
+                        error_code=error.get('code') if cooling else None,
+                        message=error['message'] if cooling else
+                        (('正在搜索 TMDB…' if path.startswith('/search/') else '正在加载探索结果…')
+                         if key in state['jobs'] else '正在等待探索请求名额…'))
             return None, meta
         return row['data'], meta
 
@@ -428,7 +472,7 @@ def action_explore(args):
             if gid:
                 params['with_genres'] = str(gid)
 
-    res, page_meta = _explore_page(tmdb_path, params, media)
+    res, page_meta = _explore_page(tmdb_path, params, media, retry=bool(getattr(args, 'retry', False)))
     if res is None:
         return page_meta
 
