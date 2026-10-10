@@ -14,6 +14,39 @@ _memory = {'path': None, 'stamp': None, 'data': None, 'health_stamp': None}
 _job = {'running': False, 'id': 0, 'started_at': 0, 'finished_at': 0,
         'phase': '', 'error': '', 'warnings': [], 'forced': False}
 _RETRY_SECONDS = 60
+# Five-minute dashboard refresh reads verified persisted facts, not 155k Episodes.
+# Explicit refresh always rebuilds; automatic full verification runs at most daily.
+_FULL_FACTS_INTERVAL = 24 * 3600
+_STATS_RECHECK_INTERVAL = 3600
+
+
+def _facts_reconcile_due():
+    marker = state_store.read(engine.STATE_DIR / 'overview_full_facts.json', {})
+    if marker.get('host') == engine.EMBY_HOST:
+        if time.time() < float(marker.get('retry_after') or 0):
+            return False
+        if time.time() - float(marker.get('ts') or 0) < _FULL_FACTS_INTERVAL:
+            return False
+    # Existing releases already have valid full snapshots. Bootstrap the marker
+    # from those facts rather than triggering a 155k-item reload on upgrade.
+    if not marker:
+        previous = morning._load_overview_disk()
+        if previous and isinstance(previous.get('data'), dict):
+            ts = float(previous.get('ts') or 0)
+            if ts > 0 and time.time() - ts < _FULL_FACTS_INTERVAL:
+                state_store.save(engine.STATE_DIR / 'overview_full_facts.json',
+                                 {'ts': ts, 'host': engine.EMBY_HOST})
+                return False
+    return True
+
+
+def _read_or_recompute_stats(forced):
+    cached = state_store.read(engine.STATE_DIR / 'library_stats_cache.json', {})
+    if not forced and isinstance(cached.get('rows'), list) and time.time() - float(cached.get('ts') or 0) < _STATS_RECHECK_INTERVAL:
+        return cached
+    with engine._strm_count_refreshing:
+        return engine._recompute_all_stats()
+
 
 
 def _path():
@@ -99,8 +132,13 @@ def _carry_metadata(fresh, previous):
 
 
 def _refresh_facts():
-    # Serialize raw builds and explicitly bypass the 600-second episode cache.
+    # Full rebuild only for manual requests, initial facts or daily reconciliation.
+    # Do not retain the large raw Episode collection after snapshot materialization.
     with engine._overview_refresh_lock:
+        # Do not hammer a disconnected Emby every five minutes after a failure.
+        marker = state_store.read(engine.STATE_DIR / 'overview_full_facts.json', {})
+        state_store.save(engine.STATE_DIR / 'overview_full_facts.json',
+                         dict(marker, host=engine.EMBY_HOST, retry_after=time.time() + 3600))
         engine._ep_cache.update(ts=0, data=None)
         fresh = engine._build_emby_library_overview()
         if not isinstance(fresh, dict) or not isinstance(fresh.get('series'), list) or not isinstance(fresh.get('movies'), list):
@@ -113,6 +151,14 @@ def _refresh_facts():
         morning._save_overview_disk(fresh)
         engine._emby_lib_cache.update(ts=time.time(), data=fresh)
         engine._emby_index_cache.update(ts=0, data=None)
+        # Only a successfully persisted full snapshot advances the reconciliation clock.
+        state_store.save(engine.STATE_DIR / 'overview_full_facts.json',
+                         {'ts': time.time(), 'host': engine.EMBY_HOST})
+        try:
+            from . import library_updates
+            library_updates.publish(full=True)
+        except Exception as error:
+            engine.log.warning('片库完整事实版本通知失败: %s', error)
 
 
 def _collect(lib_stats):
@@ -132,14 +178,15 @@ def _refresh_worker(forced):
     warnings = []
     try:
         _phase('正在更新双库统计')
-        with engine._strm_count_refreshing:
-            lib_stats = engine._recompute_all_stats()
+        lib_stats = _read_or_recompute_stats(forced)
         if engine.EMBY_KEY:
-            _phase('正在更新片库数据')
-            try:
-                _refresh_facts()
-            except Exception:
-                warnings.append('Emby 片库更新失败，保留上一份片库数据')
+            if forced or _facts_reconcile_due():
+                _phase('正在校准片库数据')
+                try:
+                    _refresh_facts()
+                except Exception:
+                    engine.log.exception('片库全量校准失败')
+                    warnings.append('Emby 片库校准失败，保留上一份片库数据')
             if forced:
                 _phase('正在更新近期入库')
                 try:

@@ -102,7 +102,7 @@ function ids(e){return Array.from(e.ctx.exploreShownCards,x=>x.tmdb_id);}
  const p=vm.createContext({window:{},__posterInflight:{},POSTER_CACHE_NAME:'fixture',
   AbortController:class {constructor(){this.signal={};}abort(){aborted=true;}},setTimeout:fn=>{timer=fn;return 1;},clearTimeout:()=>cleared++,
   fetch:async(url,opts)=>{signal=opts.signal;return {ok:true,clone(){return this;},blob:async()=>({blob:true})};}});
- vm.runInContext(html.slice(html.indexOf('async function posterFetch(url){'),html.indexOf('function clearPosterLoading(img){')),p);
+ vm.runInContext(html.slice(html.indexOf('var POSTER_MAX_CONCURRENCY = 6;'),html.indexOf('function clearPosterLoading(img){')),p);
  assert((await p.posterFetch('/api/emby/poster/1')).blob);assert(signal);assert.equal(cleared,1);assert.equal(Object.keys(p.__posterInflight).length,0);
  p.fetch=(url,opts)=>new Promise((resolve,reject)=>{p.AbortController.prototype.abort=function(){aborted=true;reject(Error('timed out'));};});
  const slow=p.posterFetch('/api/emby/poster/2');await Promise.resolve();timer();await assert.rejects(slow,/timed out/);assert(aborted);assert.equal(cleared,2);

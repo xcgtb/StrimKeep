@@ -100,12 +100,12 @@ def test_walk_partial_error_does_not_upsert_or_delete(media):
 
 @pytest.mark.parametrize('exception', [FileNotFoundError, PermissionError])
 def test_file_stat_failure_does_not_publish_partial_index(media, exception):
-    path, before = seed(); real_stat = Path.stat
+    path, before = seed(); real_stat = Path.lstat
     touch(engine.S_ROOT, '新版本.2160p.strm')
     def denied(self, *args, **kwargs):
         if self == path: raise exception(5, 'injected file failure', str(self))
         return real_stat(self, *args, **kwargs)
-    with patch.object(Path, 'stat', denied), pytest.raises(lib.LibraryScanError):
+    with patch.object(Path, 'lstat', denied), pytest.raises(lib.LibraryScanError):
         engine.Lib(engine.S_ROOT)
     assert rows(engine.S_ROOT) == before
 

@@ -420,7 +420,7 @@ function renderSeriesCard(s){
     epInfo = (s.total_seasons || 0) + ' 季 · ' + libraryEpisodeCount(s) + ' 集';
   }
 
-  return '<div class="poster-card emby-poster-card st-' + mst + '" onclick="showEmbyDetailById(' + jsarg(s.id) + ')">'
+  return '<div class="poster-card emby-poster-card st-' + mst + '" data-series-id="' + esc(s.id) + '" onclick="showEmbyDetailById(' + jsarg(s.id) + ')">'
     + '<div class="poster-wrap">' + poster
     + '<span class="badge-type">剧集</span>'
     + '<span class="badge-status ' + statusCls + '">' + statusText + '</span>'
@@ -732,7 +732,7 @@ function renderMovieCard(m){
       ? '<div class="poster-loading">海报加载中</div><img data-emby-src="/api/emby/poster/' + esc(m.id) + '" loading="lazy" decoding="async" onload="clearPosterLoading(this)">'
       : '<div class="no-img">暂无海报</div>');
 
-  return '<div class="poster-card emby-poster-card" onclick="showMovieDetailById(' + jsarg(m.id) + ')">'
+  return '<div class="poster-card emby-poster-card" data-movie-id="' + esc(m.id) + '" onclick="showMovieDetailById(' + jsarg(m.id) + ')">'
     + '<div class="poster-wrap">' + poster
     + '<span class="badge-type">电影</span>'
     + '</div>'
@@ -743,3 +743,153 @@ function renderMovieCard(m){
     + '</div>';
 }
 
+
+/* P1: SSE delivers tiny revision hints; /changes returns changed series and movies.
+   Polling is a fallback for browsers/proxies without streaming support. */
+var libraryLiveVersion = null;
+var libraryLiveBusy = false;
+function libraryLivePage(){
+  var tab = window.__activeTab;
+  return typeof document !== 'undefined' && !document.hidden &&
+    (tab === 'mapping' || tab === 'explore' || tab === 'dashboard');
+}
+function patchVisibleMappingCard(item){
+  var list = $('embyList');
+  if (!list || typeof document === 'undefined') return;
+  var nodes = list.querySelectorAll('.poster-card[data-series-id]');
+  for (var i=0; i<nodes.length; i++) {
+    var target = nodes[i];
+    if (target.getAttribute('data-series-id') !== String(item.id)) continue;
+    // Repaint text/badges only. Preserve the existing <img>, src, decoding and
+    // in-flight image requests, so a new episode cannot cause poster flicker.
+    var temp = document.createElement('div');
+    temp.innerHTML = renderSeriesCard(item);
+    var fresh = temp.firstElementChild;
+    if (!fresh) return;
+    var oldInfo = target.querySelector('.info'), newInfo = fresh.querySelector('.info');
+    if (oldInfo && newInfo) oldInfo.innerHTML = newInfo.innerHTML;
+    var oldBadge = target.querySelector('.badge-status'), newBadge = fresh.querySelector('.badge-status');
+    if (oldBadge && newBadge) {
+      oldBadge.className = newBadge.className;
+      oldBadge.textContent = newBadge.textContent;
+    }
+    target.className = fresh.className;
+  }
+}
+function patchVisibleMovieCard(item){
+  var list = $('embyList');
+  if (!list || typeof document === 'undefined') return;
+  var nodes = list.querySelectorAll('.poster-card[data-movie-id]');
+  for (var i=0; i<nodes.length; i++) {
+    var target = nodes[i];
+    if (target.getAttribute('data-movie-id') !== String(item.id)) continue;
+    // Keep the existing poster <img> and Blob URL. Only replace its text.
+    var temp = document.createElement('div');
+    temp.innerHTML = renderMovieCard(item);
+    var fresh = temp.firstElementChild;
+    if (!fresh) return;
+    var oldInfo = target.querySelector('.info'), newInfo = fresh.querySelector('.info');
+    if (oldInfo && newInfo) oldInfo.innerHTML = newInfo.innerHTML;
+    target.className = fresh.className;
+  }
+}
+async function pollLibraryLiveChanges(){
+  if (!libraryLivePage() || libraryLiveBusy) return;
+  libraryLiveBusy = true;
+  try {
+    var r = await api('/api/library/changes?since=' + (libraryLiveVersion === null ? 0 : libraryLiveVersion),
+                      {timeoutMs:8000});
+    if (r.status !== 'success') return;
+    // Even the first revision fetch may race with a newly committed episode.
+    // Apply available deltas (or reconcile) instead of silently acknowledging
+    // a revision the currently rendered page has never observed.
+    var priorVersion = libraryLiveVersion;
+    if (priorVersion !== null && priorVersion === r.version) return;
+    if (priorVersion === null && r.version === 0) {
+      libraryLiveVersion = 0;
+      return;
+    }
+    // A full mapping request in flight might have started before this event.
+    // Retry on next poll rather than letting its late response undo our patch.
+    if (window.__activeTab === 'mapping' && embyLibraryLoading) return;
+    libraryLiveVersion = r.version;
+    if (r.full) {
+      if (window.__activeTab === 'mapping' && embyLoaded && !embyLibraryLoading)
+        await loadEmbyLibrary(false, true, true);
+    } else if (((r.series && r.series.length) || (r.movies && r.movies.length)) && embyLoaded) {
+      var added = false, oldStatus = {};
+      (r.series || []).forEach(function(item){
+        var idx = embyData.series.findIndex(function(x){return String(x.id) === String(item.id);});
+        if (idx < 0) {
+          idx = embyData.series.findIndex(function(x){
+            return (x.series_ids || [x.id]).some(function(id){return (item.series_ids || [item.id]).indexOf(id) >= 0;});
+          });
+        }
+        if (idx < 0) {embyData.series.push(item); added = true;}
+        else {
+          oldStatus[item.id] = (embyData.series[idx].tmdb_info || {}).match_status;
+          embyData.series[idx] = item;
+        }
+      });
+      var movieAdded = false;
+      (r.movies || []).forEach(function(item){
+        var ids = item.ids || [item.id];
+        var idx = embyData.movies.findIndex(function(x){
+          return ids.some(function(id){return (x.ids || [x.id]).some(function(old){return String(old) === String(id);});});
+        });
+        if (idx < 0) {embyData.movies.push(item); movieAdded = true;}
+        else embyData.movies[idx] = item;
+      });
+      if (r.stats) embyData.statsBase = r.stats;
+      embyData.stats = md_sync(embyData.series, embyData.statsBase || {});
+      window.__embySeriesMap = {};
+      embyData.series.forEach(function(x){if(x.id)window.__embySeriesMap[x.id]=x;});
+      window.__embyMovieMap = {};
+      embyData.movies.forEach(function(x){if(x.id)window.__embyMovieMap[x.id]=x;});
+      if (window.__activeTab === 'mapping') {
+        // Sorting/filter membership may change. Only those cases redraw a list.
+        var movieTab = embyFilterState.type === 'movies';
+        var reorder = (movieTab ? movieAdded : added) ||
+                      (embyFilterState.filter !== 'all') || (embyFilterState.scope !== 'all');
+        if (reorder) renderEmbyList();
+        else if (movieTab) (r.movies || []).forEach(patchVisibleMovieCard);
+        else (r.series || []).forEach(patchVisibleMappingCard);
+        $('emby-title-count').textContent = movieTab ? embyData.movies.length : embyData.series.length;
+        $('emby-total').textContent = movieTab ? embyData.movies.length : embyData.series.length;
+        $('emby-title-movies').textContent = embyData.movies.length;
+        $('emby-movies').textContent = embyData.movies.length;
+        var st = embyData.stats;
+        $('emby-aligned').textContent = st.aligned || 0;
+        $('emby-missing').textContent = st.missing || 0;
+        $('emby-extra').textContent = st.extra || 0;
+        $('emby-ongoing').textContent = st.ongoing || 0;
+        $('emby-unmatched').textContent = (st.unmatched || 0) + (st.no_tmdb || 0);
+        updateEmbyChips();
+      }
+    }
+    // Exploration already supports per-card status updates without remounting
+    // posters; simply schedule it immediately after an authoritative change.
+    if (window.__activeTab === 'explore' && typeof ensureExploreLibrarySync === 'function')
+      ensureExploreLibrarySync(true);
+    if (window.__activeTab === 'dashboard' && typeof loadDashboard === 'function')
+      loadDashboard();
+  } catch(e) { /* transient disconnects are handled by next event or poll */ }
+  finally {libraryLiveBusy = false;}
+}
+(function(){
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  function start(){
+    // Only one authenticated same-origin connection; no credentials in URLs.
+    if (typeof EventSource !== 'undefined') {
+      var feed = new EventSource('/api/library/events');
+      feed.addEventListener('library', function(){pollLibraryLiveChanges();});
+    }
+    setInterval(pollLibraryLiveChanges, 30000);
+    pollLibraryLiveChanges();
+    document.addEventListener('visibilitychange', function(){
+      if (!document.hidden) pollLibraryLiveChanges();
+    });
+  }
+  if (document.readyState === 'loading') window.addEventListener('load', start);
+  else start();
+})();

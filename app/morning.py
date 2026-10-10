@@ -73,6 +73,11 @@ def _overview_bg_refresh():
         _eng()._emby_lib_cache['ts'] = time.time()
         _eng()._emby_lib_cache['data'] = out
         _save_overview_disk(out)
+        try:
+            from . import library_updates
+            library_updates.publish(full=True)
+        except Exception as error:
+            log.warning('片库映射版本通知失败: %s', error)
         log.info('片库映射缓存后台刷新完成：剧集 %d / 电影 %d',
                  len(out.get('series', [])), len(out.get('movies', [])))
     except Exception as e:
@@ -81,8 +86,8 @@ def _overview_bg_refresh():
         _eng()._overview_refresh_lock.release()
 
 def emby_library_overview(force=False):
-    """片库映射数据三级缓存：内存(5分钟) → 磁盘(立即返回+后台刷新) → 同步构建。
-    全量拉取 Emby 分集很慢，磁盘缓存保证每次进页面秒开，后台静默更新。"""
+    """片库映射三级缓存：内存(5分钟) → 磁盘(立即返回) → 首次完整构建。
+    五分钟变化由入库增量更新，完整分集列表仅每日后台校准。"""
     if not force:
         if _eng()._emby_lib_cache['data'] and time.time() - _eng()._emby_lib_cache['ts'] < _eng()._CACHE_TTL:
             return _eng()._emby_lib_cache['data']
@@ -90,15 +95,18 @@ def emby_library_overview(force=False):
         if disk is not None:
             _eng()._emby_lib_cache['data'] = disk['data']
             _eng()._emby_lib_cache['ts'] = disk['ts']
-            if time.time() - disk['ts'] >= _eng()._CACHE_TTL:
+            if time.time() - disk['ts'] >= 24 * 3600:
+                # Five-minute freshness is supplied by targeted ingest updates.
+                # Full Emby enumeration is only a low-frequency reconciliation.
                 threading.Thread(target=_overview_bg_refresh, daemon=True,
                                  name='emby-overview-refresh').start()
             return _eng()._emby_lib_cache['data']
-    out = _build_emby_library_overview()
-    _eng()._emby_lib_cache['ts'] = time.time()
-    _eng()._emby_lib_cache['data'] = out
-    _save_overview_disk(out)
-    return out
+    with _eng()._overview_refresh_lock:
+        out = _build_emby_library_overview()
+        _eng()._emby_lib_cache['ts'] = time.time()
+        _eng()._emby_lib_cache['data'] = out
+        _save_overview_disk(out)
+        return out
 
 def _build_emby_library_overview():
     """构建统一媒体身份的片库快照。
@@ -115,24 +123,25 @@ def _build_emby_library_overview():
         'Fields': 'ProviderIds,Path,ProductionYear,CommunityRating,ImageTags,Genres',
         'Limit': 50000,
     }) or {}
-    episodes_all = _eng()._fetch_all_episodes()
-    alive = _eng()._alive_dir_map(ep.get('Path') for ep in episodes_all)
+    # 逐页消费 Emby 分集：只保留构建剧集集合必需的三列事实，
+    # 不再同时持有 155k 条原始 JSON 字典及其另一份内存缓存。
+    eps_by_series = defaultdict(list)
+    for ep in _eng()._fetch_all_episodes():
+        sid = ep.get('SeriesId')
+        if sid:
+            eps_by_series[sid].append((ep.get('Path') or '',
+                                       ep.get('ParentIndexNumber'), ep.get('IndexNumber')))
+    alive = _eng()._alive_dir_map(path for rows in eps_by_series.values()
+                                   for path, _, _ in rows)
 
     def _ep_alive(path):
         p = (path or '').replace('\\', '/')
         return alive.get(p.rsplit('/', 1)[0] if '/' in p else '', True)
 
-    # 先把真实分集按 Emby SeriesId 收好，再按 TMDB 身份聚合。
-    eps_by_series = defaultdict(list)
-    for ep in episodes_all:
-        sid = ep.get('SeriesId')
-        if sid and _ep_alive(ep.get('Path')):
-            eps_by_series[sid].append(ep)
-
     groups = {}
     for s in series_data.get('Items', []):
         sid = s.get('Id')
-        if not sid or not eps_by_series.get(sid):
+        if not sid or not any(_ep_alive(path) for path, _, _ in eps_by_series.get(sid, ())):
             continue  # 空壳 Series 不进入片库映射
         tmdb_id = str((s.get('ProviderIds') or {}).get('Tmdb') or '')
         if not tmdb_id:
@@ -159,8 +168,9 @@ def _build_emby_library_overview():
             g['name'] = s.get('Name')
         if not g.get('year') and s.get('ProductionYear'):
             g['year'] = s.get('ProductionYear')
-        for ep in eps_by_series[sid]:
-            sn = ep.get('ParentIndexNumber'); en = ep.get('IndexNumber')
+        for ep_path, sn, en in eps_by_series[sid]:
+            if not _ep_alive(ep_path):
+                continue
             if sn is None or en is None:
                 continue
             try:
@@ -170,7 +180,7 @@ def _build_emby_library_overview():
             if pair[0] < 0 or pair[1] <= 0:
                 continue
             g['episodes'].add(pair)
-            ep_lib = lib_of(ep.get('Path', '') or '')
+            ep_lib = lib_of(ep_path)
             if ep_lib == 'local': g['local_eps'].add(pair)
             elif ep_lib == 'share': g['share_eps'].add(pair)
 
@@ -731,11 +741,17 @@ def _live_series_episodes(series_id: str):
     视为 Emby 尚未清理的残留，直接剔除。删除后 Emby 的刷新是异步的，
     如果直接信 Emby，刚删完的剧集还会被当成\"仍在库里\"，海报就不会消失。
     路径映射不上的（其它库）无法核实，保留。"""
-    items = (_eng().emby_request('/Items', {
+    response = _eng().emby_request('/Items', {
         'ParentId': series_id, 'Recursive': 'true',
         'IncludeItemTypes': 'Episode',
         'Fields': 'Path,ParentIndexNumber,IndexNumber', 'Limit': 5000,
-    }) or {}).get('Items') or []
+    })
+    if not isinstance(response, dict) or not isinstance(response.get('Items'), list):
+        raise RuntimeError('Emby 剧集分集查询不完整，禁止覆盖缓存')
+    items = response['Items']
+    total = response.get('TotalRecordCount')
+    if (total is not None and int(total) > len(items)) or (total is None and len(items) >= 5000):
+        raise RuntimeError('Emby 单剧分集超过分页上限，禁止覆盖缓存')
     live = []
     for e in items:
         conv = _eng().emby_path_to_container(e.get('Path') or '')
@@ -753,8 +769,13 @@ def _resync_series_entry(entry: dict, live: list):
     lib_of = _eng().EMBY_PATHS.lib_of
     season_map, local_set, share_set = {}, set(), set()
     for ep in live:
-        sn, en = ep.get('ParentIndexNumber'), ep.get('IndexNumber')
-        if sn is None or en is None:
+        try:
+            sn, en = int(ep.get('ParentIndexNumber')), int(ep.get('IndexNumber'))
+        except (TypeError, ValueError):
+            continue
+        # Match the full library aggregation: S00 special episodes may exist,
+        # but E00/non-positive episode numbers are not counted as aired episodes.
+        if sn < 0 or en <= 0:
             continue
         season_map.setdefault(sn, set()).add(en)
         lib = lib_of(ep.get('Path') or '')
@@ -812,7 +833,7 @@ def _recompute_mapping_stats(data: dict):
     series = (data or {}).get('series') or []
     stats = (data or {}).setdefault('stats', {})
     stats.update({
-        'total_series': len(series),
+        'total_series': len(series), 'total_movies': len((data or {}).get('movies') or []),
         'aligned': 0, 'missing': 0, 'extra': 0, 'ongoing': 0,
         'unmatched': 0, 'no_tmdb': 0, 'complete_series': 0,
         'incomplete_series': 0,
@@ -827,98 +848,335 @@ def _recompute_mapping_stats(data: dict):
             stats['incomplete_series'] += 1
 
 
-def refresh_mapping_cache_after_ingest(ingest_data: dict) -> dict:
-    """入库轮询成功后，只刷新本轮确实发生入库的剧集。
+def _new_series_after_ingest(sid, live, cache):
+    """Conservatively materialize a *new* Emby series without running full-library scans.
 
-    不重新跑全量 TMDB 对照，也不重新搜索身份；沿用片库映射缓存里的
-    series_ids / tmdb_id，只重新读取这些剧当前真实存在的分集并重算 tmdb_info。
-    这样补齐缺集后，片库映射的卡片状态可在下一轮 5 分钟入库扫描后自动变为
-    「对齐」，无需手工点击「重新对照」。
+    Only a verified Series record with a nonempty live episode set can enter the
+    mapping cache. Its TMDB status is pending until the next authoritative match.
     """
-    result = {'status': 'skipped', 'affected': 0, 'updated': 0}
+    # Some Emby builds return 404 for /Items/{id} without a UserId even
+    # though the same Series is visible in GET /Items. The supported Ids
+    # filter supplies the exact item without enumerating the whole library.
+    response = _eng().emby_request('/Items', {
+        'Ids': str(sid), 'Recursive': 'true', 'IncludeItemTypes': 'Series',
+        'Fields': 'ProviderIds,Path,ProductionYear,CommunityRating,ImageTags,Genres',
+        'StartIndex': 0, 'Limit': 2,
+    }, timeout=15, retries=0)
+    if not isinstance(response, dict) or not isinstance(response.get('Items'), list):
+        raise RuntimeError('Emby 新剧详情查询不完整，保留旧缓存')
+    rows = response['Items']
+    # A server which ignores Ids could return unrelated series. Reject it,
+    # including a truncated result, instead of caching the wrong identity.
+    count = response.get('TotalRecordCount')
+    if (len(rows) != 1 or (count is not None and int(count) != 1) or
+            str(rows[0].get('Id')) != str(sid) or rows[0].get('Type') != 'Series'):
+        raise RuntimeError('Emby 新剧详情身份不唯一或与请求不符，保留旧缓存')
+    record = rows[0]
+    if not record.get('Name') or not record.get('Path') or not live:
+        return None
+    path = str(record['Path'])
+    library = _eng().EMBY_PATHS.lib_of(path)
+    if library not in ('local', 'share'):
+        return None  # an unknown source is never made into a verified mapping entry
+    if not any(_eng().EMBY_PATHS.lib_of(e.get('Path') or '') in ('local', 'share') for e in live):
+        return None
+    tid = str((record.get('ProviderIds') or {}).get('Tmdb') or '')
+    # Merge only strong matching TMDB identities (and equal title/year). Never
+    # merge by directory uniqueness or guess missing TMDB identifiers.
+    for entry in cache.get('series') or []:
+        if (tid and str(entry.get('tmdb_id') or '') == tid and
+                str(entry.get('name') or '').casefold() == str(record['Name']).casefold() and
+                str(entry.get('year') or '') == str(record.get('ProductionYear') or '')):
+            return entry, path
+    entry = {
+        'id': str(sid), 'series_ids': [str(sid)], 'name': record['Name'],
+        'year': record.get('ProductionYear'), 'rating': record.get('CommunityRating'),
+        'tmdb_id': tid or None, 'genres': list(record.get('Genres') or []),
+        'path': path, 'paths': [path], 'has_image': 'Primary' in (record.get('ImageTags') or {}),
+        'tmdb_info': {'match_status': 'pending' if tid else 'no_tmdb', 'diff': 0},
+        # Missing/complete cannot be asserted until full TMDB matching.
+        'complete': False,
+    }
+    _resync_series_entry(entry, live)
+    entry['complete'] = False
+    return entry, path
+
+
+def _refresh_series_mapping_cache_after_ingest(ingest_data: dict) -> dict:
+    """Patch only changed Series IDs; do not claim a full TMDB verification.
+
+    Network errors, truncated responses and unknown mount paths are not evidence
+    of deletion or completion. New Emby series are inserted with pending TMDB
+    classification, then reconciled by the normal background TMDB scan.
+    """
+    result = {'status': 'skipped', 'affected': 0, 'updated': 0, 'created': 0}
     if not ingest_data or not ingest_data.get('ok', True):
         return result
-
-    raw = ingest_data.get('episodes_raw') or []
-    affected_ids = {
-        str(e.get('series_id') or '').strip()
-        for e in raw
-        if str(e.get('series_id') or '').strip()
-    }
+    affected_ids = {str(e.get('series_id') or '').strip()
+                    for e in ingest_data.get('episodes_raw') or []
+                    if str(e.get('series_id') or '').strip()}
     if not affected_ids:
         return result
-
     cache = read_emby_lib_cache(max_age=None)
     if not cache:
         return result
-
     updated_entries = []
-    for entry in (cache.get('series') or []):
-        ids = {str(x).strip() for x in (entry.get('series_ids') or [entry.get('id')]) if str(x).strip()}
-        if not (ids & affected_ids):
+    series = cache.setdefault('series', [])
+    handled = set()
+    for sid in sorted(affected_ids):
+        original = next((e for e in series if sid in {str(i) for i in
+                         (e.get('series_ids') or [e.get('id')]) if i}), None)
+        member_ids = {str(i) for i in (original.get('series_ids') or [original.get('id')]) if i} if original else {sid}
+        if not member_ids.isdisjoint(handled):
             continue
-        result['affected'] += 1
-
-        # 双库同一剧可能有两个 Emby SeriesId，必须 union 两边的实时分集。
-        live = []
-        seen = set()
-        for sid in ids:
-            for ep in _live_series_episodes(sid):
-                key = (str(ep.get('Id') or ''), str(ep.get('Path') or ''),
-                       ep.get('ParentIndexNumber'), ep.get('IndexNumber'))
-                if key in seen:
+        handled.update(member_ids)
+        try:
+            live = []
+            seen = set()
+            def append_live(series_id):
+                for ep in _live_series_episodes(series_id):
+                    key = (str(ep.get('Id') or ''), str(ep.get('Path') or ''),
+                           ep.get('ParentIndexNumber'), ep.get('IndexNumber'))
+                    if key not in seen:
+                        seen.add(key)
+                        live.append(ep)
+            for series_id in sorted(member_ids):
+                append_live(series_id)
+            # Ingest only gives positive evidence for additions. An empty or
+            # failed single-series query is never evidence for deleting facts.
+            if not live:
+                continue
+            is_new = original is None
+            if is_new:
+                candidate = _new_series_after_ingest(sid, live, cache)
+                if candidate is None:
                     continue
-                seen.add(key)
-                live.append(ep)
-
-        before = (
-            int(entry.get('have_eps') or 0),
-            int((entry.get('tmdb_info') or {}).get('diff') or 0),
-            (entry.get('tmdb_info') or {}).get('match_status'),
-        )
-        _resync_series_entry(entry, live)
-        after = (
-            int(entry.get('have_eps') or 0),
-            int((entry.get('tmdb_info') or {}).get('diff') or 0),
-            (entry.get('tmdb_info') or {}).get('match_status'),
-        )
-        if before != after:
-            result['updated'] += 1
-            updated_entries.append((ids, copy.deepcopy(entry)))
-
-    if not result['affected']:
-        return result
+                # Retain the verified new location on strong-identity merges.
+                # Work on a copy until every episode lookup succeeds.
+                candidate_row, candidate_path = candidate
+                original = candidate_row if any(x is candidate_row for x in series) else None
+                entry = copy.deepcopy(candidate_row)
+                if sid not in entry.get('series_ids', []):
+                    entry['series_ids'] = list(entry.get('series_ids') or []) + [sid]
+                entry['paths'] = list(dict.fromkeys(
+                    [str(x) for x in (entry.get('paths') or [entry.get('path')]) if x] +
+                    [candidate_path]))
+                for other in sorted(set(entry['series_ids']) - member_ids):
+                    append_live(other)
+                member_ids = {str(i) for i in entry['series_ids']}
+                handled.update(member_ids)
+            else:
+                entry = copy.deepcopy(original)
+            result['affected'] += 1
+            before = {k: copy.deepcopy((original or {}).get(k)) for k in
+                      ('have_eps', 'local_eps', 'share_eps', 'seasons', 'tmdb_info', 'series_ids', 'paths')}
+            _resync_series_entry(entry, live)
+            # Location indicators must reflect the same verified per-library
+            # episodes as the badges, including a newly merged share/local ID.
+            entry['in_local'] = bool(entry.get('local_eps'))
+            entry['in_share'] = bool(entry.get('share_eps'))
+            if is_new and original is None:
+                entry['complete'] = False  # no verified TMDB comparison yet
+            after = {k: entry.get(k) for k in before}
+            if original is None or before != after:
+                if original is None:
+                    series.append(entry)
+                    result['created'] += 1
+                else:
+                    original.clear()
+                    original.update(entry)
+                result['updated'] += 1
+                updated_entries.append((member_ids, copy.deepcopy(entry)))
+        except (OSError, ValueError, RuntimeError, urllib.error.URLError) as error:
+            log.warning('单剧增量更新跳过 %s，保持旧事实: %s', sid, error)
+            continue
     if not result['updated']:
-        return {'status': 'checked', 'affected': result['affected'], 'updated': 0}
-
+        return {'status': 'checked', **{k: result[k] for k in ('affected', 'updated', 'created')}}
     _recompute_mapping_stats(cache)
     save_emby_lib_cache(cache, keep_ts=True)
 
-    # 将已经算好的条目同步到内存/总览/TMDB 对照缓存；这里不再重新访问 Emby。
     def _patch(data):
-        touched = False
-        for src in (data or {}).get('series') or []:
-            src_ids = {str(x).strip() for x in (src.get('series_ids') or [src.get('id')]) if str(x).strip()}
-            for ids, fresh in updated_entries:
-                if src_ids & ids:
-                    src.clear()
-                    src.update(copy.deepcopy(fresh))
-                    touched = True
-                    break
-        if touched:
+        changed = False
+        entries = (data or {}).get('series') or []
+        for ids, fresh in updated_entries:
+            target = next((e for e in entries if ids & {str(i) for i in
+                           (e.get('series_ids') or [e.get('id')]) if i}), None)
+            if target is not None:
+                target.clear()
+                target.update(copy.deepcopy(fresh))
+            else:
+                entries.append(copy.deepcopy(fresh))
+            changed = True
+        if changed:
+            data['series'] = entries
             _recompute_mapping_stats(data)
-        return touched
+        return changed
 
     _patch_all_caches(_patch)
-
-    # 探索/总览还有一层 library_snapshot，必须一起失效/更新，否则会继续显示旧缺集。
     snap = load_library_snapshot(max_age=None, background_refresh=False)
     if snap and _patch(snap):
         snap['facts_ts'] = time.time()
         save_library_snapshot(_health_snapshot(snap))
-
+    # Explore's identity index is separate from mapping; new IDs must become
+    # discoverable without forcing a full index rebuild every five minutes.
+    try:
+        from . import tmdb
+        tmdb.patch_explore_index_from_mapping([row for _, row in updated_entries])
+    except Exception as error:
+        log.warning('增量探索身份索引未更新，稍后完整对账: %s', error)
+    try:
+        from . import library_updates
+        library_updates.publish([i for ids, _ in updated_entries for i in ids])
+    except Exception as error:
+        log.warning('页面增量版本发布失败，将由全量读取兜底: %s', error)
     result['status'] = 'updated'
     return result
+
+
+def _movie_metadata_by_id(movie_id):
+    """Exact, bounded movie lookup. A partial/wrong Ids response is not a fact."""
+    response = _eng().emby_request('/Items', {
+        'Ids': str(movie_id), 'Recursive': 'true', 'IncludeItemTypes': 'Movie',
+        'Fields': 'ProviderIds,Path,ProductionYear,CommunityRating,ImageTags,Genres',
+        'StartIndex': 0, 'Limit': 2,
+    }, timeout=15, retries=0)
+    if not isinstance(response, dict) or not isinstance(response.get('Items'), list):
+        raise RuntimeError('Emby 电影详情不完整')
+    rows = response['Items']
+    count = response.get('TotalRecordCount')
+    if (len(rows) != 1 or (count is not None and int(count) != 1) or
+            str(rows[0].get('Id')) != str(movie_id) or rows[0].get('Type') != 'Movie'):
+        raise RuntimeError('Emby Movie ID 结果不唯一或身份不匹配')
+    movie = rows[0]
+    path = movie.get('Path') or ''
+    if not movie.get('Name') or not path or _eng().EMBY_PATHS.lib_of(path) not in ('local', 'share'):
+        raise RuntimeError('电影名称/媒体库来源无法验证')
+    return movie
+
+
+def _refresh_movie_mapping_cache_after_ingest(ingest_data):
+    """Positive movie facts only. Never infer deletions from an empty/failed query."""
+    result = {'status': 'skipped', 'affected': 0, 'updated': 0, 'created': 0}
+    if not ingest_data or not ingest_data.get('ok', True):
+        return result
+    changed_ids = {str(m.get('id') or m.get('Id') or '').strip()
+                   for m in (ingest_data.get('movies_raw') or [])
+                   if str(m.get('id') or m.get('Id') or '').strip()}
+    if not changed_ids:
+        return result
+    cache = read_emby_lib_cache(max_age=None)
+    if not cache:
+        return result
+    movies = cache.setdefault('movies', [])
+    updated = []
+    handled = set()
+    for mid in sorted(changed_ids):
+        if mid in handled:
+            continue
+        try:
+            meta = _movie_metadata_by_id(mid)
+            tid = str((meta.get('ProviderIds') or {}).get('Tmdb') or '')
+            # Do not use malformed provider IDs as cross-library identities.
+            if not tid.isdecimal():
+                tid = ''
+            # First match the exact Emby ID. Identity merges demand all three
+            # independent facts, never only title, basename or directory.
+            original = next((m for m in movies if mid in {str(i) for i in
+                            (m.get('ids') or [m.get('id')]) if i}), None)
+            if original is None and tid:
+                original = next((m for m in movies if
+                    str(m.get('tmdb_id') or '') == tid and
+                    str(m.get('name') or '').casefold() == str(meta['Name']).casefold() and
+                    str(m.get('year') or '') == str(meta.get('ProductionYear') or '')), None)
+            members = {str(i) for i in (original.get('ids') or [original.get('id')]) if i} if original else set()
+            # A contradictory identity for an existing ID is suspicious.
+            if original and (original.get('tmdb_id') and tid and
+                            str(original['tmdb_id']) != tid):
+                raise RuntimeError('同一 Emby 电影 ID 的 TMDB 身份冲突')
+            ids = sorted(members | {mid})
+            actual = [_movie_metadata_by_id(i) if i != mid else meta for i in ids]
+            if (tid and any(str((m.get('ProviderIds') or {}).get('Tmdb') or '') not in ('', tid)
+                            for m in actual)):
+                raise RuntimeError('跨库 Movie ID 对应 TMDB 冲突')
+            if any(str(m.get('Name') or '').casefold() != str(meta['Name']).casefold() or
+                   str(m.get('ProductionYear') or '') != str(meta.get('ProductionYear') or '')
+                   for m in actual):
+                raise RuntimeError('跨库电影片名/年份冲突')
+            entry = copy.deepcopy(original) if original is not None else {}
+            paths = list(dict.fromkeys(str(m['Path']) for m in actual))
+            libs = {_eng().EMBY_PATHS.lib_of(p) for p in paths}
+            primary = meta if original is None else actual[0]
+            entry.update({'id': original.get('id') if original else str(mid), 'ids': ids,
+                'name': primary['Name'], 'year': primary.get('ProductionYear'),
+                'rating': primary.get('CommunityRating'),
+                'tmdb_id': tid or (original.get('tmdb_id') if original else None),
+                'genres': list(primary.get('Genres') or []),
+                'path': paths[0], 'paths': paths,
+                'has_image': any('Primary' in (m.get('ImageTags') or {}) for m in actual),
+                'in_local': 'local' in libs, 'in_share': 'share' in libs})
+            # Preserve an existing authoritative TMDB poster and comparison;
+            # never invent a full TMDB verification from an ingest event.
+            result['affected'] += 1
+            if original is None or entry != original:
+                if original is None:
+                    movies.append(entry)
+                    result['created'] += 1
+                else:
+                    original.clear()
+                    original.update(entry)
+                updated.append((set(ids), copy.deepcopy(entry)))
+                result['updated'] += 1
+            handled.update(ids)
+        except (OSError, ValueError, RuntimeError, urllib.error.URLError) as error:
+            log.warning('单电影增量跳过 %s，保留旧事实: %s', mid, error)
+    if not result['updated']:
+        result['status'] = 'checked'
+        return result
+    _recompute_mapping_stats(cache)
+    save_emby_lib_cache(cache, keep_ts=True)
+
+    def patch(data):
+        entries = (data or {}).get('movies') or []
+        for ids, fresh in updated:
+            current = next((x for x in entries if ids & {str(i) for i in
+                            (x.get('ids') or [x.get('id')]) if i}), None)
+            if current is None:
+                entries.append(copy.deepcopy(fresh))
+            else:
+                current.clear()
+                current.update(copy.deepcopy(fresh))
+        data['movies'] = entries
+        _recompute_mapping_stats(data)
+        return True
+    _patch_all_caches(patch)
+    snap = load_library_snapshot(max_age=None, background_refresh=False)
+    if snap and patch(snap):
+        snap['facts_ts'] = time.time()
+        save_library_snapshot(_health_snapshot(snap))
+    try:
+        from . import tmdb
+        tmdb.patch_explore_index_from_mapping([], movie_entries=[row for _, row in updated])
+    except Exception as error:
+        log.warning('电影探索身份索引更新失败，等待全量校准: %s', error)
+    try:
+        from . import library_updates
+        library_updates.publish(movie_ids=[i for ids, _ in updated for i in ids])
+    except Exception as error:
+        log.warning('电影增量通知失败，等待轮询恢复: %s', error)
+    result['status'] = 'updated'
+    return result
+
+
+def refresh_mapping_cache_after_ingest(ingest_data: dict) -> dict:
+    """Both movie and episode facts are updated without a full library scan."""
+    series = _refresh_series_mapping_cache_after_ingest(ingest_data)
+    movies = _refresh_movie_mapping_cache_after_ingest(ingest_data)
+    return {'status': 'updated' if (series.get('updated') or movies.get('updated')) else
+            'checked' if (series.get('status') == 'checked' or movies.get('status') == 'checked') else 'skipped',
+            'affected': series.get('affected', 0) + movies.get('affected', 0),
+            'updated': series.get('updated', 0) + movies.get('updated', 0),
+            'created': series.get('created', 0) + movies.get('created', 0),
+            'series_updated': series.get('updated', 0), 'movies_updated': movies.get('updated', 0)}
 
 
 def patch_emby_lib_cache_after_series_delete(series_id: str, deleted_target: str = ''):
@@ -972,6 +1230,12 @@ def save_emby_lib_cache(data: dict, keep_ts: bool = False):
         data['ts'] = time.time()
     data['facts_ts'] = time.time()
     _state.save(_eng().EMBY_LIB_CACHE_FILE, data)
+    if not keep_ts:
+        try:
+            from . import library_updates
+            library_updates.publish(full=True)
+        except Exception as error:
+            log.warning('发布完整片库版本失败: %s', error)
 
 def read_emby_lib_cache(max_age=None):
     try:

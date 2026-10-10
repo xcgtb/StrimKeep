@@ -125,20 +125,22 @@ def _recompute_all_stats():
     _save_strm_count_disk(out['local_total'], out['share_total'])
     return result
 
+_STATS_AUTO_TTL = 3600  # periodic dashboard use; manual invalidate/recheck stays available
+
 def action_library_stats(args):
     # 缓存命中则直接返回
     now = time.time()
-    if _eng()._lib_stats_cache['data'] is not None and (now - _eng()._lib_stats_cache['ts']) < _eng()._CACHE_TTL:
+    if _eng()._lib_stats_cache['data'] is not None and (now - _eng()._lib_stats_cache['ts']) < _STATS_AUTO_TTL:
         return _eng()._lib_stats_cache['data']
     disk = _state.read(_eng().STATE_DIR / 'library_stats_cache.json', {})
     if isinstance(disk, dict) and isinstance(disk.get('rows'), list):
         _eng()._lib_stats_cache.update(ts=disk.get('ts', 0), data=disk)
-        if now - float(disk.get('ts') or 0) >= _eng()._CACHE_TTL:
+        if now - float(disk.get('ts') or 0) >= _STATS_AUTO_TTL:
             threading.Thread(target=_strm_count_bg_refresh, daemon=True,
                              name='library-stats-refresh').start()
         return disk
     with _eng()._strm_count_refreshing:
-        if _eng()._lib_stats_cache['data'] is not None and now - _eng()._lib_stats_cache['ts'] < _eng()._CACHE_TTL:
+        if _eng()._lib_stats_cache['data'] is not None and now - _eng()._lib_stats_cache['ts'] < _STATS_AUTO_TTL:
             return _eng()._lib_stats_cache['data']
         return _recompute_all_stats()
 
@@ -174,13 +176,13 @@ def _get_strm_counts():
     """STRM 总数三级缓存：内存(5分钟) → 磁盘(立即返回+后台刷新) → 同步首算。
     大库 rglob 全量遍历很慢，磁盘缓存保证总览页秒开，后台静默刷新。"""
     now = time.time()
-    if now - _eng()._strm_count_cache['ts'] < _eng()._CACHE_TTL and _eng()._strm_count_cache['ts'] > 0:
+    if now - _eng()._strm_count_cache['ts'] < _STATS_AUTO_TTL and _eng()._strm_count_cache['ts'] > 0:
         return _eng()._strm_count_cache['local'], _eng()._strm_count_cache['share']
     disk = _load_strm_count_disk()
     if disk is not None:
         l, s_, ts = disk
-        _eng()._strm_count_cache.update({'ts': ts or (now - _eng()._CACHE_TTL), 'local': l, 'share': s_})
-        if time.time() - _eng()._strm_count_cache['ts'] >= _eng()._CACHE_TTL:
+        _eng()._strm_count_cache.update({'ts': ts or (now - _STATS_AUTO_TTL), 'local': l, 'share': s_})
+        if time.time() - _eng()._strm_count_cache['ts'] >= _STATS_AUTO_TTL:
             threading.Thread(target=_strm_count_bg_refresh, daemon=True,
                              name='strm-count-refresh').start()
         return _eng()._strm_count_cache['local'], _eng()._strm_count_cache['share']
@@ -197,6 +199,14 @@ def invalidate_stats_cache():
     _eng()._strm_count_cache['ts'] = 0
     _eng()._lib_stats_cache['ts'] = 0
     _eng()._lib_stats_cache['data'] = None
+    # A confirmed deletion must invalidate SQLite totals, not just RAM values.
+    for path in (_eng().STATE_DIR / 'library_stats_cache.json', _eng()._STRM_COUNT_CACHE_FILE):
+        try:
+            _state.remove(path)
+        except OSError as error:
+            # Failure to invalidate a statistic must not fail an already
+            # committed media deletion; surface it for later reconciliation.
+            log.warning('统计缓存持久失效失败 %s: %s', path, error)
 
 def invalidate_media_caches(keep_emby_lib=False):
     """文件变动后统一失效内存缓存（分集 / Emby 索引 / _eng().Lib 快照 / 统计）。

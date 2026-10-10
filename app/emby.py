@@ -128,34 +128,29 @@ def parse_dt(s):
         return None
 
 def _fetch_all_episodes(force=False):
-    """分页拉取全库 Episode（带 600 秒缓存 + 线程锁，避免并发重复拉）"""
-    if not force and _eng()._ep_cache['data'] is not None and (time.time() - _eng()._ep_cache['ts']) < 600:
-        log.info('复用分集缓存（%d 条，%.0f 秒前）', len(_eng()._ep_cache['data']), time.time() - _eng()._ep_cache['ts'])
-        return _eng()._ep_cache['data']
+    """单向流式读取完整分集，避免 15 万条原始 Emby 字典常驻内存。
+
+    只有片库全量校准使用此入口；校准周期由调度器控制，而不是
+    在每个请求后再保留一份大列表做十分钟缓存。
+    """
+    start, page_size = 0, 5000
     with _eng()._ep_lock:
-        if not force and _eng()._ep_cache['data'] is not None and (time.time() - _eng()._ep_cache['ts']) < 600:
-            return _eng()._ep_cache['data']
-        all_eps = []
-        start = 0
-        page_size = 5000
+        # Old cache may originate from an older release; release its references.
+        _eng()._ep_cache.update(ts=0, data=None)
         while True:
-            data = _eng().emby_request('/Items', {
-                'Recursive': 'true',
-                'IncludeItemTypes': 'Episode',
+            response = _eng().emby_request('/Items', {
+                'Recursive': 'true', 'IncludeItemTypes': 'Episode',
                 'Fields': 'SeriesId,ParentIndexNumber,IndexNumber,Path',
-                'StartIndex': start,
-                'Limit': page_size,
+                'StartIndex': start, 'Limit': page_size,
             }) or {}
-            items = data.get('Items') or []
-            total = data.get('TotalRecordCount', 0)
-            all_eps.extend(items)
-            log.info('拉取分集 %d/%d', len(all_eps), total)
-            if len(items) < page_size or len(all_eps) >= total:
+            page = response.get('Items') or []
+            total = int(response.get('TotalRecordCount') or 0)
+            for row in page:
+                yield row
+            start += len(page)
+            log.info('拉取分集 %d/%d', start, total)
+            if not page or len(page) < page_size or (total and start >= total):
                 break
-            start += page_size
-        _eng()._ep_cache['ts'] = time.time()
-        _eng()._ep_cache['data'] = all_eps
-        return all_eps
 
 def _dir_has_media(d):
     """目录里是否还有媒体文件（一次 scandir，遇到就返回）。无法确认（权限/IO 错误）时保守返回 True。"""
@@ -195,17 +190,49 @@ def _alive_dir_map(paths):
         return {}
     return dirs
 
-def _paged_items(params, page_size=1000, max_items=50000):
-    """分页拉取 /Items；任何一页失败都向上抛，由调用方决定是否保留旧缓存。"""
+def _paged_items(params, page_size=1000, max_items=200000):
+    """分页获取 /Items；近期入库按日期倒序提前停止（兼容忽略 MinDateCreated 的 Emby）。
+
+    不能因页数/数量上限静默截断结果；否则 24 小时统计会错误变少。
+    检测到违反降序排序契约时抛错，由入库层保留上次成功数据。
+    """
     items, start = [], 0
-    while len(items) < max_items:
+    recent = (params.get('MinDateCreated') and params.get('SortBy') == 'DateCreated'
+              and params.get('SortOrder') == 'Descending')
+    cutoff = parse_dt(params['MinDateCreated']) if recent else None
+    previous = None
+    while True:
         data = _eng().emby_request('/Items', dict(params, StartIndex=start, Limit=page_size)) or {}
         page = data.get('Items') or []
-        items.extend(page)
-        total = data.get('TotalRecordCount') or 0
-        if len(page) < page_size or (total and len(items) >= total):
+        total = int(data.get('TotalRecordCount') or 0)
+        if not page:
             break
-        start += page_size
+        if cutoff:
+            reached_old = False
+            for row in page:
+                dt = parse_dt(row.get('DateCreated'))
+                if dt is None:
+                    # Do not stop prematurely when a server omits DateCreated.
+                    continue
+                if previous is not None and dt > previous:
+                    raise ValueError('Emby 入库时间排序异常，保留已有缓存')
+                previous = dt
+                if dt < cutoff:
+                    reached_old = True
+                elif reached_old:
+                    raise ValueError('Emby 入库时间排序异常，保留已有缓存')
+            items.extend(row for row in page if not (parse_dt(row.get('DateCreated')) or cutoff) < cutoff)
+            if reached_old:
+                break
+        else:
+            items.extend(page)
+        start += len(page)
+        if total and start >= total:
+            break
+        if len(page) < page_size:
+            break
+        if start >= max_items:
+            raise ValueError('Emby 返回的入库条目超出安全分页上限；保留已有缓存')
     return items
 
 def _recent(item_type, fields, limit, cutoff):

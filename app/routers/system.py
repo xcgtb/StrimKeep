@@ -34,6 +34,20 @@ def api_overview_recommendations(media: str = 'movie', retry: int = 0):
         raise HTTPException(400, '无效推荐类型')
 
 
+def _memory_status():
+    """Lightweight process RSS; no tracemalloc or full-library allocations."""
+    try:
+        with open('/proc/self/status', encoding='ascii') as handle:
+            values = {}
+            for line in handle:
+                if line.startswith(('VmRSS:', 'VmHWM:')):
+                    parts = line.split()
+                    values[parts[0][:-1]] = round(int(parts[1]) / 1024, 1)
+        return {'rss_mib': values.get('VmRSS'), 'peak_rss_mib': values.get('VmHWM')}
+    except (OSError, ValueError, IndexError):
+        return {'rss_mib': None, 'peak_rss_mib': None}
+
+
 @router.get('/api/runtime/status', dependencies=[Depends(auth)])
 def api_runtime_status():
     """Small in-process status snapshot; never scan media or probe remote APIs."""
@@ -42,7 +56,7 @@ def api_runtime_status():
              'cancel_requested': current.cancel_event.is_set()} if current else None)
     return {'status': 'success', 'ts': time.time(), 'version': APP_VERSION,
             'bot': bot.status(), 'storage': storage.storage_health(), 'task': task,
-            'comparison': engine.get_tmdb_scan_progress()}
+            'comparison': engine.get_tmdb_scan_progress(), 'memory': _memory_status()}
 
 
 @router.get('/api/health')

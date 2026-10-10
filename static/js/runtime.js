@@ -450,31 +450,73 @@ var POSTER_MAX_CONCURRENCY = 6;
 var POSTER_CACHE_NAME = 'strimkeep-posters-v1';
 var __posterInflight = {};
 var __posterCacheWrites = 0;
+// Bounded tab-memory LRU: switching Explore / Mapping must not re-read dozens
+// of CacheStorage entries, but should never grow with the full media library.
+var __posterMemory = new Map(), __posterMemoryBytes = 0;
+var POSTER_MEMORY_MAX_BYTES = 20 * 1024 * 1024, POSTER_MEMORY_MAX_ITEMS = 64;
+var __posterCachePromise = null;
+function posterMemoryGet(url){
+  if (!__posterMemory.has(url)) return null;
+  var blob = __posterMemory.get(url);
+  __posterMemory.delete(url);
+  __posterMemory.set(url, blob);
+  return blob;
+}
+function posterMemoryPut(url, blob){
+  if (!blob || typeof blob.size !== 'number' || blob.size <= 0 || blob.size > POSTER_MEMORY_MAX_BYTES) return;
+  if (__posterMemory.has(url)) __posterMemoryBytes -= __posterMemory.get(url).size;
+  __posterMemory.delete(url);
+  __posterMemory.set(url, blob);
+  __posterMemoryBytes += blob.size;
+  while (__posterMemoryBytes > POSTER_MEMORY_MAX_BYTES || __posterMemory.size > POSTER_MEMORY_MAX_ITEMS) {
+    var oldest = __posterMemory.keys().next().value;
+    __posterMemoryBytes -= __posterMemory.get(oldest).size;
+    __posterMemory.delete(oldest);
+  }
+}
+function posterBrowserCache(){
+  if (!window.caches) return Promise.resolve(null);
+  if (!__posterCachePromise) {
+    __posterCachePromise = window.caches.open(POSTER_CACHE_NAME).catch(function(){
+      __posterCachePromise = null;
+      return null;
+    });
+  }
+  return __posterCachePromise;
+}
 async function posterFetch(url){
   if (!url) throw new Error('empty poster');
+  var warm = posterMemoryGet(url);
+  if (warm) return warm;
   if (__posterInflight[url]) return __posterInflight[url];
   __posterInflight[url] = (async function(){
-    var cache = null;
-    try { if (window.caches) cache = await caches.open(POSTER_CACHE_NAME); } catch(e) {}
+    var cache = await posterBrowserCache();
     if (cache) {
       try {
         var hit = await cache.match(url);
-        if (hit) return await hit.blob();
+        if (hit) {
+          var cachedBlob = await hit.blob();
+          posterMemoryPut(url, cachedBlob);
+          return cachedBlob;
+        }
       } catch(e) {}
     }
     var controller = new AbortController(), timer = setTimeout(function(){controller.abort();}, 10000);
     try {
       var r = await fetch(url, {credentials:'same-origin', cache:'force-cache', signal:controller.signal});
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      var saved = r.clone(), blob = await r.blob();
-      if (cache) {
-        try {
-          await cache.put(url, saved);
-          if (typeof __posterCacheWrites === 'number' && ++__posterCacheWrites % 16 === 0) {
-            var keys = await cache.keys();
-            await Promise.all(keys.slice(0, Math.max(0, keys.length - 120)).map(function(key){return cache.delete(key);}));
+      var saved = cache ? r.clone() : null, blob = await r.blob();
+      posterMemoryPut(url, blob);
+      // Rendering is not blocked on slow browser storage writes. Failed writes
+      // are still best-effort and the bounded memory cache covers quick revisits.
+      if (cache && saved) {
+        Promise.resolve().then(function(){return cache.put(url, saved);}).then(function(){
+          if (++__posterCacheWrites % 16 === 0) {
+            return cache.keys().then(function(keys){
+              return Promise.all(keys.slice(0, Math.max(0, keys.length - 120)).map(function(key){return cache.delete(key);}));
+            });
           }
-        } catch(e) {}
+        }).catch(function(){});
       }
       return blob;
     } finally {clearTimeout(timer);}

@@ -95,15 +95,21 @@ class Lib:
                 continue
             d = Path(dirpath)
             pname = d.name
-            folder = d.parent.name if parse_season_dir(pname) is not None else pname
-            allow_bare_ep = (parse_season_dir(pname) is not None or _under_tv_category(d, root))
+            is_season_dir = parse_season_dir(pname) is not None
+            folder = d.parent.name if is_season_dir else pname
+            allow_bare_ep = is_season_dir or _under_tv_category(d, root)
+            # A whole episode directory shares the same governance title / TMDB
+            # identity. Resolve it only if at least one entry needs reparsing.
+            directory_identity = None
             for n in strms:
                 f = d / n
                 path_key = str(f)
                 seen_paths.add(path_key)
                 try:
-                    st = f.stat()
-                    if f.is_symlink() or not stat.S_ISREG(st.st_mode):
+                    # lstat preserves the existing fail-closed symlink check in
+                    # one filesystem round trip (stat + is_symlink used two).
+                    st = f.lstat()
+                    if not stat.S_ISREG(st.st_mode):
                         raise OSError('STRM 不是普通文件或是软链接')
                     mtime_ns, size = int(st.st_mtime_ns), int(st.st_size)
                 except OSError as error:
@@ -112,12 +118,16 @@ class Lib:
                 cached = media_index.get(path_key)
                 payload = cached.get('payload') if cached else None
                 if not cached or cached.get('mtime_ns') != mtime_ns or cached.get('size') != size or not isinstance(payload, dict):
-                    key, disp, base, year = governance_title_key(folder)
-                    tm = re.search(r'(?i)tmdb(?:id)?[=\-: ]*(\d+)', folder or '')
+                    if directory_identity is None:
+                        key, disp, base, year = governance_title_key(folder)
+                        tm = re.search(r'(?i)tmdb(?:id)?[=\-: ]*(\d+)', folder or '')
+                        directory_identity = (key, disp, base, year,
+                                              tm.group(1) if tm else '')
+                    key, disp, base, year, tmdb_id = directory_identity
                     ep = get_ep(n, pname, allow_bare_ep=allow_bare_ep)
                     payload = {
                         'key': key, 'disp': disp, 'base': base, 'year': year,
-                        'tmdb': tm.group(1) if tm else '',
+                        'tmdb': tmdb_id,
                         'season': int(ep[0]) if ep else 0,
                         'episode': int(ep[1]) if ep else 0,
                     }

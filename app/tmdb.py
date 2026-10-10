@@ -245,6 +245,60 @@ def _build_emby_library_index():
         row['in_share'] = 'share' in row['libs']
     return out
 
+def patch_explore_index_from_mapping(entries, movie_entries=()):
+    """Update changed TV/Movie identities; retain the full-index timestamp."""
+    cache = _eng()._emby_index_cache
+    index = cache.get('data')
+    if index is None:
+        disk = _load_emby_index_disk()
+        if disk:
+            index = disk['data']
+    if index is None:
+        return False
+    changed = False
+    for media, entry in ([('tv', e) for e in entries] + [('movie', e) for e in movie_entries]):
+        tid = str(entry.get('tmdb_id') or '')
+        if not tid:
+            continue
+        key = media + ':' + tid
+        row = index.get(key)
+        if row is None:
+            row = {'id': entry.get('id'), 'ids': [], 'name': entry.get('name'),
+                   'type': 'Series' if media == 'tv' else 'Movie',
+                   'path': entry.get('path'), 'paths': [],
+                   'year': entry.get('year'), 'has_image': bool(entry.get('has_image')),
+                   'libs': []}
+            index[key] = row
+        for sid in (entry.get('series_ids') if media == 'tv' else entry.get('ids')) or [entry.get('id')]:
+            if sid and sid not in row['ids']:
+                row['ids'].append(sid)
+                changed = True
+        for path in entry.get('paths') or [entry.get('path')]:
+            if path and path not in row['paths']:
+                row['paths'].append(path)
+                changed = True
+        libs = set(row.get('libs') or [])
+        if entry.get('in_local'): libs.add('local')
+        if entry.get('in_share'): libs.add('share')
+        if set(row.get('libs') or []) != libs:
+            changed = True
+        row['libs'] = sorted(libs)
+        row['in_local'] = 'local' in libs
+        row['in_share'] = 'share' in libs
+        if entry.get('has_image') and not row.get('has_image'):
+            changed = True
+        row['has_image'] = row.get('has_image', False) or bool(entry.get('has_image'))
+    if changed:
+        # Do not refresh index.ts: this is a partial observation, not a full scan.
+        cache['data'] = index
+        if cache.get('ts') == 0:
+            disk = _load_emby_index_disk()
+            if disk: cache['ts'] = disk['ts']
+        _state.save(_eng()._EMBY_INDEX_CACHE_FILE,
+                    {'ts': cache.get('ts', 0), 'data': index})
+    return changed
+
+
 def _emby_index_bg_refresh():
     # 仅由已取得刷新锁的启动函数调用，避免重复请求生成大量等待线程。
     try:

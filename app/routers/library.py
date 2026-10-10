@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """片库：入库 / 统计 / Emby / 搜索 / 日志 / 删除 / 探索"""
-import time, json, threading, sqlite3, urllib.parse, urllib.request
+import time, json, threading, sqlite3, urllib.parse, urllib.request, asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from app import runtime_logs
-from app import posters, tmdb, library_response
+from app import posters, tmdb, library_response, library_updates, morning
 
 try:
     from app.routers.deps import auth, engine, logger, Args
@@ -187,6 +187,65 @@ def api_explore_library_status(body: dict):
 @router.get('/api/tmdb/progress', dependencies=[Depends(auth)])
 def api_tmdb_progress():
     return {'status': 'success', 'progress': engine.get_tmdb_scan_progress()}
+
+
+@router.get('/api/library/changes', dependencies=[Depends(auth)])
+def api_library_changes(since: int = 0):
+    """Small patch set, never triggers Emby/TMDB scanning or exposes media paths."""
+    if since < 0:
+        raise HTTPException(400, '无效版本')
+    change = library_updates.changes(since)
+    result = {'status': 'success', 'version': change['version'],
+              'full': change['full'], 'series': [], 'movies': []}
+    if change['full'] or not (change['ids'] or change.get('movie_ids')):
+        return result
+    cached = morning.read_emby_lib_cache(max_age=None)
+    if cached is None:
+        result['full'] = True
+        return result
+    ids = set(change['ids'])
+    found = set()
+    for row in cached.get('series') or []:
+        members = {str(x) for x in (row.get('series_ids') or [row.get('id')]) if x}
+        if members & ids:
+            result['series'].append(row)
+            found.update(members & ids)
+    # A deletion or concurrent full refresh must be reconciled, not silently
+    # displayed as an unchanged badge.
+    movie_ids = set(change.get('movie_ids') or [])
+    found_movies = set()
+    for row in cached.get('movies') or []:
+        members = {str(x) for x in (row.get('ids') or [row.get('id')]) if x}
+        if members & movie_ids:
+            result['movies'].append(row)
+            found_movies.update(members & movie_ids)
+    if ids - found or movie_ids - found_movies:
+        result['full'] = True
+        result['series'] = []
+        result['movies'] = []
+        return result
+    result['stats'] = cached.get('stats') or {}
+    result['facts_ts'] = cached.get('facts_ts') or 0
+    return result
+
+
+@router.get('/api/library/events', dependencies=[Depends(auth)])
+async def api_library_events(request: Request):
+    """Authenticated SSE hints; clients read actual facts via /changes."""
+    async def updates():
+        last = library_updates.changes(0)['version']
+        yield 'retry: 5000\n\n'
+        while not await request.is_disconnected():
+            latest = library_updates.changes(last)['version']
+            if latest != last:
+                last = latest
+                yield 'event: library\ndata: ' + str(last) + '\n\n'
+            else:
+                yield ': alive\n\n'
+            await asyncio.sleep(5)
+    return StreamingResponse(updates(), media_type='text/event-stream', headers={
+        'Cache-Control': 'private, no-cache, no-transform',
+        'X-Accel-Buffering': 'no', 'Vary': 'Cookie, Authorization'})
 
 
 @router.get('/api/emby/library', dependencies=[Depends(auth)])

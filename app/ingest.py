@@ -44,10 +44,49 @@ def _eng():
             return None
 
 
-def _fetch_ingest(hours=24):
+# Event index is stored as one SQLite document, not a second JSON file.
+# A 20-minute overlap avoids losing delayed writes near the last poll boundary;
+# a six-hour authoritative pass corrects deletions/renames that DateCreated cannot detect.
+_INGEST_OVERLAP = 20 * 60
+_INGEST_RECONCILE = 6 * 3600
+_ingest_refresh_lock = threading.RLock()
+_INGEST_FIELDS = {
+    'Movie': 'DateCreated,Path,Genres,ProviderIds,ProductionYear,Name',
+    'Episode': 'DateCreated,Path,SeriesName,Genres,ProviderIds,SeriesId,ParentIndexNumber,IndexNumber,ProductionYear,Name',
+}
+
+
+def _ingest_index_path():
+    return _eng().STATE_DIR / 'ingest_recent_items.json'
+
+
+def _query_ingest_type(kind, since):
+    min_date = since.strftime('%Y-%m-%dT%H:%M:%S.0000000Z')
+    return _eng()._paged_items({
+        'Recursive': 'true', 'SortBy': 'DateCreated', 'SortOrder': 'Descending',
+        'MinDateCreated': min_date, 'IncludeItemTypes': kind,
+        'Fields': _INGEST_FIELDS[kind]})
+
+
+def _ingest_identity(item):
+    # ItemId is stable through renames; Path is the conservative legacy fallback.
+    return str(item.get('Id') or ('path:' + str(item.get('Path') or '')))
+
+
+def _merge_recent(previous, incoming, cutoff):
+    merged = {_ingest_identity(row): row for row in previous if _ingest_identity(row) != 'path:'}
+    for row in incoming:
+        ident = _ingest_identity(row)
+        if ident != 'path:':
+            merged[ident] = row
+    rows = [( _eng().parse_dt(row.get('DateCreated')), row) for row in merged.values()]
+    return [row for dt, row in sorted((v for v in rows if v[0] and v[0] >= cutoff),
+                                       key=lambda item: item[0], reverse=True)]
+
+
+def _fetch_ingest(hours=24, source_items=None):
     """实际拉取 Emby 近期入库。返回里 `ok=False` 表示至少一项拉取失败（结果不完整，不应覆盖好缓存）。"""
     cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)
-    min_date = cutoff.strftime('%Y-%m-%dT%H:%M:%S.0000000Z')
     tv_tree = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
     # 详情树：在原有“剧名 + 集数”统计之外保留季/集信息，供 Web 入库汇报展示。
     # 不改变 tv_tree 的旧结构，避免兼容 Telegram / 旧前端。
@@ -58,9 +97,8 @@ def _fetch_ingest(hours=24):
     episodes_raw = []
     errors = []
 
-    base = {'Recursive': 'true', 'SortBy': 'DateCreated', 'SortOrder': 'Descending', 'MinDateCreated': min_date}
     try:
-        for m in _eng()._paged_items(dict(base, IncludeItemTypes='Movie', Fields='DateCreated,Path,Genres,ProviderIds,ProductionYear,Name')):
+        for m in (source_items['movies'] if source_items is not None else _query_ingest_type('Movie', cutoff)):
             dt = _eng().parse_dt(m.get('DateCreated'))
             if not dt or dt < cutoff: continue
             movies_raw.append(m)
@@ -80,7 +118,7 @@ def _fetch_ingest(hours=24):
         errors.append('电影: %s' % e)
 
     try:
-        for e in _eng()._paged_items(dict(base, IncludeItemTypes='Episode', Fields='DateCreated,Path,SeriesName,Genres,ProviderIds,SeriesId,ParentIndexNumber,IndexNumber,ProductionYear,Name')):
+        for e in (source_items['episodes'] if source_items is not None else _query_ingest_type('Episode', cutoff)):
             dt = _eng().parse_dt(e.get('DateCreated'))
             if not dt or dt < cutoff: continue
             episodes_raw.append(e)
@@ -168,39 +206,93 @@ def _fetch_ingest(hours=24):
         },
         'movies_raw': [{'name': m.get('Name'), 'path': m.get('Path',''), 'created': m.get('DateCreated')} for m in movies_raw[:200]],
         'episodes_raw': [{'name': e.get('Name'), 'series': e.get('SeriesName'), 'series_id': e.get('SeriesId'), 'season': e.get('ParentIndexNumber'), 'episode': e.get('IndexNumber'), 'path': e.get('Path',''), 'created': e.get('DateCreated')} for e in episodes_raw[:500]],
+        '_recent_source': {'movies': movies_raw, 'episodes': episodes_raw},
     }
 
 def refresh_ingest_cache(hours=24) -> dict:
-    """立即拉取并覆盖缓存。拉取失败（超时等）时保留上一份完整缓存，只附上失败信息，
-    避免把「+0 部 / +0 集」的残缺结果写成最新数据。"""
-    log.info('入库缓存刷新开始（%sh）', hours)
-    data = _eng()._fetch_ingest(hours=hours)
-    if not data.get('ok', True):
-        old = read_ingest_cache()
-        if old and old.get('ok', True):
-            old['stale_error'] = data.get('error', '')
-            old['stale_error_ts'] = time.time()
-            old['from_cache'] = True
-            _write_ingest_cache(old)
-            log.warning('入库缓存刷新失败，保留旧缓存（%d 秒前）: %s',
-                        int(time.time() - old.get('ts', 0)), data.get('error'))
-            return old
-        # 没有旧缓存可退：仍把失败结果落盘，但带 ok=False，界面据此提示而不是当成「0 新增」
-    _write_ingest_cache(data)
-    # 本轮确实有新入库时，只就地刷新受影响剧集的片库映射缓存。
-    # 不触发全量 TMDB 对照，避免为了「补齐缺集」重新扫整个片库。
-    if data.get('ok', True):
-        try:
-            _eng().refresh_mapping_cache_after_ingest(data)
-        except Exception as e:
-            log.warning('入库后片库映射缓存刷新失败: %s', e)
-    st = data.get('stats', {})
-    if not data.get('ok', True):
-        log.warning('入库缓存刷新失败且无旧缓存可保留: %s', data.get('error'))
+    """持久化近期入库事实：常规只请求游标后 20 分钟重叠窗，六小时全量对账。
+
+    保存成功前不移动游标；任何拉取失败都保留旧缓存和增量索引。
+    """
+    with _ingest_refresh_lock:
+        now = time.time()
+        index = _state.read(_ingest_index_path(), {})
+        valid = (isinstance(index, dict) and index.get('host') == _eng().EMBY_HOST
+                 and index.get('hours') == hours and 0 < now - float(index.get('ts') or 0) < 3600
+                 and now - float(index.get('full_ts') or 0) < _INGEST_RECONCILE
+                 and isinstance(index.get('movies'), list) and isinstance(index.get('episodes'), list))
+        delta = None
+        if valid:
+            try:
+                # Poll time, not max(DateCreated): Emby may import older timestamps late.
+                since = datetime.datetime.fromtimestamp(
+                    max(now - hours * 3600, float(index['ts']) - _INGEST_OVERLAP),
+                    tz=datetime.timezone.utc)
+                fresh_movies = _query_ingest_type('Movie', since)
+                fresh_episodes = _query_ingest_type('Episode', since)
+                cutoff = datetime.datetime.fromtimestamp(now - hours * 3600, tz=datetime.timezone.utc)
+                delta = {'movies': _merge_recent(index['movies'], fresh_movies, cutoff),
+                         'episodes': _merge_recent(index['episodes'], fresh_episodes, cutoff)}
+                old_rows = {_ingest_identity(row): row for row in index['episodes']}
+                changed = [row for row in fresh_episodes if old_rows.get(_ingest_identity(row)) != row]
+                old_movies = {_ingest_identity(row): row for row in index['movies']}
+                changed_movies = [row for row in fresh_movies if old_movies.get(_ingest_identity(row)) != row]
+                log.info('入库增量拉取：电影 %d / 分集 %d；变化分集 %d',
+                         len(fresh_movies), len(fresh_episodes), len(changed))
+                data = _eng()._fetch_ingest(hours=hours, source_items=delta)
+            except Exception as error:
+                log.warning('入库增量拉取失败，保留旧缓存: %s', error)
+                data = {'ts': time.time(), 'ok': False, 'error': str(error), 'stats': {}, 'tree': {}}
+        else:
+            log.info('入库完整时间窗对账开始（%sh）', hours)
+            data = _eng()._fetch_ingest(hours=hours)
+            changed = None
+            changed_movies = None
+
+        if not data.get('ok', True):
+            old = read_ingest_cache()
+            if old and old.get('ok', True):
+                old['stale_error'] = data.get('error', '')
+                old['stale_error_ts'] = time.time()
+                old['from_cache'] = True
+                _write_ingest_cache(old)
+                log.warning('入库缓存刷新失败，保留旧缓存: %s', data.get('error'))
+                return old
+        rows = data.pop('_recent_source', None)
+        if data.get('ok', True):
+            if rows is not None:
+                _state.save(_ingest_index_path(), {
+                    'host': _eng().EMBY_HOST, 'hours': hours, 'ts': now,
+                    'full_ts': float(index['full_ts']) if valid else now,
+                    'movies': rows['movies'], 'episodes': rows['episodes']})
+            # Avoid re-fetching the same affected series every five minutes.
+            # On the authoritative pass, preserve the historical complete update path.
+            mapping_data = data
+            if changed is None and rows is not None:
+                # The first authoritative pass must update ALL recently changed
+                # series, not only the 500 detail rows exposed to the UI.
+                mapping_data = dict(data, episodes_raw=[{
+                    'series_id': e.get('SeriesId'), 'episode': e.get('IndexNumber'),
+                    'season': e.get('ParentIndexNumber')} for e in rows['episodes']],
+                    movies_raw=[{'id': m.get('Id')} for m in rows['movies']])
+            if changed is not None:
+                mapping_data = dict(data, episodes_raw=[{
+                    'series_id': e.get('SeriesId'), 'episode': e.get('IndexNumber'),
+                    'season': e.get('ParentIndexNumber')} for e in changed],
+                    movies_raw=[{'id': m.get('Id')} for m in changed_movies])
+        _write_ingest_cache(data)
+        if data.get('ok', True):
+            try:
+                _eng().refresh_mapping_cache_after_ingest(mapping_data)
+            except Exception as e:
+                log.warning('入库后片库映射缓存刷新失败: %s', e)
+        st = data.get('stats', {})
+        if not data.get('ok', True):
+            log.warning('入库缓存刷新失败且无旧缓存可保留: %s', data.get('error'))
+            return data
+        log.info('入库缓存刷新完成：电影 %d / 剧集 %d 部 / 集 %d',
+                 st.get('movies', 0), st.get('series', 0), st.get('episodes', 0))
         return data
-    log.info('入库缓存刷新完成：电影 %d / 剧集 %d 部 / 集 %d',
-             st.get('movies', 0), st.get('series', 0), st.get('episodes', 0))
-    return data
 
 def _write_ingest_cache(data):
     try:
