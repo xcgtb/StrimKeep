@@ -120,25 +120,88 @@ def _exact_many(jobs):
     return found
 
 
+def _verify_cross_library_series(sids, episodes):
+    """Verify parent-filter spillover is the *same* work split across two libraries.
+
+    Do not trust same name alone, library-path heuristics, or the returned
+    ParentId page: reject unknown identities, non-exact Ids lookup, same-library
+    mixed IDs, or paths outside the corresponding Emby library. This operation
+    is read-only; the original ingest commit and deletion guards remain intact.
+    """
+    if len(sids) < 2 or len(sids) > 4:
+        raise RuntimeError('Emby 单剧筛选返回过多作品身份，保留旧数据')
+    response = engine.emby_request('/Items', {
+        'Ids': ','.join(sorted(sids)), 'Recursive': 'true',
+        'IncludeItemTypes': 'Series', 'Fields': 'ProviderIds,Path,ProductionYear',
+        'Limit': len(sids) + 1}, timeout=15, retries=0)
+    if not isinstance(response, dict) or not isinstance(response.get('Items'), list):
+        raise RuntimeError('Emby 跨库电视剧身份查询失败')
+    meta = response['Items']
+    try:
+        complete = (int(response.get('TotalRecordCount')) == len(meta) == len(sids))
+    except (TypeError, ValueError):
+        complete = False
+    if not complete:
+        raise RuntimeError('Emby 跨库电视剧身份查询不完整，保留旧数据')
+    found, signatures, libraries = {}, set(), {}
+    for series in meta:
+        ident = str(series.get('Id') or '')
+        if ident not in sids or ident in found or series.get('Type') != 'Series':
+            raise RuntimeError('Emby 跨库电视剧 ID 身份异常，保留旧数据')
+        tmdb = str((series.get('ProviderIds') or {}).get('Tmdb') or '').strip()
+        name = str(series.get('Name') or '').strip().casefold()
+        year = str(series.get('ProductionYear') or '').strip()
+        # Require a nonempty strong identity. Do not merge anonymous/weak titles.
+        if not tmdb.isdecimal() or not name or not year.isdecimal():
+            raise RuntimeError('Emby 跨库作品元数据不足，保留旧数据')
+        signatures.add((tmdb, name, year))
+        path = series.get('Path') or ''
+        library = engine.EMBY_PATHS.lib_of(path, fallback=False)
+        if library not in ('local', 'share') or engine.emby_path_to_container(path) is None:
+            raise RuntimeError('Emby 跨库剧集根路径无法严格匹配，保留旧数据')
+        found[ident] = series
+        libraries[ident] = library
+    if len(found) != len(sids) or len(signatures) != 1:
+        raise RuntimeError('Emby 跨库电视剧身份不一致，保留旧数据')
+    if len(set(libraries.values())) != len(libraries):
+        raise RuntimeError('Emby 同库混合 SeriesId，保留旧数据')
+    for ep in episodes:
+        ident = str(ep.get('SeriesId') or '')
+        if ident not in libraries:
+            raise RuntimeError('Emby 跨库分集缺少可信 SeriesId，保留旧数据')
+        if engine.EMBY_PATHS.lib_of(ep.get('Path') or '', fallback=False) != libraries[ident]:
+            raise RuntimeError('Emby 跨库分集身份与目录不匹配，保留旧数据')
+
+
 def _live(sid):
+    """Return only the requested SeriesId, verifying legitimate cross-library spillover."""
+    sid = str(sid)
     response = engine.emby_request('/Items', {'ParentId': sid, 'Recursive': 'true',
         'IncludeItemTypes': 'Episode', 'Fields': 'Path,SeriesId,ParentIndexNumber,IndexNumber,IndexNumberEnd',
         'Limit': 5000}, timeout=15, retries=0)
     if not isinstance(response, dict) or not isinstance(response.get('Items'), list):
         raise RuntimeError('Emby 单剧分集读取失败')
     rows = response['Items']
-    if response.get('TotalRecordCount') is None or int(response['TotalRecordCount']) != len(rows) or len(rows) >= 5000:
+    try:
+        complete = int(response.get('TotalRecordCount')) == len(rows) and len(rows) < 5000
+    except (TypeError, ValueError):
+        complete = False
+    if not complete:
         raise RuntimeError('Emby 单剧分集结果不完整')
+    returned_sids = {str(row.get('SeriesId') or sid) for row in rows}
+    if returned_sids - {sid}:
+        # Emby can return episodes for *both* library Series IDs for one show.
+        # Verify metadata and ownership before filtering. Never blindly discard
+        # unrelated episodes: an ignored ParentId can otherwise hide corruption.
+        _verify_cross_library_series(returned_sids | {sid}, rows)
     for row in rows:
-        if str(row.get('SeriesId') or sid) != sid:
-            raise RuntimeError('Emby 忽略了单剧筛选')
         path = row.get('Path') or ''
-        if engine.EMBY_PATHS.lib_of(path) not in ('local', 'share'):
+        if engine.EMBY_PATHS.lib_of(path, fallback=False) not in ('local', 'share'):
             raise RuntimeError('分集路径无法确认所属库')
         local = engine.emby_path_to_container(path)
         if local is None or not local.is_file():
             raise RuntimeError('STRM 挂载不可见或 Emby 尚未完成同步，保留旧数据')
-    return rows
+    return [row for row in rows if str(row.get('SeriesId') or sid) == sid]
 
 
 def _commit(kind, ids, entry):
