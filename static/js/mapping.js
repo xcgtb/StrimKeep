@@ -433,6 +433,184 @@ function renderSeriesCard(s){
     + '</div>';
 }
 
+/* 同一页面只允许一个删除预览/请求；关闭或重开详情不解除正在执行的请求。 */
+var mappingDeleteBusy = false;
+var mappingDeleteMessage = '';
+var mappingDeleteView = null;
+function renderMappingDeleteState(){
+  document.querySelectorAll('[data-mapping-delete]').forEach(function(button){
+    button.disabled = mappingDeleteBusy;
+    button.setAttribute('aria-busy', String(mappingDeleteBusy));
+  });
+  var status = $('mappingDeleteStatus');
+  if (status) {
+    status.textContent = mappingDeleteBusy ? mappingDeleteMessage : '';
+    status.hidden = !mappingDeleteBusy;
+  }
+}
+function beginMappingDelete(){
+  if (mappingDeleteBusy) {
+    toast('删除正在处理中，请等待结果，不要重复提交', '', 4000);
+    return false;
+  }
+  mappingDeleteBusy = true;
+  mappingDeleteMessage = '正在核对文件，请稍候…';
+  renderMappingDeleteState();
+  return true;
+}
+function mappingDeletePhase(message){
+  mappingDeleteMessage = message;
+  renderMappingDeleteState();
+}
+function mappingDeletePoster(entry, kind){
+  if (!entry) return '';
+  var poster = kind === 'series' ? (entry.tmdb_info || {}).poster : entry.poster_tmdb;
+  var url = poster ? '/api/tmdb/poster' + poster : (entry.has_image ? '/api/emby/poster/' + encodeURIComponent(entry.id) : '');
+  return url ? '<img data-emby-src="' + esc(url) + '" style="width:72px;height:108px;object-fit:cover;border-radius:8px;flex-shrink:0">' : '';
+}
+function mappingDeleteEntry(){
+  if (!mappingDeleteView) return null;
+  var view = mappingDeleteView;
+  var list = view.kind === 'series' ? embyData.series : embyData.movies;
+  return list.find(function(x){return view.kind === 'series' ? String(x.id) === String(view.id) : String(x.tmdb_id || '') === String(view.id);}) || null;
+}
+function mappingDeleteHeader(entry){
+  var view = mappingDeleteView || {};
+  var facts = '';
+  if (entry) {
+    if (entry.in_local) facts += '本地库' + (view.kind === 'series' ? ' ' + (entry.local_eps || 0) + ' 集' : '');
+    if (entry.in_share) facts += (facts ? ' · ' : '') + '分享库' + (view.kind === 'series' ? ' ' + (entry.share_eps || 0) + ' 集' : '');
+  }
+  return '<div style="display:flex;gap:14px;align-items:center;margin-bottom:16px">'
+    + mappingDeletePoster(entry, view.kind) + '<div><strong>' + esc(view.title || '所选作品')
+    + '</strong>' + (facts ? '<p>' + esc(facts) + '</p>' : '') + '</div></div>';
+}
+function showMappingDeleteProgress(target, title, count, kind, id){
+  mappingDeleteView = {target:target, title:title, count:count, kind:kind, id:id};
+  mappingDeletePhase(target === 'local' ? '正在删除本地 STRM 及 115 源文件…' : '正在删除分享库 STRM…');
+  openModal('<div class="mapping-detail"><h3 style="margin:0 0 16px">正在删除</h3>'
+    + mappingDeleteHeader(mappingDeleteEntry())
+    + '<p>待处理 ' + esc(count) + ' 个 STRM</p>'
+    + '<p>' + (target === 'local' ? '联动删除本地 STRM 与 115 源文件。' : '仅删除分享库 STRM，保留云端源文件。') + '</p>'
+    + '<p id="mappingDeleteStatus" role="status" aria-live="polite" style="color:var(--text-mid)"></p>'
+    + '<progress id="mappingDeleteBar" value="0" max="' + Math.max(1, count) + '" style="width:100%"></progress>'
+    + '<p id="mappingDeleteCounts" role="status" aria-live="polite">已处理 0 / ' + esc(count) + '</p>'
+    + '<p id="mappingDeleteFile" style="word-break:break-all;color:var(--text-dim);font-size:12px"></p>'
+    + '<button class="btn gray" onclick="closeModal()">关闭提示（删除继续执行）</button></div>');
+  renderMappingDeleteState();
+  hydratePosters($('modalBody'));
+}
+function updateMappingDeleteProgress(snapshot){
+  var total = snapshot.total || (mappingDeleteView || {}).count || 0;
+  var processed = Number(snapshot.processed) || 0;
+  var phase = snapshot.phase;
+  mappingDeletePhase(phase === 'cleanup' ? '正在清理空目录…' : phase === 'finalizing' ? '正在更新片库状态…' :
+    (mappingDeleteView.target === 'local' ? '正在删除本地 STRM 及 115 源文件…' : '正在删除分享库 STRM…'));
+  var bar = $('mappingDeleteBar');
+  if (bar) {bar.max = Math.max(1, total); bar.value = processed;}
+  var counts = $('mappingDeleteCounts');
+  if (counts) counts.textContent = '已处理 ' + processed + ' / ' + total + ' · STRM 已删除 ' + (snapshot.strm_removed || 0)
+    + (mappingDeleteView.target === 'local' ? ' · 115 源文件已删除 ' + (snapshot.cloud_removed || 0) : '')
+    + ' · 保留 ' + (snapshot.retained || 0);
+  var file = $('mappingDeleteFile');
+  if (file) file.textContent = snapshot.current_file || '';
+}
+function mappingOperationId(){
+  var bytes = new Uint8Array(16);
+  if (window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(bytes);
+  else for (var i=0;i<bytes.length;i++) bytes[i] = Math.floor(Math.random()*256);
+  return Array.from(bytes).map(function(x){return ('0' + x.toString(16)).slice(-2);}).join('');
+}
+async function executeMappingDelete(path, body){
+  if (body.target === 'share') return api(path, {method:'POST', body:JSON.stringify(body)});
+  var operationId = mappingOperationId();
+  var statusPath = '/api/emby/delete/progress/' + operationId;
+  var initial;
+  try {
+    initial = await api(path, {method:'POST', body:JSON.stringify(Object.assign({}, body, {async_delete:true, operation_id:operationId}))});
+  } catch(error) {
+    // Lost acceptance response: query this ID; never submit the deletion again.
+    try {initial = await api(statusPath, {timeoutMs:10000, cache:'no-store'});} catch(_) {throw error;}
+    if (initial.state === 'done') return initial.result;
+    initial = {status:'accepted'};
+  }
+  if (initial.status !== 'accepted') return initial; // Compatible with synchronous servers.
+  var failures = 0;
+  while (true) {
+    var snapshot;
+    try {snapshot = await api(statusPath, {timeoutMs:10000, cache:'no-store'}); failures = 0;}
+    catch(error) {
+      failures++;
+      mappingDeletePhase('进度连接暂时中断，正在查询结果；请勿重复提交…');
+      if (failures >= 3) throw error;
+      await new Promise(function(resolve){setTimeout(resolve, 2000);});
+      continue;
+    }
+    updateMappingDeleteProgress(snapshot);
+    if (snapshot.state === 'done') return snapshot.result;
+    await new Promise(function(resolve){setTimeout(resolve, 1000);});
+  }
+}
+function showMappingDeleteResult(title, message, details){
+  openModal('<div class="mapping-detail"><h3>' + esc(title) + '</h3>'
+    + mappingDeleteHeader(mappingDeleteEntry()) + '<p role="status" aria-live="polite">' + esc(message) + '</p>'
+    + (details ? '<p style="white-space:pre-wrap;word-break:break-word;color:var(--text-mid)">' + esc(details) + '</p>' : '')
+    + '<button class="btn gray" onclick="closeModal()">关闭</button></div>');
+  hydratePosters($('modalBody'));
+}
+function finishMappingDelete(){
+  mappingDeleteBusy = false;
+  mappingDeleteMessage = '';
+  renderMappingDeleteState();
+}
+function mappingDeleteOutcome(result, previewCount, target){
+  // 使用执行时的数量。预览之后，另一设备可能已经删除了一部分或全部文件。
+  var count = result.count == null ? previewCount : Number(result.count);
+  count = Math.max(0, count || 0);
+  var removed = Math.max(0, Number(result.strm_removed) || 0);
+  var cloud = Math.max(0, Number(result.cloud_removed) || 0);
+  var errors = Array.isArray(result.errors) ? result.errors.filter(function(x){ return String(x || '').trim(); }) : [];
+  var noChange = count === 0 && removed === 0 && cloud === 0 && !errors.length;
+  var remaining = Math.max(0, count - removed);
+  var summary = '已删除 STRM ' + removed + ' 个' + (target === 'local' ? '，云端源文件 ' + cloud + ' 个' : '');
+  return {count:count, removed:removed, cloud:cloud, errors:errors, remaining:remaining,
+    noChange:noChange, partial:remaining > 0 || errors.length > 0, summary:summary};
+}
+function reportMappingDeleteResult(result, previewCount, target){
+  var outcome = mappingDeleteOutcome(result, previewCount, target);
+  if (outcome.noChange) {
+    showMappingDeleteResult('文件已不存在', '本次未新增删除', '已按片库状态更新列表。');
+    toast('该库文件已不存在，本次未新增删除', '', 4500);
+    return;
+  }
+  var entry = mappingDeleteEntry();
+  var other = entry && entry[target === 'local' ? 'in_share' : 'in_local'];
+  var details = other ? (target === 'local' ? '分享库仍有文件，海报与分享库信息已保留。' : '本地库仍有文件，海报与本地库信息已保留。') : '';
+  if (!outcome.partial && (outcome.removed > 0 || outcome.cloud > 0)) {
+    showMappingDeleteResult('删除完成', outcome.summary, details);
+    toast(outcome.summary, 'success', 4500);
+    return;
+  }
+  details += '\n本次仍有 ' + outcome.remaining + ' 个 STRM 未删除\n'
+    + (outcome.errors.length ? outcome.errors.slice(0, 3).join('\n') : '服务端未返回具体原因，请同步片库状态并查看日志。');
+  showMappingDeleteResult('删除未全部完成', outcome.summary, details.trim());
+  toast(outcome.summary + '，处理未全部完成', outcome.removed || outcome.cloud ? '' : 'error', 5000);
+}
+function reportMappingDeleteError(error, phase, result, target, count){
+  var message;
+  if (result && result.status === 'success') {
+    var outcome = mappingDeleteOutcome(result, count, target);
+    message = (outcome.noChange ? '本次未新增删除' : outcome.summary) + '\n删除结果已返回，但界面更新失败：' + error.message + '\n请读取片库缓存核实状态。';
+  } else if (phase === 'delete') {
+    message = '删除请求结果未确认：' + error.message + '\n部分文件可能已经删除。请等待并同步片库状态，不要重复提交。';
+  } else if (phase === 'resync') {
+    message = '同步片库状态失败（未新增删除）：' + error.message;
+  } else {
+    message = '核对文件失败（未提交删除）：' + error.message;
+  }
+  showMappingDeleteResult('删除状态', message, '');
+}
+
 function showMovieDetailById(id){
   var m = (window.__embyMovieMap || {})[id];
   if (!m) return;
@@ -459,20 +637,24 @@ function showMovieDetailById(id){
   var embyHost = (window.__embyHost || '').replace(/\/+$/, '');
   html += '<div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">';
   if (m.tmdb_id) {
-    html += '<button class="btn red" onclick="deleteMovieByTmdb(' + jsarg(m.tmdb_id) + ',\'local\',' + jsarg(m.name || '') + ')">\u5220\u9664\u672c\u5730\u5e93</button>';
-    html += '<button class="btn red" onclick="deleteMovieByTmdb(' + jsarg(m.tmdb_id) + ',\'share\',' + jsarg(m.name || '') + ')">\u5220\u9664\u5206\u4eab\u5e93</button>';
+    html += '<button class="btn red" data-mapping-delete onclick="deleteMovieByTmdb(' + jsarg(m.tmdb_id) + ',\'local\',' + jsarg(m.name || '') + ')">\u5220\u9664\u672c\u5730\u5e93</button>';
+    html += '<button class="btn red" data-mapping-delete onclick="deleteMovieByTmdb(' + jsarg(m.tmdb_id) + ',\'share\',' + jsarg(m.name || '') + ')">\u5220\u9664\u5206\u4eab\u5e93</button>';
   }
   if (m.id && embyHost) {
     html += '<a href="' + esc(embyHost) + '/web/index.html#!/item?id=' + esc(m.id) + '" target="_blank" rel="noopener" style="text-decoration:none" class="btn gray">\u5728 Emby \u4e2d\u6253\u5f00</a>';
   }
   html += '<button class="btn gray" onclick="closeModal()">\u5173\u95ed</button>';
   html += '</div>';
+  html += '<div id="mappingDeleteStatus" role="status" aria-live="polite" hidden style="margin-top:12px;color:var(--text-mid)"></div>';
 
   openModal(html);
+  renderMappingDeleteState();
   hydratePosters($('modalBody'));
 }
 
 async function deleteMovieByTmdb(tmdbId, target, movieName){
+  if (!beginMappingDelete()) return;
+  var phase = 'preview', r2 = null, count = 0;
   var targetName = target === 'local' ? '\u672c\u5730\u5e93\uff08\u542b 115 \u6e90\u6587\u4ef6\uff09' : '\u5206\u4eab\u5e93';
   try {
     var r1 = await api('/api/emby/movie/delete_by_tmdb', {
@@ -480,7 +662,7 @@ async function deleteMovieByTmdb(tmdbId, target, movieName){
       body: JSON.stringify({ tmdb_id: tmdbId, target: target, dry_run: true, name: movieName })
     });
     if (r1.status !== 'success') throw new Error(r1.message || '\u5931\u8d25');
-    var count = r1.count || 0;
+    count = r1.count || 0;
     if (count === 0) {
       alert('\u8be5\u5e93\u65e0\u6b64\u7535\u5f71\u6587\u4ef6');
       return;
@@ -492,26 +674,30 @@ async function deleteMovieByTmdb(tmdbId, target, movieName){
               '\n\n\u6b64\u64cd\u4f5c\u4e0d\u53ef\u6062\u590d\uff01';
     if (!confirm(msg)) return;
 
-    var r2 = await api('/api/emby/movie/delete_by_tmdb', {
-      method: 'POST',
-      body: JSON.stringify({ tmdb_id: tmdbId, target: target, dry_run: false, name: movieName })
-    });
+    phase = 'delete';
+    showMappingDeleteProgress(target, movieName, count, 'movie', tmdbId);
+    r2 = await executeMappingDelete('/api/emby/movie/delete_by_tmdb',
+      {tmdb_id:tmdbId, target:target, dry_run:false, name:movieName});
+    if (r2.status === 'busy') { showMappingDeleteResult('正在处理其他任务', r2.message || '已有治理任务正在执行，请稍后再试', '本次未提交删除。'); toast(r2.message || '已有治理任务正在执行，请稍后再试', '', 5000); return; }
     if (r2.status !== 'success') throw new Error(r2.message || '\u5931\u8d25');
 
-    var flag = target === 'local' ? 'in_local' : 'in_share';
-    embyData.movies = embyData.movies.filter(function(x){
-      return !(String(x.tmdb_id || '') === String(tmdbId) && x[flag]);
-    });
-    if (embyData.stats) embyData.stats.total_movies = embyData.movies.length;
-    renderEmbyList();
-    closeModal();
-    toast('\u2705 \u5df2\u5220\u9664 strm ' + (r2.strm_removed || 0) + ' \u4e2a' +
-          (target === 'local' ? '\uff0c\u4e91\u7aef ' + (r2.cloud_removed || 0) + ' \u4e2a' : ''), 'success', 3500);
-    if (r2.errors && r2.errors.length) {
-      setTimeout(function(){ alert('\u26a0\ufe0f \u90e8\u5206\u6587\u4ef6\u672a\u5220\u9664\uff1a\n' + r2.errors.slice(0, 3).join('\n')); }, 50);
+    var outcome = mappingDeleteOutcome(r2, count, target);
+    // 有文件保留或结果为空时，不把海报当作全部删完而撤下。
+    if (!outcome.partial && !outcome.noChange) {
+      var flag = target === 'local' ? 'in_local' : 'in_share';
+      embyData.movies = embyData.movies.filter(function(x){
+        if (String(x.tmdb_id || '') !== String(tmdbId) || !x[flag]) return true;
+        x[flag] = false;
+        return !!x[target === 'local' ? 'in_share' : 'in_local'];
+      });
+      if (embyData.stats) embyData.stats.total_movies = embyData.movies.length;
+      renderEmbyList();
     }
+    reportMappingDeleteResult(r2, count, target);
   } catch(e){
-    alert('\u5220\u9664\u5931\u8d25\uff1a' + e.message);
+    reportMappingDeleteError(e, phase, r2, target, count);
+  } finally {
+    finishMappingDelete();
   }
 }
 
@@ -569,20 +755,23 @@ function showEmbyDetailById(id){
   html += '<div class="mapping-detail-actions">';
   if (s._md) html += '<button class="btn gray" onclick="toggleManualDone(' + jsarg(s.id) + ')">取消完结</button>';
   else if (mst === 'missing' || mst === 'ongoing') html += '<button class="btn" onclick="toggleManualDone(' + jsarg(s.id) + ')">手动完结</button>';
-  html += '<button class="btn mapping-delete" onclick="deleteSeriesFromLib(' + jsarg(s.id) + ',\'local\',' + jsarg(s.name || '') + ')">删除本地库</button>';
-  html += '<button class="btn mapping-delete" onclick="deleteSeriesFromLib(' + jsarg(s.id) + ',\'share\',' + jsarg(s.name || '') + ')">删除分享库</button>';
+  html += '<button class="btn mapping-delete" data-mapping-delete onclick="deleteSeriesFromLib(' + jsarg(s.id) + ',\'local\',' + jsarg(s.name || '') + ')">删除本地库</button>';
+  html += '<button class="btn mapping-delete" data-mapping-delete onclick="deleteSeriesFromLib(' + jsarg(s.id) + ',\'share\',' + jsarg(s.name || '') + ')">删除分享库</button>';
   if (s.id && embyHost) {
     html += '<a href="' + esc(embyHost) + '/web/index.html#!/item?id=' + esc(s.id) + '" target="_blank" rel="noopener" style="text-decoration:none" class="btn gray">在 Emby 中打开</a>';
   }
   html += '<button class="btn gray" onclick="closeModal()">关闭</button>';
-  html += '</div></div>';
+  html += '</div><div id="mappingDeleteStatus" role="status" aria-live="polite" hidden style="margin-top:12px;color:var(--text-mid)"></div></div>';
 
   openModal(html);
+  renderMappingDeleteState();
   hydratePosters($('modalBody'));
   loadLibBreakdown(s, ti);
 }
 
 async function deleteSeriesFromLib(seriesId, target, seriesName){
+  if (!beginMappingDelete()) return;
+  var phase = 'preview', r2 = null, count = 0;
   var targetName = target === 'local' ? '\u672c\u5730\u5e93\uff08\u542b 115 \u6e90\u6587\u4ef6\uff09' : '\u5206\u4eab\u5e93';
   try {
     // 1. dry_run 先拿数量
@@ -591,10 +780,12 @@ async function deleteSeriesFromLib(seriesId, target, seriesName){
       body: JSON.stringify({ target: target, dry_run: true, series_name: seriesName })
     });
     if (r1.status !== 'success') throw new Error(r1.message || '\u5931\u8d25');
-    var count = r1.count || 0;
+    count = r1.count || 0;
     if (count === 0) {
       /* 该库没有文件：常见于 Emby / 缓存里残留了失效条目。提供「同步状态」，不删任何文件 */
       if (confirm('该库没有此剧文件。\n\n是否按磁盘实际情况同步状态？\n（不会删除任何文件；已无文件的剧会从列表移除）')) {
+        phase = 'resync';
+        mappingDeletePhase('正在同步片库状态，请稍候…');
         var rs = await api('/api/emby/series/' + seriesId + '/resync', { method: 'POST', body: '{}' });
         if (rs.status !== 'success') throw new Error(rs.message || '失败');
         applySeriesDeleteResult(seriesId, rs);
@@ -613,26 +804,28 @@ async function deleteSeriesFromLib(seriesId, target, seriesName){
     if (!confirm(msg)) return;
 
     // 3. 真\u5220
-    var r2 = await api('/api/emby/series/' + seriesId + '/delete', {
-      method: 'POST',
-      body: JSON.stringify({ target: target, dry_run: false, series_name: seriesName })
-    });
+    phase = 'delete';
+    showMappingDeleteProgress(target, seriesName, count, 'series', seriesId);
+    r2 = await executeMappingDelete('/api/emby/series/' + seriesId + '/delete',
+      {target:target, dry_run:false, series_name:seriesName});
+    if (r2.status === 'busy') { showMappingDeleteResult('正在处理其他任务', r2.message || '已有治理任务正在执行，请稍后再试', '本次未提交删除。'); toast(r2.message || '已有治理任务正在执行，请稍后再试', '', 5000); return; }
     if (r2.status !== 'success') throw new Error(r2.message || '\u5931\u8d25');
 
-    /* 先立即更新界面（海报马上撤下），再提示结果；Emby 那边由服务端后台通知 */
-    applySeriesDeleteResult(seriesId, r2);
-    closeModal();
-    var partial = (r2.errors && r2.errors.length) || (r2.strm_removed || 0) < count;
-    toast('\u2705 \u5df2\u5220\u9664 strm ' + (r2.strm_removed || 0) + ' \u4e2a' +
-          (target === 'local' ? '\uff0c\u4e91\u7aef ' + (r2.cloud_removed || 0) + ' \u4e2a' : ''), 'success', 3500);
-    if (partial) {
-      setTimeout(function(){
-        alert('\u26a0\ufe0f \u90e8\u5206\u6587\u4ef6\u672a\u5220\u9664\uff08\u4fdd\u62a4\u673a\u5236\uff1a\u4e91\u7aef\u6e90\u6587\u4ef6\u627e\u4e0d\u5230/\u5339\u914d\u4e0d\u552f\u4e00\u65f6\u4f1a\u4fdd\u7559 strm\uff09\uff1a\n' +
-              (r2.errors || []).slice(0, 3).join('\n'));
-      }, 50);
+    var outcome = mappingDeleteOutcome(r2, count, target);
+    if (outcome.noChange) {
+      // 另一请求可能已完成；按磁盘事实同步，不发起新的删除。
+      mappingDeletePhase('正在同步片库状态，请稍候…');
+      var fresh = await api('/api/emby/series/' + seriesId + '/resync', {method:'POST', body:'{}'});
+      if (fresh.status !== 'success') throw new Error(fresh.message || '同步失败');
+      applySeriesDeleteResult(seriesId, fresh);
+    } else {
+      applySeriesDeleteResult(seriesId, r2);
     }
+    reportMappingDeleteResult(r2, count, target);
   } catch(e){
-    alert('\u5220\u9664\u5931\u8d25\uff1a' + e.message);
+    reportMappingDeleteError(e, phase, r2, target, count);
+  } finally {
+    finishMappingDelete();
   }
 }
 

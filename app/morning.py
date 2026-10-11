@@ -1211,8 +1211,17 @@ def patch_emby_lib_cache_after_movie_delete(tmdb_id: str, target: str):
 
     def patch(data):
         movies = (data or {}).get('movies') or []
-        keep = [m for m in movies if not (str(m.get('tmdb_id') or '') == str(tmdb_id) and m.get(flag))]
-        if len(keep) == len(movies):
+        keep, changed = [], False
+        other = 'in_share' if target == 'local' else 'in_local'
+        for movie in movies:
+            if str(movie.get('tmdb_id') or '') != str(tmdb_id) or not movie.get(flag):
+                keep.append(movie)
+            elif movie.get(other):
+                keep.append(dict(movie, **{flag: False}))
+                changed = True
+            else:
+                changed = True
+        if not changed:
             return False
         removed[0] = max(removed[0], len(movies) - len(keep))
         data['movies'] = keep

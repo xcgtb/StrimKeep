@@ -4,7 +4,7 @@ import time, json, threading, sqlite3, urllib.parse, urllib.request, asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from app import runtime_logs
-from app import posters, tmdb, library_response, library_updates, morning
+from app import posters, tmdb, library_response, library_updates, morning, deletion_progress
 
 try:
     from app.routers.deps import auth, engine, logger, Args
@@ -326,7 +326,7 @@ def api_emby_series_episodes(series_id: str):
         return {'status': 'error', 'message': str(e)}
 
 
-def _delete_title_files(files, target, title, media_type, series_id=None, tmdb_id=None):
+def _delete_title_files(files, target, title, media_type, series_id=None, tmdb_id=None, progress=None):
     """单剧/单片删除的公共执行段：拿跨入口文件锁 → 删文件（与双库治理同一条 fail-safe 删除链：
     本地库=删 strm + 联动 CD2 源文件；分享库=只删 strm）→ 立即修补缓存（海报马上撤下）
     → 后台精准通知 Emby → 写审计。"""
@@ -334,7 +334,8 @@ def _delete_title_files(files, target, title, media_type, series_id=None, tmdb_i
     cloud = engine.CLOUD_L_ROOT if target == 'local' else None
     try:
         with engine.mutation_lock():
-            result = engine.safe_delete_files(files, root, cloud, dry_run=False)
+            kwargs = {'progress': progress} if progress is not None else {}
+            result = engine.safe_delete_files(files, root, cloud, dry_run=False, **kwargs)
     except engine.MutationBusy as e:
         return {'status': 'busy', 'message': str(e)}
 
@@ -356,7 +357,7 @@ def _delete_title_files(files, target, title, media_type, series_id=None, tmdb_i
             entry = info['entry']
             if series_removed and info['series_path']:
                 emby_paths.add(info['series_path'])   # 整部剧都没了：连剧目录一起通知
-        elif tmdb_id is not None:
+        elif tmdb_id is not None and len(gone) == len(files):
             engine.patch_emby_lib_cache_after_movie_delete(tmdb_id, target)
     except Exception as e:
         engine.log.warning('删除后缓存修补失败: %s', e)
@@ -381,11 +382,21 @@ def _delete_title_files(files, target, title, media_type, series_id=None, tmdb_i
         'cloud_removed': result['cloud_removed'],
         'errors': result.get('errors', []),
         'series_removed': series_removed, 'entry': entry,
+        'movie_target_removed': tmdb_id is not None and len(gone) == len(files),
     }
 
 
 @router.post('/api/emby/series/{series_id}/delete', dependencies=[Depends(auth)])
 def api_emby_series_delete(series_id: str, body: dict = None):
+    body = body or {}
+    if body.get('async_delete') and not body.get('dry_run', True):
+        identity = ('series', series_id, str(body.get('target', '')).lower())
+        return deletion_progress.submit(body.get('operation_id'), identity,
+            lambda progress: _series_delete(series_id, body, progress))
+    return _series_delete(series_id, body)
+
+
+def _series_delete(series_id, body, progress=None):
     """删除某剧的全部文件
     target: local | share
     dry_run: True -> 只返回数量，不真删
@@ -419,7 +430,7 @@ def api_emby_series_delete(series_id: str, body: dict = None):
                     'message': '该库无此剧文件', 'ghost': True}
         if dry_run:
             return {'status': 'success', 'dry_run': True, 'count': len(files), 'target': target}
-        return _delete_title_files(files, target, series_name, media_type, series_id=series_id)
+        return _delete_title_files(files, target, series_name, media_type, series_id=series_id, progress=progress)
     except Exception as e:
         return {'status': 'error', 'message': str(e)}
 
@@ -441,6 +452,27 @@ def api_emby_series_resync(series_id: str):
 
 @router.post('/api/emby/movie/delete_by_tmdb', dependencies=[Depends(auth)])
 def api_movie_delete(body: dict = None):
+    body = body or {}
+    if body.get('async_delete') and not body.get('dry_run', True):
+        identity = ('movie', str(body.get('tmdb_id', '')), str(body.get('target', '')).lower())
+        return deletion_progress.submit(body.get('operation_id'), identity,
+            lambda progress: _movie_delete(body, progress))
+    return _movie_delete(body)
+
+
+@router.get('/api/emby/delete/progress/{operation_id}', dependencies=[Depends(auth)])
+def api_delete_progress(operation_id: str, response: Response = None):
+    if response is not None:
+        response.headers['Cache-Control'] = 'no-store'
+    rec = deletion_progress.read(operation_id)
+    if rec is None:
+        raise HTTPException(404, '删除记录不存在或容器已重启，请同步片库核实结果，不要重复提交')
+    rec.pop('identity', None)
+    rec.pop('updated', None)
+    return {'status': 'success', **rec}
+
+
+def _movie_delete(body, progress=None):
     """按 tmdb_id 删除电影（扫目录名，不依赖 Emby 索引）"""
     body = body or {}
     tmdb_id = str(body.get('tmdb_id', '')).strip()
@@ -459,4 +491,4 @@ def api_movie_delete(body: dict = None):
         return {'status': 'success', 'count': 0, 'target': target}
     if dry_run:
         return {'status': 'success', 'dry_run': True, 'count': len(files), 'target': target}
-    return _delete_title_files(files, target, movie_name, '电影', tmdb_id=tmdb_id)
+    return _delete_title_files(files, target, movie_name, '电影', tmdb_id=tmdb_id, progress=progress)

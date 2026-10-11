@@ -356,7 +356,7 @@ def _unlink_with_timeout(v, timeout=15):
         log.warning('删除失败 %s: %s', v, e)
         return False
 
-def safe_delete_files(files, base_root, cloud_root=None, dry_run=False):
+def safe_delete_files(files, base_root, cloud_root=None, dry_run=False, progress=None):
     """
     白皮书 §13 fail-safe 删除链：
       - 只有 exact / normalized 允许自动删云端源
@@ -369,75 +369,94 @@ def safe_delete_files(files, base_root, cloud_root=None, dry_run=False):
           'sidecars_removed': 0, 'sidecar_residuals': [],
           'cloud_sidecars_removed': 0, 'cloud_sidecar_residuals': [], 'errors': []}
     parents = set(); cloud_parents = set()
-    for f in files:
-        if f.suffix.lower() != '.strm' or not _inside(f, base_root):
-            st['errors'].append(f'跳过非法路径: {f}')
-            continue
-
-        if cloud_root is not None:
-            if not cloud_root.exists():
-                st['cloud_missing'] += 1
-                st['errors'].append(f'{f.name}: 云端根目录不可用 ({cloud_root})，STRM 保留')
-                continue
-            vids, conf = _eng().cloud_videos(f, base_root, cloud_root)
-            if conf == 'none':
-                st['cloud_missing'] += 1
-                st['errors'].append(f'{f.name}: 未找到云端源文件，STRM 保留')
-                continue
-            if conf == 'unique_fallback':
-                st['cloud_fallback'] += 1
-                st['errors'].append(f'{f.name}: 仅目录唯一兜底匹配（低置信度），STRM 保留')
-                continue
-            if conf == 'ambiguous':
-                st['cloud_ambiguous'] += 1
-                st['errors'].append(f'{f.name}: 云端多个候选文件，STRM 保留')
-                continue
-            # exact / normalized -> 允许自动删
-        else:
-            vids, conf = [], None
-
-        if dry_run:
-            st['strm_removed'] += 1
-            st['cloud_removed'] += len(vids)
-            continue
-
-        ok = True
-        for v in vids:
+    processed = 0
+    def emit(phase, current_file=''):
+        if progress is not None:
             try:
-                sidecars = _cloud_sidecars(v, cloud_root)
-            except (OSError, ValueError) as e:
-                ok = False; st['errors'].append(f'{v}: 云端附属文件读取失败: {e}')
-                continue
-            if _unlink_with_timeout(v):
-                st['cloud_removed'] += 1; cloud_parents.add(v.parent)
-                for sidecar in sidecars:
-                    if _unlink_with_timeout(sidecar):
-                        st['cloud_sidecars_removed'] += 1
-                    else:
-                        st['cloud_sidecar_residuals'].append(str(sidecar))
-                        st['errors'].append(f'{sidecar}: 云端附属文件删除超时或失败，已跳过')
-            else:
-                ok = False
-                st['errors'].append(f'{v}: 删除超时或失败')
-        if not ok:
-            continue  # 云端没删成功 -> STRM 保留
-
+                progress({'phase': phase, 'total': len(files), 'processed': processed,
+                          'strm_removed': st['strm_removed'], 'cloud_removed': st['cloud_removed'],
+                          'retained': max(0, processed - st['strm_removed']),
+                          'error_count': len(st['errors']), 'current_file': current_file})
+            except Exception:
+                log.warning('删除进度更新失败', exc_info=True)
+    emit('deleting')
+    for f in files:
+        emit('deleting', f.name)
         try:
-            rr = _remove_strm(f)
-            st['strm_removed'] += 1
-            st['sidecars_removed'] += rr.get('sidecars_removed', 0)
-            st['sidecar_residuals'].extend(rr.get('sidecars_failed', []))
-            if rr.get('sidecars_failed'):
-                st['errors'].append(f'{f.name}: {len(rr["sidecars_failed"])} 个附属文件删除失败，已登记洗版残留')
-            parents.add(f.parent)
-        except OSError as e:
-            st['errors'].append(f'{f.name}: {e}')
+            if f.suffix.lower() != '.strm' or not _inside(f, base_root):
+                st['errors'].append(f'跳过非法路径: {f}')
+                continue
+
+            if cloud_root is not None:
+                if not cloud_root.exists():
+                    st['cloud_missing'] += 1
+                    st['errors'].append(f'{f.name}: 云端根目录不可用 ({cloud_root})，STRM 保留')
+                    continue
+                vids, conf = _eng().cloud_videos(f, base_root, cloud_root)
+                if conf == 'none':
+                    st['cloud_missing'] += 1
+                    st['errors'].append(f'{f.name}: 未找到云端源文件，STRM 保留')
+                    continue
+                if conf == 'unique_fallback':
+                    st['cloud_fallback'] += 1
+                    st['errors'].append(f'{f.name}: 仅目录唯一兜底匹配（低置信度），STRM 保留')
+                    continue
+                if conf == 'ambiguous':
+                    st['cloud_ambiguous'] += 1
+                    st['errors'].append(f'{f.name}: 云端多个候选文件，STRM 保留')
+                    continue
+                # exact / normalized -> 允许自动删
+            else:
+                vids, conf = [], None
+
+            if dry_run:
+                st['strm_removed'] += 1
+                st['cloud_removed'] += len(vids)
+                continue
+
+            ok = True
+            for v in vids:
+                try:
+                    sidecars = _cloud_sidecars(v, cloud_root)
+                except (OSError, ValueError) as e:
+                    ok = False; st['errors'].append(f'{v}: 云端附属文件读取失败: {e}')
+                    continue
+                if _unlink_with_timeout(v):
+                    st['cloud_removed'] += 1; cloud_parents.add(v.parent)
+                    emit('deleting', f.name)
+                    for sidecar in sidecars:
+                        if _unlink_with_timeout(sidecar):
+                            st['cloud_sidecars_removed'] += 1
+                        else:
+                            st['cloud_sidecar_residuals'].append(str(sidecar))
+                            st['errors'].append(f'{sidecar}: 云端附属文件删除超时或失败，已跳过')
+                else:
+                    ok = False
+                    st['errors'].append(f'{v}: 删除超时或失败')
+            if not ok:
+                continue  # 云端没删成功 -> STRM 保留
+
+            try:
+                rr = _remove_strm(f)
+                st['strm_removed'] += 1
+                st['sidecars_removed'] += rr.get('sidecars_removed', 0)
+                st['sidecar_residuals'].extend(rr.get('sidecars_failed', []))
+                if rr.get('sidecars_failed'):
+                    st['errors'].append(f'{f.name}: {len(rr["sidecars_failed"])} 个附属文件删除失败，已登记洗版残留')
+                parents.add(f.parent)
+            except OSError as e:
+                st['errors'].append(f'{f.name}: {e}')
+        finally:
+            processed += 1
+            emit('deleting')
+    emit('cleanup')
     for p in sorted(cloud_parents, key=lambda x: len(x.parts), reverse=True):
         result = _prune_up(p, cloud_root, blocked=st['cloud_sidecar_residuals'])
         st['cloud_sidecars_removed'] += result['files_removed']; st['errors'].extend(result['errors'])
     for p in sorted(parents, key=lambda x: len(x.parts), reverse=True):
         result = _prune_up(p, base_root, blocked=st['sidecar_residuals'])
         st['sidecars_removed'] += result['files_removed']; st['errors'].extend(result['errors'])
+    emit('finalizing')
     return st
 
 def find_movie_strms_by_tmdb(root, tmdb_id):
