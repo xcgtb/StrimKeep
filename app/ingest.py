@@ -281,11 +281,22 @@ def refresh_ingest_cache(hours=24) -> dict:
                     'season': e.get('ParentIndexNumber')} for e in changed],
                     movies_raw=[{'id': m.get('Id')} for m in changed_movies])
         _write_ingest_cache(data)
+        mapping_result = {'status': 'skipped', 'series_facts': []}
+        notification_result = {'status': 'skipped', 'matched': 0, 'queued': 0}
         if data.get('ok', True):
             try:
-                _eng().refresh_mapping_cache_after_ingest(mapping_data)
+                mapping_result = _eng().refresh_mapping_cache_after_ingest(mapping_data) or mapping_result
             except Exception as e:
                 log.warning('入库后片库映射缓存刷新失败: %s', e)
+            # Notifications are downstream of both successful ingest and
+            # successful fact persistence.  They are deliberately isolated so
+            # a Telegram/API failure can never fail the five-minute ingest job.
+            if mapping_result.get('series_facts'):
+                try:
+                    notification_result = _eng().enqueue_ingest_notifications(mapping_result) or notification_result
+                except Exception as e:
+                    log.warning('入库后追更事件入队失败: %s', e)
+        data['notification'] = notification_result
         st = data.get('stats', {})
         if not data.get('ok', True):
             log.warning('入库缓存刷新失败且无旧缓存可保留: %s', data.get('error'))

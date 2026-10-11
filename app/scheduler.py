@@ -23,14 +23,43 @@ TMDB_RETRY_SEC = 1800
 
 _stop = threading.Event()
 _thread = {'t': None}
+_notification_worker = {'t': None}
+_notification_worker_lock = threading.Lock()
 _bg_state = {
     'last_ingest_check': 0,
     'last_sub_check': 0,
     'last_sub_attempt': 0,
     'sub_running': False,
     'last_sub_result': None,
+    'last_sub_calibration': 0,
+    'sub_calibration_running': False,
     'last_tmdb_attempt': 0,
 }
+
+
+def _request_notification_delivery():
+    """Single-flight sender: no network or waiting on the scheduler thread."""
+    with _notification_worker_lock:
+        worker = _notification_worker['t']
+        if _stop.is_set() or (worker is not None and worker.is_alive()):
+            return False
+
+        def run():
+            try:
+                engine.drain_subscription_notifications(limit=2, time_budget=15, should_stop=_stop.is_set)
+                if not _stop.is_set():
+                    engine.recover_subscription_notifications()
+            except Exception as error:
+                engine.log.warning('追更后台发送/补报失败: %s', error)
+
+        worker = threading.Thread(target=run, daemon=True, name='subscription-notify')
+        _notification_worker['t'] = worker
+        try:
+            worker.start()
+        except Exception:
+            _notification_worker['t'] = None
+            raise
+        return True
 
 
 # ═══════════════════ 双库治理：定时巡检（只扫描+通知，不自动清理） ═══════════════════
@@ -180,6 +209,14 @@ def _tick(now: float):
         except Exception as e:
             engine.log.warning('入库缓存刷新失败: %s', e)
 
+    # Retry durable Telegram batches independently of ingest.  A failed send
+    # must survive an idle ingest window and a process restart.
+    if cfg.get('subscribe_enabled', '1') == '1':
+        try:
+            _request_notification_delivery()
+        except Exception as e:
+            engine.log.warning('追更待通知重试失败: %s', e)
+
     # ── TMDB 对照（后台预热） ──
     try:
         scan_enabled = cfg.get('tmdb_scan_enabled', '1') == '1'
@@ -195,28 +232,37 @@ def _tick(now: float):
         _bg_state['last_tmdb_attempt'] = now
         threading.Thread(target=engine.refresh_tmdb_scan, daemon=True, name='tmdb-scan').start()
 
-    # ── 订阅轮询 ──
+    # ── 追更低频校准 ──
+    # Ordinary new-episode notifications are event-driven from ingest.  This
+    # separate six-hour pass refreshes TMDB aired facts and repairs missed
+    # events; it never becomes the daily all-subscription notification path.
     try:
-        interval = max(300, int(cfg.get('subscribe_interval_min') or 30) * 60)
-    except ValueError:
-        interval = 1800
-    if cfg.get('subscribe_enabled', '1') == '1' and not _bg_state['sub_running'] \
-            and (now - _bg_state['last_sub_check']) >= interval:
-        _bg_state['sub_running'] = True
-        _bg_state['last_sub_attempt'] = now
-        try:
-            engine.log.info('追更订阅轮询开始')
-            result = engine.check_subscriptions(send_notify=True)
-            _bg_state['last_sub_result'] = result
-            _bg_state['last_sub_check'] = now
-        except Exception as e:
-            # 失败不等整个订阅周期；5 分钟后重试，且在前端留下明确诊断。
-            engine.log.warning('订阅检查失败: %s', e)
-            try: engine.record_subscription_check_failure(e)
-            except Exception: pass
-            _bg_state['last_sub_check'] = max(0, now - interval + 300)
-        finally:
-            _bg_state['sub_running'] = False
+        calibration_hours = max(1, min(168, int(cfg.get('subscribe_calibration_interval_hours') or 6)))
+        calibration_last = float(cfg.get('subscribe_calibration_last_ts') or 0)
+    except (ValueError, TypeError):
+        calibration_hours, calibration_last = 6, 0
+    if cfg.get('subscribe_enabled', '1') == '1' and not _bg_state['sub_calibration_running'] \
+            and (now - max(calibration_last, _bg_state['last_sub_calibration'])) >= calibration_hours * 3600:
+        _bg_state['sub_calibration_running'] = True
+        _bg_state['last_sub_calibration'] = now
+
+        def _run_calibration():
+            try:
+                engine.log.info('追更 TMDB 低频校准开始')
+                result = engine.process_subscription_tmdb_calibration(dispatch=False)
+                _bg_state['last_sub_result'] = result
+                if result.get('status') not in ('error', 'disabled'):
+                    fresh = _cfg.load_config()
+                    fresh['subscribe_calibration_last_ts'] = str(time.time())
+                    _cfg.save_config(fresh)
+            except Exception as e:
+                engine.log.warning('追更低频校准失败: %s', e)
+                try: engine.record_subscription_check_failure(e)
+                except Exception: pass
+            finally:
+                _bg_state['sub_calibration_running'] = False
+
+        threading.Thread(target=_run_calibration, daemon=True, name='subscription-calibration').start()
 
     # ── 双库治理定时巡检 ──
     try:
@@ -290,7 +336,11 @@ def start():
 
 
 def stop(timeout=5):
+    deadline = time.monotonic() + timeout
     _stop.set()
     t = _thread['t']
     if t is not None and t is not threading.current_thread():
         t.join(timeout)
+    worker = _notification_worker['t']
+    if worker is not None and worker is not threading.current_thread():
+        worker.join(max(0, deadline - time.monotonic()))

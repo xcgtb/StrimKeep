@@ -1,6 +1,7 @@
 /* ═══════════ 追更订阅 ═══════════ */
 function renderSubscriptionCheckStatus(st){
   st = st || {};
+  if (st.notification || st.ingest_enabled != null) renderSubscriptionTriggerHint(st);
   var state = st.status || 'idle';
   var labels = {running:'检查中',success:'正常',partial:'部分失败',error:'失败',disabled:'已停用',idle:'尚未运行'};
   var stateEl=$('subCheckState'), timeEl=$('subCheckTime'), resultEl=$('subCheckResult');
@@ -22,6 +23,18 @@ async function loadSubscriptionCheckStatus(){
   try { var r=await api('/api/subscriptions/status'); if(r.status==='success') renderSubscriptionCheckStatus(r.check); } catch(e) {}
 }
 
+function renderSubscriptionTriggerHint(st){
+  var hint=$('subTriggerHint');
+  if(!hint) return;
+  var parts=[], queue=st.notification || {};
+  if(st.ingest_enabled === false) parts.push('⚠️ 入库监控已关闭，增量不会触发追更通知；可手动检查或开启监控。');
+  if(queue.pending) parts.push('待发送 ' + Number(queue.pending) + ' 批通知' + (queue.last_error ? '：' + queue.last_error : '，后台处理中。'));
+  if(queue.reconcile_required) parts.push('有未确认的入库变化；队列恢复后自动校准补报，原通知保留。');
+  if(queue.status === 'unavailable') parts.push('通知队列状态不可用：' + (queue.error || '请查看日志'));
+  hint.textContent=parts.join(' ');
+  hint.style.display=parts.length ? '' : 'none';
+}
+
 async function loadSubscriptions(){
   try {
     var r = await api('/api/subscriptions');
@@ -29,7 +42,8 @@ async function loadSubscriptions(){
     currentSubs = r.subscriptions || [];
     $('subEnabled').checked = !!r.enabled;
     $('subCheckTmdb').checked = !!r.check_tmdb;
-    $('subInterval').value = r.interval_min || 30;
+    $('subInterval').value = r.calibration_interval_hours || 6;
+    renderSubscriptionTriggerHint(r);
     $('subCount').textContent = currentSubs.length + ' 部';
 
     if (!currentSubs.length) {
@@ -75,7 +89,7 @@ async function saveSubSettings(){
     await api('/api/subscriptions/settings', { method: 'POST', body: JSON.stringify({
       enabled: $('subEnabled').checked,
       check_tmdb: $('subCheckTmdb').checked,
-      interval_min: parseInt($('subInterval').value) || 30,
+      calibration_interval_hours: parseInt($('subInterval').value) || 6,
     })});
     toast('设置已保存', 'success');
   } catch(e){ toast('保存失败: ' + e.message, 'error'); }

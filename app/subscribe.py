@@ -4,7 +4,7 @@ if __package__:
     from . import state_store as _state
 else:
     import state_store as _state
-import os, re, sys, json, threading, shutil, fcntl, time, argparse, datetime, hashlib, logging, traceback
+import os, re, sys, json, threading, shutil, fcntl, time, argparse, datetime, hashlib, logging, traceback, copy, uuid
 import urllib.parse, urllib.request, urllib.error
 from pathlib import Path
 from collections import defaultdict
@@ -13,6 +13,19 @@ from dataclasses import dataclass, field
 import contextlib, dataclasses, html
 
 log = logging.getLogger('strimkeep')
+
+_notification_lock = threading.RLock()
+_notification_drain_lock = threading.RLock()
+_subscription_check_lock = threading.RLock()
+_subscription_observation_lock = threading.Lock()
+_NOTIFICATION_SCHEMA = 1
+_NOTIFICATION_HISTORY_LIMIT = 256
+_NOTIFICATION_PENDING_LIMIT = 512
+_NOTIFICATION_BYTES_LIMIT = 8 * 1024 * 1024
+
+
+class NotificationBackpressure(RuntimeError):
+    """Never discard accepted events or acknowledge new changes when full."""
 
 try:
     from .core import (esc, parse_season_dir, get_ep, title_key,
@@ -57,6 +70,494 @@ def _load_sub_state() -> dict:
 
 def _save_sub_state(state: dict):
     _state.save(_eng().SUB_STATE_FILE, state)
+
+
+def _notification_file():
+    state_path = getattr(_eng(), 'SUB_STATE_FILE', None)
+    if state_path is not None and getattr(state_path, 'name', '') != 'subscriptions_state.json':
+        # Isolated tests and legacy migrations may swap the subscription state
+        # document; keep their notification journal isolated as well.
+        state_path = Path(state_path)
+        return state_path.with_name('subscription_notifications_' + state_path.stem + '.json')
+    return getattr(_eng(), 'SUB_NOTIFICATION_FILE', _eng().STATE_DIR / 'subscription_notifications.json')
+
+
+def _load_notification_queue() -> dict:
+    data = _state.read(_notification_file(), {'schema': _NOTIFICATION_SCHEMA, 'events': []})
+    if (not isinstance(data, dict) or not isinstance(data.get('events', []), list) or
+            any(not isinstance(e, dict) or e.get('status') not in ('pending', 'sending', 'delivered', 'sent')
+                for e in data.get('events', []))):
+        raise RuntimeError('追更待通知队列损坏，本轮发送已停止，队列原样保留')
+    data.setdefault('schema', _NOTIFICATION_SCHEMA)
+    return data
+
+
+def _bounded_notification_history(data: dict):
+    data = dict(data or {})
+    data['schema'] = _NOTIFICATION_SCHEMA
+    events = list(data.get('events') or [])
+    # Keep a bounded sent history for crash recovery/deduplication while
+    # allowing pending events to survive indefinitely until delivery succeeds.
+    sent = [e for e in events if e.get('status') == 'sent'][-_NOTIFICATION_HISTORY_LIMIT:]
+    sent = [e if e.get('state_error') else {
+        k: e[k] for k in ('id', 'status', 'sent_at', 'canceled_at', 'reason', 'attempts') if k in e
+    } for e in sent]
+    pending = [e for e in events if e.get('status') != 'sent']
+    data['events'] = pending + sent
+    return data
+
+
+def _save_notification_queue(data: dict):
+    data = _bounded_notification_history(data)
+    pending = [e for e in data['events'] if e.get('status') != 'sent']
+    _eng().STATE_DIR.mkdir(parents=True, exist_ok=True)
+    _state.save(_notification_file(), data)
+    # A small document lets Web polling show backlog without loading every
+    # event. Failure of this derived view must not roll back accepted events.
+    try:
+        _state.save(_notification_file().with_name(_notification_file().stem + '_status.json'), {
+            'pending': len(pending), 'limit': _NOTIFICATION_PENDING_LIMIT,
+            'last_error': next((e.get('error') for e in reversed(pending) if e.get('error')), ''),
+            'updated_at': time.time(),
+        })
+    except Exception as error:
+        log.warning('追更队列摘要更新失败（通知队列已保留）: %s', error)
+
+
+def load_subscription_notification_status():
+    status = dict(_state.read(_notification_file().with_name(_notification_file().stem + '_status.json'), {}))
+    repair = _state.read(_notification_reconcile_file(), {})
+    status['reconcile_required'] = bool(repair.get('required'))
+    return status
+
+
+def _notification_reconcile_file():
+    return _notification_file().with_name(_notification_file().stem + '_reconcile.json')
+
+
+def _mark_notification_reconcile():
+    with _notification_lock:
+        _state.save(_notification_reconcile_file(), {
+            'required': True, 'generation': uuid.uuid4().hex, 'last_attempt': 0,
+        })
+
+
+def recover_subscription_notifications():
+    """After backpressure/failed enqueue, recheck subscribed facts, not media.
+
+    Called only by the single notification worker, no more than every five
+    minutes. Compare generations so a concurrent new failure cannot be cleared
+    by an older repair. Already queued batches are not recreated or merged.
+    """
+    with _notification_lock:
+        repair = _state.read(_notification_reconcile_file(), {})
+        if not repair.get('required') or time.time() - float(repair.get('last_attempt') or 0) < 300:
+            return {'status': 'skipped'}
+        queue = _load_notification_queue()
+        if sum(e.get('status') != 'sent' for e in queue.get('events') or []) >= max(1, _NOTIFICATION_PENDING_LIMIT // 2):
+            return {'status': 'waiting'}
+        generation = repair.get('generation')
+        repair['last_attempt'] = time.time()
+        _state.save(_notification_reconcile_file(), repair)
+    result = process_subscription_tmdb_calibration(dispatch=False)
+    if result.get('status') == 'success':
+        with _notification_lock:
+            current = _state.read(_notification_reconcile_file(), {})
+            if current.get('generation') == generation:
+                _state.save(_notification_reconcile_file(), {'required': False})
+    return result
+
+
+def _render_notification(updates):
+    lines = [_eng().tg_title('🔔', '追更订阅', f'{len(updates)} 部有变化')]
+    for update in updates:
+        lines.append('')
+        lines.append(f"📺 <b>《{html.escape(str(update.get('name') or ''))}》</b>")
+        if update.get('refilled'):
+            lines.append(f"　✅ 已补齐 <b>{_fmt_ep_ranges(_keys_to_eps(update['refilled']))}</b>")
+        if update.get('new_eps'):
+            lines.append(f"　🆕 新增入库 <b>{_fmt_ep_ranges(_keys_to_eps(update['new_eps']))}</b>")
+        if update.get('newly_missing'):
+            lines.append(f"　⚠️ 仍然缺集 <b>{_fmt_ep_ranges(_keys_to_eps(update['newly_missing']))}</b>")
+        # A newly arrived episode may leave a known gap.  It is an attachment
+        # to this update, never a separate repeating alarm.
+        if update.get('new_eps') and update.get('missing_eps'):
+            remaining = (_keys_to_eps(update['missing_eps']) -
+                         _keys_to_eps(update.get('newly_missing') or []))
+            if remaining:
+                lines.append(f"　⚠️ 仍然缺集 <b>{_fmt_ep_ranges(remaining)}</b>")
+    return '\n'.join(lines)
+
+
+def _queued_episode_claims(queue):
+    """Unacknowledged changes already promised to a Telegram batch.
+
+    Pending, sending and delivered (waiting for local state recovery) all own
+    their episode keys.  A later ingest cycle must never re-claim them.
+    """
+    by_sid = defaultdict(lambda: defaultdict(set))
+    for event in (queue or {}).get('events') or []:
+        if event.get('status') not in ('pending', 'sending', 'delivered'):
+            continue
+        for update in event.get('updates') or []:
+            sid = str(update.get('sid') or '')
+            if not sid:
+                continue
+            try:
+                stamp = float((event.get('state_after') or {}).get(sid, {}).get('facts_ts') or 0)
+                by_sid[sid]['facts_ts'] = max(float(by_sid[sid].get('facts_ts') or 0), stamp)
+            except (TypeError, ValueError):
+                pass
+            for field in ('new_eps', 'newly_missing', 'refilled'):
+                by_sid[sid][field].update(update.get(field) or [])
+    return by_sid
+
+
+def _pending_claims_snapshot():
+    with _notification_lock:
+        return _queued_episode_claims(_load_notification_queue())
+
+
+def _merge_subscription_record(before, after):
+    """Never roll back an accepted episode when recovering an older event.
+
+    State snapshots can be produced while an earlier Telegram message is in
+    flight, so replacing the whole record would discard later acknowledgments.
+    The strongest invariant is a monotonic set of successfully notified keys.
+    """
+    before = dict(before or {})
+    after = dict(after or {})
+    try:
+        newer_before = float(before.get('facts_ts') or 0) > float(after.get('facts_ts') or 0)
+    except (ValueError, TypeError):
+        newer_before = False
+    merged = {**after, **before} if newer_before else {**before, **after}
+    seen = _keys_to_eps(before.get('notified_episodes')) | _keys_to_eps(after.get('notified_episodes'))
+    if 'notified_episodes' in before or 'notified_episodes' in after:
+        merged['notified_episodes'] = sorted(_eps_to_keys(seen))
+    previous_ep = _parse_ep_key(before.get('latest_ep'))
+    next_ep = _parse_ep_key(after.get('latest_ep'))
+    last = max([x for x in (previous_ep, next_ep, *seen) if x], default=None)
+    if last:
+        merged['latest_ep'] = _ep_key(*last)
+    return merged
+
+
+def _persist_subscription_snapshots(staged):
+    if not staged:
+        return
+    with _notification_lock:
+        state = _load_sub_state()
+        for sid, after in staged.items():
+            state[str(sid)] = _merge_subscription_record(state.get(str(sid)), after)
+        _save_sub_state(state)
+
+
+def _queue_update_batch(updates, staged, reason='event'):
+    """Create one immutable batch per ingest cycle, after filtering queued keys.
+
+    Do not combine events across cycles, especially not a `delivered` event:
+    its Telegram message was *already sent* and merging into it loses updates.
+    """
+    if not updates:
+        return None
+    with _notification_lock:
+        queue = _bounded_notification_history(_load_notification_queue())
+        claims = _queued_episode_claims(queue)
+        acknowledged = _load_sub_state()
+        fresh_updates = []
+        for original in updates:
+            update = copy.deepcopy(original)
+            sid = str(update.get('sid') or '')
+            if not sid:
+                continue
+            seen = _eps_to_keys(_keys_to_eps((acknowledged.get(sid) or {}).get('notified_episodes')))
+            for field in ('new_eps', 'newly_missing', 'refilled'):
+                excluded = claims[sid][field]
+                if field in ('new_eps', 'refilled'):
+                    excluded = excluded | seen
+                update[field] = sorted(set(update.get(field) or []) - excluded)
+            if any(update.get(field) for field in ('new_eps', 'newly_missing', 'refilled')):
+                fresh_updates.append(update)
+        if not fresh_updates:
+            return None
+        # A unique journal identity is needed even if a new broadcast later
+        # happens to contain the same keys as a (now historical) batch.
+        event = {
+            'id': uuid.uuid4().hex,
+            'created_at': time.time(), 'updated_at': time.time(),
+            'status': 'pending', 'attempts': 0, 'reason': reason,
+            'updates': fresh_updates,
+            'state_after': copy.deepcopy({str(k): v for k, v in staged.items()
+                                          if str(k) in {str(u['sid']) for u in fresh_updates}}),
+        }
+        queue.setdefault('events', []).append(event)
+        pending_count = sum(e.get('status') != 'sent' for e in queue['events'])
+        if (pending_count > _NOTIFICATION_PENDING_LIMIT or
+                len(json.dumps(queue, ensure_ascii=False).encode('utf-8')) > _NOTIFICATION_BYTES_LIMIT):
+            # Accepted batches are immutable. Do not merge across ingest cycles,
+            # truncate old pending events, or advance new notification state.
+            _mark_notification_reconcile()
+            raise NotificationBackpressure('追更待通知队列已满，既有通知与未确认状态保留；恢复发送后校准补报')
+        _save_notification_queue(queue)
+        log.info('追更通知入队：%d 部（原因=%s，事件=%s）', len(fresh_updates), reason, event['id'])
+        return event
+
+
+def _apply_notification_state(event):
+    _persist_subscription_snapshots(event.get('state_after') or {})
+
+def drain_subscription_notifications(limit=8, force=False, time_budget=None, should_stop=None):
+    """Retry persisted batches.  Returns delivery counts for diagnostics."""
+    try:
+        if _cfg.load_config().get('subscribe_enabled', '1') != '1':
+            return {'status': 'disabled', 'sent': 0, 'failed': 0, 'pending': 0}
+    except Exception as error:
+        return {'status': 'error', 'sent': 0, 'failed': 1, 'pending': 0, 'error': str(error)}
+    if not _notification_drain_lock.acquire(blocking=False):
+        return {'status': 'busy', 'sent': 0, 'failed': 0, 'pending': 0}
+    sent = failed = 0
+    delivered_updates = []
+    deadline = time.monotonic() + float(time_budget) if time_budget is not None else None
+    try:
+        for _ in range(max(1, int(limit or 1))):
+            # Budget between batches; an individual existing Telegram call has
+            # its own timeout. Never launch parallel retry/send workers.
+            if ((should_stop is not None and should_stop()) or
+                    (deadline is not None and time.monotonic() >= deadline)):
+                break
+            with _notification_lock:
+                queue = _load_notification_queue()
+                recovery = next((e for e in queue.get('events') or []
+                                 if e.get('status') == 'delivered' or
+                                 (e.get('status') == 'sent' and e.get('state_error'))), None)
+                if recovery is not None:
+                    try:
+                        _apply_notification_state(recovery)
+                        recovery['status'] = 'sent'
+                        recovery.pop('state_error', None)
+                        _save_notification_queue(queue)
+                        continue
+                    except Exception as exc:
+                        recovery['state_error'] = str(exc)
+                        _save_notification_queue(queue)
+                        return {'status': 'partial', 'sent': sent, 'failed': failed + 1,
+                                'pending': sum(e.get('status') != 'sent' for e in queue.get('events') or [])}
+                now = time.time()
+                event = next((e for e in queue.get('events') or []
+                              if e.get('status') == 'sending' or
+                              (e.get('status') == 'pending' and
+                               (force or float(e.get('next_retry_at') or 0) <= now))), None)
+                if event is None:
+                    pending = sum(e.get('status') != 'sent' for e in queue.get('events') or [])
+                    return {'status': 'success', 'sent': sent, 'failed': failed,
+                            'pending': pending, 'delivered_updates': delivered_updates}
+                # A user can pause a subscription while Telegram is offline.
+                # Drop that show's pending item before sending; pausing is a
+                # hard notification boundary just like the event matcher.
+                try:
+                    enabled_ids = {str(s.get('id') or s.get('tmdb_id') or s.get('name'))
+                                   for s in _cfg.get_subscriptions() if s.get('enabled', True)}
+                    kept_updates = [u for u in event.get('updates') or []
+                                     if str(u.get('sid') or '') in enabled_ids]
+                    if len(kept_updates) != len(event.get('updates') or []):
+                        event['updates'] = kept_updates
+                        event['state_after'] = {sid: value for sid, value in
+                                                (event.get('state_after') or {}).items()
+                                                if sid in enabled_ids}
+                        if not kept_updates:
+                            event['status'] = 'sent'
+                            event['canceled_at'] = time.time()
+                            _save_notification_queue(queue)
+                            continue
+                        _save_notification_queue(queue)
+                except Exception as error:
+                    # Fail closed: config unreadable is not permission to send
+                    # a potentially paused/deleted subscription's old message.
+                    return {'status': 'error', 'sent': sent, 'failed': failed + 1,
+                            'pending': sum(e.get('status') != 'sent' for e in queue.get('events') or []),
+                            'error': str(error)}
+                # A crashed process may leave ``sending`` behind.  It is safe
+                # to retry: Telegram lacks a local exactly-once protocol.
+                event['status'] = 'sending'
+                event['attempts'] = int(event.get('attempts') or 0) + 1
+                event['last_attempt_at'] = time.time()
+                _save_notification_queue(queue)
+                payload = copy.deepcopy(event)
+            ok = False
+            error = ''
+            try:
+                ok = bool(_eng().notify_telegram(_render_notification(payload.get('updates') or [])))
+                if not ok:
+                    error = 'Telegram 推送失败'
+            except Exception as exc:
+                error = str(exc)
+            with _notification_lock:
+                queue = _load_notification_queue()
+                current = next((e for e in queue.get('events') or [] if e.get('id') == payload.get('id')), None)
+                if current is None:
+                    continue
+                if ok:
+                    # ``delivered`` is a recoverable intermediate marker: if
+                    # the process dies after Telegram accepts the message but
+                    # before the local subscription state is committed, the
+                    # next drain applies state_after without sending again.
+                    current['status'] = 'delivered'
+                    current['sent_at'] = time.time()
+                    current['error'] = ''
+                    _save_notification_queue(queue)
+                    try:
+                        _apply_notification_state(current)
+                    except Exception as exc:
+                        # Keep the sent marker and state_after for recovery; a
+                        # later drain applies it without sending again.
+                        current['state_error'] = str(exc)
+                        _save_notification_queue(queue)
+                        failed += 1
+                        log.warning('追更通知已发送但状态写回失败，将恢复写回：%s', exc)
+                        continue
+                    current['status'] = 'sent'
+                    _save_notification_queue(queue)
+                    sent += 1
+                    delivered_updates.extend(copy.deepcopy(current.get('updates') or []))
+                    _save_subscription_report(current.get('updates') or [])
+                    log.info('追更通知发送成功：事件=%s', current.get('id'))
+                else:
+                    current['status'] = 'pending'
+                    current['error'] = error or 'Telegram 推送失败'
+                    current['next_retry_at'] = time.time() + min(1800, 30 * (2 ** min(6, int(current.get('attempts') or 1) - 1)))
+                    _save_notification_queue(queue)
+                    failed += 1
+                    log.warning('追更通知发送失败，保留待重试事件=%s：%s', current.get('id'), current['error'])
+                    break
+        with _notification_lock:
+            queue = _load_notification_queue()
+            pending = sum(e.get('status') != 'sent' for e in queue.get('events') or [])
+        return {'status': 'partial' if failed else 'success', 'sent': sent, 'failed': failed,
+                'pending': pending, 'delivered_updates': delivered_updates}
+    finally:
+        _notification_drain_lock.release()
+
+
+def _mapping_entry_facts(entry, facts_ts=0):
+    episodes = set()
+    for season in (entry or {}).get('seasons') or []:
+        try:
+            sn = int(season.get('season'))
+        except (TypeError, ValueError):
+            continue
+        nums = season.get('episode_numbers')
+        if nums is None:
+            try:
+                hi = int(season.get('max_ep') or 0)
+            except (TypeError, ValueError):
+                hi = 0
+            missing = {int(x) for x in (season.get('missing') or []) if str(x).isdigit()}
+            nums = [x for x in range(1, hi + 1) if x not in missing]
+        for number in nums or []:
+            try:
+                en = int(number)
+            except (TypeError, ValueError):
+                continue
+            if sn > 0 and en > 0:
+                episodes.add((sn, en))
+    return {
+        'series_id': str((entry or {}).get('id') or ''),
+        'series_ids': [str(x) for x in ((entry or {}).get('series_ids') or [(entry or {}).get('id')]) if x],
+        'series_name': (entry or {}).get('name') or '',
+        'episodes': episodes,
+        'source': 'library_facts',
+        'facts_ts': (entry or {}).get('subscription_facts_ts') or facts_ts,
+        'facts_version': (entry or {}).get('facts_version') or '',
+    }
+
+
+def _mapping_facts_by_tmdb(cache, only_tmdb_ids=None):
+    by_tmdb = {}
+    facts_ts = (cache or {}).get('facts_ts') or (cache or {}).get('ts') or 0
+    for entry in (cache or {}).get('series') or []:
+        tid = str(entry.get('tmdb_id') or '').strip()
+        if not tid or (only_tmdb_ids is not None and tid not in only_tmdb_ids):
+            continue
+        facts = _mapping_entry_facts(entry, facts_ts)
+        current = by_tmdb.setdefault(tid, facts)
+        if current is not facts:
+            current['episodes'] |= facts['episodes']
+            current['series_ids'] = sorted(set(current['series_ids']) | set(facts['series_ids']))
+            try:
+                current['facts_ts'] = min(float(current.get('facts_ts') or 0), float(facts.get('facts_ts') or 0))
+            except (TypeError, ValueError):
+                current['facts_ts'] = 0
+            if not current.get('series_name'):
+                current['series_name'] = facts.get('series_name')
+    return by_tmdb
+
+
+def enqueue_ingest_notifications(mapping_result: dict) -> dict:
+    """Schedule targeted subscription analysis after ingest fact persistence.
+
+    Only changed mapping entries are handed to the worker.  The worker never
+    enumerates unrelated subscriptions or performs a full Emby library query.
+    """
+    entries = list((mapping_result or {}).get('series_facts') or [])
+    # Duplicate Emby Series IDs are unioned by TMDB identity.
+    facts = {}
+    for entry in entries:
+        tid = str(entry.get('tmdb_id') or '').strip()
+        if not tid:
+            continue
+        row = _mapping_entry_facts(entry, time.time())
+        current = facts.setdefault(tid, row)
+        if current is not row:
+            current['episodes'] |= row['episodes']
+            current['series_ids'] = sorted(set(current['series_ids']) | set(row['series_ids']))
+            if not current.get('series_name'):
+                current['series_name'] = row.get('series_name')
+    if not facts:
+        return {'status': 'skipped', 'matched': 0, 'queued': 0, 'scheduled': False}
+    ids = set(facts)
+
+    # Queue synchronously after the mapping fact has been persisted.  The
+    # queue write is local and bounded; Telegram delivery remains in the
+    # scheduler's retry loop, so a process stop after ingest cannot lose the
+    # event and the ingest task never waits on the network.
+    try:
+        result = check_subscriptions(send_notify=True, dispatch=False,
+                                     only_tmdb_ids=ids, facts_by_tmdb=facts,
+                                     fallback_missing=False, reason='ingest')
+        return {'status': 'queued', 'matched': len(ids),
+                'queued': len(result.get('updates') or []), 'scheduled': False,
+                'tmdb_ids': sorted(ids), 'event_id': result.get('event_id')}
+    except Exception as error:
+        try:
+            _mark_notification_reconcile()
+        except Exception as storage_error:
+            log.warning('追更补报标记保存失败，仍可通过手动/周期校准恢复: %s', storage_error)
+        record_subscription_check_failure(error)
+        log.warning('增量追更分析失败（不影响入库任务）: %s', error)
+        return {'status': 'error', 'matched': len(ids), 'queued': 0, 'scheduled': False,
+                'tmdb_ids': sorted(ids), 'error': str(error)}
+
+
+def process_subscription_tmdb_calibration(*, dispatch=True) -> dict:
+    """Low-frequency TMDB/aired reconciliation using persisted library facts."""
+    cfg = _cfg.load_config()
+    if cfg.get('subscribe_enabled', '1') != '1':
+        return {'status': 'disabled', 'updates': [], 'checked': 0, 'failed': 0}
+    try:
+        from . import morning
+    except ImportError:
+        import morning
+    ids = {str(s.get('tmdb_id') or '').strip() for s in _cfg.get_subscriptions()
+           if s.get('enabled', True) and str(s.get('tmdb_id') or '').strip()}
+    cache = (morning.read_emby_lib_cache(max_age=None) or {}) if ids else {}
+    facts = _mapping_facts_by_tmdb(cache, only_tmdb_ids=ids)
+    # A missing mapping fact is allowed to use the existing precise Emby
+    # fallback during this six-hour calibration, but never in the five-minute
+    # event path.
+    return check_subscriptions(send_notify=True, only_tmdb_ids=ids or None,
+                               facts_by_tmdb=facts, fallback_missing=True,
+                               reason='tmdb_calibration', dispatch=dispatch)
 
 def _subscription_report_file():
     return _eng().STATE_DIR / 'subscription_report.json'
@@ -258,16 +759,151 @@ def _fmt_ep_ranges(eps):
         parts = parts[:6] + [f'…等 {n} 集']
     return ', '.join(parts)
 
-def check_subscriptions(send_notify=True) -> dict:
+def _precise_calibration_facts(tmdb_id, cached):
+    """Bounded targeted API reads only; no full Series or disk-scan fallback."""
+    ids = list(dict.fromkeys(str(x) for x in (cached or {}).get('series_ids') or [] if x))
+    if len(ids) > 64:
+        raise RuntimeError('匹配副本数量异常，保留旧状态')
+    params = {'Recursive': 'true', 'IncludeItemTypes': 'Series',
+              'Fields': 'ProviderIds,Name,Path', 'Limit': 64}
+    if ids:
+        params['Ids'] = ','.join(ids)
+    else:
+        params['AnyProviderIdEquals'] = 'Tmdb.' + str(tmdb_id)
+    rows = _query_items(params)
+    if not rows or (ids and {str(x.get('Id') or '') for x in rows} != set(ids)):
+        raise RuntimeError('精准校准未取得全部匹配副本，保留旧状态')
+    if any(not x.get('Id') or x.get('Type') != 'Series' or
+           str((x.get('ProviderIds') or {}).get('Tmdb') or '') != str(tmdb_id) for x in rows):
+        raise RuntimeError('精准校准身份不符，保留旧状态')
+    have = set()
+    for row in rows:
+        episodes = _query_items({'ParentId': str(row['Id']), 'Recursive': 'true',
+                                'IncludeItemTypes': 'Episode', 'Limit': 5000,
+                                'Fields': 'ParentIndexNumber,IndexNumber,IndexNumberEnd'})
+        for ep in episodes:
+            try:
+                sn, en = int(ep.get('ParentIndexNumber') or 0), int(ep.get('IndexNumber') or 0)
+                end = max(en, int(ep.get('IndexNumberEnd') or en))
+            except (TypeError, ValueError):
+                continue
+            if sn > 0 and en > 0:
+                if end - en > 1000:
+                    raise RuntimeError('分集区间异常，保留旧状态')
+                have.update((sn, number) for number in range(en, end + 1))
+    return {'series_ids': [str(row['Id']) for row in rows],
+            'series_name': rows[0].get('Name') or '', 'episodes': have,
+            'source': 'emby_live', 'facts_ts': time.time()}
+
+
+def _prepare_subscription_observations(only_tmdb_ids, facts_by_tmdb, fallback_missing, reason):
+    """Network/disk observations outside the short state/queue critical section."""
+    cfg = _cfg.load_config()
+    if cfg.get('subscribe_enabled', '1') != '1':
+        return {}
+    allowed = {str(x) for x in only_tmdb_ids} if only_tmdb_ids is not None else None
+    try:
+        freshness = max(900, int(cfg.get('ingest_interval_min') or 5) * 120)
+    except (TypeError, ValueError):
+        freshness = 900
+    observed = {}
+    for sub in _cfg.get_subscriptions():
+        tid = str(sub.get('tmdb_id') or '')
+        if not tid or not sub.get('enabled', True) or tid in observed or (allowed is not None and tid not in allowed):
+            continue
+        item = {'latest': copy.deepcopy((facts_by_tmdb or {}).get(tid)),
+                'fallback_reason': '', 'error': '', 'tmdb_info': None, 'tmdb_error': ''}
+        observed[tid] = item
+        latest = item['latest']
+        if latest is None and facts_by_tmdb is not None and not fallback_missing:
+            item['skip'] = True
+            continue
+        try:
+            stamp = float((latest or {}).get('facts_ts') or 0)
+        except (TypeError, ValueError):
+            stamp = 0
+        stale = not stamp or time.time() - stamp > freshness or stamp > time.time() + 60
+        if reason == 'tmdb_calibration' and (latest is None or stale):
+            try:
+                item['latest'] = _precise_calibration_facts(tid, latest)
+            except Exception as error:
+                item['error'] = str(error)
+                continue  # never infer absence from stale/unavailable data
+        elif latest is None:
+            try:
+                item['latest'] = _emby_series_latest_ep(sub['tmdb_id'])
+            except Exception as error:
+                item['fallback_reason'] = str(error)
+            if item['latest'] is None:
+                try:
+                    item['latest'] = _disk_series_eps(sub['tmdb_id'])
+                    if item['latest'] is None:
+                        raise RuntimeError('未取得完整分集事实')
+                except Exception as error:
+                    item['error'] = '; '.join(filter(None, [item['fallback_reason'], str(error)]))
+                    continue
+        item['latest'].setdefault('facts_ts', time.time())
+        if cfg.get('subscribe_check_tmdb', '1') == '1':
+            try:
+                item['tmdb_info'] = _eng()._tmdb_series_info(sub['tmdb_id'])
+                if item['tmdb_info'] is None:
+                    raise RuntimeError('TMDB 对照不可用，保留上次缺集记录')
+            except Exception as error:
+                item['tmdb_error'] = str(error)
+    return observed
+
+
+def check_subscriptions(send_notify=True, *, only_tmdb_ids=None, facts_by_tmdb=None,
+                        fallback_missing=True, reason='manual', dispatch=True) -> dict:
+    if reason == 'ingest':
+        fallback_missing = False
+        facts_by_tmdb = facts_by_tmdb if facts_by_tmdb is not None else {}
     try:
         from .tmdb import subscription_tmdb_session
     except ImportError:
         from tmdb import subscription_tmdb_session
-    with subscription_tmdb_session():
-        return _check_subscriptions(send_notify=send_notify)
+    with subscription_tmdb_session(force_refresh=(reason == 'tmdb_calibration')):
+        observations = None
+        if reason != 'ingest':
+            # Only one expensive observation pass; ingest never takes this
+            # lock and can journal new facts while TMDB/Emby are slow.
+            with _subscription_observation_lock:
+                observations = _prepare_subscription_observations(
+                    only_tmdb_ids, facts_by_tmdb, fallback_missing, reason)
+        try:
+            with _subscription_check_lock:
+                result = _check_subscriptions(
+                    send_notify=send_notify, only_tmdb_ids=only_tmdb_ids,
+                    facts_by_tmdb=facts_by_tmdb, fallback_missing=fallback_missing,
+                    reason=reason, observations=observations)
+        except NotificationBackpressure as error:
+            record_subscription_check_failure(error)
+            raise
+        # Synchronous manual/API checks retain their existing return contract,
+        # but network delivery must not own the state/ingest check lock.
+        if send_notify and dispatch and result.get('status') != 'disabled':
+            delivery = drain_subscription_notifications(force=True)
+            if reason == 'manual' and not result.get('updates') and delivery.get('sent'):
+                result['updates'] = delivery.get('delivered_updates') or []
+            event_id = result.get('event_id')
+            with _notification_lock:
+                queue = _load_notification_queue()
+                event = next((e for e in queue.get('events') or [] if e.get('id') == event_id), None)
+                result['notification_pending'] = any(e.get('status') != 'sent' for e in queue.get('events') or [])
+            result['sent'] = (bool(event and event.get('status') == 'sent') if event_id
+                              else (True if delivery.get('sent') else None))
+            if delivery.get('failed'):
+                result['status'] = 'error'
+                result['error'] = delivery.get('error') or 'Telegram 推送失败'
+            _save_subscription_check_status(
+                result['status'], finished_at=time.time(), updates=len(result.get('updates') or []),
+                **{k: result.get(k) for k in ('total', 'checked', 'paused', 'failed', 'rows', 'sent', 'error', 'reason')})
+        return result
 
 
-def _check_subscriptions(send_notify=True) -> dict:
+def _check_subscriptions(send_notify=True, *, only_tmdb_ids=None, facts_by_tmdb=None,
+                         fallback_missing=True, reason='manual',
+                         observations=None) -> dict:
     """追更订阅检查（集合差集状态机）。
 
     核心口径（修复「吞通知 / 重复通知 / 跳集不报警」）：
@@ -297,7 +933,14 @@ def _check_subscriptions(send_notify=True) -> dict:
         return result
 
     check_tmdb = cfg.get('subscribe_check_tmdb', '1') == '1'
+    # An ingest event reuses the last reliable TMDB aired baseline.  TMDB is
+    # refreshed by the separate low-frequency calibration, never by every
+    # five-minute ingest tick.
+    if reason == 'ingest':
+        check_tmdb = False
+    only_ids = {str(x) for x in only_tmdb_ids} if only_tmdb_ids is not None else None
     state = _load_sub_state()
+    queued_claims = _pending_claims_snapshot() if send_notify else {}
     updates = []
     now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     # 记录每个订阅本轮「发送成功后应写回」的状态，发送前不落盘
@@ -313,33 +956,77 @@ def _check_subscriptions(send_notify=True) -> dict:
             continue
         sid = sub.get('id') or sub.get('tmdb_id') or sub.get('name')
         tmdb_id = sub.get('tmdb_id')
+        if only_ids is not None and str(tmdb_id or '') not in only_ids:
+            continue
         if not tmdb_id:
             failed += 1
             rows.append({'sid': sid, 'name': sub.get('name'), 'status': 'error',
                          'changed': False, 'error': '未配置 TMDB ID'})
             continue
         errors = []; fallback_reason = ''
-        try:
-            latest = _emby_series_latest_ep(tmdb_id)
-        except Exception as error:
-            latest = None
-            fallback_reason = str(error)
-        if latest is None:
-            try:
-                latest = _disk_series_eps(tmdb_id)
-                if latest is None:
-                    raise RuntimeError('未取得完整分集事实')
-            except Exception as error:
+        facts_ts = 0
+        observation = (observations or {}).get(str(tmdb_id)) if observations is not None else None
+        if observations is not None:
+            if observation is None or observation.get('error'):
                 failed += 1
                 rows.append({'sid': sid, 'name': sub.get('name'), 'tmdb_id': tmdb_id,
                              'status': 'error', 'changed': False,
-                             'error': '; '.join(filter(None, [fallback_reason, str(error)]))})
+                             'error': (observation or {}).get('error') or '订阅已变化，等待下轮核实'})
                 continue
+            if observation.get('skip'):
+                rows.append({'sid': sid, 'name': sub.get('name'), 'tmdb_id': tmdb_id,
+                             'status': 'skipped', 'changed': False, 'error': '片库事实未匹配，等待校准'})
+                continue
+            latest = copy.deepcopy(observation['latest'])
+            fallback_reason = observation.get('fallback_reason') or ''
+            facts_ts = latest.get('facts_ts') or 0
+            accepted_ts = max(float((state.get(sid) or {}).get('facts_ts') or 0),
+                              float((queued_claims.get(str(sid)) or {}).get('facts_ts') or 0))
+            if float(facts_ts) < accepted_ts:
+                rows.append({'sid': sid, 'name': sub.get('name'), 'tmdb_id': tmdb_id,
+                             'status': 'skipped', 'changed': False,
+                             'error': '观察期间已取得更新事实，保留最新状态，等待下轮核实'})
+                continue
+        elif facts_by_tmdb is not None:
+            latest = copy.deepcopy(facts_by_tmdb.get(str(tmdb_id)))
+            facts_ts = (latest or {}).get('facts_ts') or 0
+            if latest is None and not fallback_missing:
+                # The event must not manufacture facts from an incomplete
+                # mapping.  The next six-hour calibration/manual check can
+                # recover it with a precise fallback query.
+                rows.append({'sid': sid, 'name': sub.get('name'), 'tmdb_id': tmdb_id,
+                             'status': 'skipped', 'changed': False,
+                             'error': '片库事实未匹配，等待校准'})
+                continue
+        else:
+            latest = None
+        if latest is None:
+            try:
+                latest = _emby_series_latest_ep(tmdb_id)
+            except Exception as error:
+                latest = None
+                fallback_reason = str(error)
+            if latest is None:
+                try:
+                    latest = _disk_series_eps(tmdb_id)
+                    if latest is None:
+                        raise RuntimeError('未取得完整分集事实')
+                except Exception as error:
+                    failed += 1
+                    rows.append({'sid': sid, 'name': sub.get('name'), 'tmdb_id': tmdb_id,
+                                 'status': 'error', 'changed': False,
+                                 'error': '; '.join(filter(None, [fallback_reason, str(error)]))})
+                    continue
         checked += 1
         tmdb_info = None
         if check_tmdb:
             try:
-                tmdb_info = _eng()._tmdb_series_info(tmdb_id)
+                if observation is not None:
+                    if observation.get('tmdb_error'):
+                        raise RuntimeError(observation['tmdb_error'])
+                    tmdb_info = observation.get('tmdb_info')
+                else:
+                    tmdb_info = _eng()._tmdb_series_info(tmdb_id)
                 if tmdb_info is None:
                     raise RuntimeError('TMDB 对照不可用，保留上次缺集记录')
             except Exception as error:
@@ -347,7 +1034,7 @@ def _check_subscriptions(send_notify=True) -> dict:
                 failed += 1
         prev = state.get(sid) or {}
         have = set(latest.get('episodes') or [])
-        facts_ts = time.time()
+        facts_ts = facts_ts or time.time()
         facts_version = hashlib.sha256(json.dumps(sorted(have)).encode()).hexdigest()[:16]
 
         # ── 免迁移播种 ──
@@ -376,7 +1063,12 @@ def _check_subscriptions(send_notify=True) -> dict:
 
         prev_missing = _keys_to_eps(prev.get('missing_episodes'))
 
-        new_eps = sorted(have - notified)                       # 真实新增
+        # A failed or not-yet-committed Telegram batch already owns its
+        # episode keys.  These are not available for a subsequent 5m batch.
+        claimed = queued_claims.get(str(sid)) or {}
+        claimed_new = _keys_to_eps(claimed.get('new_eps'))
+        claimed_missing = _keys_to_eps(claimed.get('newly_missing'))
+        new_eps = sorted(have - notified - claimed_new)          # 真实新增、且未排队
         # TMDB 不可用/停用时不推断新缺集，仍可确认原缺集已经入库。
         missing_eps = prev_missing - have
         if tmdb_info is not None:
@@ -385,8 +1077,8 @@ def _check_subscriptions(send_notify=True) -> dict:
             # 若只算 aired - have，那么「曾经有、后来被删」的集会被误报成缺集
             # （下架 / 洗版删旧时最容易遇到）。取 aired - (have | notified)：
             # 已通知过的集视为「到过库」，即使当下不在也不算缺集。
-            missing_eps = aired - have - notified
-        newly_missing = sorted(missing_eps - prev_missing)      # 本次新出现的缺集
+            missing_eps = aired - have - notified - claimed_new
+        newly_missing = sorted(missing_eps - prev_missing - claimed_missing)  # 未排队的新缺集
         refilled = sorted(set(new_eps) & prev_missing)          # 本次被补齐的缺集
 
         # 通知只由「状态相对上次的变化」驱动，不看绝对值
@@ -438,63 +1130,44 @@ def _check_subscriptions(send_notify=True) -> dict:
             })
 
     # ── 发送成功才记账 ──
-    # send_notify=False（bot 手动查看 / 晨报 / 保存订阅后的即时检查）本身不发送消息，
-    # 等价于「已送达」，同样要记账，否则下一轮会把同一批集重复播报。
-    # 发送失败时：notified_episodes / missing_episodes 全部回退到本轮开始前的值，
-    # 保证下一轮算出同一批 new_eps 继续重试 —— 既不丢通知也不重复刷屏。
-    sent_ok = True
+    # send_notify=False（bot/保存订阅的静默校验）等价于已确认，不产生
+    # Telegram 事件；普通增量通知则先持久化队列，再由 dispatcher 发送。
+    event = None
     if send_notify and updates:
-        lines = [_eng().tg_title('🔔', '追更订阅', f'{len(updates)} 部有变化')]
-        for u in updates:
-            lines.append('')
-            lines.append(f"📺 <b>《{html.escape(str(u['name'] or ''))}》</b>")
-            if u['refilled']:
-                lines.append(f"　✅ 已补齐 <b>{_fmt_ep_ranges(_keys_to_eps(u['refilled']))}</b>")
-            if u['new_eps']:
-                lines.append(f"　🆕 新增入库 <b>{_fmt_ep_ranges(_keys_to_eps(u['new_eps']))}</b>")
-            if u['newly_missing']:
-                lines.append(f"　⚠️ 缺集 <b>{_fmt_ep_ranges(_keys_to_eps(u['newly_missing']))}</b>")
-        sent_ok = _eng().notify_telegram('\n'.join(lines))
-        if sent_ok:
-            _save_subscription_report(updates)
-        else:
-            log.warning('追更订阅推送失败，本轮不记账，下次继续重试')
-
-    if not sent_ok:
-        for u in updates:
-            st = staged.get(u['sid'])
-            if not st:
-                continue
-            # 回退新增集：把本轮 new_eps 从 notified_episodes 里剔除
-            kept = _keys_to_eps(st['notified_episodes']) - _keys_to_eps(u['new_eps'])
-            st['notified_episodes'] = sorted(_eps_to_keys(kept))
-            st['latest_ep'] = (max(st['notified_episodes'], key=_ep_key_num)
-                               if st['notified_episodes'] else '')
-            # 缺集基线也不推进：下一轮重新判定 newly_missing
-            st['missing_episodes'] = list((state.get(u['sid']) or {}).get('missing_episodes') or [])
-
-    state.update(staged)
-    _save_sub_state(state)
-
-    outcome = 'error' if not sent_ok or (failed and not checked) else ('partial' if failed else 'success')
-    error_text = 'Telegram 推送失败' if not sent_ok else ('部分订阅读取失败，请查看逐部原因' if failed else '')
+        update_sids = {str(u.get('sid') or '') for u in updates}
+        _persist_subscription_snapshots({sid: st for sid, st in staged.items()
+                                         if str(sid) not in update_sids})
+        # Immutable UUID batches and _notification_lock protect commit/claims.
+        # Do not acquire the network sender lock here: ingest must never wait
+        # for an in-flight Telegram call.
+        event = _queue_update_batch(updates, staged, reason=reason)
+    else:
+        _persist_subscription_snapshots(staged)
+    with _notification_lock:
+        pending = any(e.get('status') != 'sent' for e in _load_notification_queue().get('events') or []) if send_notify else False
+    outcome = 'error' if failed and not checked else ('partial' if failed else 'success')
+    error_text = '部分订阅读取失败，请查看逐部原因' if failed else ''
     result = {'status': outcome, 'updates': updates, 'total': len(subs), 'checked': checked, 'paused': paused,
               'failed': failed, 'rows': rows, 'error': error_text,
-              'sent': bool(sent_ok) if send_notify and updates else None}
+              'sent': False if send_notify and updates else None,
+              'event_id': (event or {}).get('id') if event else None,
+              'notification_pending': pending,
+              'reason': reason}
     _save_subscription_check_status(
         outcome, finished_at=time.time(), duration_ms=int((time.time()-started)*1000),
         updates=len(updates), total=len(subs), checked=checked, paused=paused,
-        failed=failed, rows=rows, sent=result.get('sent'), error=error_text,
+        failed=failed, rows=rows, sent=result.get('sent'), error=error_text, reason=reason,
     )
     try:
         summary = [f'检查 {checked} 部订阅' + (f'（{paused} 部已暂停，未检查）' if paused else ''),
                    f'发现 {len(updates)} 部有变化', f'{failed} 部读取失败/不完整']
         if send_notify and updates:
-            summary.append('Telegram 推送成功' if sent_ok else 'Telegram 推送失败，等待重试')
+            summary.append('通知已持久化，等待调度发送')
         logger.write('追更', '订阅检查', summary,
                      extra={'shows': rows, 'checked': checked, 'paused': paused, 'failed': failed,
                             'changed': len(updates),
-                            'sent': (bool(sent_ok) if send_notify and updates else None)})
+                            'sent': result.get('sent'),
+                            'reason': reason})
     except Exception:
         pass
     return result

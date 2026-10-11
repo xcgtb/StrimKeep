@@ -744,7 +744,7 @@ def _live_series_episodes(series_id: str):
     response = _eng().emby_request('/Items', {
         'ParentId': series_id, 'Recursive': 'true',
         'IncludeItemTypes': 'Episode',
-        'Fields': 'Path,ParentIndexNumber,IndexNumber', 'Limit': 5000,
+        'Fields': 'Path,ParentIndexNumber,IndexNumber,IndexNumberEnd', 'Limit': 5000,
     })
     if not isinstance(response, dict) or not isinstance(response.get('Items'), list):
         raise RuntimeError('Emby 剧集分集查询不完整，禁止覆盖缓存')
@@ -766,23 +766,28 @@ def _live_series_episodes(series_id: str):
 
 def _resync_series_entry(entry: dict, live: list):
     """用真实存在的分集重算缓存里这部剧的分集统计，并按原 TMDB 数据重新判定缺集。"""
+    entry['subscription_facts_ts'] = time.time()
     lib_of = _eng().EMBY_PATHS.lib_of
     season_map, local_set, share_set = {}, set(), set()
     for ep in live:
         try:
             sn, en = int(ep.get('ParentIndexNumber')), int(ep.get('IndexNumber'))
+            en_end = int(ep.get('IndexNumberEnd') or en)
         except (TypeError, ValueError):
             continue
         # Match the full library aggregation: S00 special episodes may exist,
         # but E00/non-positive episode numbers are not counted as aired episodes.
         if sn < 0 or en <= 0:
             continue
-        season_map.setdefault(sn, set()).add(en)
+        if en_end - en > 1000:
+            raise RuntimeError('Emby 分集区间异常，保留旧事实')
         lib = lib_of(ep.get('Path') or '')
-        if lib == 'local':
-            local_set.add((sn, en))
-        elif lib == 'share':
-            share_set.add((sn, en))
+        for number in range(en, max(en, en_end) + 1):
+            season_map.setdefault(sn, set()).add(number)
+            if lib == 'local':
+                local_set.add((sn, number))
+            elif lib == 'share':
+                share_set.add((sn, number))
     seasons, total_missing = [], 0
     for sn in sorted(season_map):
         eps_set = sorted(season_map[sn])
@@ -790,6 +795,10 @@ def _resync_series_entry(entry: dict, live: list):
         miss = sorted(set(range(1, lo)) | (set(range(lo, hi + 1)) - set(eps_set)))
         total_missing += len(miss)
         seasons.append({'season': sn, 'episodes': len(eps_set), 'max_ep': hi,
+                        # Keep the exact set so event-driven subscriptions can
+                        # reuse persisted facts without querying Emby again.
+                        # ``missing`` remains for older UI/report consumers.
+                        'episode_numbers': eps_set,
                         'missing': miss, 'complete': not miss,
                         'local_eps': sum(1 for ss, _ in local_set if ss == sn),
                         'share_eps': sum(1 for ss, _ in share_set if ss == sn)})
@@ -909,7 +918,8 @@ def _refresh_series_mapping_cache_after_ingest(ingest_data: dict) -> dict:
     of deletion or completion. New Emby series are inserted with pending TMDB
     classification, then reconciled by the normal background TMDB scan.
     """
-    result = {'status': 'skipped', 'affected': 0, 'updated': 0, 'created': 0}
+    result = {'status': 'skipped', 'affected': 0, 'updated': 0, 'created': 0,
+              'series_facts': []}
     if not ingest_data or not ingest_data.get('ok', True):
         return result
     affected_ids = {str(e.get('series_id') or '').strip()
@@ -987,11 +997,15 @@ def _refresh_series_mapping_cache_after_ingest(ingest_data: dict) -> dict:
                     original.update(entry)
                 result['updated'] += 1
                 updated_entries.append((member_ids, copy.deepcopy(entry)))
+            # Verified unchanged entries can repair a missed notification after
+            # an interrupted journal write; never hand off an unverified row.
+            result['series_facts'].append(copy.deepcopy(entry))
         except (OSError, ValueError, RuntimeError, urllib.error.URLError) as error:
             log.warning('单剧增量更新跳过 %s，保持旧事实: %s', sid, error)
             continue
     if not result['updated']:
-        return {'status': 'checked', **{k: result[k] for k in ('affected', 'updated', 'created')}}
+        return {'status': 'checked', **{k: result[k] for k in ('affected', 'updated', 'created')},
+                'series_facts': result['series_facts']}
     _recompute_mapping_stats(cache)
     save_emby_lib_cache(cache, keep_ts=True)
 
@@ -1176,7 +1190,8 @@ def refresh_mapping_cache_after_ingest(ingest_data: dict) -> dict:
             'affected': series.get('affected', 0) + movies.get('affected', 0),
             'updated': series.get('updated', 0) + movies.get('updated', 0),
             'created': series.get('created', 0) + movies.get('created', 0),
-            'series_updated': series.get('updated', 0), 'movies_updated': movies.get('updated', 0)}
+            'series_updated': series.get('updated', 0), 'movies_updated': movies.get('updated', 0),
+            'series_facts': series.get('series_facts') or []}
 
 
 def patch_emby_lib_cache_after_series_delete(series_id: str, deleted_target: str = ''):

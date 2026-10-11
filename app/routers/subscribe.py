@@ -17,6 +17,20 @@ except ImportError:
 router = APIRouter()
 
 
+def _calibration_hours(cfg):
+    try:
+        return max(1, min(168, int(cfg.get('subscribe_calibration_interval_hours') or 6)))
+    except (ValueError, TypeError):
+        return 6
+
+
+def _notification_status():
+    try:
+        return engine.load_subscription_notification_status()
+    except Exception as error:
+        return {'status': 'unavailable', 'error': str(error)}
+
+
 @router.get('/api/subscriptions', dependencies=[Depends(auth)])
 def api_get_subs():
     subs = get_subscriptions()
@@ -52,10 +66,16 @@ def api_get_subs():
         info['check_ts'] = observed.get('facts_ts')
         out.append(info)
     cfg = load_config()
+    calibration_hours = _calibration_hours(cfg)
     return {'status': 'success', 'subscriptions': out,
             'enabled': cfg.get('subscribe_enabled', '1') == '1',
-            'interval_min': int(cfg.get('subscribe_interval_min') or 30),
-            'check_tmdb': cfg.get('subscribe_check_tmdb', '1') == '1', 'check': check}
+            'event_driven': True,
+            'ingest_enabled': cfg.get('ingest_enabled', '1') == '1',
+            'calibration_interval_hours': calibration_hours,
+            # Deprecated response alias retained for old clients.
+            'interval_min': calibration_hours * 60,
+            'check_tmdb': cfg.get('subscribe_check_tmdb', '1') == '1', 'check': check,
+            'notification': _notification_status()}
 
 
 @router.post('/api/subscriptions', dependencies=[Depends(auth)])
@@ -92,19 +112,29 @@ def api_subs_settings(body: dict = None):
     cfg = load_config()
     if 'enabled' in body:
         cfg['subscribe_enabled'] = '1' if body['enabled'] else '0'
-    if 'interval_min' in body:
+    if 'calibration_interval_hours' in body:
         try:
-            v = max(5, min(1440, int(body['interval_min'])))
+            hours = max(1, min(168, int(body['calibration_interval_hours'])))
         except (ValueError, TypeError):
-            v = 30
-        cfg['subscribe_interval_min'] = str(v)
+            hours = 6
+        cfg['subscribe_calibration_interval_hours'] = str(hours)
+    elif 'interval_min' in body:
+        # Compatibility with older web clients.  The value now controls the
+        # low-frequency calibration window; it no longer drives notifications.
+        try:
+            hours = max(1, min(168, int(round(int(body['interval_min']) / 60.0))))
+        except (ValueError, TypeError):
+            hours = 6
+        cfg['subscribe_calibration_interval_hours'] = str(hours)
     if 'check_tmdb' in body:
         cfg['subscribe_check_tmdb'] = '1' if body['check_tmdb'] else '0'
     save_config(cfg)
     engine.reload_config()
     return {'status': 'success',
             'enabled': cfg['subscribe_enabled'] == '1',
-            'interval_min': int(cfg['subscribe_interval_min']),
+            'event_driven': True,
+            'calibration_interval_hours': _calibration_hours(cfg),
+            'interval_min': _calibration_hours(cfg) * 60,
             'check_tmdb': cfg['subscribe_check_tmdb'] == '1'}
 
 
@@ -114,7 +144,11 @@ def api_subs_status():
         status = engine.load_subscription_check_status() or {}
         cfg = load_config()
         status['enabled'] = cfg.get('subscribe_enabled', '1') == '1'
-        status['interval_min'] = int(cfg.get('subscribe_interval_min') or 30)
+        status['event_driven'] = True
+        status['ingest_enabled'] = cfg.get('ingest_enabled', '1') == '1'
+        status['calibration_interval_hours'] = _calibration_hours(cfg)
+        status['interval_min'] = status['calibration_interval_hours'] * 60
+        status['notification'] = _notification_status()
         return {'status': 'success', 'check': status}
     except Exception as e:
         return {'status': 'error', 'message': str(e)}

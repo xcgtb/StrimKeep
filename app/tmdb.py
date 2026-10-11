@@ -60,12 +60,12 @@ _explore_request_window = ContextVar('explore_request_window', default=None)
 
 
 @contextlib.contextmanager
-def subscription_tmdb_session():
+def subscription_tmdb_session(force_refresh=False):
     """每轮订阅惰性加载一次缓存，退出时只保存新增结果；不跨轮保留客户端。"""
     if _subscription_tmdb_client.get() is not None:
         yield
         return
-    session = {}
+    session = {'force_refresh': bool(force_refresh)}
     token = _subscription_tmdb_client.set(session)
     try:
         yield
@@ -822,7 +822,8 @@ def _tmdb_series_info(tmdb_id):
                 session['client'] = _eng().Tmdb()
             t = session['client']
         hits_before = getattr(t, 'hits', 0)
-        info = t.get(f'/tv/{tmdb_id}', ttl=_eng().TMDB_INFO_TTL)
+        ttl = 6 * 3600 if session and session.get('force_refresh') else _eng().TMDB_INFO_TTL
+        info = t.get(f'/tv/{tmdb_id}', ttl=ttl)
         if session is None:
             t.save()
         if not info: return None

@@ -34,7 +34,9 @@ ENGINE_EXPORTS = (
      '_load_sub_state _save_sub_state _subscription_report_file _save_subscription_report '
      '_load_subscription_report _emby_series_latest_ep _disk_series_eps _ep_key_num _ep_key _parse_ep_key '
      '_eps_to_keys _keys_to_eps _fmt_ep_ranges check_subscriptions load_subscription_check_status '
-     'record_subscription_check_failure', None),
+     'record_subscription_check_failure enqueue_ingest_notifications process_subscription_tmdb_calibration '
+     'drain_subscription_notifications recover_subscription_notifications '
+     'load_subscription_notification_status', None),
     ('wash',
      'cloud_videos _inside MutationBusy mutation_lock _is_sidecar_of _load_wash_residuals '
      '_save_wash_residuals _record_wash_residuals _remove_strm _classify_dir '

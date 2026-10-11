@@ -54,7 +54,10 @@ DEFAULTS = {
 
     # 追更订阅
     'subscribe_enabled':         '1',
+    # 保留旧字段用于历史配置兼容；普通新集通知已经由入库事件触发。
     'subscribe_interval_min':    '30',
+    'subscribe_calibration_interval_hours': '6',
+    'subscribe_calibration_last_ts': '0',
     'subscribe_check_tmdb':      '1',   # 是否对照 TMDB 已播集
     'subscriptions':             '[]',
 
@@ -88,7 +91,7 @@ ENV_OVERRIDE_KEYS = {
     'telegram_allowed_users': 'TG_ALLOWED_USERS',
 }
 
-INTERNAL_KEYS = {'tmdb_scan_last_ts', 'morning_prescan_last_date',
+INTERNAL_KEYS = {'tmdb_scan_last_ts', 'subscribe_calibration_last_ts', 'morning_prescan_last_date',
                  'morning_report_last_date', 'subscriptions'}
 EDITABLE_KEYS = [k for k in DEFAULTS if k not in INTERNAL_KEYS]
 SENSITIVE_KEYS = ['emby_key', 'tmdb_key', 'telegram_bot_token', 'http_proxy_password']

@@ -313,8 +313,8 @@ window.addEventListener('unhandledrejection', function(e){
           </div>
           <div class="toggle-row">
             <div>
-              <div class="lbl">启用订阅轮询</div>
-              <div class="desc">后台定期检查订阅剧集的新集入库</div>
+              <div class="lbl">启用追更通知</div>
+              <div class="desc">新集由五分钟入库增量事件触发；关闭入库监控后将失去自动新增通知</div>
             </div>
             <label class="switch"><input type="checkbox" id="subEnabled" onchange="saveSubSettings()"><span class="slider"></span></label>
           </div>
@@ -327,13 +327,14 @@ window.addEventListener('unhandledrejection', function(e){
           </div>
           <div class="toggle-row">
             <div>
-              <div class="lbl">轮询间隔（分钟）</div>
-              <div class="desc">建议 30-60 分钟</div>
+              <div class="lbl">异常校准间隔（小时）</div>
+              <div class="desc">日常通知由增量事件触发；校准用于 TMDB 已播事实和遗漏修复，建议 6 小时</div>
             </div>
             <div style="width:100px">
-              <input type="number" id="subInterval" min="5" max="1440" value="30" onchange="saveSubSettings()">
+              <input type="number" id="subInterval" min="1" max="168" value="6" onchange="saveSubSettings()">
             </div>
           </div>
+          <div id="subTriggerHint" class="sub-check-status" style="display:none;color:#f59e0b"></div>
           <div class="sub-check-status" id="subCheckStatus">
             <span id="subCheckState">检查状态：尚未运行</span>
             <span id="subCheckTime">—</span>
@@ -821,7 +822,7 @@ window.addEventListener('unhandledrejection', function(e){
 <script defer src="/static/js/governance.js?v=46dc287f6b42"></script>
 <script defer src="/static/js/explore.js?v=34fa83fdf4cd"></script>
 <script defer src="/static/js/mapping.js?v=d62036372c3d"></script>
-<script defer src="/static/js/subscriptions.js?v=d419bd118a94"></script>
+<script defer src="/static/js/subscriptions.js?v=e9d56e664f7f"></script>
 <script defer src="/static/js/records.js?v=823e156e2088"></script>
 <script defer src="/static/js/settings.js?v=cf397f4ab917"></script>
 <script defer src="/static/js/plans.js?v=02b979a10f92"></script>
