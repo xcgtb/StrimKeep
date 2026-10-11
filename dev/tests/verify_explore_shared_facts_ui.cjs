@@ -2,9 +2,9 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert'),path=require('path');
 const html=require('./frontend_source.cjs').loadFrontend();
 const box={innerHTML:''}; let apiCalls=0,modal='';
-const ctx=vm.createContext({Date,Math,String,Number,Array,Set,esc:String,jsarg:JSON.stringify,
+const ctx=vm.createContext({Date,Math,String,Number,Array,Set,embyLoaded:true,esc:String,jsarg:JSON.stringify,
  $:()=>box, api:async()=>{apiCalls++;throw Error('no live episode requests');},
- window:{__embySeriesMap:{}},openModal:h=>{modal=h;},hydratePosters(){},renderMappingDeleteState(){}});
+ window:{__embySeriesMap:{}},openModal:h=>{modal=h;},hydratePosters(){},renderMappingDeleteState(){},mappingNeedDetail:()=>false});
 vm.runInContext(html.slice(html.indexOf('function libraryEpisodeTotal('),html.indexOf('function renderExploreCards(')),ctx);
 vm.runInContext(html.slice(html.indexOf('function loadLibBreakdown('),html.indexOf('function renderMovieCard(')),ctx);
 vm.runInContext(html.slice(html.indexOf('function showEmbyDetailById('),html.indexOf('async function deleteSeriesFromLib(')),ctx);

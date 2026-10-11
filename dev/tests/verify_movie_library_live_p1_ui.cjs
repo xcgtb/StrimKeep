@@ -14,7 +14,7 @@ const document={hidden:false,readyState:'loading',createElement:()=>({
   set innerHTML(value){this.firstElementChild={className:'poster-card new',
     querySelector:key=>key==='.info'?{innerHTML:'双库'}:null};}
 })};
-const ctx={document,window:null,Promise,Array,String,Set,Date,Object,Math,
+const ctx={document,window:null,Promise,Array,String,Set,Date,Object,Math,mappingPagedActive:false,__mappingSortedCache:{source:null,rows:null},
   setInterval(){},setTimeout(){},embyLoaded:true,embyLibraryLoading:false,
   embyFilterState:{type:'movies',filter:'all',scope:'all'},
   embyData:{series:[],movies:[{id:'m1',in_local:true,in_share:false}],statsBase:{},stats:{}},

@@ -43,7 +43,7 @@ def _response(plain, packed, encoding):
 
 
 def cached_mapping_response(encoding=''):
-    """Reuse one current body; edits invalidate immediately, age fields expire in 15s."""
+    """Reuse one current body; source edits invalidate immediately, age flags roll over."""
     with _lock:
         key = _key()
         now = time.time()
@@ -58,7 +58,7 @@ def cached_mapping_response(encoding=''):
         packed = gzip.compress(plain, compresslevel=1, mtime=0) if len(plain) >= 1024 else None
         # Do not retain an obsolete document or keep arbitrarily large full-library bodies.
         if key == _key() and len(plain) + len(packed or b'') <= _MAX_BYTES:
-            lifetime = 15.0
+            lifetime = 60.0
             ts = float(data.get('ts') or 0)
             if ts and not data.get('stale'):
                 lifetime = min(lifetime, max(0.01, ts + 1800 - time.time()))

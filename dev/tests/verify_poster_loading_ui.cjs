@@ -63,7 +63,7 @@ function exploreEnv(){
  console.log('PASS authenticated images load near the viewport, share six slots across roots, and release blob URLs on load or error');
  const nodes=new Proxy({}, {get:(target,key)=>target[key]||(target[key]=box())});nodes.embyList.innerHTML='existing posters';
  let resolveFirst,resolveLast;const toasts=[];
- const m=vm.createContext({embyLibraryGeneration:0,embyLibraryLoading:false,embyLoaded:true,embyPage:3,embyShown:120,mappingPrefetch:{},
+ const m=vm.createContext({__mappingPreviewPending:null,mappingPagedActive:false,embyLibraryGeneration:0,embyLibraryLoading:false,embyLoaded:true,embyPage:3,embyShown:120,mappingPrefetch:{},
   embyData:{series:[],movies:[],stats:{}},$:id=>nodes[id],window:{},api:()=>new Promise(resolve=>!resolveFirst?resolveFirst=resolve:resolveLast=resolve),
   mdLoad:async()=>{},md_sync:(series,stats)=>stats,updateEmbyChips(){},renderEmbyList(){nodes.embyList.innerHTML=m.embyData.series[0].name;},
   startTmdbProgressWatch(){},toast:message=>toasts.push(message),esc:String,fmtAgo:String});

@@ -4,7 +4,7 @@ const source=fs.readFileSync(path.join(__dirname,'../../static/js/mapping.js'),'
 function fixture(response,legacy=null){
  const nodes={},calls=[],renders=[],marks=[];
  const node=id=>nodes[id]||(nodes[id]={innerHTML:'',textContent:'',style:{}});
- const ctx=vm.createContext({window:{},localStorage:{getItem:()=>legacy},$:node,
+ const ctx=vm.createContext({window:{},__mappingPreviewPending:null,mappingPagedActive:false,mappingPreviewAllowed:()=>false,localStorage:{getItem:()=>legacy},$:node,
   embyData:{series:[],movies:[],stats:{}},embyLibraryGeneration:0,embyLibraryLoading:false,embyLoaded:false,
   embyPage:1,embyShown:0,mappingPrefetch:null,
   api:async url=>{calls.push(url);return response;},

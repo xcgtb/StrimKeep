@@ -19,7 +19,7 @@ const document={hidden:false,readyState:'loading',createElement:()=>({
 })};
 const ctx={document,window:null,Promise,Array,String,Set,Date,Object,Math,
   setInterval(){},setTimeout(){},
-  embyLoaded:true,embyLibraryLoading:false,
+  embyLoaded:true,embyLibraryLoading:false,mappingPagedActive:false,__mappingSortedCache:{source:null,rows:null},
   embyFilterState:{filter:'all',scope:'all'},
   embyData:{series:[{id:'s1',have_eps:4,tmdb_info:{match_status:'missing'}}],movies:[],statsBase:{},stats:{}},
   $:name=>nodes[name]||{textContent:'',style:{}},

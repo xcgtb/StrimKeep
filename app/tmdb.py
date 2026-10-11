@@ -512,11 +512,14 @@ def _explore_library_status(cards):
     if index_cache.get('error_ts') and index_stale:
         refresh_error = ('片库索引更新失败，保留上次完整索引' if index_known else '片库索引更新失败，暂未取得完整索引')
     # 集数和对照数据与片库映射/详情共用同一批事实，不再逐卡覆盖。
-    facts = _eng().cached_library_view() if any(c['type'] == 'tv' for c in cards) else None
-    rows_by_tmdb = defaultdict(list)
-    for row in (facts or {}).get('series') or []:
-        if row.get('tmdb_id'):
-            rows_by_tmdb[str(row['tmdb_id'])].append(row)
+    # Reuse one tiny, revision-keyed TV facts index. Previously each status
+    # poll deep-copied the full library and built a fresh all-series dictionary.
+    try:
+        from . import explore_fast_facts
+    except ImportError:
+        import explore_fast_facts
+    facts = explore_fast_facts.lookup(_eng()) if any(c['type'] == 'tv' for c in cards) else None
+    rows_by_tmdb = (facts or {}).get('rows') or {}
     updates = []
     for card in cards:
         item_media, tmdb_id = card['type'], str(card['tmdb_id'])

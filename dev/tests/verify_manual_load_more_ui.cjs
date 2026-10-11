@@ -6,7 +6,7 @@ const items=Array.from({length:97},(_,id)=>({id}));
 let frames=[],insertions=[],timers=0,hydrations=0,toasts=[];
 const nodes={embyList:box(),embyInfText:box(),embyLoadMoreWrap:box(),embyMoreBtn:box()};
 nodes.embyList.insertAdjacentHTML=(position,html)=>insertions.push(html);
-const mapping=vm.createContext({Math,Promise,embyPage:1,embyShown:40,EMBY_PAGE:40,embyView:{arr:items,fn:x=>x.id+','},
+const mapping=vm.createContext({Math,Promise,mappingPagedActive:false,embyPage:1,embyShown:40,EMBY_PAGE:40,embyView:{arr:items,fn:x=>x.id+','},
  $:id=>nodes[id],posterNextCount:n=>n+40,prefetchMappingPosters(){},schedulePosterAutoLoad(){},requestAnimationFrame:fn=>frames.push(fn),setTimeout(fn){timers++;fn();},
  hydratePosters(){hydrations++;},toast:m=>toasts.push(m)});
 vm.runInContext(html.slice(html.indexOf('var embyMoreLoading = false;'),html.indexOf('function updateEmbyChips(){')),mapping);
@@ -74,11 +74,11 @@ async function completeFrame(){assert.equal(frames.length,1);frames.shift()();aw
  poster.posterImageError(pic);assert.equal(replaced.length,1);assert.equal(replaced[0][0].textContent,'暂无海报');
  console.log('PASS both poster grids use native lazy loading with visible-image priority and loading/failure placeholders preserve other card nodes');
  const firstNodes={embyList:box(),embySearch:{value:''}};
- const first=vm.createContext({embyPage:1,EMBY_PAGE:40,embyFilterState:{type:'movies',scope:'all',filter:'all',cat:''},
+ const first=vm.createContext({embyLoaded:true,mappingPagedActive:false,mappingPagedLoading:false,embyPage:1,EMBY_PAGE:40,embyFilterState:{type:'movies',scope:'all',filter:'all',cat:''},
   embyData:{movies:items,series:[]},embyView:{},embyShown:0,posterNextCount:n=>n+40,schedulePosterAutoLoad(){},$:id=>firstNodes[id],syncCatChip(){},catApply:a=>a,
   renderMovieCard:x=>'<card>'+x.id+'</card>',renderSeriesCard:x=>'<card>'+x.id+'</card>',
   hydratePosters(){},updateEmbyLoadMore(){},esc:String,Math});
- vm.runInContext(html.slice(html.indexOf('function renderEmbyList(){'),html.indexOf('function toggleSeasonList(id){')),first);
+ vm.runInContext(html.slice(html.indexOf('function replaceMappingCardsStable('),html.indexOf('var embyLibraryLoading')) + html.slice(html.indexOf('var __mappingSortedCache ='),html.indexOf('function toggleSeasonList(id){')),first);
  first.renderEmbyList();assert.equal((firstNodes.embyList.innerHTML.match(/<card>/g)||[]).length,40);
  first.embyFilterState.type='series';first.embyData.series=items.map(x=>({id:x.id,name:String(x.id)}));
  first.renderEmbyList();assert.equal((firstNodes.embyList.innerHTML.match(/<card>/g)||[]).length,40);

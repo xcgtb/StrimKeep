@@ -8,7 +8,7 @@ function environment(api){
   const buttons=[{disabled:false,setAttribute(){}},{disabled:false,setAttribute(){}}];
   const status={hidden:true,textContent:''};
   const nodes={mappingDeleteStatus:status,mappingDeleteBar:{},mappingDeleteCounts:{textContent:''},mappingDeleteFile:{textContent:''}};
-  const ctx={Promise,Array,String,Number,Math,Object,Set,Date,
+  const ctx={Promise,Array,String,Number,Math,Object,Set,Date,mappingPagedActive:false,
     document:{querySelectorAll:()=>buttons}, window:{__embySeriesMap:{}},esc:String,
     openModal:html=>modals.push(html),
     $:id=>nodes[id] || {textContent:''},

@@ -79,6 +79,14 @@ async function toggleManualDone(id){
     if (r.status !== 'success') throw new Error(r.message || '保存失败');
     window.__mdSet = r.items || {};
   } catch(e){ toast('保存失败：' + e.message, 'error', 3200); return; }
+  if (mappingPagedActive) {
+    // Manual completion changes status filter membership: use current server facts.
+    await loadMappingPaged(true);
+    if ((window.__embySeriesMap || {})[id]) showEmbyDetailById(id);
+    toast(on ? '已标记完结，不再计入缺集' : '已取消完结，恢复 TMDB 对照结果', 'success', 2600);
+    if (typeof loadDashEmby === 'function') loadDashEmby();
+    return;
+  }
   embyData.stats = md_sync(embyData.series, embyData.statsBase || embyData.stats);
   updateEmbyChips();
   embyPage = 1; renderEmbyList();
@@ -93,6 +101,29 @@ function syncCatChip(){
   box.hidden = !c; $('embyCatName').textContent = c ? '分类：' + c : '';
 }
 function dashOpenCat(name, scope){
+  if (mappingPagedActive || mappingPagedLoading || !embyLoaded) {
+    name = catClean(name);
+    embyFilterState.cat = name;
+    embyFilterState.catMode = 'seg';
+    embyFilterState.filter = 'all';
+    embyFilterState.scope = (scope === 'local' || scope === 'share') ? scope : 'all';
+    embyFilterState.type = /电影/.test(name) ? 'movies' : 'series';
+    $('embySearch').value = '';
+    var wanted = name;
+    switchTab('mapping');
+    setEmbyType(embyFilterState.type);
+    var generation = mappingPagedGeneration;
+    document.querySelectorAll('#embyFilter button').forEach(function(b){b.classList.toggle('active',b.dataset.f==='all');});
+    document.querySelectorAll('#embyScopeFilter button').forEach(function(b){b.classList.toggle('active',b.dataset.s===embyFilterState.scope);});
+    Promise.all([api(mappingPagedQuery(0,'series')),api(mappingPagedQuery(0,'movies'))]).then(function(results){
+      if (generation !== mappingPagedGeneration || embyFilterState.cat !== wanted || window.__activeTab !== 'mapping') return;
+      var seriesCount = results[0].status === 'success' ? results[0].total : 0;
+      var movieCount = results[1].status === 'success' ? results[1].total : 0;
+      var desired = !seriesCount && movieCount ? 'movies' : 'series';
+      if (embyFilterState.type !== desired) setEmbyType(desired);
+    }).catch(function(){});
+    return;
+  }
   name = catClean(name);
   embyFilterState.cat = name; embyFilterState.filter = 'all'; embyFilterState.scope = (scope === 'local' || scope === 'share') ? scope : 'all';
   embyFilterState.catMode = 'seg';
@@ -123,8 +154,232 @@ var embyView = { arr: [], fn: null };
 var embyShown = 0;
 var mappingPrefetch = null;
 var embyLoaded = false;
+var __mappingPreviewPending = null;
+/* P5: server-side filtered, globally sorted Mapping pages. */
+var mappingPagedActive = false;
+var mappingPagedLoading = false;
+var mappingPagedGeneration = 0;
+var mappingPagedController = null;
+var mappingPagedTotal = 0;
+var mappingPagedOffset = 0;
+var mappingPagedVersion = null;
+var mappingPagedDirty = false;
+var mappingPagedDetails = Object.create(null);
+var mappingPagedDetailRequests = Object.create(null);
+var mappingPagedSearchTimer = null;
+function scheduleMappingSearch(){
+  if (mappingPagedSearchTimer) clearTimeout(mappingPagedSearchTimer);
+  mappingPagedSearchTimer = setTimeout(function(){mappingPagedSearchTimer=null;embyPage=1;renderEmbyList();}, 220);
+}
+function mappingPagedQuery(offset, mediaOverride){
+  var args = [
+    ['media', mediaOverride || embyFilterState.type],
+    ['status', embyFilterState.filter || 'all'],
+    ['scope', embyFilterState.scope || 'all'],
+    ['category', embyFilterState.cat || ''],
+    ['category_mode', embyFilterState.catMode === 'sub' ? 'sub' : 'seg'],
+    ['keyword', ($('embySearch').value || '').trim()],
+    ['offset', offset], ['limit', 40]
+  ];
+  return '/api/emby/library/page?' + args.map(function(x){return encodeURIComponent(x[0]) + '=' + encodeURIComponent(x[1]);}).join('&');
+}
+function mappingPagedStats(stats){
+  embyData.stats = stats || {};
+  embyData.statsBase = stats || {};
+  var st = embyData.stats;
+  ['embyStats','embyStats2','embyTitle1','embyTitle2'].forEach(function(id){var el=$(id);if(el)el.style.display='';});
+  var counts = {'emby-title-count':st.total_series,'emby-title-movies':st.total_movies,
+    'emby-total':st.total_series,'emby-aligned':st.aligned,'emby-missing':st.missing,
+    'emby-extra':st.extra,'emby-ongoing':st.ongoing,
+    'emby-unmatched':(st.unmatched||0)+(st.no_tmdb||0),'emby-movies':st.total_movies};
+  Object.keys(counts).forEach(function(id){var node=$(id);if(node)node.textContent=counts[id]||0;});
+  updateEmbyChips();
+}
+async function loadMappingPaged(reset){
+  reset = reset !== false;
+  if (!reset && (mappingPagedLoading || mappingPagedOffset >= mappingPagedTotal)) return;
+  var generation = ++mappingPagedGeneration;
+  if (mappingPagedController) mappingPagedController.abort();
+  var ctl = typeof AbortController === 'function' ? new AbortController() : null;
+  mappingPagedController = ctl;
+  mappingPagedLoading = true;
+  if (mappingPagedActive) updateEmbyLoadMore(mappingPagedTotal);
+  var offset = reset ? 0 : mappingPagedOffset;
+  if (reset && !embyLoaded) $('embyList').innerHTML = '<div class="list-empty">正在加载片库首屏…</div>';
+  var requestedMedia = embyFilterState.type;
+  try {
+    var r = await api(mappingPagedQuery(offset), {timeoutMs:12000, signal:ctl ? ctl.signal : undefined});
+    if (generation !== mappingPagedGeneration) return;
+    if (!r || r.status !== 'success') {
+      if (r && r.status === 'nocache' && !mappingPagedActive) {
+        // A genuinely cold first installation keeps the original Emby fallback.
+        return loadEmbyLibrary(false, false);
+      }
+      throw new Error((r && r.message) || '分页接口暂不可用');
+    }
+    if (!reset && mappingPagedVersion !== r.facts_version) {
+      toast('片库数据已更新，正在重新显示第一页', '', 2200);
+      return loadMappingPaged(true);
+    }
+    if (reset) {
+      mappingPagedDetails = Object.create(null);
+      mappingPagedDetailRequests = Object.create(null);
+      embyData.series = [];
+      embyData.movies = [];
+      window.__embySeriesMap = {};
+      window.__embyMovieMap = {};
+      embyShown = 0;
+      mappingPrefetch = null;
+      mappingPagedVersion = r.facts_version;
+    }
+    var rows = r.rows || [];
+    var list = $('embyList');
+    var kind = requestedMedia === 'movies' ? 'movies' : 'series';
+    var fn = kind === 'movies' ? renderMovieCard : renderSeriesCard;
+    var arr = kind === 'movies' ? embyData.movies : embyData.series;
+    var html = rows.map(fn).join('');
+    if (reset) {
+      if (rows.length) replaceMappingCardsStable(list, rows, fn, kind);
+      else list.innerHTML = '<div class="list-empty">无匹配项</div>';
+      if (list.dataset) delete list.dataset.preview;
+    } else list.insertAdjacentHTML('beforeend', html);
+    rows.forEach(function(item){
+      arr.push(item);
+      if (item.id) (kind === 'movies' ? window.__embyMovieMap : window.__embySeriesMap)[item.id] = item;
+    });
+    embyView = {arr:arr, fn:fn};
+    embyPage = 1;
+    embyShown = arr.length;
+    embyLoaded = true;
+    mappingPagedActive = true;
+    mappingPagedDirty = false;
+    mappingPagedOffset = r.next_offset;
+    mappingPagedTotal = r.total;
+    if (r.emby_host) window.__embyHost = r.emby_host;
+    if (r.manual_done && typeof r.manual_done === 'object') window.__mdSet = r.manual_done;
+    mappingPagedStats(r.stats);
+    hydratePosters(list);
+    updateEmbyLoadMore(mappingPagedTotal);
+    schedulePosterAutoLoad();
+  } catch(e) {
+    if (generation !== mappingPagedGeneration) return;
+    // Older deployments have no P5 endpoint. Preserve the old full-load path.
+    if (!mappingPagedActive && /HTTP 404|404 Not Found|^Not Found$/.test(e.message || '')) {
+      mappingPagedLoading = false;
+      return loadEmbyLibrary(false, true, true);
+    }
+    if (mappingPagedActive) toast('片库分页加载失败，可重试：' + e.message, 'error', 4500);
+    else $('embyList').innerHTML = '<div class="list-empty">' + esc(e.message) +
+      '<br><button class="btn btn-ghost" onclick="loadMappingPaged(true)">重新加载</button></div>';
+  } finally {
+    if (generation === mappingPagedGeneration) {
+      mappingPagedLoading = false;
+      if (mappingPagedController === ctl) mappingPagedController = null;
+      if (mappingPagedActive) updateEmbyLoadMore(mappingPagedTotal);
+    }
+  }
+}
+function mappingNeedDetail(media, id){
+  if (!mappingPagedActive) return false;
+  var key = media + ':' + id;
+  if (mappingPagedDetails[key] === mappingPagedVersion) return false;
+  if (mappingPagedDetailRequests[key]) return true;
+  var version = mappingPagedVersion, generation = mappingPagedGeneration;
+  toast('正在读取完整作品详情…', '', 2000);
+  var pending = api('/api/emby/library/item?media=' + encodeURIComponent(media) + '&id=' + encodeURIComponent(id), {timeoutMs:12000})
+    .then(function(r){
+      if (generation !== mappingPagedGeneration) return;
+      if (r.status !== 'success' || !r.item) throw Error(r.message || '作品已不存在，请刷新片库');
+      if (version !== mappingPagedVersion || r.facts_version !== version) {loadMappingPaged(true);return;}
+      mappingPagedDetails[key] = version;
+      if (media === 'series') {
+        window.__embySeriesMap[id] = r.item;
+        showEmbyDetailById(id);
+      } else {
+        window.__embyMovieMap[id] = r.item;
+        showMovieDetailById(id);
+      }
+    }).catch(function(e){if (generation === mappingPagedGeneration) toast('读取作品详情失败：' + e.message, 'error', 4000);})
+    .finally(function(){if (mappingPagedDetailRequests[key] === pending) delete mappingPagedDetailRequests[key];});
+  mappingPagedDetailRequests[key] = pending;
+  return true;
+}
+
+function mappingPreviewAllowed(){
+  return !embyLoaded && embyFilterState.type === 'series' &&
+    embyFilterState.filter === 'all' && embyFilterState.scope === 'all' &&
+    !embyFilterState.cat && !(($('embySearch').value || '').trim());
+}
+async function showMappingFirstScreen(generation){
+  // This is only a bounded snapshot from the same server facts as the full API.
+  // Never install a partial array in embyData or unlock delete/detail actions.
+  var controller = typeof AbortController === 'function' ? new AbortController() : null;
+  __mappingPreviewPending = controller;
+  try {
+    var response = await api('/api/emby/library/preview', {
+      timeoutMs: 6500, signal: controller ? controller.signal : undefined
+    });
+    if (generation !== embyLibraryGeneration || embyLoaded || !mappingPreviewAllowed() ||
+        !response || response.status !== 'success' || !Array.isArray(response.series)) return;
+    var list = $('embyList');
+    var cards = response.series.slice(0, posterNextCount(0, list));
+    if (!cards.length) return;
+    list.innerHTML = cards.map(renderSeriesCard).join('');
+    if (list.dataset) list.dataset.preview = '1';
+    var hint = $('embyInfText');
+    if (hint) hint.textContent = '先显示 ' + cards.length + ' 张缓存海报 · 完整片库同步中…';
+    hydratePosters(list);
+  } catch(e) { /* The full request remains the fallback. */ }
+  finally { if (__mappingPreviewPending === controller) __mappingPreviewPending = null; }
+}
+// The full response must not remount unchanged poster nodes after the preview.
+function replaceMappingCardsStable(list, rows, render, kind){
+  var html = rows.map(render).join('');
+  if (typeof document !== 'undefined' && typeof list.querySelectorAll === 'function') {
+    var old = list.querySelectorAll('.poster-card');
+    var tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    var fresh = tmp.querySelectorAll('.poster-card');
+    if (old.length && fresh.length === rows.length) {
+      var byId = Object.create(null);
+      var attr = kind === 'series' ? 'data-series-id' : 'data-movie-id';
+      old.forEach(function(card){ byId[card.getAttribute(attr)] = card; });
+      var fragment = document.createDocumentFragment();
+      for (var i=0; i<fresh.length; i++) {
+        var previous = byId[fresh[i].getAttribute(attr)];
+        var a = previous && previous.querySelector('img');
+        var b = fresh[i].querySelector('img');
+        var sameImage = (!a && !b) || (a && b && a.getAttribute('data-emby-src') === b.getAttribute('data-emby-src'));
+        if (previous && sameImage) {
+          // Move original node, including its decoded image, into new order.
+          var oldInfo = previous.querySelector('.info'), newInfo = fresh[i].querySelector('.info');
+          if (oldInfo && newInfo && oldInfo.innerHTML !== newInfo.innerHTML) oldInfo.innerHTML = newInfo.innerHTML;
+          var oldBadge = previous.querySelector('.badge-status'), newBadge = fresh[i].querySelector('.badge-status');
+          if (oldBadge && newBadge) {
+            oldBadge.className = newBadge.className;
+            oldBadge.textContent = newBadge.textContent;
+          }
+          previous.className = fresh[i].className;
+          fragment.appendChild(previous);
+        } else fragment.appendChild(fresh[i]);
+      }
+      list.replaceChildren(fragment);
+      delete list.dataset.preview;
+      return;
+    }
+  }
+  list.innerHTML = html;
+  if (list.dataset) delete list.dataset.preview;
+}
+
 var embyLibraryLoading = false, embyLibraryGeneration = 0;
-function ensureEmbyLoaded(){ if (!embyLoaded && !embyLibraryLoading) loadEmbyLibrary(false, true, true); }
+function ensureEmbyLoaded(){
+  if (mappingPagedActive && mappingPagedDirty && !mappingPagedLoading) {
+    mappingPagedDirty = false;
+    return loadMappingPaged(true);
+  }
+  if (!embyLoaded && !embyLibraryLoading && !mappingPagedLoading) loadMappingPaged(true);
+}
 var tmdbProgressTimer = null;
 var tmdbProgressGeneration = 0;
 
@@ -163,6 +418,7 @@ function startTmdbProgressWatch(){
 }
 
 async function loadEmbyLibrary(force, withTmdb, cacheOnly){
+  if (mappingPagedActive && !force && withTmdb) return loadMappingPaged(true);
   var generation = ++embyLibraryGeneration;
   embyLibraryLoading = true;
   // 数据准备好再替换；重新对照及请求失败时保留已有海报墙。
@@ -188,7 +444,12 @@ async function loadEmbyLibrary(force, withTmdb, cacheOnly){
     }
   }
   var msg = cacheOnly ? '正在读取片库缓存...' : (withTmdb ? '正在拉取 Emby + TMDB（首次可能较慢）...' : '正在拉取 Emby 库...');
+  if (__mappingPreviewPending) { __mappingPreviewPending.abort(); __mappingPreviewPending = null; }
   if (!embyLoaded) $('embyList').innerHTML = '<div class="list-empty">' + msg + '</div>';
+  if (!embyLoaded && !force && cacheOnly && mappingPreviewAllowed()) {
+    // Fire independently: a slow/no-cache preview must never delay full data.
+    showMappingFirstScreen(generation);
+  }
   try {
     var url = '/api/emby/library?force=' + (force ? 1 : 0) + '&with_tmdb=' + (withTmdb ? 1 : 0) + (cacheOnly ? '&cache_only=1' : '') + '&web=1';
     var r = await api(url);
@@ -248,6 +509,7 @@ var embyMoreLoading = false;
 var embyMoreFailed = false;
 function loadMoreEmby(){ return embyMore(); }
 async function embyMore(){
+  if (mappingPagedActive) return loadMappingPaged(false);
   if (embyMoreLoading || !embyView.fn || embyShown >= embyView.arr.length) return;
   var view = embyView, from = embyShown;
   embyMoreLoading = true;
@@ -282,8 +544,9 @@ function updateEmbyLoadMore(total){
     + (shown >= total ? ' · 全部加载完毕' : '');
   if (button) {
     button.hidden = shown >= total;
-    button.disabled = embyMoreLoading;
-    button.textContent = embyMoreLoading ? '加载中...' : (embyMoreFailed ? '重试加载下一批' : '加载更多');
+    var loading = embyMoreLoading || (mappingPagedActive && mappingPagedLoading);
+    button.disabled = loading;
+    button.textContent = loading ? '加载中...' : (embyMoreFailed ? '重试加载下一批' : '加载更多');
   }
   prefetchMappingPosters();
 }
@@ -316,8 +579,39 @@ function setEmbyFilter(f){
   document.querySelectorAll('#embyFilter button').forEach(function(b){ b.classList.toggle('active', b.dataset.f === f); });
   renderEmbyList();
 }
+// Sort the authoritative series collection once per revision. Subsequent
+// category/search/scope filters keep that identical ordering without O(n log n)
+// work for each interaction. The live-delta handler invalidates this cache.
+var __mappingSortedCache = {source:null, rows:null};
+function sortedMappingSeries(){
+  if (__mappingSortedCache.source === embyData.series && __mappingSortedCache.rows &&
+      __mappingSortedCache.rows.length === embyData.series.length)
+    return __mappingSortedCache.rows;
+  var prio = { missing: 0, extra: 1, unmatched: 2, no_tmdb: 2, ongoing: 3, aligned: 4 };
+  var rows = embyData.series.slice();
+  rows.sort(function(a, b){
+    var sa = (a.tmdb_info || {}).match_status || 'unmatched';
+    var sb = (b.tmdb_info || {}).match_status || 'unmatched';
+    var pa = prio[sa] != null ? prio[sa] : 9;
+    var pb = prio[sb] != null ? prio[sb] : 9;
+    if (pa !== pb) return pa - pb;
+    var da = Math.abs((a.tmdb_info || {}).diff || 0);
+    var db = Math.abs((b.tmdb_info || {}).diff || 0);
+    if (da !== db) return db - da;
+    return (a.name || '').localeCompare(b.name || '');
+  });
+  __mappingSortedCache = {source:embyData.series, rows:rows};
+  return rows;
+}
 function renderEmbyList(){
+  if (mappingPagedActive || mappingPagedLoading) {loadMappingPaged(true);return;}
   var list = $('embyList');
+  if (!embyLoaded) {
+    // Filters/search are not applied to a partial preview as if it were complete.
+    list.innerHTML = '<div class="list-empty">正在读取完整片库，筛选稍后可用…</div>';
+    if (list.dataset) delete list.dataset.preview;
+    return;
+  }
   syncCatChip();
   embyMoreFailed = false;
   var keyword = ($('embySearch').value || '').trim().toLowerCase();
@@ -331,13 +625,13 @@ function renderEmbyList(){
     if (!arr.length) { embyView = { arr: [], fn: null }; updateEmbyLoadMore(0); list.innerHTML = '<div class="list-empty">' + (embyFilterState.cat ? '没有匹配「' + esc(embyFilterState.cat) + '」的条目（可先点一次「重新对照」刷新片库数据）' : '无匹配项') + '</div>'; return; }
     embyView = { arr: arr, fn: renderMovieCard };
     embyShown = embyPage === 1 ? Math.min(arr.length, posterNextCount(0, list)) : Math.min(arr.length, embyShown);
-    list.innerHTML = arr.slice(0, embyShown).map(renderMovieCard).join('');
+    replaceMappingCardsStable(list, arr.slice(0, embyShown), renderMovieCard, 'movies');
     hydratePosters(list);
     updateEmbyLoadMore(arr.length);
     schedulePosterAutoLoad();
     return;
   }
-  arr = embyData.series.slice();
+  arr = sortedMappingSeries().slice();
   if (embyFilterState.filter === 'unmatched') {
     arr = arr.filter(function(x){
       var st = (x.tmdb_info || {}).match_status;
@@ -351,21 +645,9 @@ function renderEmbyList(){
   arr = catApply(arr);
     if (keyword) arr = arr.filter(function(x){ return (x.name||'').toLowerCase().indexOf(keyword) >= 0; });
   if (!arr.length) { embyView = { arr: [], fn: null }; updateEmbyLoadMore(0); list.innerHTML = '<div class="list-empty">' + (embyFilterState.cat ? '没有匹配「' + esc(embyFilterState.cat) + '」的条目（若一直为空，说明 Emby 数据里没有分类/路径字段）' : '无匹配项') + '</div>'; return; }
-  var prio = { missing: 0, extra: 1, unmatched: 2, no_tmdb: 2, ongoing: 3, aligned: 4 };
-  arr.sort(function(a, b){
-    var sa = (a.tmdb_info || {}).match_status || 'unmatched';
-    var sb = (b.tmdb_info || {}).match_status || 'unmatched';
-    var pa = prio[sa] != null ? prio[sa] : 9;
-    var pb = prio[sb] != null ? prio[sb] : 9;
-    if (pa !== pb) return pa - pb;
-    var da = Math.abs((a.tmdb_info || {}).diff || 0);
-    var db = Math.abs((b.tmdb_info || {}).diff || 0);
-    if (da !== db) return db - da;
-    return (a.name || '').localeCompare(b.name || '');
-  });
   embyView = { arr: arr, fn: renderSeriesCard };
   embyShown = embyPage === 1 ? Math.min(arr.length, posterNextCount(0, list)) : Math.min(arr.length, embyShown);
-  list.innerHTML = arr.slice(0, embyShown).map(renderSeriesCard).join('');
+  replaceMappingCardsStable(list, arr.slice(0, embyShown), renderSeriesCard, 'series');
   hydratePosters(list);
   updateEmbyLoadMore(arr.length);
   schedulePosterAutoLoad();
@@ -612,6 +894,8 @@ function reportMappingDeleteError(error, phase, result, target, count){
 }
 
 function showMovieDetailById(id){
+  if (mappingNeedDetail('movies', id)) return;
+  if (!embyLoaded) { toast('完整片库仍在读取，请稍后查看详情', '', 2500); return; }
   var m = (window.__embyMovieMap || {})[id];
   if (!m) return;
   var html = '';
@@ -690,7 +974,7 @@ async function deleteMovieByTmdb(tmdbId, target, movieName){
         x[flag] = false;
         return !!x[target === 'local' ? 'in_share' : 'in_local'];
       });
-      if (embyData.stats) embyData.stats.total_movies = embyData.movies.length;
+      if (embyData.stats && !mappingPagedActive) embyData.stats.total_movies = embyData.movies.length;
       renderEmbyList();
     }
     reportMappingDeleteResult(r2, count, target);
@@ -702,6 +986,8 @@ async function deleteMovieByTmdb(tmdbId, target, movieName){
 }
 
 function showEmbyDetailById(id){
+  if (mappingNeedDetail('series', id)) return;
+  if (!embyLoaded) { toast('完整片库仍在读取，请稍后查看详情', '', 2500); return; }
   var s = (window.__embySeriesMap || {})[id];
   if (!s) return;
   var ti = s.tmdb_info || {};
@@ -844,10 +1130,12 @@ function applySeriesDeleteResult(seriesId, r){
   }
   embyData.stats.total_series = embyData.series.length;
   $('emby-total').textContent = embyData.stats.total_series || 0;
+  __mappingSortedCache = {source:null, rows:null};
   renderEmbyList();
 }
 
 async function refreshSingleSeriesInList(seriesId, deletedTarget){
+  if (mappingPagedActive) return loadMappingPaged(true);
   try {
     /* 服务端已按磁盘真实文件修补了缓存：直接读回该剧最新条目（缓存只读，不触发 TMDB 对照） */
     var r = await api('/api/emby/library?force=0&with_tmdb=1&cache_only=1');
@@ -864,6 +1152,7 @@ async function refreshSingleSeriesInList(seriesId, deletedTarget){
     }
     embyData.stats.total_series = embyData.series.length;
     $('emby-total').textContent = embyData.stats.total_series || 0;
+    __mappingSortedCache = {source:null, rows:null};
     renderEmbyList();
   } catch(e) {
     // 局部刷新失败不影响已完成的删除操作，静默忽略
@@ -993,6 +1282,19 @@ async function pollLibraryLiveChanges(){
     var r = await api('/api/library/changes?since=' + (libraryLiveVersion === null ? 0 : libraryLiveVersion),
                       {timeoutMs:8000});
     if (r.status !== 'success') return;
+    if (mappingPagedActive) {
+      if (libraryLiveVersion !== r.version) {
+        libraryLiveVersion = r.version;
+        mappingPagedDetails = Object.create(null);
+        if (window.__activeTab === 'mapping') await loadMappingPaged(true);
+        else mappingPagedDirty = true;
+        if (window.__activeTab === 'explore' && typeof ensureExploreLibrarySync === 'function')
+          ensureExploreLibrarySync(true);
+        if (window.__activeTab === 'dashboard' && typeof loadDashboard === 'function')
+          loadDashboard();
+      }
+      return;
+    }
     // Even the first revision fetch may race with a newly committed episode.
     // Apply available deltas (or reconcile) instead of silently acknowledging
     // a revision the currently rendered page has never observed.
@@ -1033,6 +1335,7 @@ async function pollLibraryLiveChanges(){
         if (idx < 0) {embyData.movies.push(item); movieAdded = true;}
         else embyData.movies[idx] = item;
       });
+      __mappingSortedCache = {source:null, rows:null};
       if (r.stats) embyData.statsBase = r.stats;
       embyData.stats = md_sync(embyData.series, embyData.statsBase || {});
       window.__embySeriesMap = {};

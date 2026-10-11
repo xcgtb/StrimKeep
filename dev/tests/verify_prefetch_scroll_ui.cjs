@@ -68,7 +68,7 @@ function ids(e){return Array.from(e.ctx.exploreShownCards,x=>x.tmdb_id);}
  const mNodes={embyList:node(),embyInfText:node(),embyMoreBtn:node(),embyLoadMoreWrap:node()};let cols=3,insertions=[],frames=[];
  mNodes.embyList.insertAdjacentHTML=(pos,s)=>insertions.push(s);
  const items=Array.from({length:97},(_,i)=>i);
- const m=vm.createContext({Math,Promise,embyView:{arr:items,fn:x=>x+','},embyPage:1,embyShown:39,
+ const m=vm.createContext({Math,Promise,mappingPagedActive:false,embyView:{arr:items,fn:x=>x+','},embyPage:1,embyShown:39,
   $:id=>mNodes[id],getComputedStyle:()=>({gridTemplateColumns:Array(cols).fill('100px').join(' ')}),
   hydratePosters(){},prefetchMappingPosters(){},schedulePosterAutoLoad(){},toast(){},requestAnimationFrame:fn=>frames.push(fn),setTimeout:fn=>fn()});
  vm.runInContext(html.slice(html.indexOf('var exploreLibrarySync ='),html.indexOf('function exploreAllCards(){'))+mappingSource,m);
@@ -105,7 +105,7 @@ function ids(e){return Array.from(e.ctx.exploreShownCards,x=>x.tmdb_id);}
  vm.runInContext(html.slice(html.indexOf('var POSTER_MAX_CONCURRENCY = 6;'),html.indexOf('function clearPosterLoading(img){')),p);
  assert((await p.posterFetch('/api/emby/poster/1')).blob);assert(signal);assert.equal(cleared,1);assert.equal(Object.keys(p.__posterInflight).length,0);
  p.fetch=(url,opts)=>new Promise((resolve,reject)=>{p.AbortController.prototype.abort=function(){aborted=true;reject(Error('timed out'));};});
- const slow=p.posterFetch('/api/emby/poster/2');await Promise.resolve();timer();await assert.rejects(slow,/timed out/);assert(aborted);assert.equal(cleared,2);
+ const slow=p.posterFetch('/api/emby/poster/2');for(let i=0;i<12;i++)await Promise.resolve();timer();await assert.rejects(slow,/timed out/);assert(aborted);assert.equal(cleared,2);
  console.log('PASS authenticated poster network loads release their timer and abort a stalled fetch');
  console.log('PASS 14/14; DOM-substitute behavior checks only');
 })().catch(e=>{console.error(e);process.exitCode=1;});

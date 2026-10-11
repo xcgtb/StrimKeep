@@ -447,31 +447,75 @@ function initTheme(){
 /* 海报加载：并发 + CacheStorage。Emby 图片需要鉴权，不能直接 <img src>，
    但可以把带鉴权拿到的响应缓存到浏览器，后续切页/刷新直接命中。 */
 var POSTER_MAX_CONCURRENCY = 6;
-var POSTER_CACHE_NAME = 'strimkeep-posters-v1';
+var POSTER_CACHE_NAME = 'strimkeep-posters-v2';
 var __posterInflight = {};
+var __posterOptions = {};
 var __posterCacheWrites = 0;
 // Bounded tab-memory LRU: switching Explore / Mapping must not re-read dozens
 // of CacheStorage entries, but should never grow with the full media library.
 var __posterMemory = new Map(), __posterMemoryBytes = 0;
+var __posterMemoryTimes = new Map();
 var POSTER_MEMORY_MAX_BYTES = 20 * 1024 * 1024, POSTER_MEMORY_MAX_ITEMS = 64;
 var __posterCachePromise = null;
 function posterMemoryGet(url){
   if (!__posterMemory.has(url)) return null;
+  var age=Date.now() - (__posterMemoryTimes.get(url) || 0);
+  if (age < 0 || age >= posterTtl(url)) {
+    __posterMemoryBytes -= __posterMemory.get(url).size;
+    __posterMemory.delete(url);__posterMemoryTimes.delete(url);return null;
+  }
   var blob = __posterMemory.get(url);
   __posterMemory.delete(url);
   __posterMemory.set(url, blob);
   return blob;
 }
-function posterMemoryPut(url, blob){
+function posterMemoryPut(url, blob, stamp){
   if (!blob || typeof blob.size !== 'number' || blob.size <= 0 || blob.size > POSTER_MEMORY_MAX_BYTES) return;
   if (__posterMemory.has(url)) __posterMemoryBytes -= __posterMemory.get(url).size;
   __posterMemory.delete(url);
   __posterMemory.set(url, blob);
+  __posterMemoryTimes.set(url, stamp || Date.now());
   __posterMemoryBytes += blob.size;
   while (__posterMemoryBytes > POSTER_MEMORY_MAX_BYTES || __posterMemory.size > POSTER_MEMORY_MAX_ITEMS) {
     var oldest = __posterMemory.keys().next().value;
     __posterMemoryBytes -= __posterMemory.get(oldest).size;
     __posterMemory.delete(oldest);
+    __posterMemoryTimes.delete(oldest);
+  }
+}
+function posterTtl(url){return url.indexOf('/api/emby/poster/') === 0 ? 3600000 : 86400000;}
+function posterWithin(promise, ms){
+  return new Promise(function(resolve){
+    var finished=false, timer=setTimeout(function(){done(null);},ms);
+    function done(value){if(finished)return;finished=true;clearTimeout(timer);resolve(value);}
+    Promise.resolve(promise).then(done,function(){done(null);});
+  });
+}
+var __posterRequests=[], __posterNetworkActive=0, __posterWarmActive=0;
+function requestPoster(run, options){
+  return new Promise(function(resolve,reject){
+    __posterRequests.push({run:run,options:options||{},resolve:resolve,reject:reject});
+    drainPosterRequests();
+  });
+}
+function drainPosterRequests(){
+  while (__posterNetworkActive < POSTER_MAX_CONCURRENCY && __posterRequests.length) {
+    var index=__posterRequests.findIndex(function(job){return !job.options.prefetch;});
+    if(index < 0){
+      // Background prefetch shares the six slots and waits for foreground images.
+      if(__posterWarmActive || (typeof __posterActive !== 'undefined' && __posterActive > 0)) return;
+      index=0;
+    }
+    var job=__posterRequests.splice(index,1)[0];
+    if(job.options.active && !job.options.active()){job.reject(new Error('obsolete poster'));continue;}
+    job.warm=!!job.options.prefetch;
+    __posterNetworkActive++;if(job.warm)__posterWarmActive++;
+    (function(current){
+      Promise.resolve().then(current.run).then(current.resolve,current.reject).finally(function(){
+        __posterNetworkActive--;if(current.warm)__posterWarmActive--;
+        drainPosterRequests();
+      });
+    })(job);
   }
 }
 function posterBrowserCache(){
@@ -484,43 +528,65 @@ function posterBrowserCache(){
   }
   return __posterCachePromise;
 }
-async function posterFetch(url){
+async function posterFetch(url, options){
   if (!url) throw new Error('empty poster');
   var warm = posterMemoryGet(url);
   if (warm) return warm;
-  if (__posterInflight[url]) return __posterInflight[url];
-  __posterInflight[url] = (async function(){
-    var cache = await posterBrowserCache();
-    if (cache) {
-      try {
-        var hit = await cache.match(url);
-        if (hit) {
-          var cachedBlob = await hit.blob();
-          posterMemoryPut(url, cachedBlob);
-          return cachedBlob;
-        }
-      } catch(e) {}
+  if (__posterInflight[url]) {
+    // A prefetched card entering the screen must not wait behind its own gate.
+    if(!options || !options.prefetch){
+      __posterOptions[url].prefetch=false;delete __posterOptions[url].active;
+      drainPosterRequests();
     }
-    var controller = new AbortController(), timer = setTimeout(function(){controller.abort();}, 10000);
-    try {
-      var r = await fetch(url, {credentials:'same-origin', cache:'force-cache', signal:controller.signal});
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      var saved = cache ? r.clone() : null, blob = await r.blob();
-      posterMemoryPut(url, blob);
-      // Rendering is not blocked on slow browser storage writes. Failed writes
-      // are still best-effort and the bounded memory cache covers quick revisits.
-      if (cache && saved) {
-        Promise.resolve().then(function(){return cache.put(url, saved);}).then(function(){
-          if (++__posterCacheWrites % 16 === 0) {
-            return cache.keys().then(function(keys){
-              return Promise.all(keys.slice(0, Math.max(0, keys.length - 120)).map(function(key){return cache.delete(key);}));
-            });
-          }
-        }).catch(function(){});
-      }
-      return blob;
-    } finally {clearTimeout(timer);}
-  })().finally(function(){ delete __posterInflight[url]; });
+    return __posterInflight[url];
+  }
+  var requestOptions=Object.assign({},options||{});__posterOptions[url]=requestOptions;
+  __posterInflight[url] = (async function(){
+    var cache = null;
+    // Slow/missing browser storage cannot hold the first screen for seconds.
+    var cachedBlob = window.caches ? await posterWithin(posterBrowserCache().then(async function(value){
+      cache=value;if(!cache)return null;
+      var hit=await cache.match(url);
+      if(!hit)return null;
+      var stamp=hit.headers && Number(hit.headers.get('X-StrimKeep-Cached-At'));
+      if(!stamp || Date.now()<stamp || Date.now()-stamp >= posterTtl(url)) return null;
+      return {blob:await hit.blob(),stamp:stamp};
+    }),100) : null;
+    if(cachedBlob){posterMemoryPut(url,cachedBlob.blob,cachedBlob.stamp);return cachedBlob.blob;}
+    return requestPoster(async function(){
+      var controller = new AbortController(), timer = setTimeout(function(){controller.abort();}, 10000);
+      try {
+        var r;
+        // One bounded retry for a busy shared proxy; failed bytes are never cached.
+        for(var attempt=0;attempt<2;attempt++){
+          r=await fetch(url, {credentials:'same-origin', cache:'default', signal:controller.signal});
+          if(r.status !== 503 || attempt) break;
+          if(controller.signal.aborted) throw new Error('poster timed out');
+          await new Promise(function(resolve){setTimeout(resolve,1000);});
+        }
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        var saved = null, blob = await r.blob();
+        if(cache){
+          if(typeof Headers !== 'undefined' && typeof Response !== 'undefined'){
+            var headers=new Headers(r.headers);headers.set('X-StrimKeep-Cached-At',String(Date.now()));
+            saved=new Response(blob,{status:200,headers:headers});
+          }else saved=r.clone();
+        }
+        posterMemoryPut(url, blob);
+        // Rendering never waits for browser storage writes.
+        if (cache && saved) {
+          Promise.resolve().then(function(){return cache.put(url, saved);}).then(function(){
+            if (++__posterCacheWrites % 16 === 0) {
+              return cache.keys().then(function(keys){
+                return Promise.all(keys.slice(0, Math.max(0, keys.length - 120)).map(function(key){return cache.delete(key);}));
+              });
+            }
+          }).catch(function(){});
+        }
+        return blob;
+      } finally {clearTimeout(timer);}
+    },requestOptions);
+  })().finally(function(){ delete __posterInflight[url];delete __posterOptions[url]; });
   return __posterInflight[url];
 }
 function clearPosterLoading(img){
@@ -544,16 +610,38 @@ function enqueuePoster(img){
   });
 }
 function drainPosterQueue(){
+  __posterQueue.forEach(function(job){
+    var rect=job.img.getBoundingClientRect();
+    job.priority=rect.width <= 0 ? 2 : (rect.bottom >= 0 && rect.top < window.innerHeight ? 0 : 1);
+  });
+  __posterQueue.sort(function(a,b){return a.priority-b.priority;});
   while (__posterActive < POSTER_MAX_CONCURRENCY && __posterQueue.length) {
     var job = __posterQueue.shift();
     if (job.img.isConnected === false) {job.img.removeAttribute('data-loaded');job.resolve();continue;}
+    if(job.priority === 2){
+      job.img.removeAttribute('data-loaded');
+      if(__posterObserver){__posterObserved.add(job.img);__posterObserver.observe(job.img);}
+      job.resolve();continue;
+    }
     __posterActive += 1;
-    loadPosterImage(job.img).finally(function(){__posterActive -= 1;drainPosterQueue();}).then(job.resolve, job.resolve);
+    loadPosterImage(job.img).finally(function(){
+      __posterActive -= 1;drainPosterQueue();
+      if(typeof drainPosterRequests === 'function')drainPosterRequests();
+    }).then(job.resolve, job.resolve);
   }
+}
+function posterSizedUrl(url, img){
+  if(!(/^\/api\/(?:emby|tmdb)\/poster\//).test(url) || /[?&]size=/.test(url))return url;
+  var rect=img && img.getBoundingClientRect ? img.getBoundingClientRect() : null;
+  var width=rect && rect.width || (window.innerWidth <= 640 ? 110 : 180);
+  var size=width * (window.devicePixelRatio || 1) <= 342 ? 'w342' : 'w500';
+  return url + (url.indexOf('?') >= 0 ? '&' : '?') + 'size=' + size;
 }
 async function loadPosterImage(img){
   try {
-    var blob = await posterFetch(img.getAttribute('data-emby-src'));
+    var blob = await posterFetch(posterSizedUrl(img.getAttribute('data-emby-src'),img),{
+      active:function(){return img.isConnected !== false;}
+    });
     if (img.isConnected === false) {img.removeAttribute('data-loaded');return;}
     var objUrl = URL.createObjectURL(blob), released = false;
     function release(){
@@ -570,7 +658,10 @@ async function loadPosterImage(img){
     img.src = objUrl;
     if (img.decode) img.decode().then(function(){clearPosterLoading(img);release();}, failed);
     if (img.complete && img.naturalWidth) {clearPosterLoading(img);release();}
-  } catch(e) {posterImageError(img);}
+  } catch(e) {
+    if(img.isConnected === false){img.removeAttribute('data-loaded');return;}
+    posterImageError(img);
+  }
 }
 async function hydratePosters(root){
   var scope = root || document, tasks = [];

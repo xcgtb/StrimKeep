@@ -284,6 +284,35 @@ function exploreQuery(page){
     + '&genre=' + encodeURIComponent(exploreState.genre)
     + '&page=' + page + '&q=' + encodeURIComponent(exploreState.q);
 }
+function posterCardUrl(url){
+  // Delay size selection until the actual image has a measured card width.
+  return url;
+}
+// Session-only thumbnail preview: repopulates movie metadata immediately
+// after F5 without persisting sensitive library state or claiming stale badges
+// are authoritative. The normal API and library-status paths still reconcile.
+var EXPLORE_SESSION_PREVIEW_KEY = 'strimkeep-explore-preview-v1';
+function readExploreSessionPreview(query){
+  if (typeof sessionStorage === 'undefined') return null;
+  try {
+    var row = JSON.parse(sessionStorage.getItem(EXPLORE_SESSION_PREVIEW_KEY) || 'null');
+    if (!row || row.query !== query || !(row.ts > 0) || Date.now() - row.ts > 1800000 ||
+        Date.now() < row.ts || !Array.isArray(row.cards) || row.cards.length > 20) return null;
+    return {status:'success', cards:row.cards, total_pages:row.total_pages || 1};
+  } catch(e){return null;}
+}
+function saveExploreSessionPreview(query, response){
+  if (typeof sessionStorage === 'undefined' || !response || response.status !== 'success') return;
+  try {
+    var cards = (response.cards || []).slice(0, 20).map(function(c){
+      return {type:c.type, tmdb_id:c.tmdb_id, title:c.title, year:c.year,
+              rating:c.rating, poster:c.poster, library_status:'stale', facts_stale:true};
+    });
+    sessionStorage.setItem(EXPLORE_SESSION_PREVIEW_KEY, JSON.stringify({
+      ts:Date.now(), query:query, total_pages:response.total_pages || 1, cards:cards
+    }));
+  } catch(e){} // Private mode, quota limits and disabled storage are nonfatal.
+}
 function ensureExplorePrefetch(){
   var page = exploreState.page + 1, generation = exploreGeneration;
   if (page > exploreState.totalPages || exploreMoreFailed) return;
@@ -296,7 +325,7 @@ function ensureExplorePrefetch(){
       var r = await api(url, {timeoutMs: Math.min(8000, deadline - Date.now()), signal:entry.controller ? entry.controller.signal : undefined});
       if (generation !== exploreGeneration) return {status:'cancelled'};
       if (r.status === 'success') {
-        warmPosterUrls((r.cards || []).map(function(c){return c.poster;}), function(){return generation === exploreGeneration;});
+        warmPosterUrls((r.cards || []).map(function(c){return posterCardUrl(c.poster);}), function(){return generation === exploreGeneration;});
         return r;
       }
       if (r.status !== 'pending') return r;
@@ -421,6 +450,16 @@ async function loadExplore(append, retry){
     ensureExplorePrefetch();
   }
   if (prefetched) explorePrefetch = null;
+  // Render cached poster identities in the same turn as the placeholder;
+  // existing status polling fetches authoritative membership/episode counts.
+  if (!append && requestedPage === 1) {
+    var preview = readExploreSessionPreview(qs);
+    if (preview && generation === exploreGeneration) {
+      showPage(preview);
+      exploreLibrarySync.notice = '正在同步片库状态';
+      updateExplorePageInfo();
+    }
+  }
   try {
     while (generation === exploreGeneration) {
       var remaining = deadline - Date.now();
@@ -431,6 +470,8 @@ async function loadExplore(append, retry){
       prefetched = null;
       if (generation !== exploreGeneration) return;
       if (r.status === 'success') {
+        if (!append && requestedPage === 1) saveExploreSessionPreview(qs, r);
+        exploreLibrarySync.notice = '';
         showPage(r);
         if ((r.page_refreshing === undefined ? r.refreshing : r.page_refreshing) && !r.refresh_error) refreshExplorePage(requestedPage, qs, generation);
         return; // 可见结果到达就释放加载锁，状态更新在独立任务里完成。
@@ -510,7 +551,7 @@ function appendExploreCards(cards){
     if (!c.poster) {
       posterHtml = '<div class="no-img">暂无海报</div>';
     } else if ((/^\/api\/(?:emby|tmdb)\/poster\//).test(c.poster)) {
-      posterHtml = '<div class="poster-loading">海报加载中</div><img data-emby-src="' + esc(c.poster) + '" alt="" loading="lazy" decoding="async" onload="clearPosterLoading(this)">';
+      posterHtml = '<div class="poster-loading">海报加载中</div><img data-emby-src="' + esc(posterCardUrl(c.poster)) + '" alt="" loading="lazy" decoding="async" onload="clearPosterLoading(this)">';
     } else {
       posterHtml = '<div class="poster-loading">海报加载中</div><img src="' + esc(c.poster) + '" alt="" loading="lazy" decoding="async" onload="clearPosterLoading(this)" onerror="posterImageError(this)">';
     }
@@ -544,14 +585,8 @@ function warmPosterUrls(urls, active){
       var url = urls[next++];
       try {
         if ((/^\/api\/(?:emby|tmdb)\/poster\//).test(url)) {
-          await posterFetch(url);
-        } else {
-          await new Promise(function(resolve){
-            var img = new Image(), timer = setTimeout(function(){done();img.src='';},8000);
-            function done(){clearTimeout(timer);img.onload=img.onerror=null;resolve();}
-            img.onload=img.onerror=done;img.src=url;
-          });
-        }
+          await posterFetch(posterSizedUrl(url),{prefetch:true,active:active});
+        } // Legacy external image URLs retain native lazy loading, without extra prefetch.
       } catch(e) {}
     }
   }
@@ -657,7 +692,7 @@ function renderExploreCards(cards){
     if (!c.poster) {
       posterHtml = '<div class="no-img">暂无海报</div>';
     } else if ((/^\/api\/(?:emby|tmdb)\/poster\//).test(c.poster)) {
-      posterHtml = '<div class="poster-loading">海报加载中</div><img data-emby-src="' + esc(c.poster) + '" alt="" loading="lazy" decoding="async" onload="clearPosterLoading(this)">';
+      posterHtml = '<div class="poster-loading">海报加载中</div><img data-emby-src="' + esc(posterCardUrl(c.poster)) + '" alt="" loading="lazy" decoding="async" onload="clearPosterLoading(this)">';
     } else {
       posterHtml = '<div class="poster-loading">海报加载中</div><img src="' + esc(c.poster) + '" alt="" loading="lazy" decoding="async" onload="clearPosterLoading(this)" onerror="posterImageError(this)">';
     }

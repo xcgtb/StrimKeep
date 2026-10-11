@@ -4,7 +4,7 @@ import time, json, threading, sqlite3, urllib.parse, urllib.request, asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from app import runtime_logs
-from app import posters, tmdb, library_response, library_updates, morning, deletion_progress
+from app import posters, tmdb, library_response, library_updates, morning, deletion_progress, library_first_screen, library_pagination
 
 try:
     from app.routers.deps import auth, engine, logger, Args
@@ -121,31 +121,33 @@ def api_logs_download():
                     headers={'Content-Disposition': 'attachment; filename="strimkeep-logs.txt"'})
 
 
-@router.get('/api/emby/poster/{item_id}')
-def api_emby_poster(item_id: str):
+@router.get('/api/emby/poster/{item_id}', dependencies=[Depends(auth)])
+def api_emby_poster(item_id: str, size: str = 'w500'):
     if not engine.EMBY_KEY: raise HTTPException(500, '未配置 EMBY_KEY')
-    url = f'{engine.EMBY_HOST}/Items/{urllib.parse.quote(item_id, safe="")}/Images/Primary'
-    req = urllib.request.Request(url, headers={'X-Emby-Token': engine.EMBY_KEY})
     try:
-        with urllib.request.urlopen(req, timeout=15) as r:
-            data = r.read(); ct = r.headers.get('Content-Type', 'image/jpeg')
-        # 海报是内容寻址资源：Emby Primary Image 在短时间内基本稳定，允许浏览器/代理缓存，
-        # 避免片库映射每次刷新都重新走鉴权 + 下载。
+        data, ct = posters.get_emby_poster(item_id, engine.EMBY_HOST, engine.EMBY_KEY, size)
         return Response(content=data, media_type=ct, headers={
-            'Cache-Control': 'private, max-age=86400',
+            'Cache-Control': 'private, max-age=3600',
             'Vary': 'Authorization',
+            'X-Content-Type-Options': 'nosniff',
         })
+    except posters.PosterBusyError as e:
+        raise HTTPException(503, str(e), headers={'Retry-After': '1'})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(404, str(e))
 
 
 @router.get('/api/tmdb/poster/{filename}', dependencies=[Depends(auth)])
-def api_tmdb_poster(filename: str):
+def api_tmdb_poster(filename: str, size: str = 'w500'):
     try:
-        data, content_type = posters.get_tmdb_poster(filename)
+        data, content_type = posters.get_tmdb_poster(filename, size)
         return Response(data, media_type=content_type, headers={
             'Cache-Control': 'private, max-age=86400', 'Vary': 'Authorization',
             'X-Content-Type-Options': 'nosniff'})
+    except posters.PosterBusyError as error:
+        raise HTTPException(503, str(error), headers={'Retry-After': '1'})
     except ValueError as error:
         raise HTTPException(400, str(error))
     except Exception:
@@ -246,6 +248,35 @@ async def api_library_events(request: Request):
     return StreamingResponse(updates(), media_type='text/event-stream', headers={
         'Cache-Control': 'private, no-cache, no-transform',
         'X-Accel-Buffering': 'no', 'Vary': 'Cookie, Authorization'})
+
+
+@router.get('/api/emby/library/preview', dependencies=[Depends(auth)])
+def api_emby_library_preview():
+    # Bounded read-only projection. No Emby/TMDB requests, paths or credentials.
+    return library_first_screen.preview()
+
+
+@router.get('/api/emby/library/page', dependencies=[Depends(auth)])
+def api_emby_library_page(media: str = 'series', status: str = 'all', scope: str = 'all',
+                          category: str = '', category_mode: str = 'seg', keyword: str = '',
+                          offset: int = 0, limit: int = 40):
+    try:
+        return library_pagination.page(media=media, status=status, scope=scope,
+                                       category=category, category_mode=category_mode,
+                                       keyword=keyword, offset=offset, limit=limit)
+    except ValueError as error:
+        raise HTTPException(400, str(error))
+
+
+@router.get('/api/emby/library/item', dependencies=[Depends(auth)])
+def api_emby_library_item(media: str, id: str):
+    try:
+        item = library_pagination.detail(media, id)
+    except ValueError as error:
+        raise HTTPException(400, str(error))
+    if item['status'] == 'notfound':
+        raise HTTPException(404, '作品不在片库缓存中')
+    return item
 
 
 @router.get('/api/emby/library', dependencies=[Depends(auth)])

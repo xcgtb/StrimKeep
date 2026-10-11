@@ -6,7 +6,7 @@ function fixture() {
   const calls = [], toasts = [], pending = [], intervals = new Map(), nodes = {};
   const node = id => nodes[id] || (nodes[id] = {innerHTML:'existing posters', textContent:'', style:{}, classList:{add(){},remove(){}}});
   let nextTimer = 0;
-  const c = vm.createContext({document:{getElementById:node}, $:node,
+  const c = vm.createContext({document:{getElementById:node}, $:node,mappingPagedActive:false,
     embyLibraryGeneration:0, embyLibraryLoading:false, embyLoaded:true,
     setInterval:fn=>{intervals.set(++nextTimer,fn);return nextTimer;}, clearInterval:id=>intervals.delete(id),
     toast:message=>toasts.push(message),
