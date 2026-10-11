@@ -8,7 +8,7 @@
 <link rel="icon" sizes="16x16 32x32 48x48 64x64" href="/static/icons/favicon.ico?v=312b3784ba93">
 <link rel="icon" type="image/svg+xml" sizes="any" href="/static/icons/favicon.svg?v=d6d1a1064986">
 <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png?v=a23c01bd901b">
-<link rel="stylesheet" href="/static/css/app.css?v=21dcf5feb8e0">
+<link rel="stylesheet" href="/static/css/app.css?v=ca3b9dbcb04d">
 <link rel="stylesheet" href="/static/css/overview.css?v=703b4250faac">
 <link rel="stylesheet" href="/static/css/glass.css?v=2aa6d6cab791">
 <link rel="stylesheet" href="/static/css/upstream.css?v=c28b5a83081d">
@@ -286,7 +286,10 @@ window.addEventListener('unhandledrejection', function(e){
               <button data-s="share" onclick="setEmbyScope('share')">仅分享</button>
             </div>
           </div>
-          <div class="cat-chip" id="embyCatChip" hidden><span id="embyCatName"></span><button onclick="clearEmbyCat()" aria-label="清除分类筛选">✕</button></div>
+          <div id="mappingBatchEntry" hidden><button type="button" id="mappingBatchStart" class="btn gray" onclick="mappingBatchToggleMode()">多选清理</button><span class="section-note">仅适用于电视剧；先选择“仅本地”或“仅分享”</span></div>
+          <div id="mappingBatchPanel" hidden><span id="mappingBatchCount" role="status">已选 0 部</span><button type="button" id="mappingBatchDeleteSelected" class="btn mapping-delete" onclick="mappingBatchDelete('selected')" disabled>删除已选</button><button type="button" class="btn mapping-delete" onclick="mappingBatchDelete('all')">全选当前筛选结果并删除</button><span class="section-note">执行前核实文件数并双重确认；本地库联动源文件</span></div>
+          <div class="cat-chip" id="embyCatChip"
+           hidden><span id="embyCatName"></span><button onclick="clearEmbyCat()" aria-label="清除分类筛选">✕</button></div>
           <div class="progress-wrap hidden" id="tmdbProgressWrap">
             <div class="progress-bar"><div class="fill" id="tmdbProgressFill" style="width:0%"></div></div>
             <div class="progress-info"><span class="stage" id="tmdbProgressStage">准备中...</span><span id="tmdbProgressEta"></span></div>
@@ -849,7 +852,7 @@ window.addEventListener('unhandledrejection', function(e){
 <script defer src="/static/js/dashboard.js?v=a51e30eb85fe"></script>
 <script defer src="/static/js/governance.js?v=46dc287f6b42"></script>
 <script defer src="/static/js/explore.js?v=4b2ed8980176"></script>
-<script defer src="/static/js/mapping.js?v=595fc2834aa7"></script>
+<script defer src="/static/js/mapping.js?v=961210bac73c"></script>
 <script defer src="/static/js/subscriptions.js?v=e9d56e664f7f"></script>
 <script defer src="/static/js/records.js?v=823e156e2088"></script>
 <script defer src="/static/js/settings.js?v=8d776b6a536f"></script>

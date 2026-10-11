@@ -4,7 +4,7 @@ import time, json, threading, sqlite3, urllib.parse, urllib.request, asyncio, se
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from app import runtime_logs
-from app import posters, tmdb, library_response, library_updates, morning, deletion_progress, library_first_screen, library_pagination
+from app import posters, tmdb, library_response, library_updates, morning, deletion_progress, library_first_screen, library_pagination, batch_library_delete
 
 try:
     from app.routers.deps import auth, engine, logger, Args
@@ -466,6 +466,16 @@ def _delete_title_files(files, target, title, media_type, series_id=None, tmdb_i
         'series_removed': series_removed, 'entry': entry,
         'movie_target_removed': tmdb_id is not None and len(gone) == len(files),
     }
+
+
+@router.post('/api/emby/series/batch-delete/preview', dependencies=[Depends(auth)])
+def api_batch_series_preview(body: dict = None):
+    return batch_library_delete.preview(body)
+
+
+@router.post('/api/emby/series/batch-delete/execute', dependencies=[Depends(auth)])
+def api_batch_series_execute(body: dict = None):
+    return batch_library_delete.execute(body, _delete_title_files)
 
 
 @router.post('/api/emby/series/{series_id}/delete', dependencies=[Depends(auth)])

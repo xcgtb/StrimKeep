@@ -196,6 +196,7 @@ function mappingPagedStats(stats){
   updateEmbyChips();
 }
 async function loadMappingPaged(reset){
+  if (typeof mappingBatchSyncContext === 'function') mappingBatchSyncContext();
   reset = reset !== false;
   if (!reset && (mappingPagedLoading || mappingPagedOffset >= mappingPagedTotal)) return;
   var generation = ++mappingPagedGeneration;
@@ -359,6 +360,10 @@ function replaceMappingCardsStable(list, rows, render, kind){
             oldBadge.className = newBadge.className;
             oldBadge.textContent = newBadge.textContent;
           }
+          var mark = previous.querySelector('.mapping-batch-card-check');
+          var nextMark = fresh[i].querySelector('.mapping-batch-card-check');
+          if (mark) mark.remove();
+          if (nextMark) previous.appendChild(nextMark);
           previous.className = fresh[i].className;
           fragment.appendChild(previous);
         } else fragment.appendChild(fresh[i]);
@@ -604,6 +609,7 @@ function sortedMappingSeries(){
   return rows;
 }
 function renderEmbyList(){
+  if (typeof mappingBatchSyncContext === 'function') mappingBatchSyncContext();
   if (mappingPagedActive || mappingPagedLoading) {loadMappingPaged(true);return;}
   var list = $('embyList');
   if (!embyLoaded) {
@@ -662,6 +668,117 @@ function toggleSeasonList(id){
   if (full) full.classList.toggle('hidden', !collapsed);
   el.setAttribute('data-collapsed', collapsed ? '0' : '1');
 }
+
+/* 电视剧批量清理：明确选择单个目标库；不自动删除。 */
+var mappingBatchMode = false;
+var mappingBatchSelected = new Set();
+var mappingBatchContext = '';
+function mappingBatchAllowed(){
+  return embyFilterState.type === 'series' &&
+    (embyFilterState.scope === 'local' || embyFilterState.scope === 'share');
+}
+function mappingBatchFilters(){
+  return {target:embyFilterState.scope, scope:embyFilterState.scope,
+    filter:embyFilterState.filter || 'all', category:embyFilterState.cat || '',
+    category_mode:embyFilterState.catMode === 'sub' ? 'sub' : 'seg',
+    keyword:($('embySearch').value || '').trim()};
+}
+function mappingBatchSyncContext(){
+  var sig = JSON.stringify([embyFilterState.type, embyFilterState.filter,
+    embyFilterState.scope, embyFilterState.cat, embyFilterState.catMode,
+    ($('embySearch').value || '').trim()]);
+  if (sig !== mappingBatchContext) {
+    mappingBatchContext = sig;
+    mappingBatchMode = false;
+    mappingBatchSelected.clear();
+  }
+  var permitted = mappingBatchAllowed();
+  var entry = $('mappingBatchEntry'), panel = $('mappingBatchPanel');
+  if (entry) entry.hidden = !permitted;
+  if (panel) panel.hidden = !permitted || !mappingBatchMode;
+  var count = $('mappingBatchCount');
+  if (count) count.textContent = '已选 ' + mappingBatchSelected.size + ' 部 · ' +
+    (embyFilterState.scope === 'local' ? '目标：本地库及匹配源文件' : '目标：分享库 STRM');
+  var selected = $('mappingBatchDeleteSelected');
+  if (selected) selected.disabled = !mappingBatchSelected.size || mappingDeleteBusy;
+  var start = $('mappingBatchStart');
+  if (start) start.textContent = mappingBatchMode ? '退出多选' : '多选清理';
+}
+function mappingBatchToggleMode(){
+  if (!mappingBatchAllowed() || mappingDeleteBusy) return;
+  mappingBatchMode = !mappingBatchMode;
+  mappingBatchSelected.clear();
+  mappingBatchSyncContext();
+  renderEmbyList();
+}
+function mappingBatchSetItem(id, checked){
+  if (!mappingBatchAllowed() || !mappingBatchMode || mappingDeleteBusy) return;
+  if (checked) mappingBatchSelected.add(String(id));
+  else mappingBatchSelected.delete(String(id));
+  mappingBatchSyncContext();
+}
+function mappingBatchProgress(preview){
+  var isLocal = preview.target === 'local';
+  mappingDeleteView = {target:preview.target, title:'批量清理' + (isLocal?'本地库':'分享库'),
+    count:preview.count, kind:'batch', id:preview.preview_id};
+  mappingDeletePhase('正在逐部重新验证并执行安全删除…');
+  openModal('<div class="mapping-detail"><h3>批量删除进行中</h3>'
+    + '<p>目标：' + (isLocal?'本地库（可能联动删除源视频）':'分享库（仅 STRM）') + '</p>'
+    + '<p>已确认 ' + esc(preview.count) + ' 部 / ' + esc(preview.strm_count) + ' 个 STRM；执行中会再次核验。</p>'
+    + '<p id="mappingDeleteStatus" role="status" aria-live="polite"></p>'
+    + '<progress id="mappingDeleteBar" value="0" max="' + esc(preview.count) + '" style="width:100%"></progress>'
+    + '<p id="mappingDeleteCounts" role="status" aria-live="polite">等待后端反馈…</p>'
+    + '<p id="mappingDeleteFile" style="overflow-wrap:anywhere;font-size:12px"></p>'
+    + '<button class="btn gray" onclick="closeModal()">关闭提示（删除继续执行）</button></div>');
+  renderMappingDeleteState();
+}
+async function mappingBatchDelete(selection){
+  if (!mappingBatchAllowed() || !mappingBatchMode || !beginMappingDelete()) return;
+  var phase = 'preview';
+  try {
+    var body = Object.assign(mappingBatchFilters(), {selection:selection});
+    if (selection === 'selected') body.series_ids = Array.from(mappingBatchSelected);
+    var preview = await api('/api/emby/series/batch-delete/preview', {
+      method:'POST',body:JSON.stringify(body),timeoutMs:60000});
+    if (preview.status !== 'success') throw new Error(preview.message || '预览失败');
+    var isLocal = preview.target === 'local';
+    var display = (preview.series || []).slice(0,12).map(function(x){return '· ' + x.name + '（' + x.count + ' STRM）';}).join('\n');
+    var label = isLocal ? '本地库' : '分享库';
+    var danger = isLocal ? '\n⚠️ 本地库将按原有治理规则联动删除对应的 CD2 源视频！' : '\n分享库只删除 NAS STRM，不删除源视频。';
+    var summary = '确定清理【' + label + '】吗？\n筛选：' + (body.filter||'all') +
+      ' · 共 ' + preview.count + ' 部 / ' + preview.strm_count + ' 个 STRM\n' +
+      display + (preview.count>12?'\n…其余作品略':'') + danger +
+      '\nTgtoDrive 未来同步可能重新生成 STRM。\n此操作不可撤销。';
+    if (!confirm(summary)) return;
+    var phrase = isLocal ? '删除本地库及源文件' : '删除分享库';
+    if (prompt('再次确认：请完整输入「' + phrase + '」', '') !== phrase) {
+      toast('取消删除：确认文字不符', '', 3500); return;
+    }
+    phase = 'delete';
+    mappingBatchProgress(preview);
+    var result = await executeMappingDelete('/api/emby/series/batch-delete/execute', {
+      target:preview.target,preview_id:preview.preview_id,confirmation:phrase,confirm:true});
+    if (result.status !== 'success') throw new Error(result.message || '批量执行未完成');
+    mappingBatchSelected.clear();mappingBatchMode=false;
+    var detail = '已处理 ' + (result.processed||0) + '/' + preview.count + ' 部；'
+      + ' STRM 已删除 ' + (result.strm_removed||0) + ' 个；'
+      + (isLocal?'源视频已删除 ' + (result.cloud_removed||0) + ' 个；':'')
+      + '保留 ' + (result.retained||0) + ' 个；失败/部分完成 ' + (result.failed||0) + ' 部。';
+    if ((result.errors||[]).length) detail += '\n' + result.errors.slice(0,10).join('\n');
+    showMappingDeleteResult(result.failed?'批量清理部分完成':'批量清理完成', detail,
+      '请等待 Emby 更新后重新核对片库；勿根据旧页面重复删除。');
+    toast(detail, result.failed?'':'success', 5500);
+    if (mappingPagedActive) await loadMappingPaged(true);
+    else await loadEmbyLibrary(false, true, true);
+  } catch(err) {
+    showMappingDeleteResult('批量清理状态',
+      phase==='delete'?'结果尚未确认，可能已有文件删除；不要重复提交，请检查日志和片库。':'尚未执行删除。',
+      err.message||String(err));
+  } finally {
+    finishMappingDelete(); mappingBatchSyncContext();
+  }
+}
+
 function renderSeriesCard(s){
   var ti = s.tmdb_info || {};
   var mst = ti.match_status || 'unmatched';
@@ -702,8 +819,13 @@ function renderSeriesCard(s){
     epInfo = (s.total_seasons || 0) + ' 季 · ' + libraryEpisodeCount(s) + ' 集';
   }
 
+  var mark = (typeof mappingBatchMode !== 'undefined' && mappingBatchMode && typeof mappingBatchAllowed === 'function' && mappingBatchAllowed()) ?
+    '<label class="mapping-batch-card-check" title="选择此剧" onclick="event.stopPropagation()">'
+    + '<input type="checkbox" aria-label="选择 ' + esc(s.name || '剧集') + '" '
+    + (mappingBatchSelected.has(String(s.id)) ? 'checked ' : '')
+    + 'onchange="mappingBatchSetItem(' + jsarg(s.id) + ',this.checked)"></label>' : '';
   return '<div class="poster-card emby-poster-card st-' + mst + '" data-series-id="' + esc(s.id) + '" onclick="showEmbyDetailById(' + jsarg(s.id) + ')">'
-    + '<div class="poster-wrap">' + poster
+    + mark + '<div class="poster-wrap">' + poster
     + '<span class="badge-type">剧集</span>'
     + '<span class="badge-status ' + statusCls + '">' + statusText + '</span>'
     + '</div>'

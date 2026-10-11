@@ -2018,3 +2018,13 @@ html[data-theme="dark"]{--bg:#111113;--bg-soft:#1c1c20;--bg-dim:#2b2b30;--surfac
 @media(max-width:700px){.subnav,.map-bar{top:56px}}
 
 @media(max-width:899px){.sidebar nav a{height:44px;font-size:14px}.nav-group-title{font-size:11px;padding-top:12px}.side-foot{padding-bottom:calc(14px + env(safe-area-inset-bottom,0px))}.runtime-panel{right:-34px}}
+
+
+/* Multi-select for a single explicitly chosen series library */
+#mappingBatchEntry[hidden],#mappingBatchPanel[hidden]{display:none!important}
+#mappingBatchEntry{margin:10px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+#mappingBatchPanel{margin:8px 0 12px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+#mappingBatchCount{font-size:12px;color:var(--text-mid)}
+#tab-mapping .poster-card{position:relative}
+#tab-mapping .mapping-batch-card-check{position:absolute;top:10px;right:10px;z-index:3;display:flex;align-items:center;justify-content:center;background:rgba(15,23,42,.85);color:#fff;border:1px solid rgba(255,255,255,.65);border-radius:8px;padding:8px;min-width:38px;min-height:38px;cursor:pointer}
+#tab-mapping .mapping-batch-card-check input{width:18px;height:18px;accent-color:#3b82f6;cursor:pointer}
