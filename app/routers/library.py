@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """片库：入库 / 统计 / Emby / 搜索 / 日志 / 删除 / 探索"""
-import time, json, threading, sqlite3, urllib.parse, urllib.request, asyncio
+import time, json, threading, sqlite3, urllib.parse, urllib.request, asyncio, secrets
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from app import runtime_logs
@@ -14,6 +14,35 @@ except ImportError:
     from config import load_config, save_config, get_ingest_cfg
 
 router = APIRouter()
+
+
+@router.post('/api/emby/webhook')
+async def api_emby_webhook(request: Request):
+    from app import emby_events
+    token = request.headers.get('X-StrimKeep-Token') or request.query_params.get('token') or ''
+    if not emby_events.authorized(token):
+        raise HTTPException(status_code=401, detail='回调令牌无效或监控已关闭')
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > 256 * 1024:
+            raise HTTPException(status_code=413, detail='回调内容过大')
+    try:
+        content_type = request.headers.get('content-type', '')
+        if 'application/x-www-form-urlencoded' in content_type:
+            payload = json.loads(urllib.parse.parse_qs(body.decode()).get('data', [''])[0])
+        elif 'multipart/form-data' in content_type:
+            # Request retains the bounded body for Starlette's form parser.
+            request._body = bytes(body)
+            form = await request.form(max_files=0, max_fields=8, max_part_size=256 * 1024)
+            payload = json.loads(form.get('data') or '')
+        else:
+            payload = json.loads(body)
+        result = emby_events.accept(payload)
+    except (ValueError, TypeError, UnicodeError) as error:
+        raise HTTPException(status_code=400, detail='回调内容格式错误') from error
+    return Response(content=json.dumps(result, ensure_ascii=False), media_type='application/json',
+                    status_code=503 if result['status'] == 'busy' else 202)
 
 
 @router.get('/api/ingest', dependencies=[Depends(auth)])
@@ -244,7 +273,7 @@ async def api_library_events(request: Request):
                 yield 'event: library\ndata: ' + str(last) + '\n\n'
             else:
                 yield ': alive\n\n'
-            await asyncio.sleep(5)
+            await asyncio.sleep(1)
     return StreamingResponse(updates(), media_type='text/event-stream', headers={
         'Cache-Control': 'private, no-cache, no-transform',
         'X-Accel-Buffering': 'no', 'Vary': 'Cookie, Authorization'})
@@ -308,13 +337,30 @@ def api_library_stats():
 
 @router.get('/api/ingest/settings', dependencies=[Depends(auth)])
 def api_get_ingest_settings():
-    return {'status': 'success', 'settings': get_ingest_cfg()}
+    from app import emby_events
+    return {'status': 'success', 'settings': get_ingest_cfg(), 'webhook': emby_events.status()}
 
 
 @router.post('/api/ingest/settings', dependencies=[Depends(auth)])
 def api_set_ingest_settings(body: dict = None):
     body = body or {}
     cfg = load_config()
+    previous_mode = cfg.get('ingest_mode', 'poll')
+    if body.get('mode') not in (None, 'poll', 'webhook'):
+        raise HTTPException(status_code=400, detail='无效监控模式')
+    if 'mode' in body:
+        cfg['ingest_mode'] = body['mode']
+        if not cfg.get('ingest_webhook_token'):
+            cfg['ingest_webhook_token'] = secrets.token_hex(24)
+    if body.get('reset_token'):
+        cfg['ingest_webhook_token'] = secrets.token_hex(24)
+    if 'reconcile_hours' in body:
+        try:
+            hours = max(1, min(168, int(body['reconcile_hours'])))
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail='全量校准间隔无效')
+        cfg['ingest_reconcile_hours'] = str(hours)
+        cfg['tmdb_scan_interval_hours'] = str(hours)
     if 'enabled' in body:
         cfg['ingest_enabled'] = '1' if body['enabled'] else '0'
     if 'interval_min' in body:
@@ -325,6 +371,11 @@ def api_set_ingest_settings(body: dict = None):
         cfg['ingest_interval_min'] = str(v)
     save_config(cfg)
     engine.reload_config()
+    from app import emby_events
+    emby_events.kick()
+    if previous_mode != 'webhook' and cfg.get('ingest_mode') == 'webhook':
+        from app import overview
+        overview.request_refresh(force=True)
     return {'status': 'success', 'settings': get_ingest_cfg()}
 
 

@@ -21,11 +21,12 @@ _STATS_RECHECK_INTERVAL = 3600
 
 
 def _facts_reconcile_due():
+    interval = config.get_ingest_cfg()['reconcile_hours'] * 3600 if config.load_config().get('ingest_mode') == 'webhook' else _FULL_FACTS_INTERVAL
     marker = state_store.read(engine.STATE_DIR / 'overview_full_facts.json', {})
     if marker.get('host') == engine.EMBY_HOST:
         if time.time() < float(marker.get('retry_after') or 0):
             return False
-        if time.time() - float(marker.get('ts') or 0) < _FULL_FACTS_INTERVAL:
+        if time.time() - float(marker.get('ts') or 0) < interval:
             return False
     # Existing releases already have valid full snapshots. Bootstrap the marker
     # from those facts rather than triggering a 155k-item reload on upgrade.
@@ -33,7 +34,7 @@ def _facts_reconcile_due():
         previous = morning._load_overview_disk()
         if previous and isinstance(previous.get('data'), dict):
             ts = float(previous.get('ts') or 0)
-            if ts > 0 and time.time() - ts < _FULL_FACTS_INTERVAL:
+            if ts > 0 and time.time() - ts < interval:
                 state_store.save(engine.STATE_DIR / 'overview_full_facts.json',
                                  {'ts': ts, 'host': engine.EMBY_HOST})
                 return False
@@ -42,7 +43,8 @@ def _facts_reconcile_due():
 
 def _read_or_recompute_stats(forced):
     cached = state_store.read(engine.STATE_DIR / 'library_stats_cache.json', {})
-    if not forced and isinstance(cached.get('rows'), list) and time.time() - float(cached.get('ts') or 0) < _STATS_RECHECK_INTERVAL:
+    interval = config.get_ingest_cfg()['reconcile_hours'] * 3600 if config.load_config().get('ingest_mode') == 'webhook' else _STATS_RECHECK_INTERVAL
+    if not forced and isinstance(cached.get('rows'), list) and time.time() - float(cached.get('verified_ts') or cached.get('ts') or 0) < interval:
         return cached
     with engine._strm_count_refreshing:
         return engine._recompute_all_stats()
@@ -180,17 +182,21 @@ def _refresh_worker(forced):
         _phase('正在更新双库统计')
         lib_stats = _read_or_recompute_stats(forced)
         if engine.EMBY_KEY:
+            reconciled = False
             if forced or _facts_reconcile_due():
                 _phase('正在校准片库数据')
                 try:
                     _refresh_facts()
+                    reconciled = True
                 except Exception:
                     engine.log.exception('片库全量校准失败')
                     warnings.append('Emby 片库校准失败，保留上一份片库数据')
-            if forced:
+            if forced or reconciled:
                 _phase('正在更新近期入库')
                 try:
-                    ingest = engine.refresh_ingest_cache()
+                    ingest = (engine.refresh_ingest_cache(full_reconcile=True)
+                              if config.load_config().get('ingest_mode') == 'webhook'
+                              else engine.refresh_ingest_cache())
                     if not ingest.get('ok', True) or ingest.get('stale_error'):
                         warnings.append('近期入库更新失败，保留原数据')
                 except Exception:
@@ -255,6 +261,19 @@ def get_overview():
                 data = {'ts': ts, 'dashboard': {'localCount': f'{l:,}', 'shareCount': f'{s:,}',
                          'libraryHealth': health}, 'library_stats': lib}
         result = copy.deepcopy(data) if data else {}
+        if result and config.load_config().get('ingest_mode') == 'webhook':
+            recent = engine.get_ingest()
+            imported = recent.get('stats') or {}
+            section = result.setdefault('dashboard', {}).setdefault('ingest', {})
+            section.update(cache_ts=recent.get('ts', 0),
+                           cache_age_sec=int(time.time() - recent['ts']) if recent.get('ts') else None,
+                           movies=imported.get('movies', 0), series=imported.get('series', 0),
+                           episodes=imported.get('episodes', 0))
+        live_stats = state_store.read(engine.STATE_DIR / 'library_stats_cache.json', {})
+        if result and live_stats.get('ts', 0) > (result.get('library_stats') or {}).get('ts', 0):
+            result['library_stats'] = live_stats
+            result['dashboard']['localCount'] = f"{live_stats.get('local_total', 0):,}"
+            result['dashboard']['shareCount'] = f"{live_stats.get('share_total', 0):,}"
         # Local facts/manual-done changes should appear immediately, while a
         # repeated view does not deep-copy the whole library on every request.
         stamp = _health_stamp()

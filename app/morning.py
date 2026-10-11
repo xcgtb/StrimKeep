@@ -88,6 +88,8 @@ def _overview_bg_refresh():
 def emby_library_overview(force=False):
     """片库映射三级缓存：内存(5分钟) → 磁盘(立即返回) → 首次完整构建。
     五分钟变化由入库增量更新，完整分集列表仅每日后台校准。"""
+    if not force and _cfg.load_config().get('ingest_mode') == 'webhook':
+        return read_emby_lib_cache(max_age=None) or {'series': [], 'movies': [], 'stats': {}}
     if not force:
         if _eng()._emby_lib_cache['data'] and time.time() - _eng()._emby_lib_cache['ts'] < _eng()._CACHE_TTL:
             return _eng()._emby_lib_cache['data']
@@ -1318,7 +1320,10 @@ def refresh_tmdb_scan(background=False):
 def _refresh_tmdb_scan():
     log.info('TMDB 对照开始（后台）')
     try:
-        data = emby_library_overview(force=True)
+        realtime = _cfg.load_config().get('ingest_mode') == 'webhook'
+        data = copy.deepcopy(read_emby_lib_cache(max_age=None)) if realtime else emby_library_overview(force=True)
+        if not data:
+            raise RuntimeError('等待片库事实初始化')
         series = data['series']
         movies = data['movies']
         total = len(series)
@@ -1359,7 +1364,29 @@ def _refresh_tmdb_scan():
             else: stats['incomplete_series'] += 1
         res = {'status': 'success', 'stats': stats, 'series': series, 'movies': movies,
                'tmdb_errors': tmdb_errors, 'with_tmdb': True, 'emby_host': _eng().EMBY_HOST}
-        save_emby_lib_cache(res)
+        if realtime:
+            # Full metadata requests can overlap callbacks. Apply only metadata
+            # to the latest facts; never restore an old episode/title snapshot.
+            def merge(current):
+                for row in current.get('series') or []:
+                    info = infos.get(('tv', str(row.get('tmdb_id'))))
+                    if info:
+                        row['tmdb_info'] = _eng().classify_series_by_tmdb(row.get('seasons') or [], info)
+                        if info.get('poster_path'):
+                            row['tmdb_info']['poster'] = info['poster_path']
+                _recompute_mapping_stats(current)
+                current['with_tmdb'] = True
+                return True
+            with _eng()._overview_refresh_lock:
+                _patch_all_caches(merge)
+                latest = read_emby_lib_cache(max_age=None)
+                if latest:
+                    _eng()._emby_lib_cache.update(ts=time.time(), data=copy.deepcopy(latest))
+                    _save_overview_disk(latest)
+                    stats = latest.get('stats') or stats
+                    res.update(stats=stats, series=latest.get('series') or [], movies=latest.get('movies') or [])
+        else:
+            save_emby_lib_cache(res)
         save_library_snapshot(build_library_health_snapshot())
         cfg = _cfg.load_config()
         cfg['tmdb_scan_last_ts'] = str(time.time())

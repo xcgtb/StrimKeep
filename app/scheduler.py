@@ -200,14 +200,22 @@ def _tick(now: float):
     try:
         ingest_enabled = cfg.get('ingest_enabled', '1') == '1'
         ingest_interval = max(60, int(cfg.get('ingest_interval_min') or 5) * 60)
+        if cfg.get('ingest_mode') == 'webhook':
+            ingest_interval = max(1, min(168, int(cfg.get('ingest_reconcile_hours') or 24))) * 3600
     except (ValueError, TypeError):
         ingest_enabled = True; ingest_interval = 300
-    if ingest_enabled and (now - _bg_state['last_ingest_check']) >= ingest_interval:
+    if ingest_enabled and cfg.get('ingest_mode') != 'webhook' and (now - _bg_state['last_ingest_check']) >= ingest_interval:
         _bg_state['last_ingest_check'] = now
         try:
             engine.refresh_ingest_cache()
         except Exception as e:
             engine.log.warning('入库缓存刷新失败: %s', e)
+    # Resume persisted callbacks after restarts; this performs no Emby discovery.
+    try:
+        from . import emby_events
+        emby_events.kick()
+    except Exception as e:
+        engine.log.warning('回调恢复失败: %s', e)
 
     # Retry durable Telegram batches independently of ingest.  A failed send
     # must survive an idle ingest window and a process restart.
@@ -221,6 +229,8 @@ def _tick(now: float):
     try:
         scan_enabled = cfg.get('tmdb_scan_enabled', '1') == '1'
         scan_hours = int(cfg.get('tmdb_scan_interval_hours') or 24)
+        if cfg.get('ingest_mode') == 'webhook':
+            scan_hours = max(1, min(168, int(cfg.get('ingest_reconcile_hours') or 24)))
         last_ts = float(cfg.get('tmdb_scan_last_ts') or '0')
     except (ValueError, TypeError):
         scan_enabled = True; scan_hours = 24; last_ts = 0
@@ -292,10 +302,12 @@ def _tick(now: float):
         if in_prescan_window and mr.get('prescan_last_date') != today:
             engine.log.info('晨报预扫触发')
             try:
-                engine.refresh_ingest_cache()
+                if cfg.get('ingest_mode') != 'webhook':
+                    engine.refresh_ingest_cache()
                 # 晨报前预扫同时刷新 Emby 缺集快照；9:00 只引用这次成功扫描的结果。
                 try:
-                    engine.gap_report(max_age=None, force_refresh=True, cache_only=False)
+                    engine.gap_report(max_age=None, force_refresh=cfg.get('ingest_mode') != 'webhook',
+                                      cache_only=cfg.get('ingest_mode') == 'webhook')
                 except Exception as e:
                     engine.log.warning('晨报 Emby 缺集预扫失败: %s', e)
                 _cfg.mark_morning_prescan(today)

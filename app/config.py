@@ -51,6 +51,9 @@ DEFAULTS = {
     # 入库监控
     'ingest_enabled':        '1',      # 后台入库监控开关
     'ingest_interval_min':   '5',      # 轮询间隔（分钟）
+    'ingest_mode':           'poll',   # Existing installs retain discovery until Emby is configured.
+    'ingest_webhook_token':  '',
+    'ingest_reconcile_hours': '24',
 
     # 追更订阅
     'subscribe_enabled':         '1',
@@ -306,6 +309,9 @@ def get_ingest_cfg() -> dict:
     return {
         'enabled': cfg.get('ingest_enabled', '1') == '1',
         'interval_min': int(cfg.get('ingest_interval_min') or 5),
+        'mode': cfg.get('ingest_mode', 'poll'),
+        'reconcile_hours': max(1, min(168, int(cfg.get('ingest_reconcile_hours') or 24))),
+        'webhook_token': cfg.get('ingest_webhook_token') or '',
     }
 
 # ═══════════ 画质对比规则（7 维；双库治理比较版本的唯一依据） ═══════════

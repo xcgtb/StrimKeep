@@ -44,23 +44,24 @@ def _eng():
             return None
 
 
+CATS = [
+    ('\U0001F476 儿童节目', ['儿童']),
+    ('\U0001F3A4 演唱会',       ['演唱会']),
+    ('\U0001F3AA 综艺剧',       ['综艺']),
+    ('\u26e9\ufe0f 动漫剧',     ['动漫']),
+    ('\U0001F9F8 动画电影',   ['动画电影']),
+    ('\U0001F4FD\ufe0f 纪录片',  ['纪录']),
+    ('\U0001F1E8\U0001F1F3 国产剧', ['国产剧集', '国产剧']),
+    ('\U0001F1FA\U0001F1F8 欧美剧', ['欧美剧集', '欧美剧', '其他剧集']),
+    ('\U0001F1EF\U0001F1F5 日韩剧', ['日韩剧集', '日韩剧']),
+    ('\U0001F1E8\U0001F1F3 华语电影', ['国产电影', '华语电影']),
+    ('\U0001F310 外语电影', ['欧美电影', '日韩电影', '外语电影', '其他电影']),
+]
+
 def _recompute_all_stats():
     """单次遍历双库，同时更新「分类统计」与「STRM 计数」两套缓存。
     之前两处各自独立遍历，时间不同/网络挂载抖动会导致数字对不上；
     统一从同一次遍历取数，保证总览卡片与总库分类统计永远一致。"""
-    CATS = [
-        ('\U0001F476 儿童节目', ['儿童']),
-        ('\U0001F3A4 演唱会',       ['演唱会']),
-        ('\U0001F3AA 综艺剧',       ['综艺']),
-        ('\u26e9\ufe0f 动漫剧',     ['动漫']),
-        ('\U0001F9F8 动画电影',   ['动画电影']),
-        ('\U0001F4FD\ufe0f 纪录片',  ['纪录']),
-        ('\U0001F1E8\U0001F1F3 国产剧', ['国产剧集', '国产剧']),
-        ('\U0001F1FA\U0001F1F8 欧美剧', ['欧美剧集', '欧美剧', '其他剧集']),
-        ('\U0001F1EF\U0001F1F5 日韩剧', ['日韩剧集', '日韩剧']),
-        ('\U0001F1E8\U0001F1F3 华语电影', ['国产电影', '华语电影']),
-        ('\U0001F310 外语电影', ['欧美电影', '日韩电影', '外语电影', '其他电影']),
-    ]
     cat_names = [c[0] for c in CATS]
 
     out = {
@@ -72,6 +73,9 @@ def _recompute_all_stats():
         'share_total': 0,
     }
 
+    directories = {}
+    buckets = {}
+
     for root, key in ((_eng().L_ROOT, 'local'), (_eng().S_ROOT, 'share')):
         if not root.exists():
             continue
@@ -80,6 +84,7 @@ def _recompute_all_stats():
                 parts = f.relative_to(root).parts
             except ValueError:
                 continue
+            directories[str(f.parent)] = directories.get(str(f.parent), 0) + 1
             matched = None
             for part in parts:
                 for cat_name, kws in CATS:
@@ -97,6 +102,9 @@ def _recompute_all_stats():
                 out[key][matched] += 1
             else:
                 out[key + '_other'] += 1
+            per_directory = buckets.setdefault(str(f.parent), {})
+            label = matched or 'other'
+            per_directory[label] = per_directory.get(label, 0) + 1
             out[key + '_total'] += 1
 
     rows = []
@@ -117,19 +125,108 @@ def _recompute_all_stats():
     }
     now = time.time()
     result['ts'] = now
-    _state.save(_eng().STATE_DIR / 'library_stats_cache.json', result)
+    result['verified_ts'] = now
+    ledger = {'roots': [str(_eng().L_ROOT), str(_eng().S_ROOT)],
+              'identities': {str(root): [root.stat().st_dev, root.stat().st_ino]
+                             for root in (_eng().L_ROOT, _eng().S_ROOT) if root.is_dir()},
+              'directories': directories, 'buckets': buckets, 'verified_ts': now}
+    _state.save_many([(_eng().STATE_DIR / 'library_stats_cache.json', result),
+                      (_eng().STATE_DIR / 'strm_directory_counts.json', ledger),
+                      (_eng()._STRM_COUNT_CACHE_FILE,
+                       {'ts': now, 'local': out['local_total'], 'share': out['share_total']})])
     _eng()._lib_stats_cache['ts'] = now
     _eng()._lib_stats_cache['data'] = result
     # 同一次遍历的总数同步写入 STRM 计数缓存（内存+磁盘），两处数字永远一致
     _eng()._strm_count_cache.update({'ts': now, 'local': out['local_total'], 'share': out['share_total']})
-    _save_strm_count_disk(out['local_total'], out['share_total'])
     return result
 
 _STATS_AUTO_TTL = 3600  # periodic dashboard use; manual invalidate/recheck stays available
 
+
+def refresh_event_directories(paths):
+    """Recount only callback-touched directories against a full-scan baseline.
+
+    Idempotent for duplicate/retried events. No count is inferred from episode
+    numbers or callbacks. A missing baseline waits for explicit initialization.
+    """
+    roots = [Path(_eng().L_ROOT), Path(_eng().S_ROOT)]
+    with _eng()._strm_count_refreshing:
+        ledger_path = _eng().STATE_DIR / 'strm_directory_counts.json'
+        cache_path = _eng().STATE_DIR / 'library_stats_cache.json'
+        ledger = _state.read(ledger_path, {})
+        data = _state.read(cache_path, {})
+        if ledger.get('roots') != list(map(str, roots)) or not data.get('rows'):
+            return False
+        counts = ledger.get('directories') or {}
+        buckets = ledger.get('buckets') or {}
+        changed = False
+        for value in sorted(set(paths)):
+            directory = Path(value)
+            for root, lib in zip(roots, ['local', 'share']):
+                try:
+                    relative = directory.resolve().relative_to(root.resolve())
+                except ValueError:
+                    continue
+                identity = ledger.get('identities', {}).get(str(root))
+                if not root.is_dir() or (identity and identity != [root.stat().st_dev, root.stat().st_ino]):
+                    raise RuntimeError('STRM 根目录不可见，保留统计')
+                if not identity and not any(root.iterdir()):
+                    raise RuntimeError('STRM 根目录尚未核实，保留统计')
+                # Direct children are bounded below, including root-level STRM.
+                current = 0
+                current_buckets = {}
+                if directory.is_dir():
+                    for i, file in enumerate(directory.iterdir()):
+                        if i >= 10000:
+                            raise RuntimeError('单目录过大，等待全量统计')
+                        if file.name.endswith('.strm') and file.is_file():
+                            current += 1
+                            category = next((name for part in file.relative_to(root).parts for name, words in CATS
+                                             if any(word in part for word in words)), 'other')
+                            current_buckets[category] = current_buckets.get(category, 0) + 1
+                previous = counts.get(str(directory), 0)
+                previous_buckets = buckets.get(str(directory), {})
+                if previous and not previous_buckets:
+                    return False  # upgrade requires a new full baseline
+                difference = current - previous
+                if not difference and current_buckets == previous_buckets:
+                    break
+                data[lib + '_total'] += difference
+                for category in set(current_buckets) | set(previous_buckets):
+                    delta = current_buckets.get(category, 0) - previous_buckets.get(category, 0)
+                    if category == 'other':
+                        data[lib + '_other'] += delta
+                    else:
+                        row = next(row for row in data['rows'] if row['name'] == category)
+                        row[lib] += delta
+                        row['total'] = row['local'] + row['share']
+                counts[str(directory)] = current
+                buckets[str(directory)] = current_buckets
+                changed = True
+                break
+        if not changed:
+            return True
+        if min(data['local_total'], data['share_total']) < 0:
+            raise RuntimeError('STRM 统计基线冲突，保留旧值')
+        data['ts'] = time.time()
+        ledger['directories'] = counts
+        ledger['buckets'] = buckets
+        count_path = _eng()._STRM_COUNT_CACHE_FILE
+        _state.save_many([(cache_path, data), (ledger_path, ledger), (count_path,
+                          {'ts': data['ts'], 'local': data['local_total'], 'share': data['share_total']})])
+        _eng()._lib_stats_cache.update(ts=data['ts'], data=data)
+        _eng()._strm_count_cache.update(ts=data['ts'], local=data['local_total'], share=data['share_total'])
+        return True
+
 def action_library_stats(args):
     # 缓存命中则直接返回
     now = time.time()
+    from . import config
+    if config.load_config().get('ingest_mode') == 'webhook':
+        disk = _state.read(_eng().STATE_DIR / 'library_stats_cache.json', {})
+        if isinstance(disk.get('rows'), list):
+            _eng()._lib_stats_cache.update(ts=disk.get('ts', 0), data=disk)
+            return disk
     if _eng()._lib_stats_cache['data'] is not None and (now - _eng()._lib_stats_cache['ts']) < _STATS_AUTO_TTL:
         return _eng()._lib_stats_cache['data']
     disk = _state.read(_eng().STATE_DIR / 'library_stats_cache.json', {})
@@ -176,6 +273,11 @@ def _get_strm_counts():
     """STRM 总数三级缓存：内存(5分钟) → 磁盘(立即返回+后台刷新) → 同步首算。
     大库 rglob 全量遍历很慢，磁盘缓存保证总览页秒开，后台静默刷新。"""
     now = time.time()
+    from . import config
+    if config.load_config().get('ingest_mode') == 'webhook':
+        disk = _load_strm_count_disk()
+        if disk is not None:
+            return disk[:2]
     if now - _eng()._strm_count_cache['ts'] < _STATS_AUTO_TTL and _eng()._strm_count_cache['ts'] > 0:
         return _eng()._strm_count_cache['local'], _eng()._strm_count_cache['share']
     disk = _load_strm_count_disk()

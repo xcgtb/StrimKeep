@@ -330,6 +330,24 @@ def _start_emby_index_refresh():
 def emby_library_index(force=False):
     """探索身份索引始终先读缓存；首次构建也在后台，成功空库是有效结果。"""
     cache = _eng()._emby_index_cache
+    if not force and _cfg.load_config().get('ingest_mode') == 'webhook':
+        # Build identity hints from the same verified facts as mapping. No
+        # five-minute background remote index enumeration in callback mode.
+        from . import morning
+        facts = morning.read_emby_lib_cache(max_age=None) or {}
+        revision = _state.stamp(_eng().EMBY_LIB_CACHE_FILE)
+        if cache.get('callback_revision') != revision:
+            index = {}
+            for kind, media, field in [('series', 'tv', 'series_ids'), ('movies', 'movie', 'ids')]:
+                for row in facts.get(kind) or []:
+                    if row.get('tmdb_id'):
+                        index[media + ':' + str(row['tmdb_id'])] = dict(row,
+                            type='Series' if media == 'tv' else 'Movie',
+                            ids=row.get(field) or [row.get('id')],
+                            libs=[lib for lib in ('local', 'share') if row.get('in_' + lib)])
+            cache.update(data=index, callback_revision=revision,
+                         ts=facts.get('facts_ts') or facts.get('ts') or 0, error_ts=0)
+        return cache.get('data') or {}
     if force:
         with _eng()._emby_index_refresh_lock:
             out = _build_emby_library_index()
@@ -507,6 +525,8 @@ def _explore_library_status(cards):
     index_cache = _eng()._emby_index_cache
     index_known = index_cache.get('data') is not None
     index_stale = time.time() - index_cache.get('ts', 0) >= 300
+    if _cfg.load_config().get('ingest_mode') == 'webhook':
+        index_stale = time.time() - index_cache.get('ts', 0) >= _cfg.get_ingest_cfg()['reconcile_hours'] * 3600
     refreshing = _eng()._emby_index_refresh_lock.locked()
     refresh_error = None
     if index_cache.get('error_ts') and index_stale:

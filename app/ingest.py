@@ -209,7 +209,7 @@ def _fetch_ingest(hours=24, source_items=None):
         '_recent_source': {'movies': movies_raw, 'episodes': episodes_raw},
     }
 
-def refresh_ingest_cache(hours=24) -> dict:
+def refresh_ingest_cache(hours=24, full_reconcile=False) -> dict:
     """持久化近期入库事实：常规只请求游标后 20 分钟重叠窗，六小时全量对账。
 
     保存成功前不移动游标；任何拉取失败都保留旧缓存和增量索引。
@@ -217,7 +217,7 @@ def refresh_ingest_cache(hours=24) -> dict:
     with _ingest_refresh_lock:
         now = time.time()
         index = _state.read(_ingest_index_path(), {})
-        valid = (isinstance(index, dict) and index.get('host') == _eng().EMBY_HOST
+        valid = (not full_reconcile and isinstance(index, dict) and index.get('host') == _eng().EMBY_HOST
                  and index.get('hours') == hours and 0 < now - float(index.get('ts') or 0) < 3600
                  and now - float(index.get('full_ts') or 0) < _INGEST_RECONCILE
                  and isinstance(index.get('movies'), list) and isinstance(index.get('episodes'), list))
@@ -330,6 +330,18 @@ def get_ingest(hours=24, force_refresh=False) -> dict:
     """
     if force_refresh:
         return refresh_ingest_cache(hours=hours)
+    if _cfg.load_config().get('ingest_mode') == 'webhook':
+        cached = read_ingest_cache(max_age=None)
+        if cached and time.time() - float(cached.get('ts') or 0) > 60:
+            # Expire the 24-hour window locally, without Emby discovery.
+            from . import emby_events
+            emby_events._recent([])
+            cached = read_ingest_cache(max_age=None)
+        if cached:
+            cached['from_cache'] = True
+            return cached
+        return {'ok': True, 'from_cache': True, 'stats': {}, 'tree': {},
+                'message': '等待 Emby 回调或首次全量初始化'}
     cached = read_ingest_cache(max_age=600)
     if cached and cached.get('ok', True):
         cached['from_cache'] = True

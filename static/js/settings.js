@@ -395,6 +395,16 @@ async function loadIngest(){
     var s = r.settings || {};
     $('ingEnabled').checked = !!s.enabled;
     $('ingInterval').value = s.interval_min || 5;
+    $('ingMode').value = s.mode || 'poll';
+    $('ingReconcile').value = s.reconcile_hours || 24;
+    $('ingPollRow').hidden = s.mode === 'webhook';
+    $('ingWebhookUrl').value = s.webhook_token ? window.location.origin + '/api/emby/webhook?token=' + encodeURIComponent(s.webhook_token) : '';
+    $('ingWebhookUrl').placeholder = '点击生成回调地址，然后在 Emby 中配置';
+    var hook = r.webhook || {};
+    var received = hook.received_at || hook.probe_at;
+    $('ingWebhookStatus').textContent = (received ? '最近回调：' + new Date(received * 1000).toLocaleString() : '尚未收到 Emby 回调')
+      + ' · 待处理 ' + (hook.pending || 0) + (hook.error ? ' · 等待重试：' + hook.error : '')
+      + (hook.processed_at ? ' · 最近同步：' + new Date(hook.processed_at * 1000).toLocaleString() : '');
     // 显示缓存状态
     try {
       var st = await api('/api/ingest/status');
@@ -411,13 +421,25 @@ async function loadIngest(){
 }
 async function saveIngest(){
   try {
-    await api('/api/ingest/settings', { method: 'POST', body: JSON.stringify({
+    var result = await api('/api/ingest/settings', { method: 'POST', body: JSON.stringify({
       enabled: $('ingEnabled').checked,
       interval_min: parseInt($('ingInterval').value) || 5,
+      mode: $('ingMode').value,
+      reconcile_hours: parseInt($('ingReconcile').value) || 24,
     })});
+    if (result.status !== 'success') throw new Error(result.message || '保存失败');
     toast('已保存', 'success');
     loadIngest();
   } catch(e){ toast('保存失败: ' + e.message, 'error'); }
+}
+
+async function generateIngestCallback(){
+  try {
+    var r = await api('/api/ingest/settings', {method:'POST', body:JSON.stringify({reset_token:true})});
+    if (r.status !== 'success') throw new Error(r.message || '生成失败');
+    await loadIngest();
+    toast('回调地址已更新，请在 Emby 中填写并发送测试事件', 'success');
+  } catch(e){toast('生成失败: ' + e.message, 'error');}
 }
 
 /* ═══════════ 双库定时巡检 ═══════════ */

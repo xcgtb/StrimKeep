@@ -165,6 +165,23 @@ def save(path, value):
     return True
 
 
+def save_many(documents):
+    """Commit related state documents together; revisions advance after commit."""
+    documents = list(documents)
+    if not documents:
+        return True
+    identities = [prepare(path) for path, _ in documents]
+    if len({identity[0] for identity in identities}) != 1:
+        raise ValueError('atomic documents must share a state directory')
+    with _LOCK:
+        with _access(documents[0][0], 'state_write_many') as (_, __, con):
+            for (path, value), identity in zip(documents, identities):
+                _put(con, identity[1], value)
+        for identity in identities:
+            _REVISIONS[identity] = _REVISIONS.get(identity, 0) + 1
+    return True
+
+
 def stamp(path):
     _, directory, name = _identity(path)
     identity = (str(directory), name)

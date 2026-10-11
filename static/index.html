@@ -314,7 +314,7 @@ window.addEventListener('unhandledrejection', function(e){
           <div class="toggle-row">
             <div>
               <div class="lbl">启用追更通知</div>
-              <div class="desc">新集由五分钟入库增量事件触发；关闭入库监控后将失去自动新增通知</div>
+              <div class="desc">新集由入库事实更新触发；实时模式使用 Emby 回调，只有已订阅作品才发送通知</div>
             </div>
             <label class="switch"><input type="checkbox" id="subEnabled" onchange="saveSubSettings()"><span class="slider"></span></label>
           </div>
@@ -599,15 +599,26 @@ window.addEventListener('unhandledrejection', function(e){
         <!-- 入库监控 -->
         <div class="panel">
           <h3 data-icon="activity">入库监控</h3>
-          <p style="font-size:12px;color:#6b7280;margin-bottom:12px">后台定期刷新 Emby 入库缓存，前端秒回</p>
+          <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px">实时回调同步总览、探索入库角标和片库局部对照；全量校准负责补漏。</p>
           <div class="toggle-row">
             <div>
               <div class="lbl">启用后台入库监控</div>
-              <div class="desc">关闭后需手动点「立即扫描」</div>
+              <div class="desc">关闭后停止自动接收入库事件及入库检查</div>
             </div>
             <label class="switch"><input type="checkbox" id="ingEnabled" onchange="saveIngest()"><span class="slider"></span></label>
           </div>
           <div class="toggle-row">
+            <div><div class="lbl">同步方式</div><div class="desc">先配置并测试 Emby 回调，再切换实时模式；切换时初始化一次全量事实</div></div>
+            <select id="ingMode" onchange="saveIngest()"><option value="poll">定时增量（兼容）</option><option value="webhook">Emby 实时回调</option></select>
+          </div>
+          <div style="margin:12px 0">
+            <label for="ingWebhookUrl">Emby 回调地址</label>
+            <input id="ingWebhookUrl" type="text" readonly style="margin:8px 0;width:100%" aria-label="Emby 回调地址">
+            <button class="btn gray" type="button" onclick="generateIngestCallback()">生成 / 重置回调地址</button>
+            <p style="font-size:12px;color:var(--text-dim)">在 Emby Webhooks 中填写地址，选择媒体新增和删除事件；使用 Emby 可访问的 StrimKeep 地址。重置后需同步修改 Emby。</p>
+            <p id="ingWebhookStatus" role="status" style="font-size:12px;word-break:break-word"></p>
+          </div>
+          <div class="toggle-row" id="ingPollRow">
             <div>
               <div class="lbl">刷新间隔（分钟）</div>
               <div class="desc">建议 5 分钟</div>
@@ -615,6 +626,10 @@ window.addEventListener('unhandledrejection', function(e){
             <div style="width:100px">
               <input type="number" id="ingInterval" min="1" max="1440" value="5" onchange="saveIngest()">
             </div>
+          </div>
+          <div class="toggle-row">
+            <div><div class="lbl">全量兜底间隔（小时）</div><div class="desc">实时模式默认 24 小时，校准 STRM 数量、Emby 事实及 TMDB 对照</div></div>
+            <div style="width:100px"><input type="number" id="ingReconcile" min="1" max="168" value="24" onchange="saveIngest()"></div>
           </div>
           <div id="ingStatus" style="font-size:11px;color:#9ca3af;margin-top:8px">加载中...</div>
         </div>
@@ -824,7 +839,7 @@ window.addEventListener('unhandledrejection', function(e){
 <script defer src="/static/js/mapping.js?v=34302552ba51"></script>
 <script defer src="/static/js/subscriptions.js?v=e9d56e664f7f"></script>
 <script defer src="/static/js/records.js?v=823e156e2088"></script>
-<script defer src="/static/js/settings.js?v=cf397f4ab917"></script>
+<script defer src="/static/js/settings.js?v=b3f8601e8ac9"></script>
 <script defer src="/static/js/plans.js?v=02b979a10f92"></script>
 <script defer src="/static/js/directory-cleanup.js?v=7bd34b96ca79"></script>
 <script defer src="/static/js/bootstrap.js?v=dff82f7d3da8"></script>
