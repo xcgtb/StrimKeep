@@ -804,7 +804,6 @@ function mappingOperationId(){
   return Array.from(bytes).map(function(x){return ('0' + x.toString(16)).slice(-2);}).join('');
 }
 async function executeMappingDelete(path, body){
-  if (body.target === 'share') return api(path, {method:'POST', body:JSON.stringify(body)});
   var operationId = mappingOperationId();
   var statusPath = '/api/emby/delete/progress/' + operationId;
   var initial;
@@ -919,15 +918,16 @@ function showMovieDetailById(id){
   html += '</div></div>';
 
   var embyHost = (window.__embyHost || '').replace(/\/+$/, '');
-  html += '<div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">';
+  html += '<div class="mapping-detail-actions"><div class="mapping-action-delete-row">';
   if (m.tmdb_id) {
-    html += '<button class="btn red" data-mapping-delete onclick="deleteMovieByTmdb(' + jsarg(m.tmdb_id) + ',\'local\',' + jsarg(m.name || '') + ')">\u5220\u9664\u672c\u5730\u5e93</button>';
-    html += '<button class="btn red" data-mapping-delete onclick="deleteMovieByTmdb(' + jsarg(m.tmdb_id) + ',\'share\',' + jsarg(m.name || '') + ')">\u5220\u9664\u5206\u4eab\u5e93</button>';
+    html += '<button class="btn mapping-delete" data-mapping-delete onclick="deleteMovieByTmdb(' + jsarg(m.tmdb_id) + ',\'local\',' + jsarg(m.name || '') + ')">删除本地库</button>';
+    html += '<button class="btn mapping-delete" data-mapping-delete onclick="deleteMovieByTmdb(' + jsarg(m.tmdb_id) + ',\'share\',' + jsarg(m.name || '') + ')">删除分享库</button>';
   }
+  html += '</div><div class="mapping-action-tools">';
   if (m.id && embyHost) {
     html += '<a href="' + esc(embyHost) + '/web/index.html#!/item?id=' + esc(m.id) + '" target="_blank" rel="noopener" style="text-decoration:none" class="btn gray">\u5728 Emby \u4e2d\u6253\u5f00</a>';
   }
-  html += '<button class="btn gray" onclick="closeModal()">\u5173\u95ed</button>';
+  html += '</div><button class="btn gray mapping-action-close" onclick="closeModal()">关闭</button>';
   html += '</div>';
   html += '<div id="mappingDeleteStatus" role="status" aria-live="polite" hidden style="margin-top:12px;color:var(--text-mid)"></div>';
 
@@ -1038,15 +1038,16 @@ function showEmbyDetailById(id){
 
   /* "在 Emby 中打开"链接改为读配置，不再硬编码 IP */
   var embyHost = (window.__embyHost || '').replace(/\/+$/, '');
-  html += '<div class="mapping-detail-actions">';
+  html += '<div class="mapping-detail-actions"><div class="mapping-action-tools">';
   if (s._md) html += '<button class="btn gray" onclick="toggleManualDone(' + jsarg(s.id) + ')">取消完结</button>';
   else if (mst === 'missing' || mst === 'ongoing') html += '<button class="btn" onclick="toggleManualDone(' + jsarg(s.id) + ')">手动完结</button>';
-  html += '<button class="btn mapping-delete" data-mapping-delete onclick="deleteSeriesFromLib(' + jsarg(s.id) + ',\'local\',' + jsarg(s.name || '') + ')">删除本地库</button>';
-  html += '<button class="btn mapping-delete" data-mapping-delete onclick="deleteSeriesFromLib(' + jsarg(s.id) + ',\'share\',' + jsarg(s.name || '') + ')">删除分享库</button>';
   if (s.id && embyHost) {
     html += '<a href="' + esc(embyHost) + '/web/index.html#!/item?id=' + esc(s.id) + '" target="_blank" rel="noopener" style="text-decoration:none" class="btn gray">在 Emby 中打开</a>';
   }
-  html += '<button class="btn gray" onclick="closeModal()">关闭</button>';
+  html += '</div><div class="mapping-action-delete-row">';
+  html += '<button class="btn mapping-delete" data-mapping-delete onclick="deleteSeriesFromLib(' + jsarg(s.id) + ',\'local\',' + jsarg(s.name || '') + ')">删除本地库</button>';
+  html += '<button class="btn mapping-delete" data-mapping-delete onclick="deleteSeriesFromLib(' + jsarg(s.id) + ',\'share\',' + jsarg(s.name || '') + ')">删除分享库</button>';
+  html += '</div><button class="btn gray mapping-action-close" onclick="closeModal()">关闭</button>';
   html += '</div><div id="mappingDeleteStatus" role="status" aria-live="polite" hidden style="margin-top:12px;color:var(--text-mid)"></div></div>';
 
   openModal(html);

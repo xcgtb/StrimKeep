@@ -81,6 +81,20 @@ def test_observer_failure_cannot_interrupt_deletion_and_share_never_matches_clou
     assert result['strm_removed'] == 1 and result['cloud_removed'] == 0 and not f.exists()
 
 
+def test_share_reports_real_counts_without_cloud_access(isolated, monkeypatch):
+    files = [put(engine.S_ROOT, name) for name in ['a.strm', 'b.strm', 'c.strm']]
+    video = put(engine.CLOUD_L_ROOT, 'a.mkv')
+    def forbidden(*args):
+        pytest.fail('share must not match cloud sources')
+    monkeypatch.setattr(engine, 'cloud_videos', forbidden)
+    snapshots = []
+    result = wash.safe_delete_files(files, engine.S_ROOT, progress=snapshots.append)
+    assert result['strm_removed'] == 3 and result['cloud_removed'] == 0
+    assert video.exists() and all(not f.exists() for f in files)
+    assert {s['processed'] for s in snapshots} >= {0, 1, 2, 3}
+    assert snapshots[-1]['processed'] == snapshots[-1]['total'] == 3
+
+
 def test_one_worker_no_queue_idempotent_replay_and_read_copy(isolated):
     started, release = threading.Event(), threading.Event()
     calls = []

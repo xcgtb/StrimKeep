@@ -72,3 +72,10 @@ body:has(.cinema-overview.active){background:var(--bg)}
 
 @media(max-width:760px){.mapping-detail-header{gap:14px;margin-bottom:18px}.mapping-detail-poster{width:78px}.mapping-detail-info h3{font-size:18px;margin-top:0}.mapping-detail-facts{font-size:11px;margin-top:9px}.mapping-detail .emby-badge{font-size:10px;padding:3px 5px}.lib-season-card{grid-template-columns:65px minmax(0,1fr) minmax(0,1fr);gap:14px;padding:14px 0}.lib-season-heading b{font-size:13px}.mapping-detail-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.mapping-detail-actions .btn{justify-content:center;text-align:center;font-size:11px;padding:9px 6px;white-space:nowrap}.mapping-detail-actions .btn:first-child:last-child{grid-column:1/-1}}
 @media(max-width:370px){.lib-season-card{grid-template-columns:56px minmax(0,1fr) minmax(0,1fr);gap:9px}.lib-breakdown-heading>span{font-size:9px}}
+.mapping-detail-actions{display:flex;flex-direction:column;align-items:stretch;gap:14px}
+.mapping-action-tools,.mapping-action-delete-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.mapping-action-tools:empty,.mapping-action-delete-row:empty{display:none}
+.mapping-action-tools .btn:only-child{grid-column:1/-1}
+.mapping-detail-actions .btn{width:100%;box-sizing:border-box;min-height:44px;display:flex;align-items:center;justify-content:center;text-align:center}
+.mapping-action-delete-row{padding-top:14px;border-top:1px solid var(--border)}
+.mapping-action-close{margin-top:2px}

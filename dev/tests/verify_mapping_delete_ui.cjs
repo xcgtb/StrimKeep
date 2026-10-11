@@ -154,6 +154,7 @@ const completed={status:'success',count:4,strm_removed:4,cloud_removed:4,errors:
     assert(e.modals.at(-1).includes(target==='local'?'分享库仍有文件':'本地库仍有文件'));
     assert.equal(e.ctx.closed,0,'completion must remain in the same modal');
   }
+  for (const target of ['local', 'share']) {
   let reads=0;
   e=environment((p,b)=>{
     if(b.dry_run)return {status:'success',count:4};
@@ -167,11 +168,13 @@ const completed={status:'success',count:4,strm_removed:4,cloud_removed:4,errors:
   });
   let counts=[];let countText='';
   Object.defineProperty(e.nodes.mappingDeleteCounts,'textContent',{set:v=>{countText=v;counts.push(v);},get:()=>countText});
-  await e.ctx.deleteSeriesFromLib('s','local','剧');
+  await e.ctx.deleteSeriesFromLib('s',target,'剧');
   assert.equal(e.calls.filter(c=>c.body.dry_run===false).length,1);
   assert.equal(reads,2);assert(counts.some(x=>x.includes('已处理 2 / 4') && x.includes('保留 1')));
   assert(e.modals.at(-1).includes('删除完成'));assert.equal(e.alerts.length,0);assert.equal(e.ctx.closed,0);
   console.log('PASS real polled counts, single submission, same-modal results and both-library movie retention');
+  if(target === 'share') assert(counts.every(x=>!x.includes('115 源文件')));
+  }
 
   // Lost acceptance is recovered by reading its operation ID, never posting again.
   e=environment((p,b)=>{
