@@ -2020,11 +2020,26 @@ html[data-theme="dark"]{--bg:#111113;--bg-soft:#1c1c20;--bg-dim:#2b2b30;--surfac
 @media(max-width:899px){.sidebar nav a{height:44px;font-size:14px}.nav-group-title{font-size:11px;padding-top:12px}.side-foot{padding-bottom:calc(14px + env(safe-area-inset-bottom,0px))}.runtime-panel{right:-34px}}
 
 
-/* Multi-select for a single explicitly chosen series library */
+/* Compact two-library series selection toolbar; scope-specific warnings are written by JS. */
 #mappingBatchEntry[hidden],#mappingBatchPanel[hidden]{display:none!important}
-#mappingBatchEntry{margin:10px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-#mappingBatchPanel{margin:8px 0 12px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-#mappingBatchCount{font-size:12px;color:var(--text-mid)}
+#mappingBatchEntry{margin:7px 0 3px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#mappingBatchEntry .btn{padding:7px 12px;min-height:34px}
+#mappingBatchEntryHint{font-size:11px;color:var(--text-dim)}
+#mappingBatchPanel{margin:5px 0 10px;padding:9px 11px;border:1px solid var(--border);border-radius:10px;display:flex;gap:8px 10px;align-items:center;flex-wrap:wrap;background:var(--surface)}
+#mappingBatchCount{font-size:12px;color:var(--text-mid);flex:1;min-width:125px}
+#mappingBatchPanel .mapping-batch-actions{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+#mappingBatchPanel .btn{padding:7px 10px;min-height:34px;font-size:12px}
+#mappingBatchPanel .btn:disabled{opacity:.5;cursor:not-allowed}
+#mappingBatchHint{flex-basis:100%;font-size:11px;color:var(--text-dim);line-height:1.35}
+@media(max-width:600px){
+  #mappingBatchEntry{margin:6px 0 2px;gap:7px}
+  #mappingBatchPanel{padding:8px 9px;gap:7px}
+  #mappingBatchCount{flex-basis:100%;font-size:11.5px}
+  #mappingBatchPanel .mapping-batch-actions{width:100%;gap:8px}
+  #mappingBatchPanel .mapping-batch-actions .btn{flex:1;white-space:nowrap}
+  #mappingBatchHint{font-size:10.5px}
+}
 #tab-mapping .poster-card{position:relative}
 #tab-mapping .mapping-batch-card-check{position:absolute;top:10px;right:10px;z-index:3;display:flex;align-items:center;justify-content:center;background:rgba(15,23,42,.85);color:#fff;border:1px solid rgba(255,255,255,.65);border-radius:8px;padding:8px;min-width:38px;min-height:38px;cursor:pointer}
 #tab-mapping .mapping-batch-card-check input{width:18px;height:18px;accent-color:#3b82f6;cursor:pointer}
+#tab-mapping .mapping-batch-card-check input:disabled{cursor:default}

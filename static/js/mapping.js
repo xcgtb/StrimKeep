@@ -671,6 +671,7 @@ function toggleSeasonList(id){
 
 /* 电视剧批量清理：明确选择单个目标库；不自动删除。 */
 var mappingBatchMode = false;
+var mappingBatchAll = false;
 var mappingBatchSelected = new Set();
 var mappingBatchContext = '';
 function mappingBatchAllowed(){
@@ -690,29 +691,56 @@ function mappingBatchSyncContext(){
   if (sig !== mappingBatchContext) {
     mappingBatchContext = sig;
     mappingBatchMode = false;
+    mappingBatchAll = false;
     mappingBatchSelected.clear();
   }
   var permitted = mappingBatchAllowed();
   var entry = $('mappingBatchEntry'), panel = $('mappingBatchPanel');
   if (entry) entry.hidden = !permitted;
   if (panel) panel.hidden = !permitted || !mappingBatchMode;
+  var isLocal = embyFilterState.scope === 'local';
+  var entryHint = $('mappingBatchEntryHint');
+  if (entryHint) entryHint.textContent = isLocal ? '本地库 · 联动匹配源文件' : '分享库 · 仅 STRM';
+  var hint = $('mappingBatchHint');
+  if (hint) hint.textContent = isLocal
+    ? '删除本地 STRM 和匹配的源视频；每次最多 20 部。'
+    : '仅清理分享库 STRM，不会删除源视频；每次最多 60 部。';
   var count = $('mappingBatchCount');
-  if (count) count.textContent = '已选 ' + mappingBatchSelected.size + ' 部 · ' +
-    (embyFilterState.scope === 'local' ? '目标：本地库及匹配源文件' : '目标：分享库 STRM');
+  if (count) count.textContent = mappingBatchAll
+    ? '已全选当前筛选结果（包括未加载页面）'
+    : '已选 ' + mappingBatchSelected.size + ' 部';
   var selected = $('mappingBatchDeleteSelected');
-  if (selected) selected.disabled = !mappingBatchSelected.size || mappingDeleteBusy;
+  if (selected) selected.disabled = (!mappingBatchAll && !mappingBatchSelected.size) || mappingDeleteBusy;
+  var allButton = $('mappingBatchSelectAll');
+  if (allButton) {
+    allButton.textContent = mappingBatchAll ? '取消全选' : '全选筛选结果';
+    allButton.disabled = mappingDeleteBusy;
+    allButton.setAttribute('aria-pressed', mappingBatchAll ? 'true' : 'false');
+  }
   var start = $('mappingBatchStart');
   if (start) start.textContent = mappingBatchMode ? '退出多选' : '多选清理';
 }
 function mappingBatchToggleMode(){
   if (!mappingBatchAllowed() || mappingDeleteBusy) return;
   mappingBatchMode = !mappingBatchMode;
+  mappingBatchAll = false;
   mappingBatchSelected.clear();
   mappingBatchSyncContext();
   renderEmbyList();
 }
-function mappingBatchSetItem(id, checked){
+// 全选只改变选择状态，不预览、更不提交删除。跨页范围由后端在预览时核定。
+function mappingBatchSelectFiltered(){
   if (!mappingBatchAllowed() || !mappingBatchMode || mappingDeleteBusy) return;
+  mappingBatchAll = !mappingBatchAll;
+  mappingBatchSelected.clear();
+  document.querySelectorAll('#embyList .mapping-batch-card-check input').forEach(function(node){
+    node.checked = mappingBatchAll;
+    node.disabled = mappingBatchAll;
+  });
+  mappingBatchSyncContext();
+}
+function mappingBatchSetItem(id, checked){
+  if (!mappingBatchAllowed() || !mappingBatchMode || mappingBatchAll || mappingDeleteBusy) return;
   if (checked) mappingBatchSelected.add(String(id));
   else mappingBatchSelected.delete(String(id));
   mappingBatchSyncContext();
@@ -732,10 +760,12 @@ function mappingBatchProgress(preview){
     + '<button class="btn gray" onclick="closeModal()">关闭提示（删除继续执行）</button></div>');
   renderMappingDeleteState();
 }
-async function mappingBatchDelete(selection){
-  if (!mappingBatchAllowed() || !mappingBatchMode || !beginMappingDelete()) return;
+async function mappingBatchDelete(){
+  if (!mappingBatchAllowed() || !mappingBatchMode ||
+      (!mappingBatchAll && !mappingBatchSelected.size) || !beginMappingDelete()) return;
   var phase = 'preview';
   try {
+    var selection = mappingBatchAll ? 'all' : 'selected';
     var body = Object.assign(mappingBatchFilters(), {selection:selection});
     if (selection === 'selected') body.series_ids = Array.from(mappingBatchSelected);
     var preview = await api('/api/emby/series/batch-delete/preview', {
@@ -748,7 +778,7 @@ async function mappingBatchDelete(selection){
     var summary = '确定清理【' + label + '】吗？\n筛选：' + (body.filter||'all') +
       ' · 共 ' + preview.count + ' 部 / ' + preview.strm_count + ' 个 STRM\n' +
       display + (preview.count>12?'\n…其余作品略':'') + danger +
-      '\nTgtoDrive 未来同步可能重新生成 STRM。\n此操作不可撤销。';
+      '\n其他程序后续的同步或文件生成行为不受本次清理控制。\n此操作不可撤销。';
     if (!confirm(summary)) return;
     var phrase = isLocal ? '删除本地库及源文件' : '删除分享库';
     if (prompt('再次确认：请完整输入「' + phrase + '」', '') !== phrase) {
@@ -759,7 +789,7 @@ async function mappingBatchDelete(selection){
     var result = await executeMappingDelete('/api/emby/series/batch-delete/execute', {
       target:preview.target,preview_id:preview.preview_id,confirmation:phrase,confirm:true});
     if (result.status !== 'success') throw new Error(result.message || '批量执行未完成');
-    mappingBatchSelected.clear();mappingBatchMode=false;
+    mappingBatchSelected.clear();mappingBatchAll=false;mappingBatchMode=false;
     var detail = '已处理 ' + (result.processed||0) + '/' + preview.count + ' 部；'
       + ' STRM 已删除 ' + (result.strm_removed||0) + ' 个；'
       + (isLocal?'源视频已删除 ' + (result.cloud_removed||0) + ' 个；':'')
@@ -767,7 +797,7 @@ async function mappingBatchDelete(selection){
     if ((result.errors||[]).length) detail += '\n' + result.errors.slice(0,10).join('\n');
     showMappingDeleteResult(result.failed?'批量清理部分完成':'批量清理完成', detail,
       '请等待 Emby 更新后重新核对片库；勿根据旧页面重复删除。');
-    toast(detail, result.failed?'':'success', 5500);
+    // 完整删除结果只在模态框呈现一次；不再重复显示 Toast。
     if (mappingPagedActive) await loadMappingPaged(true);
     else await loadEmbyLibrary(false, true, true);
   } catch(err) {
@@ -822,7 +852,7 @@ function renderSeriesCard(s){
   var mark = (typeof mappingBatchMode !== 'undefined' && mappingBatchMode && typeof mappingBatchAllowed === 'function' && mappingBatchAllowed()) ?
     '<label class="mapping-batch-card-check" title="选择此剧" onclick="event.stopPropagation()">'
     + '<input type="checkbox" aria-label="选择 ' + esc(s.name || '剧集') + '" '
-    + (mappingBatchSelected.has(String(s.id)) ? 'checked ' : '')
+    + (mappingBatchAll ? 'checked disabled ' : (mappingBatchSelected.has(String(s.id)) ? 'checked ' : ''))
     + 'onchange="mappingBatchSetItem(' + jsarg(s.id) + ',this.checked)"></label>' : '';
   return '<div class="poster-card emby-poster-card st-' + mst + '" data-series-id="' + esc(s.id) + '" onclick="showEmbyDetailById(' + jsarg(s.id) + ')">'
     + mark + '<div class="poster-wrap">' + poster
