@@ -61,6 +61,22 @@ function deferred(){let resolve;const promise=new Promise(r=>resolve=r);return {
  await ctx.tgtoJobs(view);assert(timers.length>0);
  view.mode='history';calls.length=0;timers.pop()();await Promise.resolve();
  assert.equal(calls.length,0,'task polling stops after switching to history');
+ ctx.tgtoOpen({title:'资源筛选',media_type:'movie',poster:'javascript:evil()'});
+ assert(!node('modalBody').innerHTML.includes('javascript:'));
+ ctx.tgtoView.searched=true;
+ ctx.tgtoView.items=[{title:'A',source:'RED',resolution:'2160p',handle:'a',transferable:true},
+  {title:'B',source:'115',resolution:'1080p',handle:'b',transferable:true}];
+ ctx.tgtoRenderResources(ctx.tgtoView);
+ ctx.tgtoSelectFacet('source',ctx.tgtoView.facets.source.indexOf('115'));
+ assert(node('tgtoResults').innerHTML.includes('tgtoTransfer(1)'),'filter preserves original candidate index');
+ assert(!node('tgtoResults').innerHTML.includes('tgtoTransfer(0)'));
+ assert.equal(calls.length,0,'local facets never call upstream');
+ const targetWait=deferred();request=()=>targetWait.promise;
+ const targets=ctx.tgtoLoadTargets(ctx.tgtoView);
+ ctx.tgtoOpen({title:'新作品',media_type:'movie'});
+ node('tgtoTarget').innerHTML='current';
+ targetWait.resolve({items:[{id:'115',name:'old'}]});await targets;
+ assert.equal(node('tgtoTarget').innerHTML,'current','stale target reply cannot affect new view');
  request=async()=>({fields:{title:'<script>x</script>',target_path:'/media/name'}});
  await ctx.tgtoDetail('7');assert(!node('tgtoResults').innerHTML.includes('<script>'));
  console.log('PASS upstream UI: no startup request, secret preservation, safe rendering, scoped search, stale replies, confirmation, uncertain outcome and scoped task polling');

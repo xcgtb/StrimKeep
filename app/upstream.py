@@ -210,6 +210,43 @@ def collection(value, keys):
     raise UpstreamError('上游返回结构暂不兼容，请提供脱敏响应样例以扩展适配', 502)
 
 
+def providers():
+    """Read only explicit transfer-target groups; never guess resource sources as targets."""
+    cfg = enabled_settings('providers')
+    result = request('providers', cfg=cfg)
+    value = result
+    rows = None
+    for _ in range(8):
+        if not isinstance(value, dict):
+            break
+        for key in ('transfer_targets', 'transfer_providers', 'targets', 'netdisk_providers'):
+            group = value.get(key)
+            if isinstance(group, list):
+                rows = group
+                break
+            if isinstance(group, dict):
+                rows = [dict(v, id=k) if isinstance(v, dict) else {'id': k, 'name': v}
+                        for k, v in list(group.items())[:40]]
+                break
+        if rows is not None:
+            break
+        value = value.get('data')
+    if rows is None:
+        raise UpstreamError('暂未识别上游转存目标列表，请在高级设置填写上游目标标识', 502)
+    targets, seen = [], set()
+    for row in rows[:40]:
+        if isinstance(row, str):
+            row = {'id': row, 'name': row}
+        if not isinstance(row, dict) or row.get('enabled') is False:
+            continue
+        key = text(row.get('id') or row.get('provider') or row.get('key'), 50)
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,50}', key) or key in seen:
+            continue
+        seen.add(key)
+        targets.append({'id': key, 'name': text(row.get('name') or row.get('label') or key, 80)})
+    return {'items': targets}
+
+
 def search(body):
     cfg = enabled_settings('search')
     title = body.get('title')
@@ -254,6 +291,13 @@ def search(body):
                                'source': text(row.get('source'), 80),
                                'quality': text(row.get('quality') or row.get('resolution'), 100),
                                'size': text(row.get('size') or row.get('size_text'), 80),
+                               'provider': text(row.get('provider') or row.get('drive_type') or row.get('netdisk'), 80),
+                               'resolution': text(row.get('resolution'), 40),
+                               'release_type': text(row.get('release_type') or row.get('video_type'), 60),
+                               'video_effect': text(row.get('video_effect') or row.get('dynamic_range') or row.get('hdr'), 80),
+                               'codec': text(row.get('codec') or row.get('video_codec'), 60),
+                               'release_group': text(row.get('release_group') or row.get('group'), 80),
+                               'file_count': text(row.get('file_count'), 20),
                                'points': text(row.get('points'), 40), 'transferable': valid})
     return {'items': candidates, 'truncated': len(rows) > 50,
             'message': '资源仅为候选，请核对季集和版本后转存；入库状态由 Emby 确认'}

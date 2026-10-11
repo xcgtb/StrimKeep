@@ -924,7 +924,7 @@ function showMovieDetailById(id){
     html += '<button class="btn mapping-delete" data-mapping-delete onclick="deleteMovieByTmdb(' + jsarg(m.tmdb_id) + ',\'share\',' + jsarg(m.name || '') + ')">删除分享库</button>';
   }
   html += '</div><div class="mapping-action-tools">';
-  if (typeof tgtoButton === 'function') html += tgtoButton({title:m.name,type:'movie',tmdb_id:m.tmdb_id,year:m.year});
+  if (typeof tgtoButton === 'function') html += tgtoButton({title:m.name,type:'movie',tmdb_id:m.tmdb_id,year:m.year,poster:mtp || (m.has_image ? '/api/emby/poster/' + encodeURIComponent(m.id) : ''),library:(m.in_local ? '本地库' : '') + (m.in_share ? (m.in_local ? ' · 分享库' : '分享库') : '')});
   if (m.id && embyHost) {
     html += '<a href="' + esc(embyHost) + '/web/index.html#!/item?id=' + esc(m.id) + '" target="_blank" rel="noopener" style="text-decoration:none" class="btn gray">\u5728 Emby \u4e2d\u6253\u5f00</a>';
   }
@@ -1040,7 +1040,7 @@ function showEmbyDetailById(id){
   /* "在 Emby 中打开"链接改为读配置，不再硬编码 IP */
   var embyHost = (window.__embyHost || '').replace(/\/+$/, '');
   html += '<div class="mapping-detail-actions"><div class="mapping-action-tools">';
-  if (typeof tgtoButton === 'function') html += tgtoButton({title:s.name,type:'tv',tmdb_id:s.tmdb_id || ti.tmdb_id,year:s.year}, '找资源 / 补集');
+  if (typeof tgtoButton === 'function') html += tgtoButton({title:s.name,type:'tv',tmdb_id:s.tmdb_id || ti.tmdb_id,year:s.year,poster:ti.poster ? '/api/tmdb/poster' + ti.poster : (s.has_image ? '/api/emby/poster/' + encodeURIComponent(s.id) : ''),library:(s.in_local ? '本地 ' + (s.local_eps || 0) + ' 集' : '') + (s.in_share ? (s.in_local ? ' · ' : '') + '分享 ' + (s.share_eps || 0) + ' 集' : '')}, '找资源 / 补集');
   if (s._md) html += '<button class="btn gray" onclick="toggleManualDone(' + jsarg(s.id) + ')">取消完结</button>';
   else if (mst === 'missing' || mst === 'ongoing') html += '<button class="btn" onclick="toggleManualDone(' + jsarg(s.id) + ')">手动完结</button>';
   if (s.id && embyHost) {

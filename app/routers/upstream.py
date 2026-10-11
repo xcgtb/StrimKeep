@@ -37,6 +37,11 @@ def search(body: dict):
     return {'status': 'success', **call(upstream.search, body)}
 
 
+@router.get('/providers')
+def providers():
+    return {'status': 'success', **call(upstream.providers)}
+
+
 @router.post('/transfer', status_code=202)
 def transfer(body: dict):
     return {'status': 'success', 'job': call(upstream.transfer, body)}

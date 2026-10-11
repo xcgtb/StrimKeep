@@ -3,7 +3,8 @@ var tgtoView = null, tgtoGeneration = 0;
 
 function tgtoButton(media, label){
   var seed = {title:media.title || media.name || '', media_type:media.type || 'tv',
-    tmdb_id:media.tmdb_id || '', year:media.year || ''};
+    tmdb_id:media.tmdb_id || '', year:media.year || '', poster:media.poster || '',
+    rating:media.rating || '', library:media.library || '', overview:media.overview || ''};
   return '<button type="button" class="btn gray tgto-open" onclick="event.stopPropagation();tgtoOpen(' +
     esc(JSON.stringify(seed)) + ')">' + esc(label || '找资源') + '</button>';
 }
@@ -48,22 +49,113 @@ async function tgtoSave(test){
 
 function tgtoOpen(seed){
   tgtoGeneration++;
-  tgtoView = {seed:seed, generation:tgtoGeneration, items:[], busy:false, historyPage:1, mode:'search'};
+  tgtoView = {seed:seed, generation:tgtoGeneration, items:[], busy:false, historyPage:1, mode:'search', filters:{}, searched:false};
+  var view = tgtoView;
   var isTV = seed.media_type === 'tv';
   openModal('<section class="tgto-view" data-tgto-view="' + tgtoGeneration + '">' +
-    '<h3>' + esc(seed.title) + ' · 上游资源</h3>' +
-    '<p class="hint">搜索、转存由 TgtoDrive 执行；STRM 生成后，Emby 入库回调更新片库与订阅通知。</p>' +
-    '<div class="tgto-filters">' +
-    (isTV ? '<label>季（可选）<input id="tgtoSeason" type="number" min="0" max="999" placeholder="全部"></label>' +
-      '<label>集（可选）<input id="tgtoEpisode" type="number" min="1" max="99999" placeholder="全部"></label>' : '') +
-    '<label>目标网盘标识<input id="tgtoProvider" value="115" maxlength="50" placeholder="例如 115"></label></div>' +
-    '<p class="hint">目标标识需与上游一致，转存目录沿用上游设置。补集时请核对本地／分享库缺失的季集，候选资源可能包含整季。</p>' +
-    '<div class="tgto-actions"><button class="btn" id="tgtoSearchBtn" onclick="tgtoSearch()">搜索资源</button>' +
-    '<button class="btn gray" onclick="tgtoHistory(1)">整理记录</button>' +
-    '<button class="btn gray" onclick="tgtoJobs()">转存任务</button></div>' +
-    '<p id="tgtoStatus" class="hint" role="status" aria-live="polite">点击搜索开始；未配置时请到规则设置 → 服务连接填写上游地址和令牌。</p>' +
-    '<div id="tgtoResults"></div>' +
-    '<button class="btn gray tgto-close" onclick="closeModal()">关闭</button></section>');
+    '<div class="tgto-top"><span>作品详情</span><button type="button" class="tgto-dismiss" onclick="closeModal()" aria-label="关闭资源详情">×</button></div>' +
+    '<header class="tgto-hero"><div class="tgto-poster">' + tgtoPoster(seed.poster) + '</div><div class="tgto-hero-info">' +
+    '<span class="tgto-eyebrow">' + (isTV ? '电视剧' : '电影') + '</span><h3>' + esc(seed.title) + '</h3>' +
+    '<div class="tgto-meta">' + (seed.rating ? '<span class="tgto-rating">★ ' + esc(seed.rating) + '</span>' : '') +
+    (seed.year ? '<span>' + esc(seed.year) + '</span>' : '') + (seed.tmdb_id ? '<span>TMDB ' + esc(seed.tmdb_id) + '</span>' : '') + '</div>' +
+    (seed.library ? '<span class="tgto-library">' + esc(seed.library) + '</span>' : '') +
+    (seed.overview ? '<p class="tgto-overview">' + esc(seed.overview) + '</p>' : '') +
+    '<p class="tgto-flow">找资源 → 转存 → 整理入库</p></div></header>' +
+    '<nav class="tgto-tabs" aria-label="资源详情视图"><button class="active" data-tgto-tab="search" onclick="tgtoResources()">资源发现</button>' +
+    '<button data-tgto-tab="history" onclick="tgtoHistory(1)">整理记录</button>' +
+    '<button data-tgto-tab="jobs" onclick="tgtoJobs()">转存任务</button></nav>' +
+    '<div class="tgto-search-tools" id="tgtoSearchTools"><div class="tgto-search-line">' +
+    (isTV ? '<label>季<input id="tgtoSeason" type="number" min="0" max="999" placeholder="全部"></label>' +
+      '<label>集<input id="tgtoEpisode" type="number" min="1" max="99999" placeholder="全部"></label>' : '') +
+    '<button class="btn" id="tgtoSearchBtn" onclick="tgtoSearch()">重新搜索</button>' +
+    '<label class="tgto-target">转存到<select id="tgtoTarget" onchange="tgtoChooseTarget()"><option value="">读取转存目标…</option></select></label></div>' +
+    '<details class="tgto-advanced"><summary>高级设置</summary><label>目标标识<input id="tgtoProvider" value="115" maxlength="50" placeholder="与上游目标标识一致"></label>' +
+    '<p id="tgtoProviderHint" class="hint">转存目录沿用上游设置。未识别目标时，可手动填写标识。</p></details>' +
+    '<details id="tgtoFilterPanel" class="tgto-filter-panel" open><summary>筛选资源</summary><div id="tgtoFacets"></div></details></div>' +
+    '<p id="tgtoStatus" class="tgto-status" role="status" aria-live="polite">正在准备资源搜索…</p>' +
+    '<div id="tgtoResults"></div><footer class="tgto-footer"><span>入库状态以 Emby 为准；转存前核对版本和季集。</span>' +
+    '<button class="btn gray" onclick="closeModal()">关闭</button></footer></section>');
+  $('tgtoResults').innerHTML = '';
+  if (typeof hydratePosters === 'function') hydratePosters($('modalBody'));
+  setTimeout(async function(){
+    if (!tgtoActive(view) || view.searched || view.busy) return;
+    await tgtoSearch();
+    if (tgtoActive(view)) tgtoLoadTargets(view);
+  }, 0);
+}
+function tgtoPoster(url){
+  if (typeof url === 'string' && /^https:\/\/image\.tmdb\.org\/t\/p\/[^/]+\/[^/?#]+$/.test(url)) url = '/api/tmdb/poster/' + url.split('/').pop();
+  return typeof url === 'string' && /^\/api\/(?:tmdb|emby)\/poster\//.test(url) && !/[<>"'\\\s?#]/.test(url)
+    ? '<img data-emby-src="' + esc(url) + '" alt="作品海报" decoding="async">' : '<span>暂无海报</span>';
+}
+async function tgtoLoadTargets(view){
+  var initial = $('tgtoProvider').value;
+  try {
+    var r = await api('/api/upstream/providers', {timeoutMs:50000});
+    if (!tgtoActive(view)) return;
+    $('tgtoTarget').innerHTML = '<option value="">自定义目标</option>' + r.items.map(function(x){return '<option value="' + esc(x.id) + '">' + esc(x.name) + '</option>';}).join('');
+    var match = r.items.find(function(x){return x.id === $('tgtoProvider').value;});
+    if (match) $('tgtoTarget').value = match.id;
+    else if (r.items.length && $('tgtoProvider').value === initial) { $('tgtoTarget').value = r.items[0].id; tgtoChooseTarget(); }
+    $('tgtoProviderHint').textContent = '目标来自上游配置，转存目录沿用上游设置。';
+  } catch(e){
+    if (tgtoActive(view)) {
+      $('tgtoTarget').innerHTML = '<option value="">自定义目标</option>';
+      $('tgtoProviderHint').textContent = e.message + '；请核对高级设置中的目标标识。';
+    }
+  }
+}
+function tgtoChooseTarget(){ if ($('tgtoTarget').value) $('tgtoProvider').value = $('tgtoTarget').value; }
+function tgtoTabs(view){
+  if (!tgtoActive(view)) return;
+  $('tgtoSearchTools').hidden = view.mode !== 'search';
+  $('modalBody').querySelectorAll('[data-tgto-tab]').forEach(function(b){
+    b.classList.toggle('active', b.getAttribute('data-tgto-tab') === (view.mode === 'detail' ? 'history' : view.mode));
+  });
+}
+function tgtoResources(){
+  var view = tgtoView;
+  if (!view || view.busy) return;
+  view.mode = 'search'; tgtoTabs(view);
+  if (!view.searched) tgtoSearch(); else tgtoRenderResources(view);
+}
+var tgtoFacetLabels = {source:'资源来源',provider:'网盘类型',resolution:'分辨率',release_type:'视频类型',video_effect:'视频效果',release_group:'发布组'};
+function tgtoSelectFacet(key, index){
+  var view = tgtoView;
+  if (!view || view.busy || view.mode !== 'search') return;
+  view.filters[key] = index < 0 ? '' : view.facets[key][index];
+  tgtoRenderResources(view);
+}
+function tgtoRenderResources(view){
+  if (!tgtoActive(view) || view.mode !== 'search') return;
+  if (!view.facetsReady) { $('tgtoFilterPanel').open = !(window.innerWidth < 600); view.facetsReady = true; }
+  view.facets = {};
+  var facets = Object.keys(tgtoFacetLabels).map(function(key){
+    var values = Array.from(new Set(view.items.map(function(x){return x[key] || '';}).filter(Boolean))).sort();
+    view.facets[key] = values;
+    if (!values.length) return '';
+    // Counts are from returned candidates, never invented upstream totals.
+    var options = [{value:'',label:'全部',index:-1}].concat(values.map(function(v,i){return {value:v,label:v,index:i};}));
+    return '<div class="tgto-facet"><span class="tgto-facet-label">' + tgtoFacetLabels[key] + '</span><div>' + options.map(function(o){
+      var count = view.items.filter(function(x){return (!o.value || x[key] === o.value) && Object.keys(view.filters).every(function(k){return k === key || !view.filters[k] || x[k] === view.filters[k];});}).length;
+      return '<button type="button" aria-pressed="' + ((!view.filters[key] && !o.value) || view.filters[key] === o.value) + '" class="tgto-chip' + (((view.filters[key] || '') === o.value) ? ' selected' : '') + '" onclick="tgtoSelectFacet(' + jsarg(key) + ',' + o.index + ')">' + esc(o.label) + '<small>' + count + '</small></button>';
+    }).join('') + '</div></div>';
+  }).join('');
+  $('tgtoFacets').innerHTML = facets;
+  var visible = view.items.map(function(item,index){return {item:item,index:index};}).filter(function(x){
+    return Object.keys(view.filters).every(function(k){return !view.filters[k] || x.item[k] === view.filters[k];});
+  });
+  var cards = visible.map(function(x){
+    var item = x.item;
+    var badges = [item.source,item.provider,item.resolution || item.quality,item.release_type,item.video_effect,item.codec,item.release_group].filter(Boolean);
+    return '<article class="tgto-resource"><div class="tgto-resource-content"><h4>' + esc(item.title) + '</h4><div class="tgto-tags">' +
+      Array.from(new Set(badges)).map(function(t){return '<span>' + esc(t) + '</span>';}).join('') + '</div>' +
+      '<p class="tgto-resource-meta">' + esc([item.size,item.file_count ? item.file_count + ' 个文件' : '',item.points ? '积分 ' + item.points : ''].filter(Boolean).join(' · ')) + '</p></div>' +
+      (item.transferable ? '<button class="btn tgto-transfer" onclick="tgtoTransfer(' + x.index + ')">转存</button>' : '<span class="hint tgto-unavailable">缺少转存标识</span>') + '</article>';
+  }).join('');
+  tgtoResult(view, '<div class="tgto-result-heading"><strong>可用资源 <span>' + visible.length + '</span></strong><span>已返回 ' + view.items.length + ' 条</span></div>' +
+    (cards ? '<div class="tgto-resource-grid">' + cards + '</div>' : '<div class="tgto-empty"><strong>' + (view.items.length ? '当前筛选暂无资源' : '暂未找到资源') + '</strong><p>' + (view.items.length ? '切换为全部，查看其他版本。' : '可调整季集后重新搜索。') + '</p></div>'),
+    view.truncated ? '仅返回前 50 条；筛选作用于这 50 条，可按季集重新搜索。' : '已加载候选资源；转存前请核对作品、版本与季集。');
 }
 function tgtoActive(view){
   var section = $('modalBody').querySelector('[data-tgto-view]');
@@ -78,22 +170,17 @@ function tgtoResult(view, html, status){
 async function tgtoSearch(){
   var view = tgtoView;
   if (!view || view.busy) return;
-  view.busy = true; view.items = []; view.mode = 'search';
+  view.busy = true; view.items = []; view.mode = 'search'; view.searched = true; view.filters = {}; view.facetsReady = false;
+  tgtoTabs(view); $('tgtoFacets').innerHTML = '';
   var body = Object.assign({}, view.seed);
   if ($('tgtoSeason')) { body.season = $('tgtoSeason').value; body.episode = $('tgtoEpisode').value; }
   $('tgtoSearchBtn').disabled = true;
-  tgtoResult(view, '', '正在查询上游资源…');
+  tgtoResult(view, '<div class="tgto-skeleton" aria-hidden="true"><i></i><i></i><i></i><i></i></div>', '正在查询上游资源…');
   try {
     var r = await api('/api/upstream/search', {method:'POST', body:JSON.stringify(body), timeoutMs:50000});
-    view.items = r.items;
-    tgtoResult(view, r.items.length ? r.items.map(function(item, index){
-      return '<article class="tgto-resource"><strong>' + esc(item.title) + '</strong>' +
-        '<p class="hint">' + esc([item.source,item.quality,item.size,item.points ? '积分 ' + item.points : ''].filter(Boolean).join(' · ')) + '</p>' +
-        (item.transferable ? '<button class="btn" onclick="tgtoTransfer(' + index + ')">转存此资源</button>' :
-          '<span class="hint">上游未返回可识别的转存标识，暂不允许转存</span>') + '</article>';
-    }).join('') : '<p class="list-empty">上游未找到候选资源</p>',
-    r.message + (r.truncated ? '；仅显示前 50 项，请按季集缩小范围' : ''));
-  } catch(e){ tgtoResult(view, '', '资源搜索失败：' + e.message); }
+    view.items = r.items; view.truncated = r.truncated;
+    tgtoRenderResources(view);
+  } catch(e){ tgtoResult(view, '<div class="tgto-empty"><strong>资源搜索未完成</strong><p>检查上游连接后，可点击重新搜索。</p></div>', '资源搜索失败：' + e.message); }
   finally {
     view.busy = false;
     if (tgtoActive(view)) $('tgtoSearchBtn').disabled = false;
@@ -139,6 +226,7 @@ async function tgtoJobs(pollView){
   if (!pollView && view.busy) return;
   if (view.jobsLoading) return;
   view.mode = 'jobs';
+  tgtoTabs(view);
   view.jobsLoading = true;
   try {
     var r = await api('/api/upstream/jobs', {timeoutMs:10000});
@@ -169,6 +257,7 @@ async function tgtoHistory(page){
   var view = tgtoView;
   if (!view || view.busy) return;
   view.historyPage = page; view.busy = true; view.mode = 'history';
+  tgtoTabs(view);
   tgtoResult(view, '', '正在读取相关整理记录…');
   try {
     var r = await api('/api/upstream/history?keyword=' + encodeURIComponent(view.seed.title) + '&page=' + page, {timeoutMs:50000});

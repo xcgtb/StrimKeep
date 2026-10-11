@@ -172,6 +172,36 @@ def test_search_bare_id_not_turned_into_transfer_identity(env, monkeypatch):
     assert result['items'][1]['transferable']
 
 
+def test_resource_metadata_whitelist(env, monkeypatch):
+    mock_remote(monkeypatch, {'items':[{'source':'RED','slug':'one','provider':'115','resolution':'2160p',
+        'release_type':'WEB-DL','video_effect':'HDR10','codec':'HEVC','release_group':'Fixture',
+        'file_count':3,'share_url':'secret-link','cookie':'secret-cookie','token':'secret-token'}]})
+    item = u.search({'title':'样本','media_type':'movie'})['items'][0]
+    assert item['provider'] == '115' and item['resolution'] == '2160p'
+    assert item['release_type'] == 'WEB-DL' and item['file_count'] == '3'
+    assert item['video_effect'] == 'HDR10' and item['release_group'] == 'Fixture'
+    assert 'secret' not in json.dumps(item)
+
+
+@pytest.mark.parametrize('reply', [
+    {'data':{'transfer_targets':[{'id':'115','name':'115 网盘','token':'secret'},{'id':'disabled','enabled':False}]}},
+    {'targets':{'115':{'name':'115 网盘','token':'secret'}}},
+])
+def test_targets_explicit_groups_only(env, monkeypatch, reply):
+    calls = []
+    monkeypatch.setattr(u, 'capabilities', lambda cfg: {'providers':True})
+    monkeypatch.setattr(u, 'request', lambda action, **kw: calls.append(action) or reply)
+    assert u.providers() == {'items':[{'id':'115','name':'115 网盘'}]}
+    assert calls == ['providers']
+
+
+def test_targets_unknown_structure_not_guessed(env, monkeypatch):
+    monkeypatch.setattr(u, 'capabilities', lambda cfg: {'providers':True})
+    monkeypatch.setattr(u, 'request', lambda *a, **k: {'providers':[{'id':'RED','name':'资源源'}]})
+    with pytest.raises(u.UpstreamError, match='暂未识别'):
+        u.providers()
+
+
 def test_transfer_durable_dedupe_points_and_no_media_projection(env, monkeypatch):
     calls,handle=resource(monkeypatch)
     workers=run_workers(monkeypatch)
