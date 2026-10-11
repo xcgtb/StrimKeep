@@ -924,6 +924,7 @@ function showMovieDetailById(id){
     html += '<button class="btn mapping-delete" data-mapping-delete onclick="deleteMovieByTmdb(' + jsarg(m.tmdb_id) + ',\'share\',' + jsarg(m.name || '') + ')">删除分享库</button>';
   }
   html += '</div><div class="mapping-action-tools">';
+  if (typeof tgtoButton === 'function') html += tgtoButton({title:m.name,type:'movie',tmdb_id:m.tmdb_id,year:m.year});
   if (m.id && embyHost) {
     html += '<a href="' + esc(embyHost) + '/web/index.html#!/item?id=' + esc(m.id) + '" target="_blank" rel="noopener" style="text-decoration:none" class="btn gray">\u5728 Emby \u4e2d\u6253\u5f00</a>';
   }
@@ -1039,6 +1040,7 @@ function showEmbyDetailById(id){
   /* "在 Emby 中打开"链接改为读配置，不再硬编码 IP */
   var embyHost = (window.__embyHost || '').replace(/\/+$/, '');
   html += '<div class="mapping-detail-actions"><div class="mapping-action-tools">';
+  if (typeof tgtoButton === 'function') html += tgtoButton({title:s.name,type:'tv',tmdb_id:s.tmdb_id || ti.tmdb_id,year:s.year}, '找资源 / 补集');
   if (s._md) html += '<button class="btn gray" onclick="toggleManualDone(' + jsarg(s.id) + ')">取消完结</button>';
   else if (mst === 'missing' || mst === 'ongoing') html += '<button class="btn" onclick="toggleManualDone(' + jsarg(s.id) + ')">手动完结</button>';
   if (s.id && embyHost) {

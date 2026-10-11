@@ -29,6 +29,7 @@ from app.routers import governance as _r_governance
 from app.routers import library as _r_library
 from app.routers import subscribe as _r_subscribe
 from app.routers import settings as _r_settings
+from app.routers import upstream as _r_upstream
 
 
 def _cd2_ready():
@@ -142,6 +143,7 @@ app.include_router(_r_governance.router)
 app.include_router(_r_library.router)
 app.include_router(_r_subscribe.router)
 app.include_router(_r_settings.router)
+app.include_router(_r_upstream.router)
 
 
 if __name__ == '__main__':

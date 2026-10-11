@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="/static/css/app.css?v=21dcf5feb8e0">
 <link rel="stylesheet" href="/static/css/overview.css?v=703b4250faac">
 <link rel="stylesheet" href="/static/css/glass.css?v=2aa6d6cab791">
+<link rel="stylesheet" href="/static/css/upstream.css?v=629a5d7f696c">
 <script>
 /* 尽早设置主题，避免页面闪烁（FOUC） */
 (function(){
@@ -689,6 +690,18 @@ window.addEventListener('unhandledrejection', function(e){
           <div id="exemptMatches"></div>
         </div>
 
+        <div class="panel">
+          <h3 data-icon="link">TgtoDrive 上游接入</h3>
+          <p class="hint">连接生成 STRM 的上游服务，在影视探索和片库映射中搜索资源、手动转存及查看整理来源。转存目录与 STRM 生成沿用上游配置。</p>
+          <label class="check-item"><input type="checkbox" id="tgtoEnabled">启用上游接入</label>
+          <div class="form-row"><label for="tgtoUrl">上游服务地址</label><input id="tgtoUrl" type="url" placeholder="http://NAS地址:上游端口" maxlength="1024" autocomplete="off"><div class="hint">填写 StrimKeep 容器能访问的完整地址；反向代理有子路径时包含前缀。</div></div>
+          <div class="form-row"><label for="tgtoToken">OpenAPI 访问令牌</label><input id="tgtoToken" type="password" maxlength="2048" autocomplete="new-password"><div class="hint">在上游实用工具 → OpenAPI 创建；只填写令牌，留空保留已保存值。</div></div>
+          <label class="check-item"><input type="checkbox" id="tgtoClearToken">清除已保存令牌</label>
+          <div class="form-row"><label for="tgtoMaxPoints">每次转存积分上限</label><input id="tgtoMaxPoints" type="number" min="0" max="10000" value="0"><div class="hint">默认 0，随转存请求交给上游执行积分限制。操作前核对候选资源。</div></div>
+          <div class="tgto-actions"><button class="btn gray" id="tgtoTestBtn" onclick="tgtoSave(true)">测试连接</button><button class="btn" id="tgtoSaveBtn" onclick="tgtoSave(false)">保存上游配置</button></div>
+          <p class="hint" id="tgtoConfigResult" role="status" aria-live="polite">等待读取配置</p>
+        </div>
+
         <!-- 服务配置 -->
         <div class="panel">
           <div class="row-between">
@@ -832,14 +845,15 @@ window.addEventListener('unhandledrejection', function(e){
 
 <script defer src="/static/js/icons.js?v=98af288253ca"></script>
 <script defer src="/static/js/modal.js?v=60e0db6c4ffc"></script>
-<script defer src="/static/js/runtime.js?v=10341ca84af7"></script>
+<script defer src="/static/js/runtime.js?v=f6b166ae2add"></script>
 <script defer src="/static/js/dashboard.js?v=a51e30eb85fe"></script>
 <script defer src="/static/js/governance.js?v=46dc287f6b42"></script>
-<script defer src="/static/js/explore.js?v=063fcd0de9d2"></script>
-<script defer src="/static/js/mapping.js?v=34302552ba51"></script>
+<script defer src="/static/js/explore.js?v=4b2ed8980176"></script>
+<script defer src="/static/js/mapping.js?v=d6e424ca6d3b"></script>
 <script defer src="/static/js/subscriptions.js?v=e9d56e664f7f"></script>
 <script defer src="/static/js/records.js?v=823e156e2088"></script>
-<script defer src="/static/js/settings.js?v=b3f8601e8ac9"></script>
+<script defer src="/static/js/settings.js?v=8d776b6a536f"></script>
+<script defer src="/static/js/upstream.js?v=fd162ed113c2"></script>
 <script defer src="/static/js/plans.js?v=02b979a10f92"></script>
 <script defer src="/static/js/directory-cleanup.js?v=7bd34b96ca79"></script>
 <script defer src="/static/js/bootstrap.js?v=dff82f7d3da8"></script>

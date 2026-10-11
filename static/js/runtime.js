@@ -21,7 +21,7 @@ function groupOf(id){
   return id;
 }
 var SET_GROUPS = [['rules','治理规则','策略 · 特别篇 · 白名单'],['auto','自动任务','入库监控 · 定时巡检'],['conn','服务连接','Emby · TMDB · Telegram']];
-var SET_MAP = ['rules','rules','rules','auto','auto','rules','conn','conn','conn'];
+var SET_MAP = ['rules','rules','rules','auto','auto','rules','conn','conn','conn','conn'];
 function buildSubnavs(){
   Object.keys(GROUPS).forEach(function(g){
     GROUPS[g].forEach(function(cur){

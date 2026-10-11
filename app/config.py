@@ -28,6 +28,10 @@ DEFAULTS = {
     'http_proxy_password':    '',
     'background_light_url':   '',
     'background_dark_url':    '',
+    'tgto_enabled':           '0',
+    'tgto_url':               '',
+    'tgto_token':             '',
+    'tgto_max_points':        '0',
     # Emby 媒体库里看到的 STRM 根目录（Emby 容器内路径），用于区分本地/分享与单剧删除
     'emby_local_path':        os.environ.get('EMBY_LOCAL_PATH',        '/strm/115网盘/影视媒体库'),
     'emby_share_path':        os.environ.get('EMBY_SHARE_PATH',        '/strm/115网盘/分享影视库'),
@@ -95,9 +99,10 @@ ENV_OVERRIDE_KEYS = {
 }
 
 INTERNAL_KEYS = {'tmdb_scan_last_ts', 'subscribe_calibration_last_ts', 'morning_prescan_last_date',
-                 'morning_report_last_date', 'subscriptions'}
+                 'morning_report_last_date', 'subscriptions', 'tgto_enabled', 'tgto_url',
+                 'tgto_token', 'tgto_max_points'}
 EDITABLE_KEYS = [k for k in DEFAULTS if k not in INTERNAL_KEYS]
-SENSITIVE_KEYS = ['emby_key', 'tmdb_key', 'telegram_bot_token', 'http_proxy_password']
+SENSITIVE_KEYS = ['emby_key', 'tmdb_key', 'telegram_bot_token', 'http_proxy_password', 'tgto_token']
 ALL_SENSITIVE = SENSITIVE_KEYS
 
 

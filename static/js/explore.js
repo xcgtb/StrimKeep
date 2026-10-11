@@ -568,6 +568,7 @@ function appendExploreCards(cards){
       + '<div class="info">'
       + '<div class="t" title="' + esc(c.title) + '">' + esc(c.title) + '</div>'
       + '<div class="meta"><span>' + (c.year || '—') + ' · TMDB</span>' + subBtn + '</div>'
+      + (typeof tgtoButton === 'function' ? tgtoButton(c) : '')
       + '</div>'
       + '</div>';
   }).join('');
@@ -709,6 +710,7 @@ function renderExploreCards(cards){
       + '<div class="info">'
       + '<div class="t" title="' + esc(c.title) + '">' + esc(c.title) + '</div>'
       + '<div class="meta"><span>' + (c.year || '—') + ' · TMDB</span>' + subBtn + '</div>'
+      + (typeof tgtoButton === 'function' ? tgtoButton(c) : '')
       + '</div>'
       + '</div>';
   }).join('');
