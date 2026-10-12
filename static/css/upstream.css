@@ -1,4 +1,4 @@
-.modal:has(.tgto-view){max-width:min(1120px,calc(100vw - 32px));padding:28px;max-height:90dvh}
+.modal:has(.tgto-view){width:calc(100vw - 48px);max-width:1560px;padding:28px;max-height:94dvh;box-sizing:border-box}
 .tgto-view{color:var(--text)}
 .tgto-top{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--text-mid);padding-bottom:16px}
 .tgto-dismiss{border:1px solid var(--border);background:var(--surface-solid);color:var(--text-mid);border-radius:50%;width:40px;height:40px;font-size:24px;cursor:pointer}
@@ -18,7 +18,8 @@
 .tgto-search-line label.tgto-target{width:180px;margin-left:auto}
 .tgto-view input,.tgto-view select{background:var(--surface-solid);color:var(--text);border:1px solid var(--border);border-radius:9px;min-height:44px;box-sizing:border-box;padding:10px 12px;width:100%;font-family:inherit;font-size:13px}
 .tgto-advanced{margin:12px 0 18px;color:var(--text-mid);font-size:12px}.tgto-advanced summary{cursor:pointer;min-height:28px;padding-top:8px}.tgto-advanced label{display:block;max-width:220px;margin:8px 0}
-.tgto-facet{display:grid;grid-template-columns:84px minmax(0,1fr);gap:12px;align-items:start;margin:10px 0}
+.tgto-facet{display:grid;grid-template-columns:84px minmax(0,1fr);gap:12px;align-items:start;margin:5px 0}
+.tgto-filter-panel{border:1px solid var(--border);background:rgba(128,160,190,.04);border-radius:12px;padding:10px 14px}
 .tgto-facet-label{font-size:12px;color:var(--text-mid);padding:9px 0}.tgto-facet>div{display:flex;gap:7px;flex-wrap:wrap}
 .tgto-filter-panel>summary{display:none}
 .tgto-chip{border:1px solid transparent;border-radius:8px;background:transparent;color:var(--text-mid);padding:8px 10px;min-height:36px;cursor:pointer;font-size:12px;max-width:100%;overflow-wrap:anywhere}
@@ -26,12 +27,18 @@
 .tgto-status{font-size:12px;color:var(--text-mid);line-height:1.7;margin:16px 0}
 .tgto-result-heading{display:flex;gap:12px;justify-content:space-between;align-items:center;margin:22px 0 12px;font-size:12px;color:var(--text-mid)}
 .tgto-result-heading strong{font-size:15px;color:var(--text)}.tgto-result-heading strong span{color:var(--text-mid);margin-left:6px;font-size:12px}
-.tgto-resource-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.tgto-resource-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(265px,1fr));gap:14px}
 .tgto-resource{border:1px solid var(--border);border-radius:14px;padding:16px;margin:12px 0;overflow-wrap:anywhere;background:var(--surface-solid)}
 .tgto-resource-grid .tgto-resource{margin:0;display:flex;flex-direction:column;gap:16px;align-items:flex-start}
 .tgto-resource h4{font-size:14px;line-height:1.6;margin:0 0 10px;overflow-wrap:anywhere}.tgto-resource-content{width:100%;min-width:0}
 .tgto-tags{display:flex;gap:5px;flex-wrap:wrap}.tgto-tags span{padding:4px 7px;border-radius:5px;border:1px solid var(--border);font-size:10px;color:var(--text-mid)}
 .tgto-resource p{margin:8px 0 0;line-height:1.6}.tgto-resource-meta{font-size:12px;color:var(--text-mid)}
+.tgto-publisher{display:inline-block;border-radius:6px;padding:5px 8px;margin-bottom:10px;font-size:11px;color:var(--accent);background:rgba(64,147,255,.1);overflow-wrap:anywhere}
+.tgto-resource-row{display:grid;grid-template-columns:30px minmax(0,1fr);gap:8px;margin-top:10px;font-size:11px;line-height:1.7}
+.tgto-resource-row>span{color:var(--text-dim)}.tgto-resource-row p{margin:0;color:var(--text-mid);white-space:pre-wrap}
+.tgto-source-tags span{background:rgba(64,147,255,.06)}
+.tgto-poster-link{cursor:pointer}.tgto-poster-link:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
+.tgto-poster-link:hover img{filter:brightness(1.06)}
 .tgto-view .btn{min-height:44px}.tgto-transfer{margin-top:auto;align-self:stretch}.tgto-unavailable{margin-top:auto;min-height:44px;display:flex;align-items:center}
 .tgto-footer{display:flex;justify-content:space-between;align-items:center;gap:20px;border-top:1px solid var(--border);padding-top:16px;margin-top:24px}
 .tgto-footer>span{font-size:11px;color:var(--text-mid);line-height:1.7}.tgto-footer .btn{min-width:100px}

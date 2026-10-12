@@ -3,6 +3,8 @@ const root=path.resolve(__dirname,'../..');
 const source=fs.readFileSync(path.join(root,'static/js/upstream.js'),'utf8');
 const html=fs.readFileSync(path.join(root,'static/index.html'),'utf8');
 const runtime=fs.readFileSync(path.join(root,'static/js/runtime.js'),'utf8');
+const explore=fs.readFileSync(path.join(root,'static/js/explore.js'),'utf8');
+assert(explore.includes('tgtoPosterAttrs(c)') && !explore.includes('tgtoButton(c)'), 'Explore opens from poster without a second resource button');
 const nodes={},calls=[],timers=[];
 function node(id){return nodes[id]||(nodes[id]={value:'',checked:false,disabled:false,textContent:'',innerHTML:'',
  querySelectorAll(){return [];},querySelector(){return null;},classList:{contains(){return true;}}});}
@@ -64,9 +66,13 @@ function deferred(){let resolve;const promise=new Promise(r=>resolve=r);return {
  ctx.tgtoOpen({title:'资源筛选',media_type:'movie',poster:'javascript:evil()'});
  assert(!node('modalBody').innerHTML.includes('javascript:'));
  ctx.tgtoView.searched=true;
- ctx.tgtoView.items=[{title:'A',source:'RED',resolution:'2160p',handle:'a',transferable:true},
+ ctx.tgtoView.items=[{title:'A',source:'RED',resolution:'2160p',handle:'a',transferable:true,publisher:'<script>publisher</script>',points:'0',reviewed_count:'0',subtitles:'简中',verification:'有效',note:'备注'},
   {title:'B',source:'115',resolution:'1080p',handle:'b',transferable:true}];
  ctx.tgtoRenderResources(ctx.tgtoView);
+ assert(node('tgtoResults').innerHTML.includes('0 积分') && node('tgtoResults').innerHTML.includes('已评阅 0 人'));
+ assert(node('tgtoResults').innerHTML.includes('简中') && !node('tgtoResults').innerHTML.includes('<script>publisher'));
+ const attrs=ctx.tgtoPosterAttrs({title:'"<unsafe>',type:'movie',tmdb_id:'7'});
+ assert(attrs.includes('role="button"') && !attrs.includes('<unsafe>'));
  ctx.tgtoSelectFacet('source',ctx.tgtoView.facets.source.indexOf('115'));
  assert(node('tgtoResults').innerHTML.includes('tgtoTransfer(1)'),'filter preserves original candidate index');
  assert(!node('tgtoResults').innerHTML.includes('tgtoTransfer(0)'));

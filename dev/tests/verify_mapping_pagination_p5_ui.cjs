@@ -2,7 +2,7 @@
 const fs=require('fs'),path=require('path'),vm=require('vm'),assert=require('assert');
 const shipped=fs.readFileSync(path.join(__dirname,'../../static/js/mapping.js'),'utf8');
 const src=shipped.slice(shipped.indexOf('var mappingPagedActive = false;'), shipped.indexOf('function mappingPreviewAllowed('));
-function node(){return {innerHTML:'', textContent:'',style:{},dataset:{},hidden:false,disabled:false,insertAdjacentHTML(side,txt){this.innerHTML+=txt;},getBoundingClientRect:()=>({top:0,bottom:500})};}
+function node(){return {innerHTML:'', textContent:'',style:{},dataset:{},hidden:false,disabled:false,classList:{contains:()=>true},getAttribute:()=> 'series:media-id',insertAdjacentHTML(side,txt){this.innerHTML+=txt;},getBoundingClientRect:()=>({top:0,bottom:500})};}
 function environment(){
  const els=new Proxy({}, {get(target,key){if(!target[key])target[key]=node();return target[key];}});
  let requests=[], toasts=[], rows=new Map(), activeCalls=0;
@@ -59,6 +59,7 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
  await tick();await tick();
  assert.equal(e.getCalls(),1);
  assert.equal(e.context.mappingNeedDetail('series','media-id'),false);
+ assert.equal(e.toasts.length,0,'background detail does not emit a blocking loading toast');
  console.log('PASS 4/5: full detail fetched only after click, then cached by revision');
  e=environment();e.els.embySearch.value='电影 & 2026';
  e.context.embyFilterState={type:'movies',filter:'all',scope:'local',cat:'国产电影',catMode:'seg'};
@@ -78,4 +79,12 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
  assert.equal(e.getCalls(),0);
  assert.equal(e.context.window.__embySeriesMap.old,undefined);
  console.log('PASS 6/6: late detail from a previous filter cannot reopen or overwrite the current selection');
+ e=environment();initial=e.context.loadMappingPaged(true);
+ e.response(e.requests[0],[{id:'media-id'}]);await initial;
+ e.context.mappingNeedDetail('series','media-id');
+ e.els.modalBg.classList.contains=()=>false;
+ e.requests[1].resolve({status:'success',facts_version:'rev-1',item:{id:'media-id'}});
+ await tick();await tick();
+ assert.equal(e.getCalls(),0,'closed modal is never reopened by detail reply');
+ assert(e.context.window.__embySeriesMap['media-id'],'background result still populates detail cache');
 })().catch(err=>{console.error(err);process.exitCode=1;});

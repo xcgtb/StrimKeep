@@ -286,7 +286,6 @@ function mappingNeedDetail(media, id){
   if (mappingPagedDetails[key] === mappingPagedVersion) return false;
   if (mappingPagedDetailRequests[key]) return true;
   var version = mappingPagedVersion, generation = mappingPagedGeneration;
-  toast('正在读取完整作品详情…', '', 2000);
   var pending = api('/api/emby/library/item?media=' + encodeURIComponent(media) + '&id=' + encodeURIComponent(id), {timeoutMs:12000})
     .then(function(r){
       if (generation !== mappingPagedGeneration) return;
@@ -295,15 +294,26 @@ function mappingNeedDetail(media, id){
       mappingPagedDetails[key] = version;
       if (media === 'series') {
         window.__embySeriesMap[id] = r.item;
-        showEmbyDetailById(id);
+        if (mappingDetailVisible(key)) showEmbyDetailById(id);
       } else {
         window.__embyMovieMap[id] = r.item;
-        showMovieDetailById(id);
+        if (mappingDetailVisible(key)) showMovieDetailById(id);
       }
     }).catch(function(e){if (generation === mappingPagedGeneration) toast('读取作品详情失败：' + e.message, 'error', 4000);})
     .finally(function(){if (mappingPagedDetailRequests[key] === pending) delete mappingPagedDetailRequests[key];});
   mappingPagedDetailRequests[key] = pending;
   return true;
+}
+function mappingDetailVisible(key){
+  var body = $('modalBody'), bg = $('modalBg');
+  return !!(body && bg && bg.classList.contains('show') && body.getAttribute('data-mapping-detail') === key);
+}
+function mappingDetailPending(media, id, pending){
+  var body = $('modalBody');
+  body.setAttribute('data-mapping-detail', media + ':' + id);
+  if (!pending) return;
+  body.querySelectorAll('.mapping-detail-actions button:not(.mapping-action-close)').forEach(function(b){b.disabled = true;});
+  body.insertAdjacentHTML('beforeend', '<p class="hint" role="status">正在补充分季详情，可先查看作品信息…</p>');
 }
 
 function mappingPreviewAllowed(){
@@ -1045,7 +1055,7 @@ function reportMappingDeleteError(error, phase, result, target, count){
 }
 
 function showMovieDetailById(id){
-  if (mappingNeedDetail('movies', id)) return;
+  var detailPending = mappingNeedDetail('movies', id);
   if (!embyLoaded) { toast('完整片库仍在读取，请稍后查看详情', '', 2500); return; }
   var m = (window.__embyMovieMap || {})[id];
   if (!m) return;
@@ -1054,9 +1064,9 @@ function showMovieDetailById(id){
   html += '<div style="width:110px;height:165px;border-radius:8px;background:#f3f4f6;overflow:hidden;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:#9ca3af;font-size:11px">';
   /* TMDB poster_path 优先（上游海报对照逻辑），Emby 缓存图兜底 */
   var mtp = m.poster_tmdb ? '/api/tmdb/poster' + m.poster_tmdb : '';
-  html += mtp
+  html += (typeof posterDecodedMarkup === 'function' ? posterDecodedMarkup(mtp || '/api/emby/poster/' + m.id) : '') || (mtp
     ? '<img data-emby-src="' + esc(mtp) + '" style="width:100%;height:100%;object-fit:cover" onerror="this.onerror=null;this.style.display=\'none\';">'
-    : (m.has_image ? '<img data-emby-src="/api/emby/poster/' + esc(m.id) + '" style="width:100%;height:100%;object-fit:cover">' : '\u65e0\u56fe');
+    : (m.has_image ? '<img data-emby-src="/api/emby/poster/' + esc(m.id) + '" style="width:100%;height:100%;object-fit:cover">' : '\u65e0\u56fe'));
   html += '</div>';
   html += '<div style="flex:1;min-width:0">';
   html += '<h3 style="margin:0 0 8px;font-size:16px;line-height:1.3;word-break:break-word">' + esc(m.name || '?') + '</h3>';
@@ -1085,6 +1095,7 @@ function showMovieDetailById(id){
   html += '<div id="mappingDeleteStatus" role="status" aria-live="polite" hidden style="margin-top:12px;color:var(--text-mid)"></div>';
 
   openModal(html);
+  mappingDetailPending('movies', id, detailPending);
   renderMappingDeleteState();
   hydratePosters($('modalBody'));
 }
@@ -1139,7 +1150,7 @@ async function deleteMovieByTmdb(tmdbId, target, movieName){
 }
 
 function showEmbyDetailById(id){
-  if (mappingNeedDetail('series', id)) return;
+  var detailPending = mappingNeedDetail('series', id);
   if (!embyLoaded) { toast('完整片库仍在读取，请稍后查看详情', '', 2500); return; }
   var s = (window.__embySeriesMap || {})[id];
   if (!s) return;
@@ -1150,11 +1161,11 @@ function showEmbyDetailById(id){
   html += '<div class="mapping-detail-header">';
   html += '<div class="mapping-detail-poster">';
   /* TMDB poster_path 优先（上游海报对照逻辑），Emby 缓存图兜底 */
-  html += ti.poster
+  html += (typeof posterDecodedMarkup === 'function' ? posterDecodedMarkup(ti.poster ? '/api/tmdb/poster' + ti.poster : '/api/emby/poster/' + s.id) : '') || (ti.poster
     ? '<img data-emby-src="/api/tmdb/poster' + esc(ti.poster) + '" style="width:100%;height:100%;object-fit:cover" onerror="this.onerror=null;this.style.display=\'none\';">'
     : (s.has_image
       ? '<img data-emby-src="/api/emby/poster/' + esc(s.id) + '" style="width:100%;height:100%;object-fit:cover">'
-      : '无图');
+      : '无图'));
   html += '</div>';
   html += '<div class="mapping-detail-info">';
   html += '<h3>' + esc(s.name || '?') + '</h3>';
@@ -1205,6 +1216,7 @@ function showEmbyDetailById(id){
   html += '</div><div id="mappingDeleteStatus" role="status" aria-live="polite" hidden style="margin-top:12px;color:var(--text-mid)"></div></div>';
 
   openModal(html);
+  mappingDetailPending('series', id, detailPending);
   renderMappingDeleteState();
   hydratePosters($('modalBody'));
   loadLibBreakdown(s, ti);

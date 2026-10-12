@@ -192,7 +192,19 @@ def enabled_settings(action):
 
 
 def text(value, limit=300):
-    return str(value or '')[:limit] if isinstance(value, (str, int, float)) else ''
+    return str(value)[:limit] if isinstance(value, (str, int, float)) and not isinstance(value, bool) else ''
+
+
+def resource_text(row, *keys, limit=300):
+    """Only public display fields; tolerate scalar and string-list variants."""
+    for key in keys:
+        value = row.get(key)
+        if isinstance(value, list):
+            value = ' · '.join(filter(None, (text(x, 80) for x in value[:16])))
+        result = text(value, limit)
+        if result:
+            return result
+    return ''
 
 
 def collection(value, keys):
@@ -298,6 +310,12 @@ def search(body):
                                'codec': text(row.get('codec') or row.get('video_codec'), 60),
                                'release_group': text(row.get('release_group') or row.get('group'), 80),
                                'file_count': text(row.get('file_count'), 20),
+                               'publisher': resource_text(row, 'publisher', 'publisher_name', 'sharer', 'share_user', 'uploader', 'author', limit=100),
+                               'reviewed_count': resource_text(row, 'reviewed_count', 'review_count', 'reviewer_count', limit=20),
+                               'subtitles': resource_text(row, 'subtitles', 'subtitle', 'subtitle_tags', limit=200),
+                               'verification': resource_text(row, 'verification', 'verification_status', 'validation_status', 'check_status', limit=80),
+                               'note': resource_text(row, 'note', 'notes', 'remark', 'remarks', 'description', limit=600),
+                               'specs': resource_text(row, 'specs', 'quality_tags', 'format_tags', limit=300),
                                'points': text(row.get('points'), 40), 'transferable': valid})
     return {'items': candidates, 'truncated': len(rows) > 50,
             'message': '资源仅为候选，请核对季集和版本后转存；入库状态由 Emby 确认'}

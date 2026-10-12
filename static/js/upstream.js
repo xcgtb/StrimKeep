@@ -1,6 +1,20 @@
 /* TgtoDrive: user-triggered operations, separate from poster and Emby facts. */
 var tgtoView = null, tgtoGeneration = 0;
 
+function tgtoPosterAttrs(media){
+  var seed = {title:media.title || media.name || '', media_type:media.type || 'tv',
+    tmdb_id:media.tmdb_id || '', year:media.year || '', poster:media.poster || '',
+    rating:media.rating || '', library:media.library || '', overview:media.overview || ''};
+  var arg = jsarg(JSON.stringify(seed));
+  return ' role="button" tabindex="0" aria-label="查看 ' + esc(seed.title) + ' 的资源详情"' +
+    ' onclick="tgtoOpen(JSON.parse(' + arg + '))" onkeydown="tgtoPosterKey(event,' + arg + ')"';
+}
+function tgtoPosterKey(event, seed){
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault(); tgtoOpen(JSON.parse(seed));
+  }
+}
+
 function tgtoButton(media, label){
   var seed = {title:media.title || media.name || '', media_type:media.type || 'tv',
     tmdb_id:media.tmdb_id || '', year:media.year || '', poster:media.poster || '',
@@ -85,6 +99,8 @@ function tgtoOpen(seed){
 }
 function tgtoPoster(url){
   if (typeof url === 'string' && /^https:\/\/image\.tmdb\.org\/t\/p\/[^/]+\/[^/?#]+$/.test(url)) url = '/api/tmdb/poster/' + url.split('/').pop();
+  var decoded = typeof posterDecodedMarkup === 'function' && typeof url === 'string' ? posterDecodedMarkup(url) : '';
+  if (decoded) return decoded;
   return typeof url === 'string' && /^\/api\/(?:tmdb|emby)\/poster\//.test(url) && !/[<>"'\\\s?#]/.test(url)
     ? '<img data-emby-src="' + esc(url) + '" alt="作品海报" decoding="async">' : '<span>暂无海报</span>';
 }
@@ -119,7 +135,7 @@ function tgtoResources(){
   view.mode = 'search'; tgtoTabs(view);
   if (!view.searched) tgtoSearch(); else tgtoRenderResources(view);
 }
-var tgtoFacetLabels = {source:'资源来源',provider:'网盘类型',resolution:'分辨率',release_type:'视频类型',video_effect:'视频效果',release_group:'发布组'};
+var tgtoFacetLabels = {source:'资源来源',provider:'资源类型',resolution:'分辨率',release_type:'视频类型',video_effect:'视频效果',release_group:'发布组'};
 function tgtoSelectFacet(key, index){
   var view = tgtoView;
   if (!view || view.busy || view.mode !== 'search') return;
@@ -147,10 +163,14 @@ function tgtoRenderResources(view){
   });
   var cards = visible.map(function(x){
     var item = x.item;
-    var badges = [item.source,item.provider,item.resolution || item.quality,item.release_type,item.video_effect,item.codec,item.release_group].filter(Boolean);
-    return '<article class="tgto-resource"><div class="tgto-resource-content"><h4>' + esc(item.title) + '</h4><div class="tgto-tags">' +
+    var badges = [item.source,item.provider,item.size,item.points !== '' && item.points != null ? item.points + ' 积分' : '',item.reviewed_count !== '' && item.reviewed_count != null ? '已评阅 ' + item.reviewed_count + ' 人' : ''].filter(Boolean);
+    var specs = [item.resolution || item.quality,item.release_type,item.video_effect,item.codec,item.release_group ? '发布组：' + item.release_group : '',item.specs].filter(Boolean);
+    function detail(label, value){return value ? '<div class="tgto-resource-row"><span>' + label + '</span><p>' + esc(value) + '</p></div>' : '';}
+    return '<article class="tgto-resource"><div class="tgto-resource-content"><h4>' + esc(item.title) + '</h4>' +
+      '<div class="tgto-publisher">发布者：' + esc(item.publisher || '上游未提供') + '</div><div class="tgto-tags tgto-source-tags">' +
       Array.from(new Set(badges)).map(function(t){return '<span>' + esc(t) + '</span>';}).join('') + '</div>' +
-      '<p class="tgto-resource-meta">' + esc([item.size,item.file_count ? item.file_count + ' 个文件' : '',item.points ? '积分 ' + item.points : ''].filter(Boolean).join(' · ')) + '</p></div>' +
+      detail('规格', specs.join(' · ')) + detail('字幕', item.subtitles) + detail('校验', item.verification) +
+      detail('文件', item.file_count ? item.file_count + ' 个文件' : '') + detail('备注', item.note) + '</div>' +
       (item.transferable ? '<button class="btn tgto-transfer" onclick="tgtoTransfer(' + x.index + ')">转存</button>' : '<span class="hint tgto-unavailable">缺少转存标识</span>') + '</article>';
   }).join('');
   tgtoResult(view, '<div class="tgto-result-heading"><strong>可用资源 <span>' + visible.length + '</span></strong><span>已返回 ' + view.items.length + ' 条</span></div>' +

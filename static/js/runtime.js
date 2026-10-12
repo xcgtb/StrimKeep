@@ -266,7 +266,11 @@ async function requestScanCancel(control){
 var __hintPolls = 0;   // 正在轮询的任务数：只有最后一个结束才收起提示条，避免互相误关/漏关
 function fmtElapsed(sec){ var m = Math.floor(sec / 60), s = sec % 60; return m + ':' + (s < 10 ? '0' : '') + s; }
 function toggleSidebar(open){ var sb = $('sidebar'); if(open){ sb.classList.add('open'); $('mask').classList.add('show'); document.body.classList.add('drawer-open'); } else { sb.classList.remove('open'); $('mask').classList.remove('show'); document.body.classList.remove('drawer-open'); } }
-function openModal(html){ $('modalBody').innerHTML = html; $('modalBg').classList.add('show'); }
+function openModal(html){
+  var body = $('modalBody');
+  if (body.removeAttribute) body.removeAttribute('data-mapping-detail');
+  body.innerHTML = html; $('modalBg').classList.add('show');
+}
 function closeModal(){ $('modalBg').classList.remove('show'); }
 
 function getHeaders(){
@@ -636,6 +640,23 @@ function posterSizedUrl(url, img){
   var width=rect && rect.width || (window.innerWidth <= 640 ? 110 : 180);
   var size=width * (window.devicePixelRatio || 1) <= 342 ? 'w342' : 'w500';
   return url + (url.indexOf('?') >= 0 ? '&' : '?') + 'size=' + size;
+}
+function posterDecodedMarkup(url){
+  // Copy pixels while the source is decoded; its Blob URL may already be revoked.
+  try {
+    var images = document.querySelectorAll('img[data-emby-src]');
+    for (var i = 0; i < images.length; i++) {
+      var img = images[i];
+      if (img.getAttribute('data-emby-src').split('?')[0] !== url.split('?')[0] || !img.complete || !img.naturalWidth) continue;
+      var canvas = document.createElement('canvas');
+      canvas.width = Math.min(342, img.naturalWidth);
+      canvas.height = Math.round(img.naturalHeight * canvas.width / img.naturalWidth);
+      if (canvas.height > 1024) continue;
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      return '<img src="' + canvas.toDataURL('image/jpeg', .9) + '" alt="作品海报" decoding="sync" style="width:100%;height:100%;object-fit:cover">';
+    }
+  } catch(e) { /* A missing/tainted image falls back to the normal poster cache. */ }
+  return '';
 }
 async function loadPosterImage(img){
   try {

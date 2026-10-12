@@ -175,11 +175,14 @@ def test_search_bare_id_not_turned_into_transfer_identity(env, monkeypatch):
 def test_resource_metadata_whitelist(env, monkeypatch):
     mock_remote(monkeypatch, {'items':[{'source':'RED','slug':'one','provider':'115','resolution':'2160p',
         'release_type':'WEB-DL','video_effect':'HDR10','codec':'HEVC','release_group':'Fixture',
-        'file_count':3,'share_url':'secret-link','cookie':'secret-cookie','token':'secret-token'}]})
+        'file_count':3,'publisher':'山间晚风','reviewed_count':0,'points':0,'subtitles':['简中','内封'],
+        'verification_status':'有效','notes':'内封字幕','share_url':'secret-link','cookie':'secret-cookie','token':'secret-token'}]})
     item = u.search({'title':'样本','media_type':'movie'})['items'][0]
     assert item['provider'] == '115' and item['resolution'] == '2160p'
     assert item['release_type'] == 'WEB-DL' and item['file_count'] == '3'
     assert item['video_effect'] == 'HDR10' and item['release_group'] == 'Fixture'
+    assert item['publisher'] == '山间晚风' and item['reviewed_count'] == item['points'] == '0'
+    assert item['subtitles'] == '简中 · 内封' and item['verification'] == '有效' and item['note'] == '内封字幕'
     assert 'secret' not in json.dumps(item)
 
 
@@ -218,6 +221,13 @@ def test_transfer_durable_dedupe_points_and_no_media_projection(env, monkeypatch
     assert 'identity' not in u.get_jobs()[0] and 'connection' not in u.get_jobs()[0]
     assert not list(config.DATA_DIR.rglob('*.strm'))
     assert u.transfer(body)['state']=='submitted' and len(workers)==1
+
+
+def test_public_resource_fields_preserve_zero_and_bound_lists():
+    assert u.text(0) == '0'
+    assert u.resource_text({'publisher': {'token': 'secret'}}, 'publisher') == ''
+    assert u.resource_text({'subtitles': ['简中', '繁中', {'secret': 'x'}]}, 'subtitles') == '简中 · 繁中'
+    assert len(u.resource_text({'notes': 'x' * 1000}, 'notes', limit=600)) == 600
 
 
 def test_timeout_unknown_restart_and_acknowledgement(env, monkeypatch):

@@ -560,7 +560,7 @@ function appendExploreCards(cards){
       ? '<button class="sub-btn ' + (isSub ? 'on' : '') + '" data-tmdb="' + esc(c.tmdb_id) + '" data-title="' + esc(c.title) + '" data-poster="' + esc(c.poster || '') + '">' + (isSub ? '✓ 已订阅' : '+ 订阅') + '</button>'
       : '';
     return '<div class="poster-card">'
-      + '<div class="poster-wrap">' + posterHtml
+      + '<div class="poster-wrap tgto-poster-link"' + (typeof tgtoPosterAttrs === 'function' ? tgtoPosterAttrs(c) : '') + '>' + posterHtml
       + '<span class="badge-type">' + typeLabel + '</span>'
       + (c.rating ? '<span class="badge-rate">' + icon('star') + c.rating + '</span>' : '')
       + '<span class="badge-status ' + cls + '"' + statusTip + '>' + status + '</span>'
@@ -568,7 +568,6 @@ function appendExploreCards(cards){
       + '<div class="info">'
       + '<div class="t" title="' + esc(c.title) + '">' + esc(c.title) + '</div>'
       + '<div class="meta"><span>' + (c.year || '—') + ' · TMDB</span>' + subBtn + '</div>'
-      + (typeof tgtoButton === 'function' ? tgtoButton(c) : '')
       + '</div>'
       + '</div>';
   }).join('');
@@ -702,7 +701,7 @@ function renderExploreCards(cards){
       ? '<button class="sub-btn ' + (isSub ? 'on' : '') + '" data-tmdb="' + esc(c.tmdb_id) + '" data-title="' + esc(c.title) + '" data-poster="' + esc(c.poster || '') + '">' + (isSub ? '✓ 已订阅' : '+ 订阅') + '</button>'
       : '';
     return '<div class="poster-card">'
-      + '<div class="poster-wrap">' + posterHtml
+      + '<div class="poster-wrap tgto-poster-link"' + (typeof tgtoPosterAttrs === 'function' ? tgtoPosterAttrs(c) : '') + '>' + posterHtml
       + '<span class="badge-type">' + typeLabel + '</span>'
       + (c.rating ? '<span class="badge-rate">' + icon('star') + c.rating + '</span>' : '')
       + '<span class="badge-status ' + cls + '"' + statusTip + '>' + status + '</span>'
@@ -710,7 +709,6 @@ function renderExploreCards(cards){
       + '<div class="info">'
       + '<div class="t" title="' + esc(c.title) + '">' + esc(c.title) + '</div>'
       + '<div class="meta"><span>' + (c.year || '—') + ' · TMDB</span>' + subBtn + '</div>'
-      + (typeof tgtoButton === 'function' ? tgtoButton(c) : '')
       + '</div>'
       + '</div>';
   }).join('');
