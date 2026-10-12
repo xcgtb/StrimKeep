@@ -65,7 +65,7 @@ def _summary():
     if not health:
         return None
     return {k: health.get(k) for k in ('ts', 'facts_ts', 'facts_version', 'stats',
-                                      'episodes', 'source', 'stale')}
+                                      'episodes', 'source', 'stale', 'top_missing')}
 
 
 def _read():
@@ -169,7 +169,6 @@ def _collect(lib_stats):
     if data.get('error'):
         raise RuntimeError('总览数据读取失败')
     data.pop('storage', None)
-    data['libraryHealth'].pop('top_missing', None)
     data['localCount'] = f"{lib_stats['local_total']:,}"
     data['shareCount'] = f"{lib_stats['share_total']:,}"
     return {'schema': 1, 'ts': time.time(), 'emby_host': engine.EMBY_HOST,
@@ -290,6 +289,12 @@ def get_overview():
     health = (result.get('dashboard') or {}).get('libraryHealth')
     if health:
         health['stale'] = not health.get('ts') or time.time() - health['ts'] > 1800
+    try:
+        from . import overview_activity
+        result['activity'] = overview_activity.snapshot(health)
+    except Exception:
+        engine.log.exception('总览动态读取失败')
+        result['activity'] = {'status': 'error', 'message': '动态数据暂不可用，请稍后刷新'}
     request_refresh()
     with _lock:
         result['refresh'] = dict(_job)

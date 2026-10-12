@@ -21,7 +21,7 @@ function groupOf(id){
   return id;
 }
 var SET_GROUPS = [['rules','治理规则','策略 · 特别篇 · 白名单'],['auto','自动任务','入库监控 · 定时巡检'],['conn','服务连接','Emby · TMDB · Telegram']];
-var SET_MAP = ['rules','rules','rules','auto','auto','rules','conn','conn','conn','conn'];
+
 function buildSubnavs(){
   Object.keys(GROUPS).forEach(function(g){
     GROUPS[g].forEach(function(cur){
@@ -32,8 +32,7 @@ function buildSubnavs(){
     });
   });
   var st = $('tab-settings'); if (!st) return;
-  var ps = Array.prototype.filter.call(st.children, function(c){ return c.classList.contains('panel'); });
-  ps.forEach(function(p, i){ p.dataset.sg = SET_MAP[i] || 'rules'; });
+  organizeSettingsPanels(st);
   var opts = st.querySelectorAll('.strategy-option[data-v]');
   if (opts.length) { var w = document.createElement('div'); w.className = 'opt-grid'; opts[0].parentNode.insertBefore(w, opts[0]); opts.forEach(function(o){ w.appendChild(o); }); }
   var sv = st.querySelector('button[onclick^="saveConfig"]');
@@ -45,9 +44,16 @@ function buildSubnavs(){
   setSetGroup(g0);
 }
 function setSetGroup(g){
+  if(!SET_GROUPS.some(function(row){return row[0]===g;}))g='rules';
+  settingsSelectedGroup=g;
   try { sessionStorage.setItem('setGroup', g); } catch(e){}
-  document.querySelectorAll('#setNav button').forEach(function(b){ b.classList.toggle('on', b.dataset.g === g); });
-  document.querySelectorAll('#tab-settings > .panel').forEach(function(p){ p.style.display = p.dataset.sg === g ? '' : 'none'; });
+  document.querySelectorAll('#setNav button').forEach(function(b){ b.classList.toggle('on', b.dataset.g === g);b.setAttribute('aria-pressed',String(b.dataset.g===g)); });
+  var row=SET_GROUPS.find(function(row){return row[0]===g;});
+  if($('settingsGroupTitle'))$('settingsGroupTitle').textContent=row[1];
+  if($('settingsGroupDescription'))$('settingsGroupDescription').textContent={rules:'设置双库保留策略、画质优先级和无需处理的作品。',auto:'管理入库同步和定时巡检；开关与间隔修改后自动保存。',conn:'配置片库、元数据、通知与上游连接；每组独立保存，密钥默认脱敏。'}[g];
+  var sections=Array.from(document.querySelectorAll('#settingsContent .settings-card')).filter(function(p){return p.dataset.sg===g&&p.dataset.settingsSection;});
+  if($('settingsSectionNav'))$('settingsSectionNav').innerHTML='<button type="button" class="on" data-section="all" onclick="setSettingsSection(\'all\')">全部</button>'+sections.map(function(p){return '<button type="button" data-section="'+esc(p.dataset.settingsSection)+'" onclick="setSettingsSection(\''+p.dataset.settingsSection+'\')">'+esc(p.dataset.settingsLabel)+'</button>';}).join('');
+  setSettingsSection('all');
 }
 
 var currentPlan = null;

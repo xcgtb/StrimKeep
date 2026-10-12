@@ -266,6 +266,7 @@ function discardCoverDraft(){
   loadCoverStrategy();
 }
 function goCoverRules(){
+  setSetGroup('rules');setSettingsSection('cover');
   var el = $('coverPanel');
   if (!el) return;
   el.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -630,3 +631,86 @@ async function testHttpProxy(){
   finally{button.disabled=false;}
 }
 
+
+/* Named configuration sections; move live controls, keep IDs and handlers. */
+var settingsServiceFields={
+  emby:{emby_host:'cfg-emby-host',emby_key:'cfg-emby-key',emby_local_path:'cfg-emby-local-path',emby_share_path:'cfg-emby-share-path'},
+  tmdb:{tmdb_key:'cfg-tmdb-key'},
+  telegram:{telegram_bot_token:'cfg-tg-token',telegram_chat_id:'cfg-tg-chat',telegram_allowed_users:'cfg-tg-users'},
+  proxy:{http_proxy_enabled:'cfg-proxy-enabled',http_proxy_url:'cfg-proxy-url',http_proxy_username:'cfg-proxy-user',http_proxy_password:'cfg-proxy-password'}
+};
+function organizeSettingsPanels(st){
+  if(st.querySelector('.settings-content'))return;
+  var service=$('settingsServices');
+  function make(id,title){var panel=document.createElement('div');panel.id=id;panel.className='panel';panel.dataset.sg='conn';panel.innerHTML='<h3>'+esc(title)+'</h3>';st.appendChild(panel);return panel;}
+  function move(id,panel){var control=$(id);if(control){var row=control.closest('.form-row');if(row)panel.appendChild(row);}}
+  function actions(panel,scope,test){
+    var bar=document.createElement('div');bar.className='settings-actions';
+    if(test){var parent=test.parentNode;bar.appendChild(test);if(parent&&!parent.children.length)parent.remove();}
+    bar.insertAdjacentHTML('beforeend','<button type="button" class="btn" id="settingsSave-'+scope+'" onclick="saveServiceConfig(\''+scope+'\')">'+icon('save')+'保存本组配置</button><button type="button" class="btn gray" onclick="loadServiceConfig(\''+scope+'\')">重新读取</button>');
+    panel.appendChild(bar);panel.insertAdjacentHTML('beforeend','<p class="hint settings-save-status" id="settingsStatus-'+scope+'" role="status" aria-live="polite"></p>');
+  }
+  if(service){
+    var testEmbyButton=service.querySelector('button[onclick="testEmby()"]');
+    var testTmdbButton=service.querySelector('button[onclick="testTmdb()"]');
+    var testTelegramButton=service.querySelector('button[onclick="testTelegram()"]');
+    var proxyButton=$('proxyTestBtn');
+    var tmdbPanel=make('settingsTmdb','TMDB 元数据'),telegramPanel=make('settingsTelegram','Telegram 通知'),proxyPanel=make('settingsProxy','外部服务 HTTP 代理');
+    move('cfg-tmdb-key',tmdbPanel);['cfg-tg-token','cfg-tg-chat','cfg-tg-users'].forEach(function(id){move(id,telegramPanel);});
+    var proxy=service.querySelector('.proxy-settings');if(proxy){var title=proxy.querySelector('h4');if(title)title.remove();proxyPanel.appendChild(proxy);}
+    var header=service.querySelector('h3');if(header)header.innerHTML=icon('link')+' Emby 片库连接';
+    service.querySelectorAll('button[onclick="loadConfig()"],button[onclick="saveConfig()"]').forEach(function(b){var parent=b.parentNode;b.remove();if(parent&&!parent.children.length)parent.remove();});
+    actions(service,'emby',testEmbyButton);actions(tmdbPanel,'tmdb',testTmdbButton);actions(telegramPanel,'telegram',testTelegramButton);actions(proxyPanel,'proxy',proxyButton);
+    var bot=$('settingsBotStatus');if(bot){var wrap=document.createElement('div');wrap.className='settings-bot-info';while(bot.firstChild)wrap.appendChild(bot.firstChild);telegramPanel.appendChild(wrap);bot.remove();}
+  }
+  var definitions={settingsStrategy:['strategy','治理策略'],coverPanel:['cover','画质对比'],settingsSpecial:['special','特别篇'],settingsWhitelist:['whitelist','白名单'],settingsIngest:['ingest','入库监控'],settingsGovAuto:['patrol','定时巡检'],settingsServices:['emby','Emby'],settingsTmdb:['tmdb','TMDB'],settingsTelegram:['telegram','Telegram'],settingsProxy:['proxy','网络代理'],settingsUpstream:['upstream','上游接入'],settingsAppearance:['appearance','界面背景']};
+  var content=document.createElement('div');content.className='settings-content';content.id='settingsContent';
+  content.innerHTML='<div class="settings-group-heading"><h2 id="settingsGroupTitle">规则设置</h2><p id="settingsGroupDescription"></p></div><nav class="settings-section-nav" id="settingsSectionNav" aria-label="配置分类"></nav>';
+  Object.keys(definitions).forEach(function(id){var p=$(id);if(!p)return;p.classList.add('settings-card');p.dataset.settingsSection=definitions[id][0];p.dataset.settingsLabel=definitions[id][1];content.appendChild(p);});
+  var serviceGrid=document.createElement('div');serviceGrid.className='settings-service-columns';serviceGrid.id='settingsServiceColumns';
+  [['settingsServices','settingsTelegram','settingsUpstream'],['settingsTmdb','settingsProxy','settingsAppearance']].forEach(function(ids){var column=document.createElement('div');column.className='settings-service-column';ids.forEach(function(id){var panel=content.querySelector('#'+id);if(panel)column.appendChild(panel);});serviceGrid.appendChild(column);});
+  content.appendChild(serviceGrid);
+  // Future panels retain their explicit group, rather than inheriting an index.
+  Array.from(st.children).filter(function(p){return p.classList.contains('panel');}).forEach(function(p){p.classList.add('settings-card');p.dataset.sg=p.dataset.sg||'rules';content.appendChild(p);});
+  st.appendChild(content);
+}
+var settingsSelectedGroup='rules',settingsSelectedSection='all';
+function setSettingsSection(section){
+  var valid=section==='all'||Array.from(document.querySelectorAll('#settingsContent .settings-card')).some(function(p){return p.dataset.sg===settingsSelectedGroup&&p.dataset.settingsSection===section;});
+  settingsSelectedSection=valid?section:'all';
+  document.querySelectorAll('#settingsContent .settings-card').forEach(function(p){p.hidden=p.dataset.sg!==settingsSelectedGroup||(settingsSelectedSection!=='all'&&p.dataset.settingsSection!==settingsSelectedSection);p.style.display=p.hidden?'none':'';});
+  var columns=$('settingsServiceColumns');if(columns){columns.hidden=settingsSelectedGroup!=='conn';columns.dataset.filtered=String(settingsSelectedSection!=='all');Array.from(columns.children).forEach(function(column){column.hidden=!Array.from(column.children).some(function(panel){return !panel.hidden;});});}
+  document.querySelectorAll('#settingsSectionNav button').forEach(function(b){b.classList.toggle('on',b.dataset.section===settingsSelectedSection);b.setAttribute('aria-pressed',String(b.dataset.section===settingsSelectedSection));});
+}
+function settingsScopedBody(scope){
+  var fields=settingsServiceFields[scope];if(!fields)throw new Error('未知配置分组');
+  var body={};Object.keys(fields).forEach(function(key){var input=$(fields[key]);body[key]=input.type==='checkbox'?(input.checked?'1':'0'):key==='http_proxy_password'?input.value:input.value.trim();});return body;
+}
+function applyServiceConfig(scope,c,before){
+  var fields=settingsServiceFields[scope];Object.keys(fields).forEach(function(key){
+    var input=$(fields[key]),current=input.type==='checkbox'?input.checked:input.value;
+    if(before&&current!==before[key])return; // Keep edits made during an in-flight save.
+    if(input.type==='checkbox')input.checked=c[key]==='1';else input.value=c[key]||'';
+    if(['emby_key','tmdb_key','telegram_bot_token'].indexOf(key)>=0){revealed[key]=false;var row=input.closest('.form-row');if(row)row.classList.remove('revealed');var btn=document.querySelector('.eye-btn[data-eye="'+key+'"]');if(btn){btn.classList.remove('on');btn.innerHTML=icon('eye')+'<span>查看</span>';}}
+  });
+}
+async function loadServiceConfig(scope){
+  var result=$('settingsStatus-'+scope);if(!settingsServiceFields[scope]||!result)return;
+  result.textContent='正在读取本组配置…';
+  try{var r=await api('/api/config');if(r.status!=='success')throw new Error(r.message||'读取失败');applyServiceConfig(scope,r.config||{});result.textContent='已读取本组保存值';}
+  catch(e){result.textContent='读取失败：'+e.message;}
+}
+async function saveServiceConfig(scope){
+  var button=$('settingsSave-'+scope),result=$('settingsStatus-'+scope);if(!button||button.disabled)return;
+  var before={},fields=settingsServiceFields[scope];Object.keys(fields).forEach(function(key){var input=$(fields[key]);before[key]=input.type==='checkbox'?input.checked:input.value;});
+  var body=settingsScopedBody(scope);button.disabled=true;result.textContent='正在保存本组配置…';
+  try{
+    var r=await api('/api/config',{method:'POST',body:JSON.stringify(body)});if(r.status!=='success')throw new Error(r.message||'保存失败');
+    applyServiceConfig(scope,r.config||{},before);
+    result.textContent=(r.skipped_env||[]).some(function(key){return key in body;})?'部分值由部署环境固定，请在部署配置中修改':'本组配置已保存并生效';
+    if(scope==='emby')embyLoaded=false;
+    if(scope==='telegram')loadBotStatus();
+    toast('本组配置已保存','success');
+  }catch(e){result.textContent='保存失败：'+e.message;toast('配置未保存','error');}
+  finally{button.disabled=false;}
+}

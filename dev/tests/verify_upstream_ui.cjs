@@ -17,7 +17,7 @@ const ctx={$:node,esc,jsarg:s=>esc(JSON.stringify(String(s))),encodeURIComponent
 vm.createContext(ctx);vm.runInContext(source,ctx);
 assert.equal(calls.length,0,'evaluating the feature must not query upstream');
 assert(html.includes('id="tgtoToken" type="password"'));
-assert(runtime.includes("'conn','conn','conn','conn'"),'new settings panel must not displace existing connection panels');
+assert(html.includes('id="settingsUpstream" data-sg="conn"') && runtime.includes('organizeSettingsPanels(st)'),'upstream retains explicit connection group independent of panel position');
 for(const media_type of ['movie','tv']) {
  const markup=ctx.tgtoButton({title:'<img onerror=evil()>',type:media_type,tmdb_id:'7',year:2026});
  assert(!markup.includes('<img') && markup.includes('event.stopPropagation()'));

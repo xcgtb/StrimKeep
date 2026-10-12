@@ -112,6 +112,7 @@ function renderDashboard(d){
   renderDashPlanFromDashboard(d);
 }
 function renderOverview(r){
+  renderOverviewActivity(r.activity,r.dashboard);
   if(r.dashboard)renderDashboard(r.dashboard);if(r.library_stats&&r.library_stats.rows)renderLibraryStats(r.library_stats);renderOverviewStrategy(r.strategy);
   $('overviewUpdated').textContent=r.ts?'更新于 '+new Date(r.ts*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}):'等待首次更新';
   var job=r.refresh||{},btn=$('overviewRefresh');btn.disabled=!!job.running;btn.innerHTML=(job.running?'<span class="spin"></span>':icon('refresh'))+(job.running?'正在刷新':'刷新总览');
@@ -176,8 +177,9 @@ async function loadOverviewRecommendations(retry){
 }
 function openOverviewRecommendation(i){
   var c=overviewHot.rows[overviewHot.media][i];if(!c)return;
-  var canSub=c.type==='tv',subs=typeof _subscribedTmdbIds==='function'?_subscribedTmdbIds():{};
-  openModal('<div class="cinema-film-detail"><div class="mapping-detail-header"><div class="mapping-detail-poster">'+(c.poster?'<img data-emby-src="'+esc(c.poster)+'" alt="" onload="clearPosterLoading(this)">':'暂无海报')+'</div><div class="mapping-detail-info"><h3>'+esc(c.title)+'</h3><p>'+esc(c.year||'年份未知')+' · '+(canSub?'剧集':'电影')+' · ★ '+Number(c.rating||0).toFixed(1)+'</p><p>'+(c.in_emby?'已在库':c.library_status==='available'?'未入库':'片库状态待同步')+'</p></div></div><div class="cinema-detail-actions">'+(canSub?'<button type="button" class="sub-btn '+(subs[c.tmdb_id]?'on':'')+'" data-tmdb="'+esc(c.tmdb_id)+'" data-title="'+esc(c.title)+'" data-poster="'+esc(c.poster||'')+'">'+(subs[c.tmdb_id]?'✓ 已订阅':'+ 订阅追更')+'</button>':'')+'<a class="btn gray" href="https://www.themoviedb.org/'+(canSub?'tv/':'movie/')+encodeURIComponent(c.tmdb_id)+'" target="_blank" rel="noopener noreferrer">查看影视详情 ↗</a></div></div>');hydratePosters($('modalBody'));
+  tgtoOpen({title:c.title,media_type:c.type==='tv'?'tv':'movie',tmdb_id:c.tmdb_id,
+    year:c.year||'',poster:c.poster||'',rating:c.rating||'',
+    library:c.in_emby?'已在库':c.library_status==='available'?'未入库':'片库状态待同步'});
 }
 document.addEventListener('visibilitychange',function(){if(document.hidden)pauseOverview();else if(overviewActive()){overviewHot.lastAt=0;loadDashboard(true);}});
 
@@ -239,3 +241,55 @@ document.addEventListener('keydown',function(event){
     var trigger=$('headerRuntime');if(trigger&&trigger.focus)trigger.focus();
   }
 });
+
+/* Small activity projections: no remote lookups from a renderer. */
+var overviewActivity=null,overviewActivitySignature="";
+function overviewActivityImage(row){
+  var url=String(row.poster||'');
+  if(!/^\/api\/(?:tmdb|emby)\/poster\/[A-Za-z0-9_.-]+$/.test(url))return '<span class="overview-empty">'+icon('image')+'</span>';
+  return '<img data-emby-src="'+esc(url)+'" alt="'+esc(row.title||'')+'" loading="lazy" decoding="async" onload="clearPosterLoading(this)">';
+}
+function overviewActivityButton(row,kind,index,cls,content){
+  return '<button type="button" class="'+cls+'" '+(row.identity_known&&row.tmdb_id?'onclick="overviewOpenActivity(\''+kind+'\','+index+')"':'disabled title="作品身份未核实，请到片库映射查看"')+'>'+content+'</button>';
+}
+function overviewOpenActivity(kind,index){
+  var rows=overviewActivity&&overviewActivity[kind]||[],row=rows[index];
+  if(!row||!row.identity_known||!row.tmdb_id)return;
+  tgtoOpen({title:row.title,media_type:row.media_type,tmdb_id:row.tmdb_id,
+    year:row.year||'',poster:row.poster||'',library:row.library||''});
+}
+function overviewActivityTime(ts){return ts?new Date(ts*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'时间未提供';}
+function renderOverviewActivity(data,dashboard){
+  if(!$('overviewRecent'))return;
+  var signature=JSON.stringify([data,(dashboard||{}).ingest,(dashboard||{}).subscriptions,((dashboard||{}).libraryHealth||{}).stats]);
+  if(signature===overviewActivitySignature)return;
+  overviewActivitySignature=signature;
+  overviewActivity=data&&data.status==='success'?data:null;
+  var empty='<div class="overview-empty">'+esc(data&&data.message||'暂无可用缓存，等待后台更新')+'</div>';
+  if(!overviewActivity){
+    ['overviewRecent','overviewMissing','overviewNotifications'].forEach(function(id){$(id).innerHTML=empty;});
+    $('overviewFocus').hidden=true;$('overviewFollowingPanel').hidden=true;$('overviewSideFollowing').hidden=true;return;
+  }
+  var a=overviewActivity,ing=(dashboard||{}).ingest||{},recent=a.recent||[];
+  $('overviewRecentSummary').innerHTML=['movies','series','episodes'].map(function(k,i){return '<span><b>'+esc(ing[k]==null?'—':ing[k])+'</b>'+['电影','剧集','集'][i]+'</span>';}).join('');
+  $('overviewRecentNote').textContent=(a.ingest_ts?'近 24 小时 · '+overviewActivityTime(a.ingest_ts)+' 更新':'暂无入库缓存')+(a.ingest_error?' · 上次更新失败，保留缓存':'');
+  $('overviewRecent').innerHTML=recent.slice(0,3).map(function(row,i){var lib={'本地影视库':'本地库','分享影视库':'分享库'}[row.library]||row.library||'来源未提供';
+    var detail=row.media_type==='movie'?'电影':row.episodes||'季集未提供';
+    return overviewActivityButton(row,'recent',i,'overview-import-item',overviewActivityImage(row)+'<div><b>'+esc(row.title)+'</b><p>'+esc(lib+' · '+detail)+'</p><small>'+esc(row.media_type==='movie'?'电影入库记录':row.episode_count!=null?'涉及 '+row.episode_count+' 集':row.count!=null?row.count+' 条记录':'数量未提供')+'</small></div><time>'+esc(row.ts?new Date(row.ts*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}):'')+'</time>');
+  }).join('')||'<div class="overview-empty">'+(a.ingest_ts?'近 24 小时暂无入库记录':'暂无入库缓存')+'</div>';
+  var focus=recent[0];$('overviewFocus').hidden=!focus;
+  if(focus){$('overviewFocus').innerHTML=overviewActivityButton(focus,'recent',0,'overview-focus-content',overviewActivityImage(focus)+'<div><small>最近入库 · '+esc(focus.media_type==='movie'?'电影':'剧集')+'</small><b>'+esc(focus.title)+'</b><p>'+esc(focus.episodes||focus.year||'')+'</p><div class="focus-bottom">查看作品与资源 ↗</div></div>');}
+  var missing=a.missing||[];
+  $('overviewMissingCount').textContent=((dashboard||{}).libraryHealth||{}).stats&&((dashboard||{}).libraryHealth.stats.missing)!=null?dashboard.libraryHealth.stats.missing+' 部 ↗':'查看全部 ↗';
+  $('overviewMissing').innerHTML=missing.map(function(row,i){return '<button class="overview-gap-row" type="button" onclick="overviewOpenHealth(\'missing\')"><span>'+String(i+1).padStart(2,'0')+'</span><div><b>'+esc(row.title)+'</b><small>'+esc(row.have!=null&&row.total!=null?'已入库 '+row.have+' / '+row.total+' 集':'分集对照未提供')+'</small></div><strong>'+esc(row.diff!=null?'缺 '+row.diff+' 集':'缺集未知')+'</strong></button>';}).join('')||'<div class="overview-empty">'+(a.missing_ts?'缓存中暂无已确认缺集，未匹配作品仍需核对':'暂无缺集对照缓存')+'</div>';
+  $('overviewMissingNote').textContent=a.missing_stale?'TMDB 对照超过30分钟 · 等待校准':a.missing_ts?'仅计已播集 · '+overviewActivityTime(a.missing_ts):'等待片库对照';
+  var subs=a.subscriptions||{},morning=a.morning||{},check=((dashboard||{}).subscriptions||{}).check||{};
+  var checkText={success:'正常',partial:'部分失败',error:'检查失败',running:'检查中',disabled:'已停用'}[check.status]||'尚未检查';
+  $('overviewNotifications').innerHTML=[['追更订阅',subs.enabled==null?'未知':subs.enabled+' / '+subs.total+' 部启用'],['最近检查',checkText],['待发送通知',subs.pending==null?'未知':subs.pending+' 批'],['每日晨报',morning.enabled?morning.time:'未开启']].map(function(row){return '<div class="overview-status-row"><span>'+row[0]+'</span><b>'+esc(row[1])+'</b></div>';}).join('')+'<div class="overview-module-footer"><span>'+esc(morning.last_date?'上次发送 '+morning.last_date:'尚无晨报发送记录')+'</span><button onclick="switchTab(\'daily\')">查看汇报 ↗</button></div>';
+  $('overviewFollowingPanel').hidden=!(a.following||[]).length;
+  $('overviewFollowing').innerHTML=(a.following||[]).map(function(row,i){return overviewActivityButton(row,'following',i,'overview-follow-card',overviewActivityImage(row)+'<div><b>'+esc(row.title)+'</b><small>'+esc(row.detail)+'</small></div>');}).join('');
+  $('overviewFollowingNote').textContent=a.following_ts?'最近一次成功通知 · '+overviewActivityTime(a.following_ts):'';
+  var watching=a.watching||[];$('overviewSideFollowing').hidden=!watching.length;
+  $('overviewSideFollowing').innerHTML='<div class="overview-side-heading"><b>最近关注</b><span>追更中</span></div>'+watching.map(function(row,i){return overviewActivityButton(row,'watching',i,'overview-watching-item',overviewActivityImage(row)+'<div><b>'+esc(row.title)+'</b><small>'+esc(row.detail)+'</small></div>');}).join('');
+  ['overviewRecent','overviewFocus','overviewFollowing','overviewSideFollowing'].forEach(function(id){hydratePosters($(id));});
+}

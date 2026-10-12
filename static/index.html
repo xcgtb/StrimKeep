@@ -8,8 +8,8 @@
 <link rel="icon" sizes="16x16 32x32 48x48 64x64" href="/static/icons/favicon.ico?v=312b3784ba93">
 <link rel="icon" type="image/svg+xml" sizes="any" href="/static/icons/favicon.svg?v=d6d1a1064986">
 <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png?v=a23c01bd901b">
-<link rel="stylesheet" href="/static/css/app.css?v=fc29965d93f8">
-<link rel="stylesheet" href="/static/css/overview.css?v=703b4250faac">
+<link rel="stylesheet" href="/static/css/app.css?v=9039a2f90d8c">
+<link rel="stylesheet" href="/static/css/overview.css?v=6e992b9dfb0f">
 <link rel="stylesheet" href="/static/css/glass.css?v=2aa6d6cab791">
 <link rel="stylesheet" href="/static/css/upstream.css?v=2643ac830fe2">
 <script>
@@ -46,6 +46,7 @@ window.addEventListener('unhandledrejection', function(e){
   <aside class="sidebar" id="sidebar">
     <div class="side-title" id="sideTitle"><span class="brand-mark" aria-hidden="true">S</span><div><b>StrimKeep</b><small>影视库管理与治理</small></div><span class="v" id="sideVersion"></span></div>
     <nav id="menu"></nav>
+    <section class="overview-side-following" id="overviewSideFollowing" hidden></section>
     <div class="side-foot">
       <button class="side-theme" onclick="toggleTheme()" type="button"><span class="side-theme-icon" id="sideThemeIcon"></span><span id="sideThemeText">主题</span></button>
       <button data-icon="logout">退出系统</button>
@@ -81,6 +82,7 @@ window.addEventListener('unhandledrejection', function(e){
 
       <!-- 媒体总览 -->
       <section class="tab active cinema-overview" id="tab-dashboard">
+        <div class="overview-layout"><div class="overview-core">
         <div class="cinema-hero">
           <div class="cinema-topline"><span>我的媒体库 / 媒体总览</span><div><span id="overviewUpdated" role="status">读取缓存中</span><button type="button" id="overviewRefresh" onclick="refreshOverview()" data-icon="refresh">刷新总览</button></div></div>
           <div class="cinema-title"><span class="cinema-eyebrow">STRIMKEEP · YOUR COLLECTION</span><h1>你的私人片库</h1><p>片库规模、剧集完整度与治理进展，一眼掌握。</p></div>
@@ -90,6 +92,7 @@ window.addEventListener('unhandledrejection', function(e){
             <div><span>剧集</span><b id="dash-series">—</b><small>共 <span id="dash-eps">—</span> 集</small></div>
             <div><span>电影</span><b id="dash-movies">—</b><small>已入库</small></div>
           </div>
+          <div class="overview-focus panel" id="overviewFocus" hidden></div>
         </div>
         <div id="overviewRefreshState" class="cinema-refresh-state" role="status" aria-live="polite"></div>
         <div class="panel" id="dash-storage-warning" style="display:none" role="status"><h3 class="red">运行数据保存异常</h3><div id="dash-storage-issues"></div><p class="muted">请检查数据目录权限、剩余空间或数据库状态；成功重试后提示会消失。</p></div>
@@ -104,6 +107,7 @@ window.addEventListener('unhandledrejection', function(e){
               <div class="cinema-section-heading"><h2 id="overviewHotTitle">近期热门</h2><div class="cinema-scope cinema-hot-tabs" id="overviewHotTabs"><button type="button" class="active" data-media="movie" onclick="setOverviewMedia('movie')">热门电影</button><button type="button" data-media="tv" onclick="setOverviewMedia('tv')">热门剧集</button></div><div class="cinema-shelf-actions"><button type="button" class="cinema-link" onclick="overviewMoreRecommendations()">更多推荐 ↗</button><button type="button" class="cinema-arrow" aria-label="上一组推荐" onclick="scrollOverviewShelf(-1)">‹</button><button type="button" class="cinema-arrow" aria-label="下一组推荐" onclick="scrollOverviewShelf(1)">›</button></div></div>
               <div id="overviewHotShelf" class="cinema-shelf" aria-label="热门影视推荐"><div class="cinema-recommendation-empty">正在读取热门推荐…</div></div><div id="overviewHotNote" class="cinema-recommendation-note" role="status"></div>
             </section>
+            <section class="overview-following" id="overviewFollowingPanel" hidden><div class="overview-follow-heading"><h3>最近追更动态</h3><button type="button" onclick="switchTab('subscribe')">查看全部 ↗</button></div><div class="overview-follow-grid" id="overviewFollowing"></div><p class="overview-module-note" id="overviewFollowingNote"></p></section>
             <section class="cinema-governance" aria-labelledby="overviewGovTitle"><div class="cinema-section-heading"><h2 id="overviewGovTitle">最近治理</h2><button type="button" class="cinema-link" onclick="switchTab('governance')">查看清单 ↗</button></div><div id="overviewGovRecent" class="cinema-recent-row">暂无治理扫描</div><details class="cinema-decisions"><summary>治理决策 <span id="dash-gov-reason-note"></span></summary><div id="dash-gov-reasons" class="overview-reasons"></div></details></section>
             <section class="cinema-activity" aria-label="入库与追更"><button type="button" onclick="switchTab('daily')"><span data-icon="file">24H 入库</span><b id="stat-ingest-mov">—</b><small id="stat-ingest-age">等待同步</small></button><button type="button" onclick="switchTab('subscribe')"><span data-icon="bell">追更订阅</span><b id="stat-sub">—</b><small id="stat-sub-sub">点击查看</small></button><button type="button" onclick="switchTab('morning')"><span data-icon="sun">每日晨报</span><b id="stat-morning">—</b><small id="stat-morning-sub">点击设置</small></button></section>
           </div>
@@ -114,6 +118,12 @@ window.addEventListener('unhandledrejection', function(e){
             <div class="cinema-services"><span><i class="dd" id="overviewEmbyDot"></i>Emby <b id="svc-emby">检查中</b></span><span>TMDB <b id="svc-tmdb">检查中</b></span></div>
           </aside>
         </div>
+        </div><aside class="overview-rail">
+          <section class="panel"><div class="overview-module-heading"><h3>近期入库</h3><button type="button" onclick="switchTab('daily')">全部记录 ↗</button></div><div id="overviewRecentSummary" class="overview-import-summary"></div><p class="overview-module-note" id="overviewRecentNote">读取入库缓存中</p><div id="overviewRecent"></div></section>
+          <section class="panel"><div class="overview-module-heading"><h3>缺集关注</h3><button type="button" id="overviewMissingCount" onclick="overviewOpenHealth('missing')">查看全部 ↗</button></div><div id="overviewMissing"></div><div class="overview-module-footer"><span id="overviewMissingNote"></span><button type="button" onclick="overviewOpenHealth('missing')">去片库映射 ↗</button></div></section>
+          <section class="panel"><div class="overview-module-heading"><h3>订阅与通知</h3><button type="button" onclick="switchTab('subscribe')">管理 ↗</button></div><div id="overviewNotifications"></div></section>
+          <section class="panel"><div class="overview-module-heading"><h3>快捷任务</h3></div><div class="overview-quick-grid"><button type="button" onclick="switchTab('subscribe')"><span data-icon="bell"></span>管理订阅</button><button type="button" onclick="switchTab('daily')"><span data-icon="file"></span>入库汇报</button><button type="button" onclick="switchTab('history')"><span data-icon="clock"></span>执行记录</button><button type="button" onclick="switchTab('settings')"><span data-icon="gear"></span>规则设置</button></div></section>
+        </aside></div>
       </section>
 
       <!-- 影视探索 -->
@@ -501,7 +511,7 @@ window.addEventListener('unhandledrejection', function(e){
       <section class="tab" id="tab-settings">
 
         <!-- 治理策略 -->
-        <div class="panel">
+        <div class="panel" id="settingsStrategy" data-sg="rules">
           <div class="row-between">
             <h3 data-icon="bookmark">治理策略</h3>
           </div>
@@ -567,7 +577,7 @@ window.addEventListener('unhandledrejection', function(e){
         </div>
 
         <!-- 画质对比规则 -->
-        <div class="panel" id="coverPanel">
+        <div class="panel" id="coverPanel" data-sg="rules">
           <div class="row-between">
             <h3 data-icon="scale">画质对比规则 <span style="font-size:10px;font-weight:600;color:#dc2626;border:1px solid #dc2626;border-radius:6px;padding:1px 6px;margin-left:6px">关键策略</span></h3>
             <span id="coverDirty" style="display:none;font-size:11px;color:#d97706;font-weight:600">● 有未保存的改动</span>
@@ -591,7 +601,7 @@ window.addEventListener('unhandledrejection', function(e){
         </div>
 
         <!-- 特别篇策略 -->
-        <div class="panel">
+        <div class="panel" id="settingsSpecial" data-sg="rules">
           <h3 data-icon="film">特别篇（S00）策略</h3>
           <p style="font-size:12px;color:#6b7280;margin-bottom:12px">Emby 中的 S00 / Specials 如何处理</p>
           <div style="display:flex;gap:8px">
@@ -611,7 +621,7 @@ window.addEventListener('unhandledrejection', function(e){
         </div>
 
         <!-- 入库监控 -->
-        <div class="panel">
+        <div class="panel" id="settingsIngest" data-sg="auto">
           <h3 data-icon="activity">入库监控</h3>
           <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px">实时回调同步总览、探索入库角标和片库局部对照；全量校准负责补漏。</p>
           <div class="toggle-row">
@@ -649,7 +659,7 @@ window.addEventListener('unhandledrejection', function(e){
         </div>
 
         <!-- 双库治理定时巡检 -->
-        <div class="panel">
+        <div class="panel" id="settingsGovAuto" data-sg="auto">
           <h3 data-icon="scale">双库定时巡检</h3>
           <p style="font-size:12px;color:#6b7280;margin-bottom:12px">后台定期扫描双库，发现待清理项时通过 Telegram Bot 通知你；只扫描不删除，清理需你在 Bot 里点按钮确认</p>
           <div class="toggle-row">
@@ -686,7 +696,7 @@ window.addEventListener('unhandledrejection', function(e){
         </div>
 
         <!-- 白名单 -->
-        <div class="panel">
+        <div class="panel" id="settingsWhitelist" data-sg="rules">
           <h3 data-icon="shield">白名单（豁免词）</h3>
           <p style="font-size:12px;color:#6b7280;margin-bottom:12px">
             命中白名单的剧集：扫描时跳过清理，标记为「豁免」，显示在治理页
@@ -703,7 +713,7 @@ window.addEventListener('unhandledrejection', function(e){
           <div id="exemptMatches"></div>
         </div>
 
-        <div class="panel">
+        <div class="panel" id="settingsUpstream" data-sg="conn">
           <h3 data-icon="link">TgtoDrive 上游接入</h3>
           <p class="hint">连接生成 STRM 的上游服务，在影视探索和片库映射中搜索资源、手动转存及查看整理来源。转存目录与 STRM 生成沿用上游配置。</p>
           <label class="check-item"><input type="checkbox" id="tgtoEnabled">启用上游接入</label>
@@ -716,7 +726,7 @@ window.addEventListener('unhandledrejection', function(e){
         </div>
 
         <!-- 服务配置 -->
-        <div class="panel">
+        <div class="panel" id="settingsServices" data-sg="conn">
           <div class="row-between">
             <h3 data-icon="gear">服务配置</h3>
             <button class="btn" onclick="loadConfig()" data-icon="refresh">重新加载</button>
@@ -810,11 +820,11 @@ window.addEventListener('unhandledrejection', function(e){
           </div>
         </div>
 
-        <div class="panel">
+        <div class="panel" id="settingsBotStatus" data-sg="conn">
           <h3 data-icon="info">Bot 状态</h3>
           <div id="botStatus" style="font-size:12px;color:#6b7280">加载中...</div>
         </div>
-        <div class="panel appearance-settings">
+        <div class="panel appearance-settings" id="settingsAppearance" data-sg="conn">
           <h3 data-icon="image">界面背景</h3>
           <p class="hint">手机和电脑共用，切换主题时自动使用对应背景。填写图床的图片直链，留空使用内置背景。</p>
           <div class="appearance-grid">
@@ -858,14 +868,14 @@ window.addEventListener('unhandledrejection', function(e){
 
 <script defer src="/static/js/icons.js?v=98af288253ca"></script>
 <script defer src="/static/js/modal.js?v=60e0db6c4ffc"></script>
-<script defer src="/static/js/runtime.js?v=0a6fd157f794"></script>
-<script defer src="/static/js/dashboard.js?v=432cc7f0dbc0"></script>
+<script defer src="/static/js/runtime.js?v=0bebd661bd51"></script>
+<script defer src="/static/js/dashboard.js?v=25734a8bef58"></script>
 <script defer src="/static/js/governance.js?v=46dc287f6b42"></script>
 <script defer src="/static/js/explore.js?v=b04e7a5b76fb"></script>
 <script defer src="/static/js/mapping.js?v=cddcc03d383f"></script>
 <script defer src="/static/js/subscriptions.js?v=e9d56e664f7f"></script>
 <script defer src="/static/js/records.js?v=823e156e2088"></script>
-<script defer src="/static/js/settings.js?v=8d776b6a536f"></script>
+<script defer src="/static/js/settings.js?v=34eb5714a1ed"></script>
 <script defer src="/static/js/upstream.js?v=5717a3b51eeb"></script>
 <script defer src="/static/js/plans.js?v=02b979a10f92"></script>
 <script defer src="/static/js/directory-cleanup.js?v=7bd34b96ca79"></script>
