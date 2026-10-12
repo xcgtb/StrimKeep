@@ -189,6 +189,86 @@ def _render_notification(updates):
     return '\n'.join(lines)
 
 
+def _render_notification_card(update):
+    """One show's caption. Bound display fields without changing queued facts."""
+    def esc(value, limit=120):
+        value = str(value or '')
+        return html.escape(value if len(value) <= limit else value[:limit] + '…')
+
+    def episodes(keys):
+        eps = _keys_to_eps(keys or [])
+        text = _fmt_ep_ranges(eps)
+        if len(text) > 100:
+            # Cut at a complete range, never in the middle of an episode key.
+            text = _fmt_ep_ranges(sorted(eps)[:6]) + f'…（共 {len(eps)} 集）'
+        return esc(text, 120)
+
+    lines = ['🔔 <b>追更订阅</b>',
+             '📺 <b>《' + esc(update.get('name'), 100) + '》</b>'
+             + (f"（{esc(update['year'], 4)}）" if update.get('year') else ''), '']
+    if update.get('new_eps'):
+        lines.append(f"🆕 新增入库 <b>{episodes(update['new_eps'])}</b> · {len(update['new_eps'])} 集")
+    if update.get('refilled'):
+        lines.append(f"✅ 已补齐 <b>{episodes(update['refilled'])}</b>")
+    if update.get('newly_missing'):
+        lines.append(f"⚠️ 新发现缺集 <b>{episodes(update['newly_missing'])}</b>")
+    if update.get('missing_eps'):
+        lines.append(f"🧩 待补 <b>{len(update['missing_eps'])} 集</b> · {episodes(update['missing_eps'])}")
+    if update.get('have') is not None:
+        total = f"📚 片库已有 <b>{update['have']} 集</b>"
+        if update.get('tmdb_source') in ('tmdb', 'tmdb_cache') and update.get('tmdb_total') is not None:
+            total += f" · TMDB 已播 {update['tmdb_total']} 集"
+        lines.append(total)
+    seasons = update.get('season_counts') or []
+    if seasons:
+        lines.append('🗓 ' + ' · '.join(f"S{int(s['season']):02d} 已有 {s['have']} 集" for s in seasons[:3])
+                     + (f' · 另 {len(seasons) - 3} 季' if len(seasons) > 3 else ''))
+    counts = []
+    for field, label in (('local_eps', '本地库'), ('share_eps', '分享库')):
+        if update.get(field) is not None:
+            counts.append(f"{label} {update[field]} 集")
+    if counts:
+        lines.append('🗂 ' + ' · '.join(counts))
+    if update.get('tmdb_id'):
+        lines.append('🎞 TMDB：' + esc(update['tmdb_id'], 16))
+    source = {'library_facts': 'Emby 片库事实', 'emby_live': 'Emby 实时核实',
+              'disk': 'STRM 目录核实', 'disk_scan': 'STRM 目录核实'}.get(update.get('facts_source'))
+    if source:
+        lines.append('📌 ' + source)
+    if update.get('tmdb_source') in ('unavailable', 'disabled'):
+        lines.append('ℹ️ 本次未取得已播对照，缺集信息沿用上次记录')
+    return '\n'.join(lines)
+
+
+def _deliver_notification_cards(payload, deadline=None, should_stop=None):
+    """Durable per-show receipts; partial retry never repeats accepted cards."""
+    delivered = set(payload.get('delivered_sids') or [])
+    for update in payload.get('updates') or []:
+        sid = str(update.get('sid') or '')
+        if sid in delivered:
+            continue
+        if ((should_stop is not None and should_stop()) or
+                (deadline is not None and time.monotonic() >= deadline)):
+            return None
+        # Check pause/delete again between cards, outside the journal lock.
+        enabled = {str(s.get('id') or s.get('tmdb_id') or s.get('name'))
+                   for s in _cfg.get_subscriptions() if s.get('enabled', True)}
+        if sid not in enabled or _cfg.load_config().get('subscribe_enabled', '1') != '1':
+            return None
+        if not _eng().notify_telegram_card(_render_notification_card(update), update.get('poster') or '',
+                                         text_sender=_eng().notify_telegram):
+            return False
+        with _notification_lock:
+            queue = _load_notification_queue()
+            current = next((e for e in queue.get('events') or [] if e.get('id') == payload.get('id')), None)
+            if current is None:
+                raise RuntimeError('追更卡片已发送，但通知事件丢失')
+            delivered.add(sid)
+            current['delivered_sids'] = sorted(delivered)
+            _save_notification_queue(queue)
+    return True
+
+
 def _queued_episode_claims(queue):
     """Unacknowledged changes already promised to a Telegram batch.
 
@@ -359,12 +439,13 @@ def drain_subscription_notifications(limit=8, force=False, time_budget=None, sho
                     enabled_ids = {str(s.get('id') or s.get('tmdb_id') or s.get('name'))
                                    for s in _cfg.get_subscriptions() if s.get('enabled', True)}
                     kept_updates = [u for u in event.get('updates') or []
-                                     if str(u.get('sid') or '') in enabled_ids]
+                                     if (str(u.get('sid') or '') in enabled_ids or
+                                         str(u.get('sid') or '') in (event.get('delivered_sids') or []))]
                     if len(kept_updates) != len(event.get('updates') or []):
                         event['updates'] = kept_updates
                         event['state_after'] = {sid: value for sid, value in
                                                 (event.get('state_after') or {}).items()
-                                                if sid in enabled_ids}
+                                                if sid in {str(u.get('sid') or '') for u in kept_updates}}
                         if not kept_updates:
                             event['status'] = 'sent'
                             event['canceled_at'] = time.time()
@@ -387,8 +468,8 @@ def drain_subscription_notifications(limit=8, force=False, time_budget=None, sho
             ok = False
             error = ''
             try:
-                ok = bool(_eng().notify_telegram(_render_notification(payload.get('updates') or [])))
-                if not ok:
+                ok = _deliver_notification_cards(payload, deadline, should_stop)
+                if ok is False:
                     error = 'Telegram 推送失败'
             except Exception as exc:
                 error = str(exc)
@@ -397,6 +478,11 @@ def drain_subscription_notifications(limit=8, force=False, time_budget=None, sho
                 current = next((e for e in queue.get('events') or [] if e.get('id') == payload.get('id')), None)
                 if current is None:
                     continue
+                if ok is None:
+                    current['status'] = 'pending'
+                    current['next_retry_at'] = 0
+                    _save_notification_queue(queue)
+                    break
                 if ok:
                     # ``delivered`` is a recoverable intermediate marker: if
                     # the process dies after Telegram accepts the message but
@@ -440,6 +526,7 @@ def drain_subscription_notifications(limit=8, force=False, time_budget=None, sho
 
 
 def _mapping_entry_facts(entry, facts_ts=0):
+    entry = entry or {}
     episodes = set()
     for season in (entry or {}).get('seasons') or []:
         try:
@@ -465,6 +552,11 @@ def _mapping_entry_facts(entry, facts_ts=0):
         'series_id': str((entry or {}).get('id') or ''),
         'series_ids': [str(x) for x in ((entry or {}).get('series_ids') or [(entry or {}).get('id')]) if x],
         'series_name': (entry or {}).get('name') or '',
+        'poster': ((entry or {}).get('tmdb_info') or {}).get('poster') or (
+            '/api/emby/poster/' + str(entry['id']) if entry.get('has_image') and entry.get('id') else ''),
+        'year': (entry or {}).get('year'),
+        'local_eps': (entry or {}).get('local_eps'),
+        'share_eps': (entry or {}).get('share_eps'),
         'episodes': episodes,
         'source': 'library_facts',
         'facts_ts': (entry or {}).get('subscription_facts_ts') or facts_ts,
@@ -490,6 +582,10 @@ def _mapping_facts_by_tmdb(cache, only_tmdb_ids=None):
                 current['facts_ts'] = 0
             if not current.get('series_name'):
                 current['series_name'] = facts.get('series_name')
+            # Duplicate Emby identities may overlap. Counts cannot be safely
+            # summed without per-library episode sets; display them as unknown.
+            current['local_eps'] = current['share_eps'] = None
+            current['poster'] = current.get('poster') or facts.get('poster')
     return by_tmdb
 
 
@@ -513,6 +609,8 @@ def enqueue_ingest_notifications(mapping_result: dict) -> dict:
             current['series_ids'] = sorted(set(current['series_ids']) | set(row['series_ids']))
             if not current.get('series_name'):
                 current['series_name'] = row.get('series_name')
+            current['local_eps'] = current['share_eps'] = None
+            current['poster'] = current.get('poster') or row.get('poster')
     if not facts:
         return {'status': 'skipped', 'matched': 0, 'queued': 0, 'scheduled': False}
     ids = set(facts)
@@ -627,7 +725,7 @@ def _emby_series_latest_ep(series_tmdb_id: str):
     if not series_tmdb_id:
         return None
     base = {'Recursive': 'true', 'IncludeItemTypes': 'Series',
-            'Fields': 'ProviderIds,Name,Path', 'Limit': 50000}
+            'Fields': 'ProviderIds,Name,Path,ProductionYear,ImageTags', 'Limit': 50000}
     try:
         items = _query_items(dict(base, AnyProviderIdEquals=f'Tmdb.{series_tmdb_id}'))
     except Exception:
@@ -662,6 +760,9 @@ def _emby_series_latest_ep(series_tmdb_id: str):
                 created[(sn, number)] = max(created.get((sn, number), ''), ep.get('DateCreated') or '')
     sn, en = max(have) if have else (None, None)
     return {'series_id': series_ids[0], 'series_ids': series_ids,
+            'poster': next(('/api/emby/poster/' + str(s['Id']) for s in items
+                            if (s.get('ImageTags') or {}).get('Primary')), ''),
+            'year': items[0].get('ProductionYear'),
             'series_name': names[0] if names else '', 'season': sn, 'episode': en,
             'date_created': created.get((sn, en), ''), 'episodes': have, 'source': 'emby_live'}
 
@@ -1122,7 +1223,13 @@ def _check_subscriptions(send_notify=True, *, only_tmdb_ids=None, facts_by_tmdb=
                 'sid': sid,
                 'name': (latest and latest.get('series_name')) or (tmdb_info and tmdb_info.get('name')) or sub.get('name'),
                 'tmdb_id': tmdb_id,
-                'poster': sub.get('poster', ''),
+                'poster': latest.get('poster') or sub.get('poster') or (tmdb_info or {}).get('poster') or '',
+                'year': latest.get('year') or sub.get('year') or (tmdb_info or {}).get('year'),
+                'have': len(have), 'tmdb_total': (tmdb_info or {}).get('total_episodes'),
+                'tmdb_source': st['tmdb_source'], 'facts_source': st['facts_source'],
+                'local_eps': latest.get('local_eps'), 'share_eps': latest.get('share_eps'),
+                'season_counts': [{'season': sn, 'have': sum(1 for ss, _ in have if ss == sn)}
+                                  for sn in sorted({sn for sn, _ in set(new_eps) | set(newly_missing) | set(refilled)})],
                 'new_eps': sorted(_eps_to_keys(new_eps)),
                 'missing_eps': sorted(_eps_to_keys(missing_eps)),
                 'newly_missing': sorted(_eps_to_keys(newly_missing)),

@@ -43,7 +43,12 @@ def _facts(rows, media, tid):
             return None
     else:
         count = len(row.get('ids') or ([row['id']] if row.get('id') else []))
-    return {'count': count, 'local': bool(row.get('in_local')), 'share': bool(row.get('in_share'))}
+    return {'count': count, 'local': bool(row.get('in_local')), 'share': bool(row.get('in_share')),
+            'year': row.get('year'),
+            'poster': (row.get('tmdb_info') or {}).get('poster') or row.get('poster_tmdb') or (
+                '/api/emby/poster/' + str(row['id']) if row.get('has_image') and row.get('id') else ''),
+            'local_count': row.get('local_eps' if media == 'tv' else 'local_versions'),
+            'share_count': row.get('share_eps' if media == 'tv' else 'share_versions')}
 
 
 def current(payload):
@@ -108,8 +113,19 @@ def drain(limit=2):
                     return
                 event = dict(event)
             facts = event['facts']
-            text = '🎬 <b>订阅资源已入库</b>\n' + html.escape(event['title']) + '\n' + ('本地库 ' if facts['local'] else '') + ('分享库 ' if facts['share'] else '') + '\n当前入库数量：' + str(facts['count']) + '\n已由 Emby 片库事实确认。'
-            ok = tg.notify_telegram(text)
+            is_tv = event['key'].startswith('tv:')
+            unit = '集' if is_tv else '个版本'
+            title = html.escape(str(event['title'])[:150])
+            year = f"（{html.escape(str(facts['year'])[:4])}）" if facts.get('year') else ''
+            lines = ['🔔 <b>订阅资源已入库</b>', ('📺' if is_tv else '🎬') + f' <b>《{title}》</b>{year}', '',
+                     f"📚 当前片库 <b>{facts['count']} {unit}</b>"]
+            for field, flag, label in (('local_count', 'local', '本地库'), ('share_count', 'share', '分享库')):
+                if facts.get(field) is not None:
+                    lines.append(f"🗂 {label}：{facts[field]} {unit}")
+                elif facts.get(flag):
+                    lines.append(f'🗂 {label}：已入库')
+            lines += ['🎞 TMDB：' + html.escape(event['key'].split(':', 1)[1]), '📌 已由 Emby 片库事实确认']
+            ok = tg.notify_telegram_card('\n'.join(lines), facts.get('poster') or '')
             with _lock:
                 data = _load()
                 queue = data.get('pending', [])

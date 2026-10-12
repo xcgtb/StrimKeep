@@ -633,7 +633,7 @@ def build_morning_report(items: list, force_refresh: bool = False, cache_only: b
     now = datetime.datetime.fromtimestamp(time.time())
     lines = [_eng().tg_title('☀️', 'StrimKeep 晨报', f'{now:%Y-%m-%d} 周{_eng()._WEEK[now.weekday()]}')]
     snap = daily_consistency_snapshot(force_refresh=force_refresh)
-    lines.append(f"🧭 <i>统一快照 · 规则 {html.escape(str(snap.get('rule_sig') or ''))}</i>")
+    lines.append('🧭 <i>汇总入库、订阅更新与片库缺集</i>')
 
     if 'stats' in items:
         try:
@@ -686,7 +686,10 @@ def build_morning_report(items: list, force_refresh: bool = False, cache_only: b
                 if len(ups) > 10:
                     lines.append(f'<i>…另有 {len(ups) - 10} 部有变化</i>')
             else:
-                lines.append('今日尚无成功推送的订阅汇报')
+                lines.append('今天暂未发送订阅更新通知')
+            pending = _eng().load_subscription_notification_status() or {}
+            if pending.get('pending'):
+                lines.append(f"⏳ 还有 {int(pending['pending'])} 批通知等待发送，成功后计入汇报")
             check = _eng().load_subscription_check_status() or {}
             if check.get('status') in ('error', 'partial'):
                 lines.append(f"⚠️ 最近检查失败/不完整：{html.escape(str(check.get('error') or '请查看逐部原因'))}")
@@ -708,8 +711,11 @@ def build_morning_report(items: list, force_refresh: bool = False, cache_only: b
             broken = sorted(rep['missing'], key=_diff, reverse=True)
             total_gap = sum(_diff(x) for x in broken)
             lines += ['', f"🧩 <b>Emby 缺集</b>　<i>{len(broken)} 部 · 共缺 {total_gap} 集</i>"]
-            lines.append(f"<i>片库事实版本 {html.escape(str(rep.get('facts_version') or '未知'))} · "
-                         + ('TMDB 对照已过期，以上为缓存结果' if rep.get('stale') else '当前缓存对照') + '</i>')
+            stamp = rep.get('facts_ts') or rep.get('cache_ts')
+            if stamp:
+                lines.append(f"<i>片库更新于 {datetime.datetime.fromtimestamp(float(stamp)):%m-%d %H:%M}</i>")
+            lines.append('<i>' + ('⚠️ TMDB 对照已过期，缺集数为缓存结果' if rep.get('stale')
+                                  else '根据当前片库缓存与 TMDB 已播集数对照') + '</i>')
             if broken:
                 shown = broken[:_eng().MORNING_GAP_TOP]
                 # 折叠引用：默认只露前几行（缺得最多的排最前），点一下展开，再点收起

@@ -168,7 +168,7 @@ def test_new_repair_generation_is_not_cleared_by_an_older_success(event_env, mon
 def test_dispatch_budget_stops_between_batches(event_env, monkeypatch):
     seed(); enqueue([1, 2]); enqueue([1, 2, 3])
     monkeypatch.setattr(engine, 'notify_telegram', lambda *_: True)
-    clock = iter([0, 0, 16])
+    clock = iter([0, 0, 0, 16])  # deadline, batch, card, next batch
     monkeypatch.setattr(subscribe.time, 'monotonic', lambda: next(clock))
     result = subscribe.drain_subscription_notifications(time_budget=15)
     assert result['sent'] == 1 and result['pending'] == 1

@@ -16,7 +16,7 @@ ENGINE_EXPORTS = (
     ('logger',
      '', 'logger'),
     ('tg',
-     'tg_title tg_row tg_stamp fmt_scan_text split_telegram_html notify_telegram', None),
+     'tg_title tg_row tg_stamp fmt_scan_text split_telegram_html notify_telegram notify_telegram_card', None),
     ('lib',
      'Lib _get_lib _invalidate_lib_cache _lib_cache _disk_tmdb_lookup _disk_eps_by_tmdb '
      '_match_governance_key _normalize_title _find_dir_fuzzy _under_tv_category', None),

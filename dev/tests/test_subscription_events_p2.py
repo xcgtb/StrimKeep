@@ -141,7 +141,7 @@ def test_paused_subscription_cancels_pending_delivery(event_env, monkeypatch):
     assert len(calls) == 1
 
 
-def test_two_changed_subscriptions_share_one_message(event_env, monkeypatch):
+def test_two_changed_subscriptions_get_separate_detail_cards(event_env, monkeypatch):
     monkeypatch.setattr(subscribe._cfg, 'get_subscriptions', lambda: [
         {'id': 'a', 'name': '甲', 'tmdb_id': '100', 'enabled': True},
         {'id': 'b', 'name': '乙', 'tmdb_id': '200', 'enabled': True},
@@ -160,7 +160,7 @@ def test_two_changed_subscriptions_share_one_message(event_env, monkeypatch):
                                            facts_by_tmdb=facts_by_tmdb,
                                            reason='ingest')
     assert result['checked'] == 2 and len(result['updates']) == 2
-    assert len(sent) == 1 and '《测试剧》' in sent[0] and '《乙》' in sent[0]
+    assert len(sent) == 2 and '《测试剧》' in sent[0] and '《乙》' in sent[1]
 
 
 def test_mapping_facts_reconstruct_sparse_episodes():

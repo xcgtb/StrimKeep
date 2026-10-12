@@ -868,6 +868,8 @@ def _tmdb_series_info(tmdb_id):
             'source': 'tmdb_cache' if getattr(t, 'hits', 0) > hits_before else 'tmdb',
             'ts': cache_row.get('ts'),
             'name': info.get('name'),
+            'poster': info.get('poster_path') or '',
+            'year': (info.get('first_air_date') or '')[:4],
             'status': info.get('status', ''),
             'last_episode_to_air': last,
             'seasons': aired_seasons,
