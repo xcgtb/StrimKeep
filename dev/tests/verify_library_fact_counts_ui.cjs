@@ -17,11 +17,11 @@ async function main(){
  response={status:'success',ts:now-4000,facts_ts:now,facts_version:'v13',episodes:13,
   series:[{have_eps:13}],movies:[],stats:{total_series:1,missing:1},top_missing:[],stale:true};
  await ctx.loadDashEmby();assert(node('dash-eps').innerHTML==='13');
- assert(node('dash-library-facts').textContent.includes('集数更新') && node('dash-library-facts').textContent.includes('已过期'));
+ assert(node('dash-library-facts').textContent.includes('集数更新') && node('dash-library-facts').textContent.includes('超过30分钟，等待下次校准'));
  assert(JSON.parse(saved.get('dashEmbyCache')).facts_version==='v13');
  console.log('PASS dashboard uses shared 13-episode total and preserves fact version/time in local cache');
  ctx.renderDashEmby(JSON.parse(saved.get('dashEmbyCache')));
- assert(node('dash-library-facts').textContent.includes('已过期'));
+ assert(node('dash-library-facts').textContent.includes('超过30分钟，等待下次校准'));
  console.log('PASS cached hydration labels comparison age instead of claiming a fresh scan');
  fail=true;ctx.embyLoaded=true;ctx.embyData={series:[{have_eps:0,total_episodes:20}],movies:[],stats:{}};
  await ctx.loadDashEmby();assert(node('dash-eps').innerHTML==='0');

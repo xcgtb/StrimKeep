@@ -39,9 +39,9 @@ function fmtBig(n){return(n||0).toLocaleString();}
 function fmtUnit(n,u){return(n||0).toLocaleString()+'<i class="u">'+u+'</i>';}
 function renderDashEmby(x){
   var factsTs=x.facts_ts||x.ts||0;
-  var stale=x.stale||(x.ts&&Date.now()/1000-x.ts>1800);
-  $('dash-facts-summary').textContent=stale?'对照缓存已过期':'数据更新时间';
-  $('dash-library-facts').textContent=factsTs?'集数更新 '+new Date(factsTs*1000).toLocaleString('zh-CN')+(x.ts?' · TMDB 对照 '+new Date(x.ts*1000).toLocaleString('zh-CN')+(stale?'（已过期）':''):' · 尚无完整 TMDB 对照'):'暂无片库对照缓存';
+  var stale=!!x.stale||!!(x.ts&&Date.now()/1000-x.ts>1800);
+  $('dash-facts-summary').textContent='Emby 入库 / TMDB 对照';
+  $('dash-library-facts').textContent=(factsTs?'集数更新 '+new Date(factsTs*1000).toLocaleString('zh-CN'):'入库事实尚未初始化')+' · '+(x.ts?'TMDB 对照 '+new Date(x.ts*1000).toLocaleString('zh-CN')+(stale?'（超过30分钟，等待下次校准）':''):'尚无完整 TMDB 对照');
   $('dash-series').innerHTML=fmtUnit(x.series,'部');$('dash-movies').innerHTML=fmtUnit(x.movies,'部');$('dash-eps').innerHTML=fmtBig(x.eps);
   var st=x.st||{},rows=[['完整','ok',st.aligned],['缺集','err',st.missing],['超集','warn',st.extra],['在更','info',st.ongoing],['未匹配','dim',(st.unmatched||0)+(st.no_tmdb||0)]];
   var sum=rows.reduce(function(n,r){return n+(Number(r[2])||0);},0);

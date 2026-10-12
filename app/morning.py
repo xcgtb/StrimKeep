@@ -835,15 +835,21 @@ def _resync_series_entry(entry: dict, live: list):
         else:
             old['local_total'] = entry['total_episodes']
 
-def _patch_all_caches(patch):
-    """对 内存 / 总览磁盘 / TMDB 对照磁盘 三份缓存各调用一次 patch(data)->bool，改动了就落盘（保留原时间戳）。"""
+def _patch_all_caches(patch, comparison_ts=None):
+    """Incrementally patch facts, optionally recording a verified complete TMDB comparison."""
+    def update(data):
+        if not patch(data):
+            return False
+        if comparison_ts is not None:
+            data['ts'] = comparison_ts
+        return True
     if _eng()._emby_lib_cache.get('data'):
-        patch(_eng()._emby_lib_cache['data'])
+        update(_eng()._emby_lib_cache['data'])
     disk = _load_overview_disk()
-    if disk and patch(disk['data']):
+    if disk and update(disk['data']):
         _save_overview_disk(disk['data'])
     tmdb_cache = read_emby_lib_cache()
-    if tmdb_cache and patch(tmdb_cache):
+    if tmdb_cache and update(tmdb_cache):
         save_emby_lib_cache(tmdb_cache, keep_ts=True)
 
 
@@ -1262,7 +1268,9 @@ def save_emby_lib_cache(data: dict, keep_ts: bool = False):
     data = dict(data)
     if not (keep_ts and data.get('ts')):
         data['ts'] = time.time()
-    data['facts_ts'] = time.time()
+    # Metadata-only patches must not pretend a fresh Emby facts verification.
+    if not (keep_ts and data.get('facts_ts')):
+        data['facts_ts'] = time.time()
     _state.save(_eng().EMBY_LIB_CACHE_FILE, data)
     if not keep_ts:
         try:
@@ -1341,6 +1349,9 @@ def _refresh_tmdb_scan():
         has_key = bool(t.key)
         reqs = [('tv', s_.get('tmdb_id')) for s_ in series if s_.get('tmdb_id')]
         infos, tmdb_errors, cache_rows = _tmdb_bulk_get(t, reqs, max_workers=8) if has_key else ({}, 0, {})
+        # A partial/unauthenticated comparison may update valid metadata, but
+        # must not advance the authoritative last-success timestamp.
+        comparison_complete = bool(has_key and tmdb_errors == 0)
         for i, s_ in enumerate(series):
             tmdb_id = s_.get('tmdb_id')
             if not tmdb_id:
@@ -1386,7 +1397,7 @@ def _refresh_tmdb_scan():
                 current['with_tmdb'] = True
                 return True
             with _eng()._overview_refresh_lock:
-                _patch_all_caches(merge)
+                _patch_all_caches(merge, comparison_ts=time.time() if comparison_complete else None)
                 latest = read_emby_lib_cache(max_age=None)
                 if latest:
                     _eng()._emby_lib_cache.update(ts=time.time(), data=copy.deepcopy(latest))
@@ -1396,11 +1407,16 @@ def _refresh_tmdb_scan():
         else:
             save_emby_lib_cache(res)
         save_library_snapshot(build_library_health_snapshot())
-        cfg = _cfg.load_config()
-        cfg['tmdb_scan_last_ts'] = str(time.time())
-        _cfg.save_config(cfg)
+        if comparison_complete:
+            cfg = _cfg.load_config()
+            cfg['tmdb_scan_last_ts'] = str(time.time())
+            _cfg.save_config(cfg)
+        else:
+            log.warning('TMDB 对照部分完成（失败 %d，API Key %s），保留上次完整对照时间',
+                        tmdb_errors, '已配置' if has_key else '未配置')
         _eng()._tmdb_scan_progress.update({'running': False, 'finished_at': time.time(),
-                                    'stage': '完成', 'stats': stats})
+                                    'stage': '完成' if comparison_complete else '部分完成（保留上次完整对照时间）',
+                                    'stats': stats})
         log.info('TMDB 对照完成：对齐 %d / 缺集 %d / 超集 %d / 在更 %d',
                  stats['aligned'], stats['missing'], stats['extra'], stats['ongoing'])
         return res

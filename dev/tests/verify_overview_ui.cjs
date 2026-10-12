@@ -18,7 +18,9 @@ console.log('PASS all/local/share summaries use their own totals and unclassifie
 const hostile='剧名"><img src=x onerror=alert(1)>';
 ctx.renderDashEmby({series:1,movies:0,eps:0,st:{missing:1},top:[{name:hostile,year:2000,diff:10,have:0,tot:10}],ts:Date.now()/1000-4000});
 assert(!node('dash-health').innerHTML.includes(hostile));
-assert(node('dash-facts-summary').textContent.includes('已过期'));assert(node('dash-eps').innerHTML==='0');
+assert(node('dash-facts-summary').textContent.includes('Emby 入库 / TMDB 对照'));
+assert(node('dash-library-facts').textContent.includes('超过30分钟，等待下次校准'));
+assert(node('dash-eps').innerHTML==='0');
 assert(node('dash-health-bar').innerHTML.includes('flex-grow:1'));
 console.log('PASS overview has only summary completeness, explicit zero counts and stale-cache labels');
 ctx.renderDashPlanFromDashboard({});assert(node('overviewGovRecent').innerHTML.includes('暂无治理扫描'));
