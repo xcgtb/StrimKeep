@@ -271,6 +271,8 @@ def _build_emby_library_overview():
             'rating': g['rating'], 'tmdb_id': g['tmdb_id'], 'genres': g['genres'],
             'in_local': 'local' in libs, 'in_share': 'share' in libs,
             'path': g['paths'][0] if g['paths'] else '', 'paths': g['paths'],
+            'local_versions': sum(lib_of(p) == 'local' for p in g['paths']),
+            'share_versions': sum(lib_of(p) == 'share' for p in g['paths']),
             'has_image': g['has_image'],
         })
     return out

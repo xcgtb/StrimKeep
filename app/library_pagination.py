@@ -144,4 +144,9 @@ def detail(media, item_id):
         row = collection.get(item_id)
         if row is None:
             return {'status': 'notfound'}
-        return {'status': 'success', 'media': media, 'item': dict(row), **_cache['meta']}
+        item = dict(row)
+        if media == 'movies':
+            paths = set(item.get('paths') or ([item['path']] if item.get('path') else []))
+            item['local_versions'] = sum(engine.EMBY_PATHS.lib_of(p, fallback=False) == 'local' for p in paths)
+            item['share_versions'] = sum(engine.EMBY_PATHS.lib_of(p, fallback=False) == 'share' for p in paths)
+        return {'status': 'success', 'media': media, 'item': item, **_cache['meta']}

@@ -37,6 +37,12 @@
 .tgto-resource-row{display:grid;grid-template-columns:30px minmax(0,1fr);gap:8px;margin-top:10px;font-size:11px;line-height:1.7}
 .tgto-resource-row>span{color:var(--text-dim)}.tgto-resource-row p{margin:0;color:var(--text-mid);white-space:pre-wrap}
 .tgto-source-tags span{background:rgba(64,147,255,.06)}
+.tgto-resource-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%;margin-top:auto}
+.tgto-resource-actions .tgto-transfer{margin:0}
+.tgto-copy-ready{width:100%}.tgto-copy-ready input{font-size:11px}.tgto-copy-ready button{width:100%;margin-top:8px}
+.mapping-movie-libraries{border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:16px 0;margin:16px 0}
+.mapping-movie-libraries h4{font-size:14px;margin:0 0 12px}.mapping-movie-libraries p{font-size:12px;color:var(--text-mid);line-height:1.6}
+.tgto-tabs{overflow-x:auto}.tgto-tabs button{white-space:nowrap}
 .tgto-access-tags{margin-top:8px}.tgto-access-tags .tgto-points{color:#c58a35;background:rgba(205,143,38,.1);border-color:rgba(205,143,38,.25)}
 .tgto-access-tags .unlocked,.tgto-access-tags .tgto-unlock-count{color:#299b75;background:rgba(41,155,117,.08)}
 .tgto-access-tags .locked{color:var(--text-mid)}

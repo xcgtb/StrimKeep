@@ -74,17 +74,18 @@ function tgtoOpen(seed){
     (seed.year ? '<span>' + esc(seed.year) + '</span>' : '') + (seed.tmdb_id ? '<span>TMDB ' + esc(seed.tmdb_id) + '</span>' : '') + '</div>' +
     (seed.library ? '<span class="tgto-library">' + esc(seed.library) + '</span>' : '') +
     (seed.overview ? '<p class="tgto-overview">' + esc(seed.overview) + '</p>' : '') +
-    '<p class="tgto-flow">找资源 → 转存 → 整理入库</p></div></header>' +
+    '<p class="tgto-flow">找资源 → 转存 → 整理入库</p><button class="btn gray" onclick="tgtoSubscribeResource()">订阅资源获取</button></div></header>' +
     '<nav class="tgto-tabs" aria-label="资源详情视图"><button class="active" data-tgto-tab="search" onclick="tgtoResources()">资源发现</button>' +
     '<button data-tgto-tab="history" onclick="tgtoHistory(1)">整理记录</button>' +
-    '<button data-tgto-tab="jobs" onclick="tgtoJobs()">转存任务</button></nav>' +
+    '<button data-tgto-tab="jobs" onclick="tgtoJobs()">上游任务</button>' +
+    '<button data-tgto-tab="subscriptions" onclick="tgtoResourceSubscriptions()">资源订阅</button></nav>' +
     '<div class="tgto-search-tools" id="tgtoSearchTools"><div class="tgto-search-line">' +
     (isTV ? '<label>季<input id="tgtoSeason" type="number" min="0" max="999" placeholder="全部"></label>' +
       '<label>集<input id="tgtoEpisode" type="number" min="1" max="99999" placeholder="全部"></label>' : '') +
     '<button class="btn" id="tgtoSearchBtn" onclick="tgtoSearch()">重新搜索</button>' +
     '<label class="tgto-target">转存到<select id="tgtoTarget" onchange="tgtoChooseTarget()"><option value="">读取转存目标…</option></select></label></div>' +
-    '<details class="tgto-advanced"><summary>高级设置</summary><label>目标标识<input id="tgtoProvider" value="115" maxlength="50" placeholder="与上游目标标识一致"></label>' +
-    '<p id="tgtoProviderHint" class="hint">转存目录沿用上游设置。未识别目标时，可手动填写标识。</p></details>' +
+    '<details class="tgto-advanced"><summary>高级设置</summary><label>目标标识<input id="tgtoProvider" value="115" maxlength="50" onchange="tgtoDirectoryText()" placeholder="与上游目标标识一致"></label>' +
+    '<p id="tgtoProviderHint" class="hint">手填的是网盘目标标识，保存目录沿用上游设置。</p></details><p id="tgtoDirectoryInfo" class="hint">正在读取上游保存目录…</p>' +
     '<details id="tgtoFilterPanel" class="tgto-filter-panel" open><summary>筛选资源</summary><div id="tgtoFacets"></div></details></div>' +
     '<p id="tgtoStatus" class="tgto-status" role="status" aria-live="polite">正在准备资源搜索…</p>' +
     '<div id="tgtoResults"></div><footer class="tgto-footer"><span>入库状态以 Emby 为准；转存前核对版本和季集。</span>' +
@@ -94,7 +95,7 @@ function tgtoOpen(seed){
   setTimeout(async function(){
     if (!tgtoActive(view) || view.searched || view.busy) return;
     await tgtoSearch();
-    if (tgtoActive(view)) tgtoLoadTargets(view);
+    if (tgtoActive(view)) {tgtoLoadTargets(view);tgtoLoadDirectories(view);}
   }, 0);
 }
 function tgtoPoster(url){
@@ -109,19 +110,31 @@ async function tgtoLoadTargets(view){
   try {
     var r = await api('/api/upstream/providers', {timeoutMs:50000});
     if (!tgtoActive(view)) return;
-    $('tgtoTarget').innerHTML = '<option value="">自定义目标</option>' + r.items.map(function(x){return '<option value="' + esc(x.id) + '">' + esc(x.name) + '</option>';}).join('');
+    view.targets = r.items;
+    $('tgtoTarget').innerHTML = '<option value="">手填目标标识</option>' + r.items.map(function(x){return '<option value="' + esc(x.id) + '">' + esc(x.name) + '</option>';}).join('');
     var match = r.items.find(function(x){return x.id === $('tgtoProvider').value;});
     if (match) $('tgtoTarget').value = match.id;
     else if (r.items.length && $('tgtoProvider').value === initial) { $('tgtoTarget').value = r.items[0].id; tgtoChooseTarget(); }
     $('tgtoProviderHint').textContent = '目标来自上游配置，转存目录沿用上游设置。';
   } catch(e){
     if (tgtoActive(view)) {
-      $('tgtoTarget').innerHTML = '<option value="">自定义目标</option>';
+      $('tgtoTarget').innerHTML = '<option value="">手填目标标识</option>';
       $('tgtoProviderHint').textContent = e.message + '；请核对高级设置中的目标标识。';
     }
   }
 }
-function tgtoChooseTarget(){ if ($('tgtoTarget').value) $('tgtoProvider').value = $('tgtoTarget').value; }
+function tgtoChooseTarget(){ if ($('tgtoTarget').value) $('tgtoProvider').value = $('tgtoTarget').value; tgtoDirectoryText(); }
+async function tgtoLoadDirectories(view){
+  try {var r = await api('/api/upstream/directories');if (tgtoActive(view)) {view.directories=r.items;tgtoDirectoryText();}}
+  catch(e){if(tgtoActive(view)) $('tgtoDirectoryInfo').textContent='保存目录未能读取：'+e.message+'。请到上游核对；此处不能自定义目录。';}
+}
+function tgtoDirectoryText(){
+  var view=tgtoView;if(!view || !tgtoActive(view))return;
+  var row=(view.directories||view.targets||[]).find(function(x){return x.id===$('tgtoProvider').value;});
+  $('tgtoDirectoryInfo').textContent=row && (row.directory_id||row.directory_path)
+    ? '上游保存目录：'+(row.directory_path||'路径未提供')+' · ID '+(row.directory_id||'未提供')+'（目录修改请到上游）'
+    : '上游未提供此目标的保存目录 ID / 路径，请在上游配置并核对。';
+}
 function tgtoTabs(view){
   if (!tgtoActive(view)) return;
   $('tgtoSearchTools').hidden = view.mode !== 'search';
@@ -177,7 +190,10 @@ function tgtoRenderResources(view){
       detail('评阅', item.reviewed_count !== '' && item.reviewed_count != null ? item.reviewed_count + ' 人' : '') +
       detail('规格', specs.join(' · ')) + detail('字幕', item.subtitles) + detail('校验', item.verification) +
       detail('文件', item.file_count ? item.file_count + ' 个文件' : '') + detail('备注', item.note) + '</div>' +
-      (item.transferable ? '<button class="btn tgto-transfer" onclick="tgtoTransfer(' + x.index + ')">转存</button>' : '<span class="hint tgto-unavailable">缺少转存标识</span>') + '</article>';
+      '<div class="tgto-resource-actions">' +
+      (item.transferable ? '<button class="btn tgto-transfer" onclick="tgtoTransfer(' + x.index + ')">转存</button><button class="btn gray" onclick="tgtoCopyLink(' + x.index + ')">复制链接</button>' : '<span class="hint tgto-unavailable">缺少资源标识</span>') +
+      '</div>' +
+      (item.copyLink ? '<div class="tgto-copy-ready"><input readonly aria-label="资源分享链接" value="'+esc(item.copyLink)+'"><button class="btn gray" onclick="tgtoCopyReady('+x.index+')">复制已获取链接</button></div>' : '') + '</article>';
   }).join('');
   tgtoResult(view, '<div class="tgto-result-heading"><strong>可用资源 <span>' + visible.length + '</span></strong><span>已返回 ' + view.items.length + ' 条</span></div>' +
     (cards ? '<div class="tgto-resource-grid">' + cards + '</div>' : '<div class="tgto-empty"><strong>' + (view.items.length ? '当前筛选暂无资源' : '暂未找到资源') + '</strong><p>' + (view.items.length ? '切换为全部，查看其他版本。' : '可调整季集后重新搜索。') + '</p></div>'),
@@ -187,6 +203,55 @@ function tgtoActive(view){
   var section = $('modalBody').querySelector('[data-tgto-view]');
   return tgtoView === view && $('modalBg').classList.contains('show') && section &&
     Number(section.getAttribute('data-tgto-view')) === view.generation;
+}
+async function tgtoOperation(action, payload){
+  var view=tgtoView;if(!view||view.busy)return;
+  view.operations=view.operations||{};
+  var key=action+JSON.stringify(payload)+$('tgtoProvider').value.trim();
+  var id=view.operations[key]||(view.operations[key]=tgtoOperationId());
+  view.busy=true;
+  try {
+    $('tgtoStatus').textContent='正在提交上游操作，请勿重复操作…';
+    var r=await api('/api/upstream/operations/'+action,{method:'POST',body:JSON.stringify(Object.assign({},payload,{confirmed:true,operation_id:id,provider:$('tgtoProvider').value.trim()})),timeoutMs:25000});
+    var job=r.job;
+    for(var n=0;job.state==='submitting' && n<25 && tgtoActive(view);n++){
+      await new Promise(function(resolve){setTimeout(resolve,1000);});
+      var jobs=await api('/api/upstream/jobs');job=jobs.items.find(function(x){return x.id===job.id;})||job;
+    }
+    if(tgtoActive(view))$('tgtoStatus').textContent=job.message;
+    return job;
+  }catch(e){if(tgtoActive(view))$('tgtoStatus').textContent='结果未确认：'+e.message+'。请到上游核实，不会自动重试。';}
+  finally{view.busy=false;}
+}
+async function tgtoCopyLink(index){
+  var view=tgtoView,item=view&&view.items[index];if(!item||view.busy)return;
+  if(!confirm('通过上游获取此资源链接；未解锁资源可能按上游规则扣积分。确认继续？'))return;
+  var job=await tgtoOperation('copy_link',{handle:item.handle});
+  if(job&&job.state==='submitted'&&tgtoActive(view)){
+    try{var r=await api('/api/upstream/jobs/'+encodeURIComponent(job.id)+'/link');if(!tgtoActive(view))return;item.copyLink=r.link;tgtoRenderResources(view);$('tgtoStatus').textContent='链接已获取，点击“复制已获取链接”；也可长按链接框手动复制。';}
+    catch(e){if(tgtoActive(view))$('tgtoStatus').textContent=e.message;}
+  }
+}
+async function tgtoCopyReady(index){
+  var item=tgtoView&&tgtoView.items[index];var link=item&&item.copyLink;if(!link)return;
+  try{await navigator.clipboard.writeText(link);toast('链接已复制','success');}
+  catch(e){$('tgtoStatus').textContent='浏览器未允许剪贴板访问，请长按链接框手动复制。';}
+}
+async function tgtoSubscribeResource(){
+  var view=tgtoView;if(!view||view.busy)return;
+  if(!confirm('启用上游资源自动订阅《'+view.seed.title+'》，并登记 Emby 入库通知？\n上游按其配置监控、获取和整理资源，可能扣积分。请先确认上游资源规则、积分限制和保存目录，以及 StrimKeep Telegram / 入库监控已配置。'))return;
+  await tgtoOperation('resource_subscribe',{title:view.seed.title,media_type:view.seed.media_type,tmdb_id:String(view.seed.tmdb_id||''),notify_import:true});
+}
+async function tgtoResourceSubscriptions(){
+  var view=tgtoView;if(!view||view.busy)return;
+  view.mode='subscriptions';tgtoTabs(view);
+  try{var r=await api('/api/upstream/resource-subscriptions');var notification=r.notifications||{};tgtoResult(view,'<button class="btn gray" onclick="tgtoSubscriptionEvents()">查看上游监控事件</button><p class="hint">已登记 '+esc(notification.count||0)+' 部入库通知，待发送 '+esc(notification.pending||0)+' 条</p>'+r.items.map(function(x){return '<article class="tgto-resource"><h4>'+esc(x.title)+'</h4><p>'+esc(x.enabled===true?'上游已启用':x.enabled===false?'上游已停用':'状态未提供')+' · 目标 '+esc(x.target_provider||'未提供')+'</p></article>';}).join(''),'上游负责资源监控与获取，入库通知以 Emby 确认的数据为准。');}
+  catch(e){tgtoResult(view,'',e.message);}
+}
+async function tgtoSubscriptionEvents(){
+  var view=tgtoView;if(!view||view.busy)return;
+  try{var r=await api('/api/upstream/subscription-events');tgtoResult(view,'<button class="btn gray" onclick="tgtoResourceSubscriptions()">返回资源订阅</button>'+r.items.map(function(x){return '<article class="tgto-resource"><h4>'+esc(x.title)+'</h4><p>'+esc(x.status)+'</p><p>'+esc(x.message)+'</p></article>';}).join(''),'上游最近 30 条监控 / 资源处理事件');}
+  catch(e){tgtoResult(view,'',e.message);}
 }
 function tgtoResult(view, html, status){
   if (!tgtoActive(view)) return;
@@ -264,7 +329,7 @@ async function tgtoJobs(pollView){
         '<p class="hint">' + esc(job.message) + '</p>' +
         (job.state !== 'submitting' ? '<button class="btn gray" onclick="tgtoAcknowledge(' + jsarg(job.id) + ')">已核实，清除记录</button>' : '') + '</article>';
     }).join('') : '<p class="list-empty">暂无转存任务</p>',
-    '这里显示转存提交结果；实际转存和 STRM 生成进度请查看上游，片库状态以 Emby 入库为准。');
+    '这里显示上游操作提交结果；实际资源处理进度请查看上游，片库状态以 Emby 入库为准。');
     if (r.items.some(function(job){return job.state === 'submitting';}) && !view.jobPollPending) {
       view.jobPollPending = true;
       setTimeout(function(){ view.jobPollPending = false; if (tgtoActive(view)) tgtoJobs(view); }, 1500);
@@ -273,7 +338,7 @@ async function tgtoJobs(pollView){
   finally { view.jobsLoading = false; }
 }
 async function tgtoAcknowledge(id){
-  if (!confirm('请先核实上游转存历史。\n清除本地记录不会取消上游任务，但会解除此资源的重复转存保护。继续？')) return;
+  if (!confirm('请先在上游核实此操作。\n清除本地记录不会取消上游任务，但会解除重复提交保护。继续？')) return;
   try {
     await api('/api/upstream/jobs/' + encodeURIComponent(id) + '/acknowledge', {method:'POST',body:'{"confirmed":true}'});
     await tgtoJobs();

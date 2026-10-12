@@ -42,6 +42,36 @@ def providers():
     return {'status': 'success', **call(upstream.providers)}
 
 
+@router.get('/directories')
+def directories(response: Response):
+    response.headers['Cache-Control'] = 'no-store'
+    return {'status': 'success', **call(upstream.transfer_directories)}
+
+
+@router.get('/resource-subscriptions')
+def resource_subscriptions(response: Response):
+    response.headers['Cache-Control'] = 'no-store'
+    from app import resource_watch
+    return {'status': 'success', 'items': call(upstream.resource_subscriptions), 'notifications': resource_watch.status()}
+
+
+@router.get('/subscription-events')
+def subscription_events(response: Response):
+    response.headers['Cache-Control'] = 'no-store'
+    return {'status': 'success', 'items': call(upstream.subscription_events)}
+
+
+@router.post('/operations/{action}', status_code=202)
+def business_operation(action: str, body: dict):
+    return {'status': 'success', 'job': call(upstream.business_operation, action, body)}
+
+
+@router.get('/jobs/{operation}/link')
+def operation_link(operation: str, response: Response):
+    response.headers['Cache-Control'] = 'no-store'
+    return {'status': 'success', 'link': call(upstream.operation_link, operation)}
+
+
 @router.post('/transfer', status_code=202)
 def transfer(body: dict):
     return {'status': 'success', 'job': call(upstream.transfer, body)}

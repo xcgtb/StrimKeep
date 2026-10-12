@@ -26,6 +26,17 @@ def test_page_never_leaks_paths_and_retains_zero(cached):
     assert out['has_more'] is False
 
 
+def test_movie_detail_reports_per_library_versions(cached, monkeypatch):
+    movie = {'id': 'm', 'name': '电影', 'ids': ['m', 'm2'], 'in_local': True, 'in_share': True,
+             'paths': ['/local/a.strm', '/share/a.strm', '/share/a.strm']}
+    monkeypatch.setattr(library_pagination, '_read', lambda: True)
+    monkeypatch.setitem(library_pagination._cache, 'movies_by_id', {'m': movie})
+    monkeypatch.setitem(library_pagination._cache, 'meta', {})
+    monkeypatch.setattr(engine.EMBY_PATHS, 'lib_of', lambda path, fallback=False: 'local' if path.startswith('/local/') else 'share')
+    item = library_pagination.detail('movies', 'm')['item']
+    assert item['local_versions'] == item['share_versions'] == 1
+
+
 def test_global_status_sorting_and_paging_no_duplication(cached):
     a = series(3); a['id'] = 'a'; a['name'] = 'A'
     b = series(8); b['id'] = 'b'; b['name'] = 'B'; b['tmdb_info']['match_status'] = 'aligned'

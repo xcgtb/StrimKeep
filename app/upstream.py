@@ -22,6 +22,11 @@ ROUTES = {
     'transfer': ('POST', '/api/media/resources/transfer'),
     'history': ('GET', '/api/organize-history'),
     'detail': ('GET', '/api/organize-history/detail'),
+    'copy_link': ('POST', '/api/media/resources/copy-link'),
+    'media_settings': ('GET', '/api/media/settings'),
+    'resource_subscribe': ('POST', '/api/media/subscriptions'),
+    'resource_subscriptions': ('GET', '/api/media/subscriptions'),
+    'subscription_events': ('GET', '/api/media/subscriptions/events'),
 }
 MAX_RESPONSE = 2 * 1024 * 1024
 MAX_HANDLES = 500
@@ -314,8 +319,153 @@ def providers():
         if not re.fullmatch(r'[A-Za-z0-9_-]{1,50}', key) or key in seen:
             continue
         seen.add(key)
-        targets.append({'id': key, 'name': text(row.get('name') or row.get('label') or key, 80)})
+        targets.append({'id': key, 'name': text(row.get('name') or row.get('label') or key, 80),
+                        'directory_id': resource_display(row, 'directory_id', 'folder_id', 'cid', 'target_dir_id', limit=80),
+                        'directory_path': resource_display(row, 'directory_path', 'folder_path', 'target_path', 'path', limit=300)})
     return {'items': targets}
+
+
+def transfer_directories():
+    cfg = enabled_settings('media_settings')
+    value = request('media_settings', cfg=cfg)
+    for _ in range(5):
+        if not isinstance(value, dict):
+            break
+        if 'media_transfer_targets' in value:
+            targets = value['media_transfer_targets']
+            if isinstance(targets, str) and len(targets) < 8192:
+                try:
+                    targets = json.loads(targets)
+                except ValueError:
+                    break
+            if isinstance(targets, dict):
+                targets = [dict(v, provider=k) for k, v in list(targets.items())[:40] if isinstance(v, dict)]
+            if not isinstance(targets, list):
+                break
+            return {'items': [{'id': resource_text(v, 'provider', 'id', 'key', limit=50),
+                  'directory_id': resource_text(v, 'directory_id', 'folder_id', 'cid', 'target_dir_id', 'dir_id', 'target_cid', limit=80),
+                  'directory_path': resource_text(v, 'directory_path', 'folder_path', 'target_path', 'path', 'save_path', limit=300)}
+                 for v in targets[:40] if isinstance(v, dict)]}
+        value = value.get('settings') or value.get('data')
+    raise UpstreamError('上游未提供可识别的保存目录信息，请在上游核对转存目标', 502)
+
+
+def resource_subscriptions():
+    cfg = enabled_settings('resource_subscriptions')
+    rows = collection(request('resource_subscriptions', cfg=cfg), ('subscriptions', 'items', 'list'))
+    return [{'id': text(r.get('id'), 80), 'title': text(r.get('title') or r.get('name')),
+             'enabled': r.get('enabled') if isinstance(r.get('enabled'), bool) else None,
+             'target_provider': text(r.get('target_provider'), 50)} for r in rows[:100] if isinstance(r, dict)]
+
+
+def subscription_events():
+    cfg = enabled_settings('subscription_events')
+    rows = collection(request('subscription_events', query={'limit': 30}, cfg=cfg), ('events', 'items', 'list'))
+    return [{'title': resource_text(r, 'title', 'name', limit=200),
+             'status': resource_text(r, 'status', 'event_type', 'type', limit=80),
+             'message': resource_text(r, 'message', 'reason', 'summary', limit=500)}
+            for r in rows[:30] if isinstance(r, dict)]
+
+
+def business_operation(action, body):
+    """Explicit writes with persistent duplicate protection and no automatic retry."""
+    if action not in ('copy_link', 'resource_subscribe') or body.get('confirmed') is not True:
+        raise UpstreamError('请明确确认上游操作范围')
+    cfg = enabled_settings(action)
+    operation = body.get('operation_id')
+    if not isinstance(operation, str) or not re.fullmatch(r'[A-Za-z0-9_-]{16,80}', operation):
+        raise UpstreamError('请求编号无效')
+    provider = body.get('provider')
+    if not isinstance(provider, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,50}', provider):
+        raise UpstreamError('目标标识无效')
+    with _LOCK:
+        jobs = _jobs()
+        if operation in jobs:
+            if jobs[operation].get('action') != action or jobs[operation].get('provider') != provider:
+                raise UpstreamError('请求编号已用于另一操作', 409)
+            return public_job(jobs[operation])
+        if action == 'copy_link':
+            handle = body.get('handle')
+            if not isinstance(handle, str) or not 1 <= len(handle) <= 100:
+                raise UpstreamError('资源选择编号无效')
+            candidate = _handles.get(handle)
+            if not candidate or time.monotonic() - candidate['time'] >= HANDLE_TTL or candidate['connection'] != fingerprint(cfg):
+                raise UpstreamError('资源选择已过期，请重新搜索', 409)
+            identity = candidate['identity']
+            if not identity.get('source') or not identity.get('slug'):
+                raise UpstreamError('上游复制链接接口需要 source 和 slug，此资源未提供', 409)
+            payload = {k: identity[k] for k in ('source', 'slug')}
+            payload['provider'] = provider
+            title = candidate['title']
+        else:
+            title = body.get('title')
+            media = body.get('media_type')
+            tid = str(body.get('tmdb_id') or '')
+            if not isinstance(title, str) or not 1 <= len(title.strip()) <= 200 or media not in ('tv', 'movie') or not 1 <= len(tid) <= 15 or not tid.isdecimal() or int(tid) < 1:
+                raise UpstreamError('资源订阅需要片名、类型和 TMDB ID')
+            payload = {'source': 'tmdb', 'entity_type': media, 'media_type': media,
+                       'external_id': tid, 'tmdb_id': tid, 'title': title.strip(),
+                       'target_provider': provider, 'enabled': True}
+        signature = hashlib.sha256(json.dumps([action, payload, fingerprint(cfg)], sort_keys=True).encode()).hexdigest()
+        for job in jobs.values():
+            if job.get('signature') == signature:
+                return public_job(job)
+        if len(jobs) >= 100 or not _WRITE.acquire(blocking=False):
+            raise UpstreamError('上游任务繁忙或记录已满，请核实已有任务后再操作', 409)
+        jobs[operation] = {'id': operation, 'action': action, 'title': title, 'provider': provider,
+                           'signature': signature, 'state': 'submitting', 'created': time.time(), 'message': '正在提交，请勿重复操作'}
+        try:
+            state_store.save(_job_path(), jobs)
+            threading.Thread(target=_submit_business, args=(operation, action, payload, cfg, body.get('notify_import') is True), daemon=True).start()
+        except Exception:
+            _WRITE.release()
+            raise
+        return public_job(jobs[operation])
+
+
+def _submit_business(operation, action, payload, cfg, notify_import=False):
+    try:
+        state, message, link = 'unknown', '结果未确认，请在上游核实；不会自动重试', ''
+        try:
+            baseline = None
+            if action == 'resource_subscribe' and notify_import:
+                from . import resource_watch
+                baseline = resource_watch.current(payload)
+            result = request(action, payload, cfg=cfg)
+            data = result.get('data', result) if isinstance(result, dict) else {}
+            if action == 'copy_link':
+                link = resource_text(data, 'share_url', 'url', 'link', limit=4096) if isinstance(data, dict) else ''
+                if link and not re.match(r'^(https?://|magnet:\?)', link):
+                    link = ''
+                accepted = bool(link)
+            else:
+                accepted = isinstance(result, dict) and (result.get('success') is True or result.get('ok') is True or str(result.get('status', '')).lower() in ('success', 'ok', 'accepted', 'queued'))
+            if accepted:
+                state, message = 'submitted', '上游已接收；任务完成与 Emby 入库需分别核实'
+                if action == 'resource_subscribe' and notify_import:
+                    try:
+                        from . import resource_watch
+                        resource_watch.register(payload, baseline)
+                        resource_watch.changed()
+                        message += '；入库通知已登记，请确保 Telegram 和入库监控已启用'
+                    except Exception:
+                        message += '；本地入库通知登记失败，请重新配置通知，勿重复创建上游订阅'
+        except Exception:
+            pass
+        with _LOCK:
+            jobs = _jobs()
+            jobs[operation].update(state=state, message=message, link=link)
+            state_store.save(_job_path(), jobs)
+    finally:
+        _WRITE.release()
+
+
+def operation_link(operation):
+    with _LOCK:
+        job = _jobs().get(operation)
+        if not job or job.get('action') != 'copy_link' or job.get('state') != 'submitted':
+            raise UpstreamError('链接尚未确认，请查看任务状态', 409)
+        return job.get('link', '')
 
 
 def search(body):

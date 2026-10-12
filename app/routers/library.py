@@ -470,11 +470,21 @@ def _delete_title_files(files, target, title, media_type, series_id=None, tmdb_i
 
 @router.post('/api/emby/series/batch-delete/preview', dependencies=[Depends(auth)])
 def api_batch_series_preview(body: dict = None):
-    return batch_library_delete.preview(body)
+    return batch_library_delete.preview(dict(body or {}, media='series'))
 
 
 @router.post('/api/emby/series/batch-delete/execute', dependencies=[Depends(auth)])
 def api_batch_series_execute(body: dict = None):
+    return batch_library_delete.execute(body, _delete_title_files)
+
+
+@router.post('/api/emby/movies/batch-delete/preview', dependencies=[Depends(auth)])
+def api_batch_movies_preview(body: dict = None):
+    return batch_library_delete.preview(dict(body or {}, media='movies'))
+
+
+@router.post('/api/emby/movies/batch-delete/execute', dependencies=[Depends(auth)])
+def api_batch_movies_execute(body: dict = None):
     return batch_library_delete.execute(body, _delete_title_files)
 
 

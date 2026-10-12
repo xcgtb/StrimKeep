@@ -685,7 +685,7 @@ var mappingBatchAll = false;
 var mappingBatchSelected = new Set();
 var mappingBatchContext = '';
 function mappingBatchAllowed(){
-  return embyFilterState.type === 'series' &&
+  return (embyFilterState.type === 'series' || embyFilterState.type === 'movies') &&
     (embyFilterState.scope === 'local' || embyFilterState.scope === 'share');
 }
 function mappingBatchFilters(){
@@ -777,8 +777,9 @@ async function mappingBatchDelete(){
   try {
     var selection = mappingBatchAll ? 'all' : 'selected';
     var body = Object.assign(mappingBatchFilters(), {selection:selection});
-    if (selection === 'selected') body.series_ids = Array.from(mappingBatchSelected);
-    var preview = await api('/api/emby/series/batch-delete/preview', {
+    var media=embyFilterState.type === 'movies' ? 'movies' : 'series';
+    if (selection === 'selected') body[media==='movies'?'movie_ids':'series_ids'] = Array.from(mappingBatchSelected);
+    var preview = await api('/api/emby/'+media+'/batch-delete/preview', {
       method:'POST',body:JSON.stringify(body),timeoutMs:60000});
     if (preview.status !== 'success') throw new Error(preview.message || '预览失败');
     var isLocal = preview.target === 'local';
@@ -796,7 +797,7 @@ async function mappingBatchDelete(){
     }
     phase = 'delete';
     mappingBatchProgress(preview);
-    var result = await executeMappingDelete('/api/emby/series/batch-delete/execute', {
+    var result = await executeMappingDelete('/api/emby/'+media+'/batch-delete/execute', {
       target:preview.target,preview_id:preview.preview_id,confirmation:phrase,confirm:true});
     if (result.status !== 'success') throw new Error(result.message || '批量执行未完成');
     mappingBatchSelected.clear();mappingBatchAll=false;mappingBatchMode=false;
@@ -1078,6 +1079,10 @@ function showMovieDetailById(id){
   html += '</div>';
   html += '<div style="margin-top:8px;font-size:12px;color:#6b7280">\u7535\u5f71</div>';
   html += '</div></div>';
+
+  html += '<section class="mapping-movie-libraries"><h4>两库版本</h4><div class="mapping-action-tools">' +
+    '<div><b>本地库</b><p>' + (m.in_local ? '已入库' + (m.local_versions != null ? ' · '+esc(m.local_versions)+' 个版本' : ' · 版本数待补充') : '未入库') + '</p></div>' +
+    '<div><b>分享库</b><p>' + (m.in_share ? '已入库' + (m.share_versions != null ? ' · '+esc(m.share_versions)+' 个版本' : ' · 版本数待补充') : '未入库') + '</p></div></div></section>';
 
   var embyHost = (window.__embyHost || '').replace(/\/+$/, '');
   html += '<div class="mapping-detail-actions"><div class="mapping-action-delete-row">';
@@ -1381,8 +1386,9 @@ function renderMovieCard(m){
       ? '<div class="poster-loading">海报加载中</div><img data-emby-src="/api/emby/poster/' + esc(m.id) + '" loading="lazy" decoding="async" onload="clearPosterLoading(this)">'
       : '<div class="no-img">暂无海报</div>');
 
+  var mark = typeof mappingBatchMode !== 'undefined' && mappingBatchMode && mappingBatchAllowed() ? '<label class="mapping-batch-card-check" onclick="event.stopPropagation()"><input type="checkbox" aria-label="选择 '+esc(m.name||'电影')+'" '+(mappingBatchAll?'checked disabled ':(mappingBatchSelected.has(String(m.id))?'checked ':''))+'onchange="mappingBatchSetItem('+jsarg(m.id)+',this.checked)"></label>' : '';
   return '<div class="poster-card emby-poster-card" data-movie-id="' + esc(m.id) + '" onclick="showMovieDetailById(' + jsarg(m.id) + ')">'
-    + '<div class="poster-wrap">' + poster
+    + mark + '<div class="poster-wrap">' + poster
     + '<span class="badge-type">电影</span>'
     + '</div>'
     + '<div class="info">'

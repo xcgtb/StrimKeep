@@ -35,6 +35,9 @@ def _target(body):
 
 def _checked_rows(body):
     target = _target(body)
+    media = body.get('media', 'series')
+    if media not in ('series', 'movies'):
+        raise ValueError('无效媒体类型')
     status = body.get('filter', 'all')
     category = body.get('category', '')
     keyword = body.get('keyword', '')
@@ -46,7 +49,7 @@ def _checked_rows(body):
     if (not isinstance(category, str) or not isinstance(keyword, str) or
             len(category) > 80 or len(keyword) > 120):
         raise ValueError('分类或搜索内容无效')
-    ids = body.get('series_ids', [])
+    ids = body.get('movie_ids' if media == 'movies' else 'series_ids', [])
     if selection == 'selected':
         if (not isinstance(ids, list) or not 1 <= len(ids) <= maximum or
                 any(not isinstance(x, str) or not x or len(x) > 128 for x in ids) or
@@ -58,7 +61,7 @@ def _checked_rows(body):
         if not library_pagination._read():
             raise ValueError('片库数据尚未就绪，请先完成一次片库映射')
         revision = library_response._key()
-        rows = library_pagination._filtered('series', status, target, category, mode, keyword.strip().lower())
+        rows = library_pagination._filtered(media, status, target, category, mode, keyword.strip().lower())
         allowed = {str(row['id']): row for row in rows if row.get('id') and row.get('in_' + target)}
         if selection == 'selected':
             if any(sid not in allowed for sid in ids):
@@ -74,14 +77,14 @@ def _checked_rows(body):
         records = []
         member_seen = set()
         for row in selected:
-            members = [str(x) for x in (row.get('series_ids') or [row['id']]) if x]
+            members = [str(x) for x in (row.get('ids' if media == 'movies' else 'series_ids') or [row['id']]) if x]
             if (not members or len(members) > 12 or len(set(members)) != len(members) or
                     any(len(x) > 128 for x in members) or member_seen.intersection(members)):
                 raise ValueError('发现无效或重复的电视剧成员 ID，拒绝执行批量操作')
             member_seen.update(members)
             records.append({'id': str(row['id']), 'name': str(row.get('name') or '')[:180],
                             'year': row.get('year'), 'tmdb_id': str(row.get('tmdb_id') or ''),
-                            'members': members, 'target': target})
+                            'members': members, 'target': target, 'media': media})
         if revision != library_response._key():
             raise ValueError('片库快照刚发生变化，请重新预览')
     return revision, records, target, maximum
@@ -94,6 +97,8 @@ def _collect(row):
     delete a path unless it has an explicit SeriesId belonging to the verified
     same-title group and maps under the selected root.
     """
+    if row.get('media') == 'movies':
+        return _collect_movie(row)
     members = row['members']
     tid = row['tmdb_id']
     if not tid.isdecimal() or not row['name'] or row.get('year') is None:
@@ -151,6 +156,38 @@ def _collect(row):
     return sorted(paths), primary
 
 
+def _collect_movie(row):
+    members, tid = row['members'], row['tmdb_id']
+    if not tid.isdecimal() or not row['name'] or row.get('year') is None:
+        raise ValueError('电影缺少可核实的 TMDB、片名或年份')
+    response = engine.emby_request('/Items', {'Ids': ','.join(members), 'Recursive': 'true',
+        'IncludeItemTypes': 'Movie', 'Fields': 'Path,ProviderIds,ProductionYear', 'Limit': len(members) + 1}, timeout=15, retries=0)
+    if not isinstance(response, dict) or response.get('TotalRecordCount') != len(members) or not isinstance(response.get('Items'), list) or len(response['Items']) != len(members):
+        raise ValueError('电影成员响应不完整，禁止批量删除')
+    root = engine.L_ROOT if row['target'] == 'local' else engine.S_ROOT
+    paths, seen = set(), set()
+    for item in response['Items']:
+        ident = str(item.get('Id') or '')
+        if ident not in members or ident in seen or item.get('Type') != 'Movie' or str(item.get('Name') or '').casefold() != row['name'].casefold() or str(item.get('ProductionYear') or '') != str(row['year']) or str((item.get('ProviderIds') or {}).get('Tmdb') or '') != tid:
+            raise ValueError('电影成员身份不一致，禁止批量删除')
+        seen.add(ident)
+        path = item.get('Path') or ''
+        lib = engine.EMBY_PATHS.lib_of(path, fallback=False)
+        if lib not in ('local', 'share'):
+            raise ValueError('电影库路径无法核实')
+        if lib != row['target']:
+            continue
+        converted = engine.emby_path_to_container(path)
+        if converted is None or converted.suffix.lower() != '.strm' or not engine._inside(converted, root) or not converted.is_file():
+            raise ValueError('电影路径无法严格核实为目标库 STRM')
+        paths.add(str(converted))
+    # Do not remove extra files that Emby did not explicitly prove.
+    found = {str(p) for p in engine.find_movie_strms_by_tmdb(root, tid)}
+    if paths != found:
+        raise ValueError('电影目录文件与 Emby 版本不一致，请单片核实')
+    return sorted(paths), members[0]
+
+
 def preview(body):
     try:
         revision, records, target, maximum = _checked_rows(body or {})
@@ -196,7 +233,8 @@ def _run(records, target, progress, delete_files):
                 raise ValueError('源文件或库归属与预览不同，本部跳过，请重新预览')
             from pathlib import Path
             files = [Path(p) for p in current]
-            result = delete_files(files, target, row['name'], '剧集', series_id=primary)
+            result = (delete_files(files, target, row['name'], '电影', tmdb_id=row['tmdb_id'])
+                      if row.get('media') == 'movies' else delete_files(files, target, row['name'], '剧集', series_id=primary))
             if result.get('status') != 'success':
                 raise ValueError(str(result.get('message') or '删除失败'))
             num = int(result.get('strm_removed') or 0)

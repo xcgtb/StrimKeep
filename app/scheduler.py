@@ -48,6 +48,9 @@ def _request_notification_delivery():
             try:
                 engine.drain_subscription_notifications(limit=2, time_budget=15, should_stop=_stop.is_set)
                 if not _stop.is_set():
+                    from . import resource_watch
+                    resource_watch.drain(limit=2)
+                if not _stop.is_set():
                     engine.recover_subscription_notifications()
             except Exception as error:
                 engine.log.warning('追更后台发送/补报失败: %s', error)

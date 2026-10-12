@@ -18,6 +18,11 @@ def _path():
 
 
 def publish(series_ids=(), *, movie_ids=(), full=False):
+    try:
+        from . import resource_watch
+        resource_watch.changed()
+    except Exception:
+        pass  # UI revision publication must not depend on notification persistence.
     ids = sorted({str(i) for i in series_ids if i})
     movies = sorted({str(i) for i in movie_ids if i})
     if len(ids) + len(movies) > _MAX_IDS:

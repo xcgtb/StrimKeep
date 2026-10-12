@@ -73,6 +73,33 @@ def test_preview_local_and_share_exact_files(ctx):
     assert b['status']=='success' and b['strm_count']==2
     assert mod.preview({'target':'local','scope':'share','selection':'all'})['status']=='error'
 
+
+def test_movie_batch_exact_target_identity_and_no_extra_files(ctx, monkeypatch):
+    mod, engine, _, _, _, accepted, pager = ctx
+    row = {'id': 'm1', 'ids': ['m1', 'm2'], 'tmdb_id': '7', 'name': '电影', 'year': 2024, 'in_local': True, 'in_share': True}
+    pager._filtered = lambda *a: [row]
+    items = [{'Id': ident, 'Type': 'Movie', 'Name': '电影', 'ProductionYear': 2024, 'ProviderIds': {'Tmdb': '7'}, 'Path': '/' + lib + '/movie.strm'} for ident, lib in [('m1', 'local'), ('m2', 'share')]]
+    for item in items:
+        engine.emby_path_to_container(item['Path']).write_text('fixture')
+    engine.emby_request = lambda *a, **kw: {'Items': items, 'TotalRecordCount': 2}
+    engine.find_movie_strms_by_tmdb = lambda root, tid: [root / 'movie.strm']
+    body = {'media': 'movies', 'target': 'share', 'scope': 'share', 'selection': 'selected', 'movie_ids': ['m1']}
+    pre = mod.preview(body)
+    assert pre['status'] == 'success' and pre['strm_count'] == 1
+    seen = []
+    def delete(files, target, title, media_type, tmdb_id):
+        seen.append((files, target, tmdb_id))
+        return {'status': 'success', 'strm_removed': len(files)}
+    reply = mod.execute({'target': 'share', 'confirm': True, 'confirmation': '删除分享库', 'preview_id': pre['preview_id'], 'operation_id': 'm' * 32}, delete)
+    assert reply['status'] == 'accepted'
+    accepted.pop()[1](lambda event: None)
+    assert seen[0][1:] == ('share', '7') and all(p.is_relative_to(engine.S_ROOT) for p in seen[0][0])
+    items[1]['ProviderIds']['Tmdb'] = '999'
+    assert mod.preview(body)['status'] == 'error'
+    items[1]['ProviderIds']['Tmdb'] = '7'
+    engine.find_movie_strms_by_tmdb = lambda root, tid: [root / 'movie.strm', root / 'unverified.strm']
+    assert mod.preview(body)['status'] == 'error'
+
 def test_execute_requires_target_phrase_and_runs_only_target_paths(ctx):
     mod,engine,_,_,_,accepted,_=ctx
     pre=mod.preview({'target':'local','scope':'local','selection':'all'})

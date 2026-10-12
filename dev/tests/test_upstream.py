@@ -194,7 +194,7 @@ def test_targets_explicit_groups_only(env, monkeypatch, reply):
     calls = []
     monkeypatch.setattr(u, 'capabilities', lambda cfg: {'providers':True})
     monkeypatch.setattr(u, 'request', lambda action, **kw: calls.append(action) or reply)
-    assert u.providers() == {'items':[{'id':'115','name':'115 网盘'}]}
+    assert u.providers() == {'items':[{'id':'115','name':'115 网盘','directory_id':'','directory_path':''}]}
     assert calls == ['providers']
 
 
@@ -244,6 +244,50 @@ def test_resource_unknown_fields_and_false_values_are_not_overridden():
     assert result['unlocked'] is False and result['points'] == '8' and result['unlock_count'] == '0'
     assert 'secret' not in json.dumps(result)
     assert u.resource_metadata({'is_valid': False})['verification'] == '校验无效'
+
+
+def test_copy_link_private_result_and_duplicate_guard(env, monkeypatch):
+    _, handle = resource(monkeypatch)
+    workers = run_workers(monkeypatch)
+    calls = []
+    monkeypatch.setattr(u, 'capabilities', lambda cfg: {'copy_link': True})
+    monkeypatch.setattr(u, 'request', lambda action, payload, cfg: calls.append((action, payload)) or {'data': {'share_url': 'https://115.com/s/fixture', 'token': 'secret'}})
+    body = {'confirmed': True, 'operation_id': 'copy_operation_0001', 'provider': '115', 'handle': handle}
+    job = u.business_operation('copy_link', body)
+    assert u.business_operation('copy_link', body)['id'] == job['id'] and len(workers) == 1
+    workers[0]()
+    assert u.operation_link(job['id']) == 'https://115.com/s/fixture'
+    assert 'https://115' not in json.dumps(u.get_jobs())
+    assert set(calls[0][1]) == {'source', 'slug', 'provider'}
+    assert 'secret' not in json.dumps(u.get_jobs())
+
+
+def test_business_scope_and_unknown_result_do_not_retry(env, monkeypatch):
+    _, handle = resource(monkeypatch)
+    workers = run_workers(monkeypatch)
+    monkeypatch.setattr(u, 'capabilities', lambda cfg: {'copy_link': True})
+    calls = []
+    def request(*a, **k):
+        calls.append(a)
+        raise TimeoutError()
+    monkeypatch.setattr(u, 'request', request)
+    body = {'confirmed': True, 'operation_id': 'copy_operation_0001', 'provider': '115', 'handle': handle}
+    with pytest.raises(u.UpstreamError):
+        u.business_operation('share_strm', body)
+    assert not calls and 'share_strm' not in u.ROUTES
+    job = u.business_operation('copy_link', body)
+    workers[0]()
+    assert u.get_jobs()[0]['state'] == 'unknown'
+    assert u.business_operation('copy_link', dict(body, operation_id='copy_operation_0002'))['id'] == job['id']
+    assert len(calls) == len(workers) == 1
+
+
+def test_directory_response_is_public_projection(env, monkeypatch):
+    monkeypatch.setattr(u, 'capabilities', lambda cfg: {'media_settings': True})
+    monkeypatch.setattr(u, 'request', lambda *a, **k: {'settings': {'media_transfer_targets': {'115': {'folder_id': '1234', 'path': '/电影', 'token': 'secret'}}}})
+    result = u.transfer_directories()
+    assert result == {'items': [{'id': '115', 'directory_id': '1234', 'directory_path': '/电影'}]}
+    assert 'secret' not in json.dumps(result)
 
 
 def test_timeout_unknown_restart_and_acknowledgement(env, monkeypatch):

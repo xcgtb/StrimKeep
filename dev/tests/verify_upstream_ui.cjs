@@ -10,7 +10,7 @@ function node(id){return nodes[id]||(nodes[id]={value:'',checked:false,disabled:
  querySelectorAll(){return [];},querySelector(){return null;},classList:{contains(){return true;}}});}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 let accept=true,request=async()=>({status:'success',settings:{url:'http://fixture',enabled:true,has_token:true,max_points:0}});
-const ctx={$:node,esc,jsarg:s=>esc(JSON.stringify(String(s))),encodeURIComponent,Uint32Array,
+const ctx={$:node,esc,jsarg:s=>esc(JSON.stringify(String(s))),encodeURIComponent,Uint32Array,URL,
  window:{crypto:{getRandomValues(values){values.fill(7);}}},confirm:()=>accept,toast(){},
  setTimeout:fn=>timers.push(fn),api:async(url,opts)=>{calls.push({url,opts});return request(url,opts);},
  openModal(markup){node('modalBody').innerHTML=markup;node('modalBody').querySelector=()=>({getAttribute:()=>String(ctx.tgtoGeneration)});}};
@@ -87,5 +87,10 @@ function deferred(){let resolve;const promise=new Promise(r=>resolve=r);return {
  assert.equal(node('tgtoTarget').innerHTML,'current','stale target reply cannot affect new view');
  request=async()=>({fields:{title:'<script>x</script>',target_path:'/media/name'}});
  await ctx.tgtoDetail('7');assert(!node('tgtoResults').innerHTML.includes('<script>'));
+ ctx.tgtoOpen({title:'单链接',media_type:'movie'});ctx.tgtoView.items=[{title:'A',transferable:true,copyLink:'https://115cdn.com/s/fixture?password=abcd'}];calls.length=0;
+ ctx.tgtoRenderResources(ctx.tgtoView);
+ assert(node('tgtoResults').innerHTML.includes('复制已获取链接'));
+ assert(!source.includes('tgtoCreateShareStrm') && !source.includes('shareCommand'),'removed feature has no handlers or command state');
+ assert(!source.includes('configured-directories') && !source.includes("'share_strm'"),'resource UI must never call the directory scanner');
  console.log('PASS upstream UI: no startup request, secret preservation, safe rendering, scoped search, stale replies, confirmation, uncertain outcome and scoped task polling');
 })().catch(e=>{console.error(e);process.exitCode=1;});
