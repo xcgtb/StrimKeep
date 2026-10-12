@@ -230,6 +230,22 @@ def test_public_resource_fields_preserve_zero_and_bound_lists():
     assert len(u.resource_text({'notes': 'x' * 1000}, 'notes', limit=600)) == 600
 
 
+@pytest.mark.parametrize('value, expected', [(True, True), (False, False), ('false', False), ('true', True), (0, False), ('unknown', None)])
+def test_resource_access_state_does_not_infer_from_popularity_or_zero_cost(value, expected):
+    result = u.resource_metadata({'metadata': {'is_unlocked': value, 'unlock_points': 0, 'unlock_count': 179, 'audio_codec': 'DDP 5.1'}})
+    assert result['unlocked'] is expected
+    assert result['points'] == '0' and result['unlock_count'] == '179'
+    assert result['audio'] == 'DDP 5.1'
+    assert u.resource_metadata({'points': 0, 'unlock_count': 179})['unlocked'] is None
+
+
+def test_resource_unknown_fields_and_false_values_are_not_overridden():
+    result = u.resource_metadata({'is_unlocked': False, 'metadata': {'is_unlocked': True, 'points_cost': 8, 'unlock_count': 0, 'token': 'secret'}})
+    assert result['unlocked'] is False and result['points'] == '8' and result['unlock_count'] == '0'
+    assert 'secret' not in json.dumps(result)
+    assert u.resource_metadata({'is_valid': False})['verification'] == '校验无效'
+
+
 def test_timeout_unknown_restart_and_acknowledgement(env, monkeypatch):
     _,handle=resource(monkeypatch)
     mock_remote(monkeypatch, transfer=TimeoutError())

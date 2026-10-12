@@ -207,6 +207,65 @@ def resource_text(row, *keys, limit=300):
     return ''
 
 
+def resource_fields(row):
+    """Read bounded known metadata envelopes, never forward the raw response."""
+    fields = [row]
+    for key in ('metadata', 'resource_info', 'attributes', 'extra', 're0'):
+        value = row.get(key)
+        if isinstance(value, dict):
+            fields.append(value)
+    return fields
+
+
+def resource_display(row, *keys, limit=300):
+    for fields in resource_fields(row):
+        value = resource_text(fields, *keys, limit=limit)
+        if value:
+            return value
+    return ''
+
+
+def resource_flag(row, *keys):
+    for fields in resource_fields(row):
+        for key in keys:
+            value = fields.get(key)
+            if value is True or value == 1 or (isinstance(value, str) and value.lower() in ('true', '1', 'yes')):
+                return True
+            if value is False or value == 0 or (isinstance(value, str) and value.lower() in ('false', '0', 'no')):
+                return False
+    return None
+
+
+def resource_metadata(row):
+    unlocked = resource_flag(row, 'is_unlocked', 'unlocked', 'has_unlocked', 'already_unlocked')
+    if unlocked is None:
+        status = resource_display(row, 'unlock_status', 'access_status', limit=40).lower()
+        if status in ('unlocked', '已解锁'):
+            unlocked = True
+        elif status in ('locked', '未解锁'):
+            unlocked = False
+    if unlocked is None:
+        locked = resource_flag(row, 'is_locked', 'locked')
+        if locked is not None:
+            unlocked = not locked
+    verification = resource_display(row, 'verification', 'verification_status', 'validation_status', 'check_status', limit=80)
+    if not verification:
+        valid = resource_flag(row, 'is_valid', 'link_valid', 'validated')
+        verification = '校验有效' if valid is True else ('校验无效' if valid is False else '')
+    return {
+        'publisher': resource_display(row, 'publisher', 'publisher_name', 'sharer', 'share_user', 'uploader', 'author', limit=100),
+        'points': resource_display(row, 'points', 'unlock_points', 'points_cost', 'point_cost', 'required_points', 'cost_points', 'unlock_cost', limit=40),
+        'unlocked': unlocked,
+        'unlock_count': resource_display(row, 'unlock_count', 'unlocked_count', 'unlock_people', 'unlocked_users_count', 'unlock_user_count', limit=20),
+        'reviewed_count': resource_display(row, 'reviewed_count', 'review_count', 'reviewer_count', limit=20),
+        'subtitles': resource_display(row, 'subtitles', 'subtitle', 'subtitle_tags', limit=200),
+        'verification': verification,
+        'note': resource_display(row, 'note', 'notes', 'remark', 'remarks', 'description', limit=600),
+        'specs': resource_display(row, 'specs', 'quality_tags', 'format_tags', limit=300),
+        'audio': resource_display(row, 'audio', 'audio_codec', 'audio_format', limit=100),
+    }
+
+
 def collection(value, keys):
     """Known response envelopes only. Unknown is an error, never fake empty."""
     for _ in range(8):
@@ -302,21 +361,15 @@ def search(body):
             candidates.append({'handle': handle, 'title': text(row.get('title') or row.get('name') or title),
                                'source': text(row.get('source'), 80),
                                'quality': text(row.get('quality') or row.get('resolution'), 100),
-                               'size': text(row.get('size') or row.get('size_text'), 80),
-                               'provider': text(row.get('provider') or row.get('drive_type') or row.get('netdisk'), 80),
-                               'resolution': text(row.get('resolution'), 40),
-                               'release_type': text(row.get('release_type') or row.get('video_type'), 60),
-                               'video_effect': text(row.get('video_effect') or row.get('dynamic_range') or row.get('hdr'), 80),
-                               'codec': text(row.get('codec') or row.get('video_codec'), 60),
-                               'release_group': text(row.get('release_group') or row.get('group'), 80),
-                               'file_count': text(row.get('file_count'), 20),
-                               'publisher': resource_text(row, 'publisher', 'publisher_name', 'sharer', 'share_user', 'uploader', 'author', limit=100),
-                               'reviewed_count': resource_text(row, 'reviewed_count', 'review_count', 'reviewer_count', limit=20),
-                               'subtitles': resource_text(row, 'subtitles', 'subtitle', 'subtitle_tags', limit=200),
-                               'verification': resource_text(row, 'verification', 'verification_status', 'validation_status', 'check_status', limit=80),
-                               'note': resource_text(row, 'note', 'notes', 'remark', 'remarks', 'description', limit=600),
-                               'specs': resource_text(row, 'specs', 'quality_tags', 'format_tags', limit=300),
-                               'points': text(row.get('points'), 40), 'transferable': valid})
+                               'size': resource_display(row, 'size', 'size_text', 'file_size_text', limit=80),
+                               'provider': resource_display(row, 'provider', 'drive_type', 'netdisk', 'cloud_type', limit=80),
+                               'resolution': resource_display(row, 'resolution', limit=40),
+                               'release_type': resource_display(row, 'release_type', 'video_type', limit=60),
+                               'video_effect': resource_display(row, 'video_effect', 'dynamic_range', 'hdr', limit=80),
+                               'codec': resource_display(row, 'codec', 'video_codec', limit=60),
+                               'release_group': resource_display(row, 'release_group', 'group', limit=80),
+                               'file_count': resource_display(row, 'file_count', limit=20),
+                               **resource_metadata(row), 'transferable': valid})
     return {'items': candidates, 'truncated': len(rows) > 50,
             'message': '资源仅为候选，请核对季集和版本后转存；入库状态由 Emby 确认'}
 

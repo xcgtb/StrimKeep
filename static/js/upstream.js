@@ -163,12 +163,18 @@ function tgtoRenderResources(view){
   });
   var cards = visible.map(function(x){
     var item = x.item;
-    var badges = [item.source,item.provider,item.size,item.points !== '' && item.points != null ? item.points + ' 积分' : '',item.reviewed_count !== '' && item.reviewed_count != null ? '已评阅 ' + item.reviewed_count + ' 人' : ''].filter(Boolean);
-    var specs = [item.resolution || item.quality,item.release_type,item.video_effect,item.codec,item.release_group ? '发布组：' + item.release_group : '',item.specs].filter(Boolean);
+    var badges = [item.source,item.provider,item.size].filter(Boolean);
+    var specs = [item.resolution || item.quality,item.release_type,item.video_effect,item.codec,item.audio,item.release_group ? '发布组：' + item.release_group : '',item.specs].filter(Boolean);
+    var access = '<span class="tgto-points">' + esc(item.points !== '' && item.points != null ? item.points + ' 积分' : '积分未提供') + '</span>' +
+      '<span class="tgto-unlock ' + (item.unlocked === true ? 'unlocked' : item.unlocked === false ? 'locked' : '') + '">' +
+      (item.unlocked === true ? '当前账号已解锁' : item.unlocked === false ? '当前账号未解锁' : '账号解锁状态未知') + '</span>' +
+      '<span class="tgto-unlock-count">' + esc(item.unlock_count !== '' && item.unlock_count != null ? '已解锁 ' + item.unlock_count + ' 人' : '解锁人数未提供') + '</span>';
     function detail(label, value){return value ? '<div class="tgto-resource-row"><span>' + label + '</span><p>' + esc(value) + '</p></div>' : '';}
     return '<article class="tgto-resource"><div class="tgto-resource-content"><h4>' + esc(item.title) + '</h4>' +
       '<div class="tgto-publisher">发布者：' + esc(item.publisher || '上游未提供') + '</div><div class="tgto-tags tgto-source-tags">' +
       Array.from(new Set(badges)).map(function(t){return '<span>' + esc(t) + '</span>';}).join('') + '</div>' +
+      '<div class="tgto-tags tgto-access-tags">' + access + '</div>' +
+      detail('评阅', item.reviewed_count !== '' && item.reviewed_count != null ? item.reviewed_count + ' 人' : '') +
       detail('规格', specs.join(' · ')) + detail('字幕', item.subtitles) + detail('校验', item.verification) +
       detail('文件', item.file_count ? item.file_count + ' 个文件' : '') + detail('备注', item.note) + '</div>' +
       (item.transferable ? '<button class="btn tgto-transfer" onclick="tgtoTransfer(' + x.index + ')">转存</button>' : '<span class="hint tgto-unavailable">缺少转存标识</span>') + '</article>';
