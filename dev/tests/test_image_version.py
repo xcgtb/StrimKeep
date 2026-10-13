@@ -56,3 +56,36 @@ def test_main_build_uses_latest_merged_release(tmp_path):
     git(root, 'tag', 'v9.0.0')
     git(root, 'checkout', '-q', '-')
     assert versions.resolve(root, 'branch', 'main') == '1.0.10'
+
+
+def test_main_head_release_yields_fixed_and_latest_metadata(tmp_path):
+    root = repo(tmp_path)
+    git(root, 'tag', 'v1.2.8')
+    metadata = versions.publish_metadata(root)
+    assert metadata == {'value': '1.2.8', 'tag': 'v1.2.8', 'release': 'true'}
+
+
+def test_new_untagged_commit_only_updates_latest(tmp_path):
+    root = repo(tmp_path)
+    git(root, 'tag', 'v1.2.7')
+    (root/'next.txt').write_text('next')
+    git(root, 'add', 'next.txt')
+    git(root, 'commit', '-qm', 'next')
+    assert versions.publish_metadata(root) == {
+        'value': '1.2.7', 'tag': '', 'release': 'false'
+    }
+
+
+def test_ambiguous_release_tags_on_one_commit_are_rejected(tmp_path):
+    root = repo(tmp_path)
+    git(root, 'tag', 'v1.2.7')
+    git(root, 'tag', 'v1.2.8')
+    with pytest.raises(ValueError, match='Multiple release tags'):
+        versions.publish_metadata(root)
+
+
+def test_unrelated_nonrelease_tags_do_not_trigger_version_publish(tmp_path):
+    root = repo(tmp_path)
+    git(root, 'tag', 'v1.2.7')
+    git(root, 'tag', 'latest-test')
+    assert versions.head_release_tag(root) == 'v1.2.7'

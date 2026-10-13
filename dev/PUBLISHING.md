@@ -18,32 +18,38 @@ git status --short
 
 根目录的 `docker-compose.yml` 是可提交的公共模板，凭据必须保持占位值。私人配置放 Git 工作区外的部署目录，或使用已忽略的 `docker-compose.override.yml`；不要修改公共模板为自己的密码再提交。
 
-## 日常更新 latest
+## 自动发布（main + Tag 一次推送）
 
-推送 `main` 后，`publish-image` 自动运行回归检查，再构建并发布 amd64/arm64 的 `ghcr.io/xcgtb/strimkeep:latest`。等待该工作流的 `build` 成功后，NAS 在原 Docker 部署目录执行：
+`main` 推送仅触发一次 `publish-image`：先复用 `checks.yml` 的 Python、前端和生产镜像检查，
+全部通过后 **只构建一次** amd64/arm64 镜像。`checks.yml` 仍独立用于 Pull Request，
+**Tag 推送本身不再触发第二套检查和构建**。
+
+正常修复必须先在 `CHANGELOG.md` 添加对应版本的 `## X.Y.Z（日期）` 标题，再执行：
+
+```bash
+git add <本次实际修改的文件>
+git commit -m "fix: describe changes"
+git tag -a v1.2.8 -m "StrimKeep v1.2.8"
+git push --atomic origin main v1.2.8
+```
+
+`--atomic` 要求 GitHub 同时接收 `main` 和 Tag，防止发布工作流在 Tag 尚不可见时启动。
+`publish-image` 检查 **是否有且只有一个符合 vX.Y.Z 的版本标签指向当前 HEAD**：
+
+- 如果有，先核实 `CHANGELOG` 与标签一致，然后**同一次构建**推送 `latest` 和 `X.Y.Z`。
+- 如果没有，只更新 `latest`，版本号沿用当前分支最近的已发布版本，**不会覆盖固定版本标签**。
+- 如果一个提交有多个有效版本标签，拒绝发布，避免镜像版本不确定。
+- 单独补推 Tag 不触发发布；如已先推 `main` 后补 Tag，需在 Actions 手动运行 `publish-image`（选择 `main`）重新测试并发布。
+
+版本由 Git 标签注入构建参数 `APP_VERSION`；不要修改 `app/version.py` 的本地兜底值 `0.0.0+local`。
+`latest` 仍适合 NAS 测试，待镜像构建成功后在部署目录执行：
 
 ```bash
 docker compose pull strimkeep
 docker compose up -d strimkeep
 ```
 
-部署配置需使用 `ghcr.io/xcgtb/strimkeep:latest`。仅重启容器不会更新镜像。可以在 Actions 手动运行 `publish-image` 并选择 `main`，重建 latest。
-
-日常 main 构建只更新 latest，不覆盖正式版本号镜像。应用使用从 Git 标签自动解析并注入的正式版本，例如 `1.0.3`。Web 仅显示版本号，不显示提交编号；`latest` 的代码可能领先于正式版本标签。
-
-## 正式版本发布
-
-版本由 Git 标签自动注入镜像，无需手动修改源码版本号。源码推送完成后创建并推送下一版本标签，例如：
-
-```bash
-git tag v1.0.4
-git push origin v1.0.4
-```
-
-`publish-image` 先执行 Python、前端和生产镜像检查，再发布 amd64/arm64 镜像。标签必须使用 `v数字.数字.数字` 格式；`v1.0.4` 自动生成 `1.0.4` 镜像并让 Web 显示 `1.0.4`。失败时先修复检查，不绕过 CI。
-
-当前已发布固定版本地址为 `ghcr.io/xcgtb/strimkeep:1.0.3`，日常部署模板继续使用 `latest`。实际发布流程按 GitHub 仓库名生成小写镜像地址。如果更换账号或仓库名，同步修改公共 YML、开发 YML、README 和 Dockerfile 的 source 标签。发布后将 GHCR 包设为公开，普通用户才能不登录直接拉取。
-
-以后正式升级只需选择新 Git 标签，CI 自动确定版本，无需修改 Dockerfile、Compose 或 `app/version.py`。`app/version.py` 只存放 `0.0.0+local` 本地运行兜底标识，**不得**据此判断正式版本。无有效 Git 标签的 CI 镜像构建必须失败。CHANGELOG 顶部保留「未发布」，发版前将本次内容移入新版本标题并同步文档示例。开发 Compose 固定使用 `strimkeep:local`，公共部署模板继续使用 `latest`。已发布成功的版本标签不覆盖。
+Tag 是已公开的不可变发布记录。测试或镜像构建失败时保留失败标签，修复后创建下一个版本，不强制移动旧 Tag。
+GitHub Release 不是必须的，正式发布后可单独创建发行说明。
 
 覆盖源码包时，`dev/docker-compose.build.yml` 是需要一起更新的开发模板。只保护实际部署目录里的配置、密码和数据；不要排除开发模板。推送前运行 `python3 dev/tools/release_check.py`，避免将版本不一致的文件推送到 CI。

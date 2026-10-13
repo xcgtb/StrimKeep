@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Resolve CI image version from Git tags; never use the local source fallback."""
+import argparse
 import os
 from pathlib import Path
 import re
@@ -29,9 +30,39 @@ def resolve(root, ref_type, ref_name):
     return base
 
 
+def head_release_tag(root):
+    """One release tag must point at exactly this commit, not an ancestor."""
+    candidates = git(root, 'tag', '--points-at', 'HEAD').splitlines()
+    releases = [tag for tag in candidates if RELEASE_TAG.fullmatch(tag)]
+    if len(releases) > 1:
+        raise ValueError('Multiple release tags on HEAD; cannot choose a unique image version')
+    return releases[0] if releases else ''
+
+
+def publish_metadata(root):
+    """Main-only pushes update latest; a simultaneous release also gets fixed tags."""
+    tag = head_release_tag(root)
+    version = tag[1:] if tag else resolve(root, 'branch', 'main')
+    return {
+        'value': version,
+        'tag': tag,
+        'release': 'true' if tag else 'false',
+    }
+
+
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--github-output', action='store_true', help='print build metadata to GITHUB_OUTPUT')
+    parser.add_argument('--head-release-tag', action='store_true', help='print an exact HEAD release tag, or empty')
+    args = parser.parse_args()
     try:
-        print(resolve(ROOT, os.environ.get('GITHUB_REF_TYPE', 'branch'),
-                      os.environ.get('GITHUB_REF_NAME', '')))
+        if args.github_output:
+            for key, value in publish_metadata(ROOT).items():
+                print(f'{key}={value}')
+        elif args.head_release_tag:
+            print(head_release_tag(ROOT))
+        else:
+            print(resolve(ROOT, os.environ.get('GITHUB_REF_TYPE', 'branch'),
+                          os.environ.get('GITHUB_REF_NAME', '')))
     except (ValueError, subprocess.CalledProcessError) as exc:
         raise SystemExit(str(exc))
