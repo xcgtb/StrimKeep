@@ -7,7 +7,7 @@ for (const id of ['ingMode','ingReconcile','ingWebhookUrl','ingWebhookStatus','i
 const start = source.indexOf('async function loadIngest()');
 const end = source.indexOf('/* ═══════════ 双库定时巡检',start);
 const elements = {}, calls = [], toasts = [];
-const $ = id => elements[id] || (elements[id] = {});
+const $ = id => elements[id] || (elements[id] = {style:{}, hidden:false});
 let failSave = false;
 const ctx = { $,window:{location:{origin:'https://nas.example'}},encodeURIComponent,Date,parseInt,
   toast:(...a)=>toasts.push(a),

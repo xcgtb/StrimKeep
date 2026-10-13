@@ -638,8 +638,11 @@ window.addEventListener('unhandledrejection', function(e){
           <div style="margin:12px 0">
             <label for="ingWebhookUrl">Emby 回调地址</label>
             <input id="ingWebhookUrl" type="text" readonly style="margin:8px 0;width:100%" aria-label="Emby 回调地址">
-            <button class="btn gray" type="button" onclick="generateIngestCallback()">生成 / 重置回调地址</button>
-            <p style="font-size:12px;color:var(--text-dim)">在 Emby Webhooks 中填写地址，选择媒体新增和删除事件；使用 Emby 可访问的 StrimKeep 地址。重置后需同步修改 Emby。</p>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
+              <button class="btn gray" id="ingWebhookGenerateBtn" type="button" onclick="generateIngestCallback()" hidden>首次生成回调地址</button>
+              <button class="btn red" id="ingWebhookResetBtn" type="button" onclick="requestResetIngestCallback()" hidden>重置回调令牌</button>
+            </div>
+            <p style="font-size:12px;color:var(--text-dim)">在 Emby Webhooks 中填写地址并选择媒体新增、删除事件；这里根据当前网页访问域名显示地址，不会自动修改 Emby 已填写的局域网地址。重置令牌会让旧回调地址立即失效，必须同步更新 Emby。</p>
             <p id="ingWebhookStatus" role="status" style="font-size:12px;word-break:break-word"></p>
           </div>
           <div class="toggle-row" id="ingPollRow">
@@ -872,10 +875,10 @@ window.addEventListener('unhandledrejection', function(e){
 <script defer src="/static/js/dashboard.js?v=25734a8bef58"></script>
 <script defer src="/static/js/governance.js?v=46dc287f6b42"></script>
 <script defer src="/static/js/explore.js?v=b04e7a5b76fb"></script>
-<script defer src="/static/js/mapping.js?v=6d302af590ad"></script>
+<script defer src="/static/js/mapping.js?v=20261013paging-nostore"></script>
 <script defer src="/static/js/subscriptions.js?v=e9d56e664f7f"></script>
 <script defer src="/static/js/records.js?v=823e156e2088"></script>
-<script defer src="/static/js/settings.js?v=34eb5714a1ed"></script>
+<script defer src="/static/js/settings.js?v=20261013hooks-paging"></script>
 <script defer src="/static/js/upstream.js?v=5717a3b51eeb"></script>
 <script defer src="/static/js/plans.js?v=02b979a10f92"></script>
 <script defer src="/static/js/directory-cleanup.js?v=7bd34b96ca79"></script>

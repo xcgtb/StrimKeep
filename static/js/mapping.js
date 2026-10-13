@@ -164,9 +164,11 @@ var mappingPagedTotal = 0;
 var mappingPagedOffset = 0;
 var mappingPagedVersion = null;
 var mappingPagedDirty = false;
+var mappingPagedRecoveryRetries = 0;
 var mappingPagedDetails = Object.create(null);
 var mappingPagedDetailRequests = Object.create(null);
 var mappingPagedSearchTimer = null;
+var mappingPageNonce = 0;
 function scheduleMappingSearch(){
   if (mappingPagedSearchTimer) clearTimeout(mappingPagedSearchTimer);
   mappingPagedSearchTimer = setTimeout(function(){mappingPagedSearchTimer=null;embyPage=1;renderEmbyList();}, 220);
@@ -181,7 +183,9 @@ function mappingPagedQuery(offset, mediaOverride){
     ['keyword', ($('embySearch').value || '').trim()],
     ['offset', offset], ['limit', 40]
   ];
-  return '/api/emby/library/page?' + args.map(function(x){return encodeURIComponent(x[0]) + '=' + encodeURIComponent(x[1]);}).join('&');
+  // A unique query key also bypasses already-cached 200/nocache responses at old URLs.
+  return '/api/emby/library/page?' + args.map(function(x){return encodeURIComponent(x[0]) + '=' + encodeURIComponent(x[1]);}).join('&')
+    + '&__skcb=' + Date.now() + '-' + (++mappingPageNonce);
 }
 function mappingPagedStats(stats){
   embyData.stats = stats || {};
@@ -209,15 +213,35 @@ async function loadMappingPaged(reset){
   if (reset && !embyLoaded) $('embyList').innerHTML = '<div class="list-empty">正在加载片库首屏…</div>';
   var requestedMedia = embyFilterState.type;
   try {
-    var r = await api(mappingPagedQuery(offset), {timeoutMs:12000, signal:ctl ? ctl.signal : undefined});
-    if (generation !== mappingPagedGeneration) return;
+    var r = null;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      r = await api(mappingPagedQuery(offset), {
+        timeoutMs:12000, cache:'no-store', signal:ctl ? ctl.signal : undefined
+      });
+      if (generation !== mappingPagedGeneration) return;
+      if (!r || r.status !== 'nocache') break;
+    }
     if (!r || r.status !== 'success') {
       if (r && r.status === 'nocache' && !mappingPagedActive) {
-        // A genuinely cold first installation keeps the original Emby fallback.
+        // Genuine first-install cold start: keep the pre-existing Emby-only fallback.
+        mappingPagedLoading = false;
         return loadEmbyLibrary(false, false);
       }
-      throw new Error((r && r.message) || '分页接口暂不可用');
+      if (r && r.status === 'nocache') {
+        // Do not discard the current posters/filters or perform an expensive full scan.
+        mappingPagedDirty = true;
+        if (mappingPagedRecoveryRetries < 1) {
+          mappingPagedRecoveryRetries++;
+          setTimeout(function(){
+            if (generation === mappingPagedGeneration && mappingPagedActive && mappingPagedDirty)
+              loadMappingPaged(true);
+          }, 1800);
+        }
+        throw new Error('片库缓存暂不可用，已保留现有海报；稍后自动重试，也可手动重试');
+      }
+      throw new Error((r && r.message) || '片库分页请求失败');
     }
+    mappingPagedRecoveryRetries = 0;
     if (!reset && mappingPagedVersion !== r.facts_version) {
       toast('片库数据已更新，正在重新显示第一页', '', 2200);
       return loadMappingPaged(true);
@@ -328,7 +352,7 @@ async function showMappingFirstScreen(generation){
   __mappingPreviewPending = controller;
   try {
     var response = await api('/api/emby/library/preview', {
-      timeoutMs: 6500, signal: controller ? controller.signal : undefined
+      timeoutMs: 6500, cache:'no-store', signal: controller ? controller.signal : undefined
     });
     if (generation !== embyLibraryGeneration || embyLoaded || !mappingPreviewAllowed() ||
         !response || response.status !== 'success' || !Array.isArray(response.series)) return;

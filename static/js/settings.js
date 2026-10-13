@@ -400,7 +400,13 @@ async function loadIngest(){
     $('ingReconcile').value = s.reconcile_hours || 24;
     $('ingPollRow').hidden = s.mode === 'webhook';
     $('ingWebhookUrl').value = s.webhook_token ? window.location.origin + '/api/emby/webhook?token=' + encodeURIComponent(s.webhook_token) : '';
-    $('ingWebhookUrl').placeholder = '点击生成回调地址，然后在 Emby 中配置';
+    $('ingWebhookUrl').placeholder = '尚未生成回调令牌';
+    var hasToken = !!s.webhook_token;
+    $('ingWebhookGenerateBtn').hidden = hasToken;
+    $('ingWebhookResetBtn').hidden = !hasToken;
+    // 部分主题的 .btn 会覆盖 [hidden]，再明确控制 display。
+    $('ingWebhookGenerateBtn').style.display = hasToken ? 'none' : '';
+    $('ingWebhookResetBtn').style.display = hasToken ? '' : 'none';
     var hook = r.webhook || {};
     var received = hook.received_at || hook.probe_at;
     $('ingWebhookStatus').textContent = (received ? '最近回调：' + new Date(received * 1000).toLocaleString() : '尚未收到 Emby 回调')
@@ -431,16 +437,59 @@ async function saveIngest(){
     if (result.status !== 'success') throw new Error(result.message || '保存失败');
     toast('已保存', 'success');
     loadIngest();
-  } catch(e){ toast('保存失败: ' + e.message, 'error'); }
+  } catch(e){
+    toast('保存失败: ' + e.message, 'error');
+    await loadIngest(); // 保存失败时恢复真实同步模式，避免误以为切换成功。
+  }
 }
 
+var ingestCallbackBusy = false;
 async function generateIngestCallback(){
+  if (ingestCallbackBusy) return;
+  if ($('ingWebhookUrl').value) return toast('已有回调地址，不能再次生成；如需更换请选择重置', 'info');
+  ingestCallbackBusy = true;
+  $('ingWebhookGenerateBtn').disabled = true;
   try {
-    var r = await api('/api/ingest/settings', {method:'POST', body:JSON.stringify({reset_token:true})});
-    if (r.status !== 'success') throw new Error(r.message || '生成失败');
+    var r = await api('/api/ingest/settings', {method:'POST', body:JSON.stringify({generate_token:true})});
+    if (r.status !== 'success') throw new Error(r.message || '首次生成失败');
     await loadIngest();
-    toast('回调地址已更新，请在 Emby 中填写并发送测试事件', 'success');
-  } catch(e){toast('生成失败: ' + e.message, 'error');}
+    toast('回调地址已生成，请填写到 Emby 并发送测试事件', 'success');
+  } catch(e){toast('首次生成失败: ' + e.message, 'error');}
+  finally { ingestCallbackBusy = false; $('ingWebhookGenerateBtn').disabled = false; }
+}
+function requestResetIngestCallback(){
+  if (ingestCallbackBusy) return;
+  if (!$('ingWebhookUrl').value) return toast('尚未生成回调令牌，无需重置', 'info');
+  openModal('<h3>二次确认：重置 Emby 回调令牌</h3>' +
+    '<p style="margin:12px 0;line-height:1.7">重置后，<strong>原令牌和旧回调地址立即失效</strong>。' +
+    'Emby 中原有 Webhook 必须同步替换，否则新增、删除等实时入库事件会停止同步。</p>' +
+    '<label for="ingWebhookResetConfirm">请手动输入「重置」确认操作</label>' +
+    '<input id="ingWebhookResetConfirm" type="text" autocomplete="off" placeholder="输入：重置"' +
+    ' style="width:100%;margin:8px 0 14px" oninput="checkIngestResetConfirm()">' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">' +
+    '<button class="btn gray" type="button" onclick="closeModal()">取消</button>' +
+    '<button class="btn red" type="button" id="ingWebhookResetConfirmBtn" disabled' +
+    ' onclick="resetIngestCallback()">确认重置并使旧地址失效</button></div>');
+}
+function checkIngestResetConfirm(){
+  var input = $('ingWebhookResetConfirm'), button = $('ingWebhookResetConfirmBtn');
+  if (input && button && !ingestCallbackBusy) button.disabled = input.value.trim() !== '重置';
+}
+async function resetIngestCallback(){
+  if (ingestCallbackBusy || !$('ingWebhookResetConfirm') ||
+      $('ingWebhookResetConfirm').value.trim() !== '重置') return;
+  ingestCallbackBusy = true;
+  var button = $('ingWebhookResetConfirmBtn');
+  if (button) button.disabled = true;
+  try {
+    var r = await api('/api/ingest/settings', {method:'POST',
+      body:JSON.stringify({reset_token:true, confirm_reset:'RESET_WEBHOOK_TOKEN'})});
+    if (r.status !== 'success') throw new Error(r.message || '重置失败');
+    closeModal();
+    await loadIngest();
+    toast('令牌已重置：旧回调地址失效，请立即更新 Emby Webhook', 'success', 5500);
+  } catch(e){toast('重置失败（旧令牌可能仍有效）: ' + e.message, 'error');}
+  finally { ingestCallbackBusy = false; if (button) button.disabled = false; }
 }
 
 /* ═══════════ 双库定时巡检 ═══════════ */

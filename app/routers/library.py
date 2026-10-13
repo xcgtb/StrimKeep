@@ -279,8 +279,16 @@ async def api_library_events(request: Request):
         'X-Accel-Buffering': 'no', 'Vary': 'Cookie, Authorization'})
 
 
+def _mapping_no_store(response: Response):
+    # Even `status:nocache` is HTTP 200; prevent browser/FRP/CDN from retaining it.
+    response.headers['Cache-Control'] = 'private, no-store, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Vary'] = 'Cookie, Authorization'
+
+
 @router.get('/api/emby/library/preview', dependencies=[Depends(auth)])
-def api_emby_library_preview():
+def api_emby_library_preview(response: Response):
+    _mapping_no_store(response)
     # Bounded read-only projection. No Emby/TMDB requests, paths or credentials.
     return library_first_screen.preview()
 
@@ -288,7 +296,8 @@ def api_emby_library_preview():
 @router.get('/api/emby/library/page', dependencies=[Depends(auth)])
 def api_emby_library_page(media: str = 'series', status: str = 'all', scope: str = 'all',
                           category: str = '', category_mode: str = 'seg', keyword: str = '',
-                          offset: int = 0, limit: int = 40):
+                          offset: int = 0, limit: int = 40, response: Response = None):
+    _mapping_no_store(response)
     try:
         return library_pagination.page(media=media, status=status, scope=scope,
                                        category=category, category_mode=category_mode,
@@ -298,7 +307,8 @@ def api_emby_library_page(media: str = 'series', status: str = 'all', scope: str
 
 
 @router.get('/api/emby/library/item', dependencies=[Depends(auth)])
-def api_emby_library_item(media: str, id: str):
+def api_emby_library_item(media: str, id: str, response: Response):
+    _mapping_no_store(response)
     try:
         item = library_pagination.detail(media, id)
     except ValueError as error:
@@ -348,12 +358,23 @@ def api_set_ingest_settings(body: dict = None):
     previous_mode = cfg.get('ingest_mode', 'poll')
     if body.get('mode') not in (None, 'poll', 'webhook'):
         raise HTTPException(status_code=400, detail='无效监控模式')
-    if 'mode' in body:
-        cfg['ingest_mode'] = body['mode']
-        if not cfg.get('ingest_webhook_token'):
-            cfg['ingest_webhook_token'] = secrets.token_hex(24)
-    if body.get('reset_token'):
+    if body.get('generate_token') and body.get('reset_token'):
+        raise HTTPException(status_code=400, detail='不能同时生成和重置回调令牌')
+    if body.get('generate_token'):
+        if cfg.get('ingest_webhook_token'):
+            raise HTTPException(status_code=409, detail='已有回调令牌，首次生成不能覆盖，请使用重置操作')
         cfg['ingest_webhook_token'] = secrets.token_hex(24)
+    if body.get('reset_token'):
+        # 后端同样执行二次确认校验，拦截旧网页缓存中的误触请求。
+        if body.get('confirm_reset') != 'RESET_WEBHOOK_TOKEN':
+            raise HTTPException(status_code=400, detail='重置回调令牌需要二次确认')
+        if not cfg.get('ingest_webhook_token'):
+            raise HTTPException(status_code=400, detail='尚未生成回调令牌，请先首次生成')
+        cfg['ingest_webhook_token'] = secrets.token_hex(24)
+    if 'mode' in body:
+        if body['mode'] == 'webhook' and not cfg.get('ingest_webhook_token'):
+            raise HTTPException(status_code=400, detail='请先生成回调地址并在 Emby 中配置，再开启实时回调')
+        cfg['ingest_mode'] = body['mode']
     if 'reconcile_hours' in body:
         try:
             hours = max(1, min(168, int(body['reconcile_hours'])))

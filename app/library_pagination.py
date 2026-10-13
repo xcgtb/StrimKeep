@@ -59,16 +59,22 @@ def _category_match(row, category, mode):
 
 def _read():
     """Single catalogue per facts revision; discard if change races snapshot."""
-    key = library_response._key()
     now = time.monotonic()
+    key = library_response._key()
     if _cache['key'] == key and now < _cache['until']:
         return True
-    facts = engine.cached_library_view()
+    # A webhook may commit a new source revision while we read. Retry once
+    # against a fresh revision instead of falsely reporting a missing cache.
+    facts = None
+    for attempt in range(2):
+        key = library_response._key()
+        candidate = engine.cached_library_view()
+        if candidate is not None and key == library_response._key():
+            facts = candidate
+            break
+        if candidate is None:
+            break
     if facts is None:
-        _cache.update(key=None, until=0)
-        return False
-    # Guard against a source changing *during* the full snapshot read.
-    if key != library_response._key():
         _cache.update(key=None, until=0)
         return False
     series = tuple(sorted(facts.get('series') or (), key=cmp_to_key(_series_cmp)))
