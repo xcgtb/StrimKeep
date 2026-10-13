@@ -6,7 +6,7 @@
 | --- | --- |
 | `tests/` | Python 回归、前端交互回归、固定输入与预期结果 |
 | `checks/` | 历史 SQLite、HTTP 启动、单写存储与探索后台的隔离检查 |
-| `tools/` | 静态检查、发布边界、前端检查、只读存储审计 |
+| `tools/` | 静态检查、发布边界、前端检查、资源版本生成、只读存储审计 |
 | `requirements.txt` | 开发依赖，包含生产依赖与 pytest/httpx |
 | `docker-compose.build.yml` | 仅供开发者本地构建镜像 |
 
@@ -22,6 +22,14 @@ python dev/tools/static_check.py
 python dev/tools/release_check.py
 pytest dev/tests/ -q
 node dev/tools/verify_frontend.cjs
+```
+
+修改 `static/` 下的 CSS、JavaScript 或图标后，使用工具按文件内容自动更新
+`static/index.html` 中的 SHA-256 缓存版本（文本资源按 LF 规范化，二进制资源按原始字节）；CI 可用 `--check` 只检查漂移：
+
+```bash
+node dev/tools/update_frontend_asset_versions.cjs
+node dev/tools/update_frontend_asset_versions.cjs --check
 ```
 
 前端用例使用 DOM 替身，不能代替真实手机/电脑视觉验收。隔离测试使用临时状态和假服务，不操作真实媒体，也不发送通知。

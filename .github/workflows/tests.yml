@@ -23,7 +23,9 @@ jobs:
           python dev/tools/static_check.py
           python dev/tools/release_check.py
       - name: Frontend syntax and regression
-        run: node dev/tools/verify_frontend.cjs
+        run: |
+          node dev/tools/update_frontend_asset_versions.cjs --check
+          node dev/tools/verify_frontend.cjs
       - name: Python regression
         run: pytest dev/tests/ -q
   production:

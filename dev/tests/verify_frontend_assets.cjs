@@ -6,8 +6,11 @@ const scripts=Array.from(html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)
 const urls=scripts.map(m=>m[1].match(/src="([^"]+)"/)).filter(Boolean).map(m=>m[1]);
 assert.equal(urls.length,15);
 for(const url of urls.concat(Array.from(html.matchAll(/<link\b[^>]*href="([^"]+)"/g),m=>m[1]))){
-  const content=fs.readFileSync(path.join(__dirname,'../../',new URL(url,'http://fixture').pathname.slice(1))),version=new URL(url,'http://fixture').searchParams.get('v');
-  assert.equal(version,crypto.createHash('sha256').update(content).digest('hex').slice(0,12));
+  const file=path.join(__dirname,'../../',new URL(url,'http://fixture').pathname.slice(1));
+  const content=fs.readFileSync(file),version=new URL(url,'http://fixture').searchParams.get('v');
+  const input=['.css','.js','.svg'].includes(path.extname(file).toLowerCase())
+    ? content.toString('utf8').replace(/\r\n/g,'\n') : content;
+  assert.equal(version,crypto.createHash('sha256').update(input).digest('hex').slice(0,12));
 }
 assert(scripts.filter(m=>/src=/.test(m[1])).every(m=>/\bdefer\b/.test(m[1])&&!/\basync\b|type="module"/.test(m[1])));
 assert(!/<style\b/.test(html));
