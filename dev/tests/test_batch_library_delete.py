@@ -8,7 +8,7 @@ import pytest
 @pytest.fixture
 def ctx(monkeypatch, tmp_path):
     # Load the new module against compatible minimal app stubs.
-    app = types.ModuleType('app'); app.__path__=[]
+    app = types.ModuleType('app'); app.__path__=[str(Path(__file__).resolve().parents[2] / 'app')]
     engine = types.ModuleType('app.engine')
     pager = types.ModuleType('app.library_pagination')
     response = types.ModuleType('app.library_response')
@@ -33,9 +33,11 @@ def ctx(monkeypatch, tmp_path):
     episodes=[]
     for sid, lib, numbers in [('s1','local',[1,2,3]),('s2','share',[1,2])]:
         for num in numbers:
-            ep={'Id':f'{sid}-{num}', 'SeriesId':sid, 'Path':f'/{lib}/S01E{num:02d}.strm'}
+            ep={'Id':f'{sid}-{num}', 'SeriesId':sid, 'Path':f'/{lib}/国民老公/S01E{num:02d}.strm'}
             episodes.append(ep)
-            (engine.emby_path_to_container(ep['Path'])).write_text('fixture')
+            converted = engine.emby_path_to_container(ep['Path'])
+            converted.parent.mkdir(parents=True, exist_ok=True)
+            converted.write_text('fixture')
     series={sid:{'Id':sid,'Type':'Series','Name':'国民老公','ProductionYear':2018,
                   'ProviderIds':{'Tmdb':'84842'},'Path':f'/{lib}/国民老公'}
             for sid,lib in [('s1','local'),('s2','share')]}

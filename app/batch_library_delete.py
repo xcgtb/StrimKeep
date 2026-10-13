@@ -99,61 +99,13 @@ def _collect(row):
     """
     if row.get('media') == 'movies':
         return _collect_movie(row)
-    members = row['members']
-    tid = row['tmdb_id']
-    if not tid.isdecimal() or not row['name'] or row.get('year') is None:
-        raise ValueError('《%s》缺少可信的 TMDB/剧名/年份，请用单剧删除核实' % row['name'])
-    meta = engine.emby_request('/Items', {
-        'Ids': ','.join(members), 'Recursive': 'true', 'IncludeItemTypes': 'Series',
-        'Fields': 'Path,ProviderIds,ProductionYear', 'Limit': len(members) + 1,
-    }, timeout=15, retries=0)
-    if not isinstance(meta, dict) or not isinstance(meta.get('Items'), list) or not isinstance(meta.get('TotalRecordCount'), int):
-        raise ValueError('Emby 电视剧身份响应不完整')
-    rows = meta['Items']
-    if len(rows) != len(members) or meta['TotalRecordCount'] != len(members):
-        raise ValueError('Emby 未完整返回关联电视剧，无法证明跨库身份')
-    seen = set()
-    for item in rows:
-        sid = str(item.get('Id') or '')
-        if sid not in members or sid in seen or item.get('Type') != 'Series':
-            raise ValueError('Emby 电视剧成员身份不匹配')
-        seen.add(sid)
-        if (str(item.get('Name') or '').casefold() != row['name'].casefold() or
-                str(item.get('ProductionYear') or '') != str(row['year']) or
-                str((item.get('ProviderIds') or {}).get('Tmdb') or '') != tid):
-            raise ValueError('关联 Series ID 的片名、年份或 TMDB 不一致')
-        if engine.EMBY_PATHS.lib_of(item.get('Path') or '', fallback=False) not in ('local', 'share'):
-            raise ValueError('电视剧所在库路径不可核实')
-    root = engine.L_ROOT if row['target'] == 'local' else engine.S_ROOT
-    paths = {}
-    primary = None
-    for sid in members:
-        resp = engine.emby_request('/Items', {'ParentId': sid, 'Recursive': 'true',
-            'IncludeItemTypes': 'Episode', 'Fields': 'Path,SeriesId', 'Limit': 5000}, timeout=15, retries=0)
-        if not isinstance(resp, dict) or not isinstance(resp.get('Items'), list) or not isinstance(resp.get('TotalRecordCount'), int):
-            raise ValueError('Emby 分集查询不完整')
-        episodes = resp['Items']
-        if resp['TotalRecordCount'] != len(episodes) or len(episodes) >= 5000:
-            raise ValueError('Emby 分集列表被截断，禁止批量删除')
-        for episode in episodes:
-            eid = str(episode.get('SeriesId') or '')
-            if eid not in members:
-                raise ValueError('Emby 返回其他作品分集，禁止批量删除')
-            if eid != sid:
-                continue  # A cross-library result; its own member pass will inspect it.
-            path = episode.get('Path') or ''
-            if engine.EMBY_PATHS.lib_of(path, fallback=False) != row['target']:
-                continue
-            conv = engine.emby_path_to_container(path)
-            if conv is None or not engine._inside(conv, root) or conv.suffix.lower() != '.strm':
-                raise ValueError('分集路径无法严格映射到目标库 STRM')
-            if not conv.is_file():
-                raise ValueError('预览发现文件已不存在或挂载不可见，拒绝按过期状态删除')
-            paths[str(conv)] = conv
-            primary = primary or sid
-            if len(paths) > _MAX_FILES:
-                raise ValueError('本批次 STRM 过多，请缩小范围')
-    return sorted(paths), primary
+    from . import library_identity
+    if not row['tmdb_id'].isdecimal() or not row['name'] or row.get('year') is None:
+        raise ValueError('缺少可信的 TMDB、片名或年份，请先同步片库')
+    files, primary = library_identity.series_files(engine, row, require_files=True)
+    if len(files) > _MAX_FILES:
+        raise ValueError('本批次 STRM 过多，请缩小范围')
+    return files, primary
 
 
 def _collect_movie(row):

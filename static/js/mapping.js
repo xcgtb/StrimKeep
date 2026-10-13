@@ -1135,8 +1135,16 @@ async function deleteMovieByTmdb(tmdbId, target, movieName){
     if (r2.status !== 'success') throw new Error(r2.message || '\u5931\u8d25');
 
     var outcome = mappingDeleteOutcome(r2, count, target);
+    if (Array.isArray(r2.movie_entries)) {
+      embyData.movies = embyData.movies.filter(function(x){return String(x.tmdb_id || '') !== String(tmdbId);})
+        .concat(r2.movie_entries);
+      window.__embyMovieMap = {};
+      embyData.movies.forEach(function(x){if(x.id)window.__embyMovieMap[x.id] = x;});
+      if (embyData.stats && !mappingPagedActive) embyData.stats.total_movies = embyData.movies.length;
+      renderEmbyList();
+    }
     // 有文件保留或结果为空时，不把海报当作全部删完而撤下。
-    if (!outcome.partial && !outcome.noChange) {
+    if (!Array.isArray(r2.movie_entries) && !outcome.partial && !outcome.noChange) {
       var flag = target === 'local' ? 'in_local' : 'in_share';
       embyData.movies = embyData.movies.filter(function(x){
         if (String(x.tmdb_id || '') !== String(tmdbId) || !x[flag]) return true;
@@ -1290,15 +1298,20 @@ async function deleteSeriesFromLib(seriesId, target, seriesName){
 /* 只重新拉取单部剧集在 Emby 中的最新分集情况，替换/移除列表里对应的一条，
    避免像整页刷新那样把所有剧集的 TMDB 对照状态打回"待对照"。 */
 function applySeriesDeleteResult(seriesId, r){
-  var idx = embyData.series.findIndex(function(x){ return x.id === seriesId; });
+  var idx = embyData.series.findIndex(function(x){ return String(x.id) === String(seriesId) ||
+    (x.series_ids || []).some(function(id){return String(id) === String(seriesId);}); });
+  var oldId = idx >= 0 ? embyData.series[idx].id : seriesId;
   if (r.series_removed) {
     if (idx >= 0) embyData.series.splice(idx, 1);
     delete window.__embySeriesMap[seriesId];
+    delete window.__embySeriesMap[oldId];
   } else if (r.entry && idx >= 0) {
     var md = embyData.series[idx]._md;
     if (md) r.entry._md = md;
     embyData.series[idx] = r.entry;
-    window.__embySeriesMap[seriesId] = r.entry;
+    delete window.__embySeriesMap[seriesId];
+    delete window.__embySeriesMap[oldId];
+    window.__embySeriesMap[r.entry.id] = r.entry;
   }
   embyData.stats.total_series = embyData.series.length;
   $('emby-total').textContent = embyData.stats.total_series || 0;

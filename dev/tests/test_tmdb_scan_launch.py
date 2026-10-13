@@ -103,7 +103,7 @@ def test_saved_key_is_used_by_scan_without_connection_test(scan, routes, tmp_pat
 
     monkeypatch.setattr(morning, 'emby_library_overview', overview)
     monkeypatch.setattr(engine, 'Tmdb', lambda: SimpleNamespace(key='', cache={}, save=lambda: None))
-    monkeypatch.setattr(morning, 'save_emby_lib_cache', lambda data: None)
+    monkeypatch.setattr(morning, 'save_emby_lib_cache', lambda data, **kw: None)
     monkeypatch.setattr(morning, 'save_library_snapshot', lambda data: None)
     monkeypatch.setattr(morning, 'build_library_health_snapshot', lambda: {})
     assert settings.api_set_config({'emby_host': 'http://emby.test', 'emby_key': 'saved-test-key'})['status'] == 'success'

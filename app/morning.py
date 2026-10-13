@@ -747,32 +747,21 @@ def send_morning_report(items: list, force_refresh: bool = False, mark_sent: boo
     return ok
 
 def _live_series_episodes(series_id: str):
-    """某剧当前「真实存在」的分集：Emby 返回的分集里，路径能映射到容器内且文件已不在磁盘上的，
-    视为 Emby 尚未清理的残留，直接剔除。删除后 Emby 的刷新是异步的，
-    如果直接信 Emby，刚删完的剧集还会被当成\"仍在库里\"，海报就不会消失。
-    路径映射不上的（其它库）无法核实，保留。"""
-    response = _eng().emby_request('/Items', {
-        'ParentId': series_id, 'Recursive': 'true',
-        'IncludeItemTypes': 'Episode',
-        'Fields': 'Path,ParentIndexNumber,IndexNumber,IndexNumberEnd', 'Limit': 5000,
-    })
-    if not isinstance(response, dict) or not isinstance(response.get('Items'), list):
-        raise RuntimeError('Emby 剧集分集查询不完整，禁止覆盖缓存')
-    items = response['Items']
-    total = response.get('TotalRecordCount')
-    if (total is not None and int(total) > len(items)) or (total is None and len(items) >= 5000):
-        raise RuntimeError('Emby 单剧分集超过分页上限，禁止覆盖缓存')
-    live = []
-    for e in items:
-        conv = _eng().emby_path_to_container(e.get('Path') or '')
-        if conv is not None:
-            try:
-                if not conv.exists():
-                    continue
-            except OSError:
-                pass
-        live.append(e)
-    return live
+    """Exact scoped facts; reject unverified ParentId spillover and failed reads."""
+    if __package__:
+        from . import library_identity as identity
+    else:
+        import library_identity as identity
+    cached = read_emby_lib_cache(max_age=None) or {}
+    entry = next((row for row in cached.get('series') or [] if str(series_id) in
+                  {str(i) for i in row.get('series_ids') or [row.get('id')] if i}), None)
+    members = identity.member_ids(entry or {'id': series_id}, 'series_ids')
+    try:
+        meta = identity.metadata(_eng(), members, 'Series', entry)
+        return [row for row in identity.episodes(_eng(), [str(series_id)], meta)
+                if str(row['SeriesId']) == str(series_id)]
+    except ValueError as error:
+        raise RuntimeError(str(error)) from error
 
 def _resync_series_entry(entry: dict, live: list):
     """用真实存在的分集重算缓存里这部剧的分集统计，并按原 TMDB 数据重新判定缺集。"""
@@ -1210,64 +1199,145 @@ def refresh_mapping_cache_after_ingest(ingest_data: dict) -> dict:
             'series_facts': series.get('series_facts') or []}
 
 
-def patch_emby_lib_cache_after_series_delete(series_id: str, deleted_target: str = ''):
-    """删除 / 同步后就地修补缓存里这部剧（以磁盘真实文件为准）。
-    返回 {'remaining': 剩余分集数, 'entry': 新条目或 None, 'series_path': Emby 侧剧目录}。"""
-    live = _live_series_episodes(series_id)
-    info = {'remaining': len(live), 'entry': None, 'series_path': ''}
-
-    def patch(data):
-        series_list = (data or {}).get('series') or []
-        idx = next((i for i, x in enumerate(series_list) if x.get('id') == series_id), None)
-        if idx is None:
-            return False
-        info['series_path'] = series_list[idx].get('path') or info['series_path']
-        if not live:
-            series_list.pop(idx)
+def _save_deleted_facts(data, *, revision, series_ids=(), movie_ids=(), primary=None):
+    """Commit all derived title views together, then publish their invalidation."""
+    now = time.time()
+    data['facts_ts'] = now
+    _recompute_mapping_stats(data)
+    with _state._LOCK:
+        if _state.stamp(_eng().EMBY_LIB_CACHE_FILE) != revision:
+            raise RuntimeError('片库已发生其他更新，请重新同步；保留最新状态')
+        done = read_manual_done()
+        marker = next((done[sid] for sid in series_ids if sid in done), None)
+        carry_done = primary and primary not in done and marker is not None
+        if carry_done:
+            done[primary] = copy.deepcopy(marker)
+        snapshot = _health_snapshot(data, manual_done=done)
+        documents = [
+            (_eng().EMBY_LIB_CACHE_FILE, data),
+            (_eng()._EMBY_OVERVIEW_CACHE_FILE, {'ts': now, 'data': data}),
+            (_eng().LIBRARY_SNAPSHOT_FILE, snapshot),
+        ]
+        if carry_done:
+            documents.append((_eng().MANUAL_DONE_FILE, done))
+        _state.save_many(documents)
+    _eng()._emby_lib_cache.update(ts=now, data=copy.deepcopy(data))
+    _eng()._emby_index_cache.update(ts=0, data=None)
+    _eng()._emby_index_cache.pop('callback_revision', None)
+    try:
+        if __package__:
+            from . import library_updates
         else:
-            _resync_series_entry(series_list[idx], live)
-            info['entry'] = series_list[idx]
-        data['series'] = series_list
-        if isinstance(data.get('stats'), dict):
-            data['stats']['total_series'] = len(series_list)
-        return True
+            import library_updates
+        library_updates.publish(series_ids, movie_ids=movie_ids)
+    except Exception as error:
+        log.warning('删除事实已保存，页面更新通知失败: %s', error)
 
-    _patch_all_caches(patch)
-    return info
+
+def patch_emby_lib_cache_after_series_delete(series_id: str, deleted_target: str = ''):
+    """Reconcile the complete verified title group, including a non-primary ID."""
+    if __package__:
+        from . import library_identity as identity
+    else:
+        import library_identity as identity
+    with _eng()._overview_refresh_lock:
+        revision = _state.stamp(_eng().EMBY_LIB_CACHE_FILE)
+        data = read_emby_lib_cache(max_age=None)
+        if data is None:
+            raise RuntimeError('片库缓存尚未就绪，请重新同步')
+        series = data.get('series') or []
+        entry = next((row for row in series if str(series_id) in
+                      {str(i) for i in row.get('series_ids') or [row.get('id')] if i}), None)
+        if entry is None:
+            raise RuntimeError('作品不在片库缓存中，请刷新后重新同步')
+        members = identity.member_ids(entry, 'series_ids')
+        meta = identity.metadata(_eng(), members, 'Series', entry, allow_missing=True)
+        live = identity.episodes(_eng(), members, meta)
+        # A missing remote member cannot prove local absence while its recorded
+        # directory still holds STRM. Do not discard it during an Emby rescan.
+        for path in entry.get('paths') or [entry.get('path')]:
+            if not path or path in {row['Path'] for row in meta.values()}:
+                continue
+            directory, _ = identity.mapped_path(_eng(), path)
+            if any(directory.rglob('*.strm')):
+                raise RuntimeError('Emby 成员缺失但 STRM 仍存在，保留原状态')
+        info = {'remaining': len(live), 'entry': None, 'series_path': entry.get('path') or ''}
+        if live:
+            fresh = copy.deepcopy(entry)
+            alive_ids = sorted({str(ep['SeriesId']) for ep in live})
+            primary = str(entry.get('id')) if str(entry.get('id')) in alive_ids else alive_ids[0]
+            fresh.update(id=primary, series_ids=alive_ids, path=meta[primary]['Path'],
+                         paths=list(dict.fromkeys(meta[sid]['Path'] for sid in alive_ids)),
+                         has_image=bool('Primary' in (meta[primary].get('ImageTags') or {})))
+            _resync_series_entry(fresh, live)
+            series[series.index(entry)] = fresh
+            info['entry'] = fresh
+        else:
+            series.remove(entry)
+        data['series'] = series
+        _save_deleted_facts(data, revision=revision, series_ids=members,
+                           primary=info['entry']['id'] if info['entry'] else None)
+        return info
+
 
 def patch_emby_lib_cache_after_movie_delete(tmdb_id: str, target: str):
-    """按 tmdb_id 删电影后，把缓存里「位于被删库」的电影条目移除。返回移除数。"""
-    flag = 'in_local' if target == 'local' else 'in_share'
-    removed = [0]
-
-    def patch(data):
-        movies = (data or {}).get('movies') or []
-        keep, changed = [], False
-        other = 'in_share' if target == 'local' else 'in_local'
-        for movie in movies:
-            if str(movie.get('tmdb_id') or '') != str(tmdb_id) or not movie.get(flag):
-                keep.append(movie)
-            elif movie.get(other):
-                keep.append(dict(movie, **{flag: False}))
-                changed = True
-            else:
-                changed = True
-        if not changed:
-            return False
-        removed[0] = max(removed[0], len(movies) - len(keep))
-        data['movies'] = keep
-        if isinstance(data.get('stats'), dict):
-            data['stats']['total_movies'] = len(keep)
-        return True
-
-    _patch_all_caches(patch)
-    return removed[0]
+    """Rebuild surviving movie members/paths from exact metadata and disk facts."""
+    if __package__:
+        from . import library_identity as identity
+    else:
+        import library_identity as identity
+    if target not in ('local', 'share'):
+        raise ValueError('无效目标库')
+    with _eng()._overview_refresh_lock:
+        revision = _state.stamp(_eng().EMBY_LIB_CACHE_FILE)
+        data = read_emby_lib_cache(max_age=None)
+        if data is None:
+            raise RuntimeError('片库缓存尚未就绪，请重新同步')
+        kept, changed_ids, removed = [], set(), 0
+        for movie in data.get('movies') or []:
+            if str(movie.get('tmdb_id') or '') != str(tmdb_id) or not movie.get('in_' + target):
+                kept.append(movie)
+                continue
+            members = identity.member_ids(movie, 'ids')
+            meta = identity.metadata(_eng(), members, 'Movie', movie, allow_missing=True)
+            alive = {}
+            for mid, record in meta.items():
+                path, _ = identity.mapped_path(_eng(), record['Path'], file=True)
+                if identity.file_exists(path):
+                    alive[mid] = record
+            # Missing ID lookup is authoritative only if its recorded path has
+            # also disappeared. Never hide an existing STRM during an Emby rescan.
+            for path in movie.get('paths') or [movie.get('path')]:
+                if not path or path in {row['Path'] for row in meta.values()}:
+                    continue
+                converted, _ = identity.mapped_path(_eng(), path, file=True)
+                if identity.file_exists(converted):
+                    raise RuntimeError('Emby 电影成员缺失但 STRM 仍存在，保留原状态')
+            changed_ids.update(members)
+            if not alive:
+                removed += 1
+                continue
+            ids = sorted(alive)
+            primary = str(movie.get('id')) if str(movie.get('id')) in alive else ids[0]
+            libs = {_eng().EMBY_PATHS.lib_of(row['Path'], fallback=False) for row in alive.values()}
+            fresh = copy.deepcopy(movie)
+            fresh.update(id=primary, ids=ids, path=alive[primary]['Path'],
+                         paths=list(dict.fromkeys(alive[mid]['Path'] for mid in ids)),
+                         in_local='local' in libs, in_share='share' in libs,
+                         has_image=bool('Primary' in (alive[primary].get('ImageTags') or {})))
+            kept.append(fresh)
+        if changed_ids:
+            data['movies'] = kept
+            _save_deleted_facts(data, revision=revision, movie_ids=changed_ids)
+        return removed
 
 def save_emby_lib_cache(data: dict, keep_ts: bool = False):
     _eng().STATE_DIR.mkdir(parents=True, exist_ok=True)
     data = dict(data)
-    if not (keep_ts and data.get('ts')):
+    if not keep_ts:
         data['ts'] = time.time()
+    elif 'ts' not in data:
+        data['ts'] = 0  # no successful TMDB comparison has been established
     # Metadata-only patches must not pretend a fresh Emby facts verification.
     if not (keep_ts and data.get('facts_ts')):
         data['facts_ts'] = time.time()
@@ -1333,11 +1403,64 @@ def refresh_tmdb_scan(background=False):
         return {'status': 'error', 'message': str(e)}
     return {'status': 'started', 'message': 'TMDB 对照已在后台启动'}
 
+def _carry_metadata(fresh, previous):
+    """Reuse verified identity's TMDB metadata, recompute against new episodes.
+
+    Preserve the original comparison time; new Emby facts are NOT a new TMDB
+    comparison. New or changed identities remain unmatched until normal scan.
+    """
+    previous = previous or {}
+    for kind, ids_field in (('series', 'series_ids'), ('movies', 'ids')):
+        by_id = {}
+        for row in previous.get(kind) or []:
+            for ident in row.get(ids_field) or [row.get('id')]:
+                if ident:
+                    by_id.setdefault(str(ident), []).append(row)
+        for row in fresh.get(kind) or []:
+            candidates = []
+            for ident in row.get(ids_field) or [row.get('id')]:
+                candidates.extend(by_id.get(str(ident), []))
+            candidates = [old for old in candidates if old.get('name') == row.get('name')
+                          and old.get('year') == row.get('year')
+                          and str(old.get('tmdb_id') or '') == str(row.get('tmdb_id') or '')]
+            distinct = {str(old.get('id')) for old in candidates}
+            if len(distinct) != 1:
+                continue
+            old = candidates[0]
+            if kind == 'movies':
+                if old.get('poster_tmdb'):
+                    row['poster_tmdb'] = old['poster_tmdb']
+                continue
+            info = copy.deepcopy(old.get('tmdb_info') or {})
+            if info.get('tmdb_total') and info.get('seasons'):
+                meta = {'status': info.get('tmdb_status') or '',
+                        'seasons': [{'season_number': s['season'], 'episode_count': s.get('tmdb', 0)}
+                                    for s in info['seasons']]}
+                update = _eng().classify_series_by_tmdb(row.get('seasons') or [], meta)
+                declared = info.get('declared_total')
+                info.update(update)
+                if declared is not None:
+                    info['declared_total'] = declared
+            elif info:
+                # No valid season comparison cannot establish completeness.
+                info.update(local_total=_episode_count(row), match_status='unmatched')
+            if info:
+                row['tmdb_info'] = info
+    fresh.update(ts=previous.get('ts') or 0, facts_ts=time.time(), source='emby_refresh')
+    return fresh
+
+
+
 def _refresh_tmdb_scan():
     log.info('TMDB 对照开始（后台）')
     try:
         realtime = _cfg.load_config().get('ingest_mode') == 'webhook'
-        data = copy.deepcopy(read_emby_lib_cache(max_age=None)) if realtime else emby_library_overview(force=True)
+        baseline = _state.stamp(_eng().EMBY_LIB_CACHE_FILE)
+        previous = copy.deepcopy(read_emby_lib_cache(max_age=None))
+        if realtime:
+            data = copy.deepcopy(previous)
+        else:
+            data = _carry_metadata(copy.deepcopy(emby_library_overview(force=True)), previous)
         if not data:
             raise RuntimeError('等待片库事实初始化')
         series = data['series']
@@ -1349,6 +1472,12 @@ def _refresh_tmdb_scan():
         has_key = bool(t.key)
         reqs = [('tv', s_.get('tmdb_id')) for s_ in series if s_.get('tmdb_id')]
         infos, tmdb_errors, cache_rows = _tmdb_bulk_get(t, reqs, max_workers=8) if has_key else ({}, 0, {})
+        requested = {('tv', str(tid)) for _, tid in reqs}
+        invalid = {key for key in requested if not isinstance(infos.get(key), dict)
+                   or not isinstance(infos[key].get('seasons'), list)}
+        if has_key:
+            tmdb_errors = max(tmdb_errors, len(invalid))
+        infos = {key: info for key, info in infos.items() if key not in invalid}
         # A partial/unauthenticated comparison may update valid metadata, but
         # must not advance the authoritative last-success timestamp.
         comparison_complete = bool(has_key and tmdb_errors == 0)
@@ -1361,7 +1490,8 @@ def _refresh_tmdb_scan():
                                    'tmdb_total': None, 'diff': None, 'seasons': []}
             else:
                 info = infos.get(('tv', str(tmdb_id)))
-                s_['tmdb_info'] = _eng().classify_series_by_tmdb(s_.get('seasons', []), info)
+                if info or not s_.get('tmdb_info'):
+                    s_['tmdb_info'] = _eng().classify_series_by_tmdb(s_.get('seasons', []), info)
                 if info and info.get('poster_path'):
                     s_['tmdb_info']['poster'] = info.get('poster_path')
             _eng()._tmdb_scan_progress['done'] = i + 1
@@ -1382,21 +1512,32 @@ def _refresh_tmdb_scan():
             if s_.get('complete'): stats['complete_series'] += 1
             else: stats['incomplete_series'] += 1
         res = {'status': 'success', 'stats': stats, 'series': series, 'movies': movies,
-               'tmdb_errors': tmdb_errors, 'with_tmdb': True, 'emby_host': _eng().EMBY_HOST}
-        if realtime:
-            # Full metadata requests can overlap callbacks. Apply only metadata
-            # to the latest facts; never restore an old episode/title snapshot.
-            def merge(current):
-                for row in current.get('series') or []:
-                    info = infos.get(('tv', str(row.get('tmdb_id'))))
-                    if info:
-                        row['tmdb_info'] = _eng().classify_series_by_tmdb(row.get('seasons') or [], info)
-                        if info.get('poster_path'):
-                            row['tmdb_info']['poster'] = info['poster_path']
-                _recompute_mapping_stats(current)
-                current['with_tmdb'] = True
-                return True
-            with _eng()._overview_refresh_lock:
+               'tmdb_errors': tmdb_errors, 'with_tmdb': True, 'emby_host': _eng().EMBY_HOST,
+               'comparison_complete': comparison_complete, 'comparison_attempt_ts': time.time()}
+        # Both modes can overlap a Web deletion or poll fact update. Never
+        # replace a newer persisted title list with the pre-network snapshot.
+        with _eng()._overview_refresh_lock, _state._LOCK:
+            current = read_emby_lib_cache(max_age=None)
+            if realtime or _state.stamp(_eng().EMBY_LIB_CACHE_FILE) != baseline:
+                if current is None:
+                    raise RuntimeError('片库事实已重置，请重新对照')
+                current_ids = {('tv', str(row['tmdb_id'])) for row in current.get('series') or []
+                               if row.get('tmdb_id')}
+                comparison_complete = comparison_complete and current_ids.issubset(infos)
+                res['comparison_complete'] = comparison_complete
+                def merge(current):
+                    for row in current.get('series') or []:
+                        info = infos.get(('tv', str(row.get('tmdb_id'))))
+                        if info:
+                            row['tmdb_info'] = _eng().classify_series_by_tmdb(row.get('seasons') or [], info)
+                            if info.get('poster_path'):
+                                row['tmdb_info']['poster'] = info['poster_path']
+                    _recompute_mapping_stats(current)
+                    current['with_tmdb'] = True
+                    current['comparison_complete'] = comparison_complete
+                    current['comparison_attempt_ts'] = res['comparison_attempt_ts']
+                    current['tmdb_errors'] = tmdb_errors
+                    return True
                 _patch_all_caches(merge, comparison_ts=time.time() if comparison_complete else None)
                 latest = read_emby_lib_cache(max_age=None)
                 if latest:
@@ -1404,9 +1545,19 @@ def _refresh_tmdb_scan():
                     _save_overview_disk(latest)
                     stats = latest.get('stats') or stats
                     res.update(stats=stats, series=latest.get('series') or [], movies=latest.get('movies') or [])
-        else:
-            save_emby_lib_cache(res)
-        save_library_snapshot(build_library_health_snapshot())
+            else:
+                res['ts'] = time.time() if comparison_complete else (previous or {}).get('ts', 0)
+                res['facts_ts'] = data.get('facts_ts') or time.time()
+                save_emby_lib_cache(res, keep_ts=True)
+            save_library_snapshot(build_library_health_snapshot())
+        try:
+            if __package__:
+                from . import library_updates
+            else:
+                import library_updates
+            library_updates.publish(full=True)
+        except Exception as error:
+            log.warning('对照结果已保存，页面更新通知失败: %s', error)
         if comparison_complete:
             cfg = _cfg.load_config()
             cfg['tmdb_scan_last_ts'] = str(time.time())

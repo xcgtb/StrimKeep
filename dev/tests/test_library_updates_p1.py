@@ -163,7 +163,7 @@ def test_single_series_failure_never_replaces_good_cache(isolated, monkeypatch):
 def test_truncated_episode_page_is_not_mistaken_for_empty(monkeypatch):
     monkeypatch.setattr(engine, 'emby_request', lambda path, params, **kw:
                         {'Items': [ep(1, 's')], 'TotalRecordCount': 6001})
-    with pytest.raises(RuntimeError, match='分页上限'):
+    with pytest.raises(RuntimeError, match='截断'):
         morning._live_series_episodes('s')
 
 

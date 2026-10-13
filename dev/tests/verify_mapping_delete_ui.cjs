@@ -141,6 +141,23 @@ const completed={status:'success',count:4,strm_removed:4,cloud_removed:4,errors:
   await e.ctx.deleteSeriesFromLib('s','local','剧');
   assert.equal(e.ctx.embyData.series.length,1);assert.equal(e.ctx.embyData.series[0].in_local,false);
   assert.equal(e.ctx.embyData.series[0].share_eps,2);
+  // A surviving library owns the new primary ID; details must use its live key.
+  e=environment(()=>completed);
+  e.ctx.embyData.series=[{id:'s',series_ids:['s','survivor'],in_local:true,in_share:true}];
+  e.ctx.window.__embySeriesMap.s=e.ctx.embyData.series[0];
+  vm.runInContext(source.slice(source.indexOf('function applySeriesDeleteResult('),source.indexOf('async function refreshSingleSeriesInList(')),e.ctx);
+  e.ctx.applySeriesDeleteResult('survivor',{series_removed:false,entry:{id:'survivor',series_ids:['survivor'],in_local:false,in_share:true}});
+  assert.equal(e.ctx.embyData.series[0].id,'survivor');
+  assert.equal(e.ctx.window.__embySeriesMap.s,undefined);
+  assert.equal(e.ctx.window.__embySeriesMap.survivor.id,'survivor');
+  // Movie replies carry exact surviving identities, including partial deletions.
+  e=environment((_p,b)=>b.dry_run?{status:'success',count:4}:
+    {...completed,strm_removed:3,errors:['one source retained'],movie_entries:[{id:'alive',ids:['alive'],tmdb_id:'7',in_local:true,in_share:true}]});
+  e.ctx.embyData.movies=[{id:'dead',ids:['dead','alive'],tmdb_id:'7',in_local:true,in_share:true}];
+  await e.ctx.deleteMovieByTmdb('7','local','电影');
+  assert.equal(e.ctx.embyData.movies[0].id,'alive');
+  assert.equal(e.ctx.window.__embyMovieMap.dead,undefined);
+  assert.equal(e.ctx.window.__embyMovieMap.alive.id,'alive');
   console.log('PASS finished local/share series leave the grid; the other library retains its actual files');
   // Same-modal completion and both directions of two-library preservation.
   for(const target of ['local','share']) {

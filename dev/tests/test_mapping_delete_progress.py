@@ -196,12 +196,38 @@ def test_authenticated_http_acceptance_and_progress_reads(isolated, monkeypatch)
 
 @pytest.mark.parametrize('target', ['local','share'])
 def test_two_library_movie_cache_preserves_other_library(isolated, monkeypatch, target):
-    data = {'movies':[{'id':'both','tmdb_id':'7','in_local':True,'in_share':True},
-                      {'id':'only','tmdb_id':'7', 'in_local':target=='local', 'in_share':target=='share'},
-                      {'id':'other','tmdb_id':'8','in_local':True}], 'stats':{}}
-    monkeypatch.setattr(morning, '_patch_all_caches', lambda fn: fn(data))
+    # Exercise real exact IDs/paths, not a flags-only cache stub.
+    from app import state_store
+    monkeypatch.setattr(engine, 'EMBY_PATHS', engine.EmbyPathMap('/local', '/share'))
+    for attr, leaf in [('EMBY_LIB_CACHE_FILE','mapping.json'),
+                       ('LIBRARY_SNAPSHOT_FILE','health.json'),
+                       ('_EMBY_OVERVIEW_CACHE_FILE','overview.json')]:
+        monkeypatch.setattr(engine, attr, engine.STATE_DIR / leaf)
+    records = {}
+    for mid, lib in [('a','local'), ('b','share'), ('only',target)]:
+        f = put(engine.L_ROOT if lib == 'local' else engine.S_ROOT, mid + '.strm')
+        record = {'Id':mid, 'Type':'Movie', 'Name':'样本', 'ProductionYear':2026,
+                  'ProviderIds':{'Tmdb':'7'}, 'Path':'/' + lib + '/' + str(f.relative_to(engine.L_ROOT if lib == 'local' else engine.S_ROOT))}
+        records[mid] = record
+    data = {'ts':100, 'movies':[
+        {'id':'a', 'ids':['a','b'], 'tmdb_id':'7', 'name':'样本', 'year':2026,
+         'in_local':True, 'in_share':True, 'paths':[records['a']['Path'],records['b']['Path']]},
+        {'id':'only','tmdb_id':'7', 'name':'样本', 'year':2026,
+         'in_local':target=='local', 'in_share':target=='share', 'path':records['only']['Path']},
+        {'id':'other','tmdb_id':'8','in_local':True}], 'series':[], 'stats':{}}
+    state_store.save(engine.EMBY_LIB_CACHE_FILE, data)
+    dead = 'a' if target == 'local' else 'b'
+    for mid in [dead,'only']:
+        engine.emby_path_to_container(records[mid]['Path']).unlink()
+        records.pop(mid)
+    monkeypatch.setattr(engine, 'emby_request', lambda route,params,**kw:
+                        {'Items':[records[mid] for mid in params['Ids'].split(',') if mid in records],
+                         'TotalRecordCount':sum(mid in records for mid in params['Ids'].split(','))})
     assert morning.patch_emby_lib_cache_after_movie_delete('7',target) == 1
-    assert [x['id'] for x in data['movies']] == ['both','other']
+    data = state_store.read(engine.EMBY_LIB_CACHE_FILE)
+    survivor = 'b' if target == 'local' else 'a'
+    assert [x['id'] for x in data['movies']] == [survivor,'other']
+    assert data['movies'][0]['ids'] == [survivor]
     assert data['movies'][0]['in_'+target] is False
     assert data['movies'][0]['in_'+('share' if target=='local' else 'local')] is True
     assert data['stats']['total_movies'] == 2

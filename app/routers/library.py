@@ -4,7 +4,7 @@ import time, json, threading, sqlite3, urllib.parse, urllib.request, asyncio, se
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from app import runtime_logs
-from app import posters, tmdb, library_response, library_updates, morning, deletion_progress, library_first_screen, library_pagination, batch_library_delete
+from app import posters, tmdb, library_response, library_updates, morning, deletion_progress, library_first_screen, library_pagination, batch_library_delete, library_identity
 
 try:
     from app.routers.deps import auth, engine, logger, Args
@@ -431,7 +431,8 @@ def _delete_title_files(files, target, title, media_type, series_id=None, tmdb_i
                 emby_paths.add(engine.container_to_emby_path(d, target))
 
     engine.invalidate_media_caches(keep_emby_lib=True)
-    series_removed, entry = False, None
+    series_removed, entry, movie_entries = False, None, None
+    cache_sync_error = ''
     try:
         if series_id is not None:
             info = engine.patch_emby_lib_cache_after_series_delete(series_id, target)
@@ -439,10 +440,14 @@ def _delete_title_files(files, target, title, media_type, series_id=None, tmdb_i
             entry = info['entry']
             if series_removed and info['series_path']:
                 emby_paths.add(info['series_path'])   # 整部剧都没了：连剧目录一起通知
-        elif tmdb_id is not None and len(gone) == len(files):
+        elif tmdb_id is not None and gone:
             engine.patch_emby_lib_cache_after_movie_delete(tmdb_id, target)
+            movie_entries = [row for row in (morning.read_emby_lib_cache(max_age=None) or {}).get('movies') or []
+                             if str(row.get('tmdb_id') or '') == str(tmdb_id)]
     except Exception as e:
         engine.log.warning('删除后缓存修补失败: %s', e)
+        cache_sync_error = '文件删除已执行，片库状态同步失败，请刷新总览核实：' + str(e)
+        result.setdefault('errors', []).append(cache_sync_error)
     engine.notify_emby_deleted(emby_paths)    # 后台线程，不阻塞返回
 
     target_cn = '本地库' if target == 'local' else '分享库'
@@ -464,6 +469,7 @@ def _delete_title_files(files, target, title, media_type, series_id=None, tmdb_i
         'cloud_removed': result['cloud_removed'],
         'errors': result.get('errors', []),
         'series_removed': series_removed, 'entry': entry,
+        'movie_entries': movie_entries, 'cache_sync_error': cache_sync_error,
         'movie_target_removed': tmdb_id is not None and len(gone) == len(files),
     }
 
@@ -513,19 +519,14 @@ def _series_delete(series_id, body, progress=None):
         return {'status': 'error', 'message': 'target 必须是 local 或 share'}
 
     try:
-        data = engine.emby_request('/Items', {
-            'ParentId': series_id,
-            'Recursive': 'true',
-            'IncludeItemTypes': 'Episode',
-            'Fields': 'Path',
-            'Limit': 5000,
-        }) or {}
-        root = engine.L_ROOT if target == 'local' else engine.S_ROOT
-        files = []
-        for ep in data.get('Items') or []:
-            conv = engine.emby_path_to_container(ep.get('Path') or '')
-            if conv and engine._inside(conv, root) and conv.exists():
-                files.append(conv)
+        cached = morning.read_emby_lib_cache(max_age=None) or {}
+        entry = next((row for row in cached.get('series') or []
+                      if str(series_id) in {str(i) for i in row.get('series_ids') or [row.get('id')] if i}), None)
+        row = dict(entry or {})
+        row.update(members=library_identity.member_ids(entry or {'id': series_id}, 'series_ids'), target=target)
+        paths, _ = library_identity.series_files(engine, row)
+        from pathlib import Path
+        files = [Path(path) for path in paths]
 
         if not files:
             return {'status': 'success', 'count': 0, 'target': target,

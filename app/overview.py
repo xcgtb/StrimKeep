@@ -87,50 +87,7 @@ def _phase(text):
 
 
 def _carry_metadata(fresh, previous):
-    """Reuse verified identity's TMDB metadata, recompute against new episodes.
-
-    Preserve the original comparison time; new Emby facts are NOT a new TMDB
-    comparison. New or changed identities remain unmatched until normal scan.
-    """
-    previous = previous or {}
-    for kind, ids_field in (('series', 'series_ids'), ('movies', 'ids')):
-        by_id = {}
-        for row in previous.get(kind) or []:
-            for ident in row.get(ids_field) or [row.get('id')]:
-                if ident:
-                    by_id.setdefault(str(ident), []).append(row)
-        for row in fresh.get(kind) or []:
-            candidates = []
-            for ident in row.get(ids_field) or [row.get('id')]:
-                candidates.extend(by_id.get(str(ident), []))
-            candidates = [old for old in candidates if old.get('name') == row.get('name')
-                          and old.get('year') == row.get('year')
-                          and str(old.get('tmdb_id') or '') == str(row.get('tmdb_id') or '')]
-            distinct = {str(old.get('id')) for old in candidates}
-            if len(distinct) != 1:
-                continue
-            old = candidates[0]
-            if kind == 'movies':
-                if old.get('poster_tmdb'):
-                    row['poster_tmdb'] = old['poster_tmdb']
-                continue
-            info = copy.deepcopy(old.get('tmdb_info') or {})
-            if info.get('tmdb_total') and info.get('seasons'):
-                meta = {'status': info.get('tmdb_status') or '',
-                        'seasons': [{'season_number': s['season'], 'episode_count': s.get('tmdb', 0)}
-                                    for s in info['seasons']]}
-                update = engine.classify_series_by_tmdb(row.get('seasons') or [], meta)
-                declared = info.get('declared_total')
-                info.update(update)
-                if declared is not None:
-                    info['declared_total'] = declared
-            elif info:
-                # No valid season comparison cannot establish completeness.
-                info.update(local_total=morning._episode_count(row), match_status='unmatched')
-            if info:
-                row['tmdb_info'] = info
-    fresh.update(ts=previous.get('ts') or 0, facts_ts=time.time(), source='emby_refresh')
-    return fresh
+    return morning._carry_metadata(fresh, previous)
 
 
 def _refresh_facts():
