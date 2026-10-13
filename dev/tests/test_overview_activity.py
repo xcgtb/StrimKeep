@@ -84,3 +84,35 @@ def test_repeat_reads_reuse_projection_and_expire_without_remote_scan(tmp_path, 
     state_store.save(engine.INGEST_CACHE_FILE, {'ts': clock[0]})
     activity.snapshot()
     assert calls == ['cache', 'cache']
+
+
+def test_missing_poster_uses_cached_metadata_without_remote_lookup():
+    result = project(health={'top_missing': [
+        {'name': '黑道教父', 'year': 2025, 'diff': 10, 'have': 30, 'tot': 40},
+        {'name': '无法匹配', 'diff': 2, 'have': 2, 'tot': 4},
+    ]}, cache={'series': [
+        {'name': '黑道教父', 'year': 2025, 'tmdb_id': '1234',
+         'tmdb_info': {'poster': '/season.jpg'}},
+    ]})
+    missing = result['missing']
+    assert missing[0]['poster'] == '/api/tmdb/poster/season.jpg'
+    assert missing[0]['diff'] == 10 and missing[0]['have'] == 30
+    assert missing[1]['poster'] == ''
+
+
+def test_missing_poster_disambiguates_same_title_by_year():
+    result = project(health={'top_missing': [
+        {'name': '同名作品', 'year': 2024, 'diff': 3, 'have': 7, 'tot': 10},
+        {'name': '同名作品', 'year': 2020, 'diff': 5, 'have': 5, 'tot': 10},
+        {'name': '同名作品', 'diff': 2, 'have': 8, 'tot': 10},
+    ]}, cache={'series': [
+        {'name': '同名作品', 'year': 2020, 'tmdb_id': '22', 'has_image': True, 'id': 'emby22'},
+        {'name': '同名作品', 'year': 2024, 'tmdb_id': '44',
+         'tmdb_info': {'poster': '/2024.jpg'}},
+    ]})
+    missing = result['missing']
+    assert missing[0]['tmdb_id'] == '44'
+    assert missing[0]['poster'] == '/api/tmdb/poster/2024.jpg'
+    assert missing[1]['tmdb_id'] == '22'
+    assert missing[1]['poster'] == '/api/emby/poster/emby22'
+    assert missing[2]['poster'] == ''  # unknown year, ambiguous identity

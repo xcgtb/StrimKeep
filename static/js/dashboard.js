@@ -281,7 +281,7 @@ function renderOverviewActivity(data,dashboard){
   if(focus){$('overviewFocus').innerHTML=overviewActivityButton(focus,'recent',0,'overview-focus-content',overviewActivityImage(focus)+'<div><small>最近入库 · '+esc(focus.media_type==='movie'?'电影':'剧集')+'</small><b>'+esc(focus.title)+'</b><p>'+esc(focus.episodes||focus.year||'')+'</p><div class="focus-bottom">查看作品与资源 ↗</div></div>');}
   var missing=a.missing||[];
   $('overviewMissingCount').textContent=((dashboard||{}).libraryHealth||{}).stats&&((dashboard||{}).libraryHealth.stats.missing)!=null?dashboard.libraryHealth.stats.missing+' 部 ↗':'查看全部 ↗';
-  $('overviewMissing').innerHTML=missing.map(function(row,i){return '<button class="overview-gap-row" type="button" onclick="overviewOpenHealth(\'missing\')"><span>'+String(i+1).padStart(2,'0')+'</span><div><b>'+esc(row.title)+'</b><small>'+esc(row.have!=null&&row.total!=null?'已入库 '+row.have+' / '+row.total+' 集':'分集对照未提供')+'</small></div><strong>'+esc(row.diff!=null?'缺 '+row.diff+' 集':'缺集未知')+'</strong></button>';}).join('')||'<div class="overview-empty">'+(a.missing_ts?'缓存中暂无已确认缺集，未匹配作品仍需核对':'暂无缺集对照缓存')+'</div>';
+  $('overviewMissing').innerHTML=missing.map(function(row,i){return '<button class="overview-gap-row" type="button" onclick="overviewOpenHealth(\'missing\')"><span class="overview-gap-rank">'+String(i+1).padStart(2,'0')+'</span><span class="overview-gap-poster">'+overviewActivityImage(row)+'</span><div><b>'+esc(row.title)+'</b><small>'+esc(row.have!=null&&row.total!=null?'已入库 '+row.have+' / '+row.total+' 集':'分集对照未提供')+'</small></div><strong>'+esc(row.diff!=null?'缺 '+row.diff+' 集':'缺集未知')+'</strong></button>';}).join('')||'<div class="overview-empty">'+(a.missing_ts?'缓存中暂无已确认缺集，未匹配作品仍需核对':'暂无缺集对照缓存')+'</div>';
   $('overviewMissingNote').textContent=a.missing_stale?'TMDB 对照超过30分钟 · 等待校准':a.missing_ts?'仅计已播集 · '+overviewActivityTime(a.missing_ts):'等待片库对照';
   var subs=a.subscriptions||{},morning=a.morning||{},check=((dashboard||{}).subscriptions||{}).check||{};
   var checkText={success:'正常',partial:'部分失败',error:'检查失败',running:'检查中',disabled:'已停用'}[check.status]||'尚未检查';
@@ -291,5 +291,5 @@ function renderOverviewActivity(data,dashboard){
   $('overviewFollowingNote').textContent=a.following_ts?'最近一次成功通知 · '+overviewActivityTime(a.following_ts):'';
   var watching=a.watching||[];$('overviewSideFollowing').hidden=!watching.length;
   $('overviewSideFollowing').innerHTML='<div class="overview-side-heading"><b>最近关注</b><span>追更中</span></div>'+watching.map(function(row,i){return overviewActivityButton(row,'watching',i,'overview-watching-item',overviewActivityImage(row)+'<div><b>'+esc(row.title)+'</b><small>'+esc(row.detail)+'</small></div>');}).join('');
-  ['overviewRecent','overviewFocus','overviewFollowing','overviewSideFollowing'].forEach(function(id){hydratePosters($(id));});
+  ['overviewRecent','overviewMissing','overviewFocus','overviewFollowing','overviewSideFollowing'].forEach(function(id){hydratePosters($(id));});
 }

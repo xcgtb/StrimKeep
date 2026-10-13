@@ -35,10 +35,16 @@ def _index(cache):
     return names
 
 
-def _seed(names, kind, title, tid=''):
+def _seed(names, kind, title, tid='', year=None):
     rows = names.get((kind, str(title)), [])
     if tid:
         rows = [row for row in rows if str(row.get('tmdb_id') or '') == str(tid)]
+    elif year not in (None, ''):
+        # Missing-series summaries preserve the production year; use it to
+        # disambiguate same-title shows before choosing an existing poster.
+        same_year = [row for row in rows if str(row.get('year') or '') == str(year)]
+        if same_year:
+            rows = same_year
     identities = {str(row.get('tmdb_id') or '') for row in rows}
     known = bool(rows and len(identities) == 1 and '' not in identities)
     row = rows[0] if known else {}
@@ -120,7 +126,8 @@ def build(health, cache, ingest, subscriptions, report, state, notification, mor
         history = state.get(sid) or {}
         watching.append(dict(seed, detail=('最近通知 ' + str(history['latest_ep'])
                                            if history.get('latest_ep') else '尚无通知记录')))
-    missing = [dict(_seed(names, 'tv', row.get('name')), diff=_number(row.get('diff')),
+    missing = [dict(_seed(names, 'tv', row.get('name'), year=row.get('year')),
+                    diff=_number(row.get('diff')),
                     have=_number(row.get('have')), total=_number(row.get('tot')))
                for row in (health or {}).get('top_missing') or []]
     return {'status': 'success', 'recent': _recent(ingest or {}, names, now),
