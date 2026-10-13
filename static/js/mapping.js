@@ -729,6 +729,9 @@ function mappingBatchSyncContext(){
     mappingBatchSelected.clear();
   }
   var permitted = mappingBatchAllowed();
+  var list = $('embyList');
+  if (list && list.classList && list.classList.toggle)
+    list.classList.toggle('mapping-swipe-enabled', permitted && mappingBatchMode);
   var entry = $('mappingBatchEntry'), panel = $('mappingBatchPanel');
   if (entry) entry.hidden = !permitted;
   if (panel) panel.hidden = !permitted || !mappingBatchMode;
@@ -738,7 +741,7 @@ function mappingBatchSyncContext(){
   var hint = $('mappingBatchHint');
   if (hint) hint.textContent = isLocal
     ? '删除本地 STRM 和匹配的源视频；每次最多 20 部。'
-    : '仅清理分享库 STRM，不会删除源视频；每次最多 60 部。';
+    : '分享库单次可选最多 600 部；后台每批核验不超过 60 部 / 3000 个 STRM，仅删除分享 STRM。手机可横向滑过海报连续选择。';
   var count = $('mappingBatchCount');
   if (count) count.textContent = mappingBatchAll
     ? '已全选当前筛选结果（包括未加载页面）'
@@ -760,6 +763,7 @@ function mappingBatchToggleMode(){
   mappingBatchAll = false;
   mappingBatchSelected.clear();
   mappingBatchSyncContext();
+  mappingBatchBindSwipe();
   renderEmbyList();
 }
 // 全选只改变选择状态，不预览、更不提交删除。跨页范围由后端在预览时核定。
@@ -770,6 +774,8 @@ function mappingBatchSelectFiltered(){
   document.querySelectorAll('#embyList .mapping-batch-card-check input').forEach(function(node){
     node.checked = mappingBatchAll;
     node.disabled = mappingBatchAll;
+    var card = node.closest('.poster-card');
+    if (card) card.classList.toggle('mapping-batch-selected', mappingBatchAll);
   });
   mappingBatchSyncContext();
 }
@@ -777,8 +783,110 @@ function mappingBatchSetItem(id, checked){
   if (!mappingBatchAllowed() || !mappingBatchMode || mappingBatchAll || mappingDeleteBusy) return;
   if (checked) mappingBatchSelected.add(String(id));
   else mappingBatchSelected.delete(String(id));
+  mappingBatchUpdateCard(id, checked);
   mappingBatchSyncContext();
 }
+
+function mappingBatchUpdateCard(id, checked){
+  document.querySelectorAll('#embyList .poster-card').forEach(function(card){
+    var ident = card.getAttribute('data-series-id') || card.getAttribute('data-movie-id');
+    if (ident !== String(id)) return;
+    card.classList.toggle('mapping-batch-selected', !!checked);
+    var check = card.querySelector('.mapping-batch-card-check input');
+    if (check) check.checked = !!checked;
+  });
+}
+
+var mappingBatchSuppressClickUntil = 0;
+function mappingBatchCardClick(media, id, event){
+  if (mappingBatchMode && mappingBatchAllowed()) {
+    if (event && event.stopPropagation) event.stopPropagation();
+    if (mappingDeleteBusy || mappingBatchAll || Date.now() < mappingBatchSuppressClickUntil) return;
+    mappingBatchSetItem(id, !mappingBatchSelected.has(String(id)));
+    return;
+  }
+  if (media === 'movies') showMovieDetailById(id);
+  else showEmbyDetailById(id);
+}
+
+// iOS/Android: tap toggles; a deliberate HORIZONTAL swipe selects adjacent
+// cards. Vertical gestures are left to the browser to scroll naturally.
+function mappingBatchBindSwipe(){
+  var list = $('embyList');
+  if (!list || list.__mappingSwipeBound) return;
+  list.__mappingSwipeBound = true;
+  var state = null;
+  function cardAt(x, y){
+    if (typeof document.elementFromPoint !== 'function') return null;
+    var node = document.elementFromPoint(x, y);
+    return node && node.closest ? node.closest('#embyList .poster-card') : null;
+  }
+  function markAt(x, y){
+    var card = cardAt(x, y);
+    if (!card || !list.contains(card)) return;
+    var id = card.getAttribute('data-series-id') || card.getAttribute('data-movie-id');
+    if (id && !mappingBatchSelected.has(id)) mappingBatchSetItem(id, true);
+  }
+  list.addEventListener('touchstart', function(ev){
+    if (!mappingBatchMode || !mappingBatchAllowed() || mappingBatchAll || mappingDeleteBusy || ev.touches.length !== 1) {
+      state = null; return;
+    }
+    if (ev.target.closest && ev.target.closest('.mapping-batch-card-check')) { state = null; return; }
+    var card = ev.target.closest ? ev.target.closest('.poster-card') : null;
+    if (!card) { state = null; return; }
+    var t = ev.touches[0];
+    state = {x:t.clientX,y:t.clientY, lastX:t.clientX,lastY:t.clientY,mode:''};
+  }, {passive:true});
+  list.addEventListener('touchmove', function(ev){
+    if (!state || ev.touches.length !== 1 || !mappingBatchMode || mappingDeleteBusy) return;
+    var t = ev.touches[0], dx=t.clientX-state.x, dy=t.clientY-state.y;
+    if (!state.mode && Math.hypot(dx,dy) > 12)
+      state.mode = Math.abs(dx) > Math.abs(dy)*1.25 ? 'select' : 'scroll';
+    if (state.mode !== 'select') return;
+    if (ev.cancelable) ev.preventDefault();
+    mappingBatchSuppressClickUntil = Date.now() + 800;
+    var count = Math.min(24, Math.max(1, Math.ceil(Math.abs(t.clientX-state.lastX)/18)));
+    for (var j=0;j<=count;j++) {
+      var fraction=j/count;
+      markAt(state.lastX+(t.clientX-state.lastX)*fraction,
+             state.lastY+(t.clientY-state.lastY)*fraction);
+    }
+    markAt(state.x,state.y);
+    state.lastX=t.clientX;state.lastY=t.clientY;
+  }, {passive:false});
+  list.addEventListener('touchend', function(ev){
+    if (state && state.mode === 'select') mappingBatchSuppressClickUntil = Date.now() + 800;
+    state = null;
+  }, {passive:true});
+  list.addEventListener('touchcancel', function(){state=null;}, {passive:true});
+}
+
+async function mappingBatchPrepare(media, body){
+  // Share preview is background read-only work; no delete happens here.
+  if (body.target !== 'share') {
+    return api('/api/emby/'+media+'/batch-delete/preview', {
+      method:'POST',body:JSON.stringify(body),timeoutMs:60000});
+  }
+  var started = await api('/api/emby/'+media+'/batch-delete/preview/start', {
+    method:'POST',body:JSON.stringify(body),timeoutMs:12000});
+  if (started.status !== 'accepted') throw Error(started.message || '无法启动批量预览');
+  var startedAt = Date.now();
+  while (Date.now() - startedAt < 15*60*1000) {
+    await new Promise(function(resolve){setTimeout(resolve, 1200);});
+    var status = await api('/api/emby/'+media+'/batch-delete/preview/status?job_id='+
+      encodeURIComponent(started.job_id)+'&_='+Date.now(), {timeoutMs:12000,cache:'no-store'});
+    if (status.status === 'running') {
+      var hint = $('mappingBatchHint');
+      if (hint) hint.textContent = '正在只读核验 '+(status.processed||0)+' / '+(status.total||'…')+
+        ' 部；尚未开始删除，请等待预览完成…';
+      continue;
+    }
+    if (status.status === 'done') return status.result;
+    throw Error(status.message || '预览查询失败');
+  }
+  throw Error('预览核验超时；后台可能仍在处理，请勿重复发起，稍后检查');
+}
+
 function mappingBatchProgress(preview){
   var isLocal = preview.target === 'local';
   mappingDeleteView = {target:preview.target, title:'批量清理' + (isLocal?'本地库':'分享库'),
@@ -786,7 +894,8 @@ function mappingBatchProgress(preview){
   mappingDeletePhase('正在逐部重新验证并执行安全删除…');
   openModal('<div class="mapping-detail"><h3>批量删除进行中</h3>'
     + '<p>目标：' + (isLocal?'本地库（可能联动删除源视频）':'分享库（仅 STRM）') + '</p>'
-    + '<p>已确认 ' + esc(preview.count) + ' 部 / ' + esc(preview.strm_count) + ' 个 STRM；执行中会再次核验。</p>'
+    + '<p>已确认 ' + esc(preview.count) + ' 部 / ' + esc(preview.strm_count) + ' 个 STRM；'+
+      '共 '+esc(preview.batch_count||1)+' 批，执行中会再次核验。</p>'
     + '<p id="mappingDeleteStatus" role="status" aria-live="polite"></p>'
     + '<progress id="mappingDeleteBar" value="0" max="' + esc(preview.count) + '" style="width:100%"></progress>'
     + '<p id="mappingDeleteCounts" role="status" aria-live="polite">等待后端反馈…</p>'
@@ -803,15 +912,20 @@ async function mappingBatchDelete(){
     var body = Object.assign(mappingBatchFilters(), {selection:selection});
     var media=embyFilterState.type === 'movies' ? 'movies' : 'series';
     if (selection === 'selected') body[media==='movies'?'movie_ids':'series_ids'] = Array.from(mappingBatchSelected);
-    var preview = await api('/api/emby/'+media+'/batch-delete/preview', {
-      method:'POST',body:JSON.stringify(body),timeoutMs:60000});
+    var originalContext = mappingBatchContext;
+    var originalIds = selection === 'all' ? '*' : Array.from(mappingBatchSelected).sort().join('\u001f');
+    var preview = await mappingBatchPrepare(media, body);
+    var currentIds = mappingBatchAll ? '*' : Array.from(mappingBatchSelected).sort().join('\u001f');
+    if (originalContext !== mappingBatchContext || originalIds !== currentIds || !mappingBatchMode)
+      throw Error('预览期间筛选或选择发生变化，请重新预览');
     if (preview.status !== 'success') throw new Error(preview.message || '预览失败');
     var isLocal = preview.target === 'local';
     var display = (preview.series || []).slice(0,12).map(function(x){return '· ' + x.name + '（' + x.count + ' STRM）';}).join('\n');
     var label = isLocal ? '本地库' : '分享库';
     var danger = isLocal ? '\n⚠️ 本地库将按原有治理规则联动删除对应的 CD2 源视频！' : '\n分享库只删除 NAS STRM，不删除源视频。';
     var summary = '确定清理【' + label + '】吗？\n筛选：' + (body.filter||'all') +
-      ' · 共 ' + preview.count + ' 部 / ' + preview.strm_count + ' 个 STRM\n' +
+      ' · 共 ' + preview.count + ' 部 / ' + preview.strm_count + ' 个 STRM' +
+       '，分 '+(preview.batch_count||1)+' 批执行\n' +
       display + (preview.count>12?'\n…其余作品略':'') + danger +
       '\n其他程序后续的同步或文件生成行为不受本次清理控制。\n此操作不可撤销。';
     if (!confirm(summary)) return;
@@ -828,7 +942,7 @@ async function mappingBatchDelete(){
     var detail = '已处理 ' + (result.processed||0) + '/' + preview.count + ' 部；'
       + ' STRM 已删除 ' + (result.strm_removed||0) + ' 个；'
       + (isLocal?'源视频已删除 ' + (result.cloud_removed||0) + ' 个；':'')
-      + '保留 ' + (result.retained||0) + ' 个；失败/部分完成 ' + (result.failed||0) + ' 部。';
+      + '保留 ' + (result.retained||0) + ' 个；共 '+(result.batch_total||1)+' 批；失败/部分完成 ' + (result.failed||0) + ' 部。';
     if ((result.errors||[]).length) detail += '\n' + result.errors.slice(0,10).join('\n');
     showMappingDeleteResult(result.failed?'批量清理部分完成':'批量清理完成', detail,
       '请等待 Emby 更新后重新核对片库；勿根据旧页面重复删除。');
@@ -889,7 +1003,7 @@ function renderSeriesCard(s){
     + '<input type="checkbox" aria-label="选择 ' + esc(s.name || '剧集') + '" '
     + (mappingBatchAll ? 'checked disabled ' : (mappingBatchSelected.has(String(s.id)) ? 'checked ' : ''))
     + 'onchange="mappingBatchSetItem(' + jsarg(s.id) + ',this.checked)"></label>' : '';
-  return '<div class="poster-card emby-poster-card st-' + mst + '" data-series-id="' + esc(s.id) + '" onclick="showEmbyDetailById(' + jsarg(s.id) + ')">'
+  return '<div class="poster-card emby-poster-card st-' + mst + (mappingBatchMode && (mappingBatchAll || mappingBatchSelected.has(String(s.id))) ? ' mapping-batch-selected' : '') + '" data-series-id="' + esc(s.id) + '" onclick="mappingBatchCardClick(\'series\',' + jsarg(s.id) + ',event)">'
     + mark + '<div class="poster-wrap">' + poster
     + '<span class="badge-type">剧集</span>'
     + '<span class="badge-status ' + statusCls + '">' + statusText + '</span>'
@@ -980,7 +1094,8 @@ function updateMappingDeleteProgress(snapshot){
   var counts = $('mappingDeleteCounts');
   if (counts) counts.textContent = '已处理 ' + processed + ' / ' + total + ' · STRM 已删除 ' + (snapshot.strm_removed || 0)
     + (mappingDeleteView.target === 'local' ? ' · 115 源文件已删除 ' + (snapshot.cloud_removed || 0) : '')
-    + ' · 保留 ' + (snapshot.retained || 0);
+    + ' · 保留 ' + (snapshot.retained || 0)
+    + (snapshot.batch_total ? ' · 当前第 '+(snapshot.batch_index||1)+' / '+snapshot.batch_total+' 批' : '');
   var file = $('mappingDeleteFile');
   if (file) file.textContent = snapshot.current_file || '';
 }
@@ -1424,7 +1539,7 @@ function renderMovieCard(m){
       : '<div class="no-img">暂无海报</div>');
 
   var mark = typeof mappingBatchMode !== 'undefined' && mappingBatchMode && mappingBatchAllowed() ? '<label class="mapping-batch-card-check" onclick="event.stopPropagation()"><input type="checkbox" aria-label="选择 '+esc(m.name||'电影')+'" '+(mappingBatchAll?'checked disabled ':(mappingBatchSelected.has(String(m.id))?'checked ':''))+'onchange="mappingBatchSetItem('+jsarg(m.id)+',this.checked)"></label>' : '';
-  return '<div class="poster-card emby-poster-card" data-movie-id="' + esc(m.id) + '" onclick="showMovieDetailById(' + jsarg(m.id) + ')">'
+  return '<div class="poster-card emby-poster-card' + (mappingBatchMode && (mappingBatchAll || mappingBatchSelected.has(String(m.id))) ? ' mapping-batch-selected' : '') + '" data-movie-id="' + esc(m.id) + '" onclick="mappingBatchCardClick(\'movies\',' + jsarg(m.id) + ',event)">'
     + mark + '<div class="poster-wrap">' + poster
     + '<span class="badge-type">电影</span>'
     + '</div>'

@@ -2043,6 +2043,11 @@ html[data-theme="dark"]{--bg:#111113;--bg-soft:#1c1c20;--bg-dim:#2b2b30;--surfac
 #tab-mapping .mapping-batch-card-check{position:absolute;top:10px;right:10px;z-index:3;display:flex;align-items:center;justify-content:center;background:rgba(15,23,42,.85);color:#fff;border:1px solid rgba(255,255,255,.65);border-radius:8px;padding:8px;min-width:38px;min-height:38px;cursor:pointer}
 #tab-mapping .mapping-batch-card-check input{width:18px;height:18px;accent-color:#3b82f6;cursor:pointer}
 #tab-mapping .mapping-batch-card-check input:disabled{cursor:default}
+/* Mobile swipe-select is restricted to Mapping batch mode. Preserve vertical scroll. */
+#tab-mapping .poster-card.mapping-batch-selected{outline:2px solid var(--accent,#3b82f6);outline-offset:-2px;box-shadow:0 0 0 2px rgba(59,130,246,.18)}
+#tab-mapping #embyList.mapping-swipe-enabled .poster-card{touch-action:pan-y;user-select:none;-webkit-user-select:none}
+#tab-mapping #embyList.mapping-swipe-enabled .poster-card .info{pointer-events:none}
+
 
 /* Settings: named groups, compact service cards and scoped save actions. */
 #tab-settings .settings-content{min-width:0;grid-column:2;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;align-items:start}

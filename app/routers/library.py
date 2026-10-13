@@ -495,6 +495,20 @@ def _delete_title_files(files, target, title, media_type, series_id=None, tmdb_i
     }
 
 
+@router.post('/api/emby/{media}/batch-delete/preview/start', dependencies=[Depends(auth)])
+def api_batch_preview_start(media: str, body: dict = None):
+    if media not in ('series', 'movies'):
+        raise HTTPException(status_code=400, detail='无效媒体类型')
+    return batch_library_delete.start_preview(dict(body or {}, media=media))
+
+
+@router.get('/api/emby/{media}/batch-delete/preview/status', dependencies=[Depends(auth)])
+def api_batch_preview_status(media: str, job_id: str):
+    if media not in ('series', 'movies'):
+        raise HTTPException(status_code=400, detail='无效媒体类型')
+    return batch_library_delete.preview_status(job_id)
+
+
 @router.post('/api/emby/series/batch-delete/preview', dependencies=[Depends(auth)])
 def api_batch_series_preview(body: dict = None):
     return batch_library_delete.preview(dict(body or {}, media='series'))

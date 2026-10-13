@@ -1,7 +1,8 @@
 name: publish-image
+run-name: 'StrimKeep ${{ github.ref_name }} · 发布镜像'
 on:
   push:
-    branches: ['main']
+    tags: ['v*']
   workflow_dispatch:
 permissions:
   contents: read

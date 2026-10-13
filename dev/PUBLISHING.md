@@ -18,28 +18,29 @@ git status --short
 
 根目录的 `docker-compose.yml` 是可提交的公共模板，凭据必须保持占位值。私人配置放 Git 工作区外的部署目录，或使用已忽略的 `docker-compose.override.yml`；不要修改公共模板为自己的密码再提交。
 
-## 自动发布（main + Tag 一次推送）
+## 自动发布（版本 Tag 触发）
 
-`main` 推送仅触发一次 `publish-image`：先复用 `checks.yml` 的 Python、前端和生产镜像检查，
-全部通过后 **只构建一次** amd64/arm64 镜像。`checks.yml` 仍独立用于 Pull Request，
-**Tag 推送本身不再触发第二套检查和构建**。
+只有 `vX.Y.Z` Tag 推送会自动触发一次 `publish-image`，Github Actions 运行标题和蓝色引用标签均显示 `vX.Y.Z`（例如 `v1.2.9`），方便确认目前发布到哪一版。`main` 推送本身不发布镜像，也不触发第二套检查；Pull Request 仍独立运行 `checks.yml`。
 
-正常修复必须先在 `CHANGELOG.md` 添加对应版本的 `## X.Y.Z（日期）` 标题，再执行：
+正式发布必须先把 `CHANGELOG.md` 中的版本标题 `## X.Y.Z（日期）` 写好并提交。发布前检查远程 Tag，确保未复用旧版本号：
 
 ```bash
+git fetch --tags origin
+git tag --list 'v*' --sort=-v:refname | head -n 10
+git tag --list v1.2.9
+git status --short
+GITHUB_REF_TYPE=tag GITHUB_REF_NAME=v1.2.9 python3 dev/tools/release_check.py
+# 检查无误后提交本次实际变更；不使用 git add .，避免混入私人文件
 git add <本次实际修改的文件>
-git commit -m "fix: describe changes"
-git tag -a v1.2.8 -m "StrimKeep v1.2.8"
-git push --atomic origin main v1.2.8
+git diff --cached --check
+git commit -m "release: v1.2.9 - share batch and mobile selection"
+git tag -a v1.2.9 -m "StrimKeep v1.2.9"
+git push --atomic origin main v1.2.9
 ```
 
-`--atomic` 要求 GitHub 同时接收 `main` 和 Tag，防止发布工作流在 Tag 尚不可见时启动。
-`publish-image` 检查 **是否有且只有一个符合 vX.Y.Z 的版本标签指向当前 HEAD**：
+发布流程严格核对 Tag 指向当前提交，并检查对应 CHANGELOG。通过 Python、前端和生产镜像回归后，同一次 amd64/arm64 镜像构建仅发布 `latest` 与 `X.Y.Z`，不发布 `X.Y` 这种浮动次版本标签。Docker 镜像标签 `X.Y.Z` 与源码 Git Tag `vX.Y.Z` 是刻意不同的命名规范。
 
-- 如果有，先核实 `CHANGELOG` 与标签一致，然后**同一次构建**推送 `latest` 和 `X.Y.Z`。
-- 如果没有，只更新 `latest`，版本号沿用当前分支最近的已发布版本，**不会覆盖固定版本标签**。
-- 如果一个提交有多个有效版本标签，拒绝发布，避免镜像版本不确定。
-- 单独补推 Tag 不触发发布；如已先推 `main` 后补 Tag，需在 Actions 手动运行 `publish-image`（选择 `main`）重新测试并发布。
+只推送 `main` 不会自动构建镜像；即使晚些时候单独推送新 Tag，也会触发该版本的发布。`workflow_dispatch` 保留手工运行权限，手工运行时请选择目标版本 Tag；选择 `main` 会显示 `main`，仅用于特殊场景，避免当作常规正式发布。
 
 版本由 Git 标签注入构建参数 `APP_VERSION`；不要修改 `app/version.py` 的本地兜底值 `0.0.0+local`。
 `latest` 仍适合 NAS 测试，待镜像构建成功后在部署目录执行：

@@ -17,8 +17,10 @@ _previews = {}
 _TTL = 300
 _PREVIEWS = 20
 _MAX_LOCAL = 20
-_MAX_SHARE = 60
-_MAX_FILES = 3000
+_MAX_SHARE = 600
+_BATCH_SHARE = 60
+_MAX_FILES = 3000  # Files per verified batch
+_MAX_SHARE_FILES = 18000  # Total files in one share-only operation
 _ALLOWED_STATUS = frozenset(('all', 'aligned', 'missing', 'extra', 'ongoing', 'unmatched', 'no_tmdb', 'pending'))
 
 
@@ -54,7 +56,7 @@ def _checked_rows(body):
         if (not isinstance(ids, list) or not 1 <= len(ids) <= maximum or
                 any(not isinstance(x, str) or not x or len(x) > 128 for x in ids) or
                 len(set(ids)) != len(ids)):
-            raise ValueError('请选择 1 至 %d 部不同的电视剧' % maximum)
+            raise ValueError('请选择 1 至 %d 部不同的作品' % maximum)
     elif ids not in ([], None):
         raise ValueError('全选请求不得额外指定作品编号')
     with library_pagination._lock:
@@ -72,7 +74,7 @@ def _checked_rows(body):
         if not selected:
             raise ValueError('当前筛选条件下没有可清理的电视剧')
         if len(selected) > maximum:
-            raise ValueError('%s库单次上限 %d 部，请缩小筛选或分批多选' %
+            raise ValueError('%s库单次选择上限 %d 部，请缩小筛选' %
                              ('本地' if target == 'local' else '分享', maximum))
         records = []
         member_seen = set()
@@ -140,22 +142,111 @@ def _collect_movie(row):
     return sorted(paths), members[0]
 
 
-def preview(body):
+def _batches(records, target):
+    """Keep each share-only unit within 60 titles AND 3000 proven STRM paths."""
+    if target != 'share':
+        return [records]
+    groups, group, files = [], [], 0
+    for row in records:
+        count = int(row.get('count') or 0)
+        if not 1 <= count <= _MAX_FILES:
+            raise ValueError('单部作品 STRM 超出单批核验上限')
+        if group and (len(group) >= _BATCH_SHARE or files + count > _MAX_FILES):
+            groups.append(group)
+            group, files = [], 0
+        group.append(row)
+        files += count
+    if group:
+        groups.append(group)
+    return groups
+
+
+# Asynchronous *read-only* preview avoids FRP/browser timeouts on hundreds of items.
+_preview_jobs = {}
+_preview_jobs_lock = threading.Lock()
+_PREVIEW_JOB_TTL = 1200
+
+
+def start_preview(body):
+    with _preview_jobs_lock:
+        now = time.monotonic()
+        for key in list(_preview_jobs):
+            info = _preview_jobs[key]
+            if info['status'] != 'running' and now - info['updated'] > _PREVIEW_JOB_TTL:
+                del _preview_jobs[key]
+        if any(row['status'] == 'running' for row in _preview_jobs.values()):
+            return _error('已有批量预览正在核验，请等待完成')
+        # Only lightweight progress/results live here; detailed STRM previews
+        # remain in the existing bounded, single-use _previews collection.
+        while len(_preview_jobs) >= 24:
+            oldest = min(_preview_jobs, key=lambda k: _preview_jobs[k]['updated'])
+            del _preview_jobs[oldest]
+        key = uuid.uuid4().hex
+        _preview_jobs[key] = {'status': 'running', 'processed': 0, 'total': 0,
+                              'updated': now, 'result': None}
+
+    started_at = time.monotonic()
+    def progress(processed, total):
+        if time.monotonic() - started_at > 720:
+            raise TimeoutError('预览核验超过 12 分钟，已停止；未删除任何文件')
+        with _preview_jobs_lock:
+            info = _preview_jobs.get(key)
+            if info:
+                info.update(processed=processed, total=total, updated=time.monotonic())
+
+    def work():
+        try:
+            result = preview(body, progress=progress)
+        except Exception as exc:
+            result = _error('批量预览异常：' + str(exc)[:180])
+        with _preview_jobs_lock:
+            info = _preview_jobs.get(key)
+            if info:
+                info.update(status='done', result=result, updated=time.monotonic())
+
+    try:
+        threading.Thread(target=work, name='mapping-batch-preview', daemon=True).start()
+    except Exception as exc:
+        with _preview_jobs_lock:
+            _preview_jobs.pop(key, None)
+        return _error('无法启动预览：' + str(exc))
+    return {'status': 'accepted', 'job_id': key}
+
+
+def preview_status(job_id):
+    if not isinstance(job_id, str) or len(job_id) != 32 or any(c not in '0123456789abcdef' for c in job_id):
+        return _error('无效预览任务编号')
+    with _preview_jobs_lock:
+        row = _preview_jobs.get(job_id)
+        if not row:
+            return _error('预览任务已过期或服务器已重启，请重新发起')
+        result = dict(row)
+    result.pop('updated', None)
+    return result
+
+
+def preview(body, progress=None):
     try:
         revision, records, target, maximum = _checked_rows(body or {})
         total = 0
         ready = []
+        if progress:
+            progress(0, len(records))
         for row in records:
             files, primary = _collect(row)
             if not files or not primary:
                 raise ValueError('《%s》没有核实到目标库 STRM，请刷新片库筛选' % row['name'])
             row.update(paths=files, primary=primary, count=len(files))
             total += len(files)
-            if total > _MAX_FILES:
-                raise ValueError('批量 STRM 超出安全上限，请缩小选择')
+            max_files = _MAX_FILES if target == 'local' else _MAX_SHARE_FILES
+            if total > max_files:
+                raise ValueError('批量 STRM 超出总量安全上限，请缩小选择')
             ready.append(row)
+            if progress:
+                progress(len(ready), len(records))
         if revision != library_response._key():
             raise ValueError('预览期间片库事实发生变化，请重新预览')
+        groups = _batches(ready, target)
         key = uuid.uuid4().hex
         with _lock:
             now = time.monotonic()
@@ -168,6 +259,7 @@ def preview(body):
                               'expires': now + _TTL, 'used': False}
         return {'status': 'success', 'preview_id': key, 'target': target,
                 'count': len(ready), 'strm_count': total, 'max_titles': maximum,
+                'batch_count': len(groups), 'batch_size': _BATCH_SHARE if target == 'share' else maximum,
                 'series': [{'name': r['name'], 'count': r['count']} for r in ready[:25]],
                 'notice': '本地库会按原治理逻辑联动删除源视频；分享库仅清理 NAS STRM'}
     except Exception as exc:
@@ -178,7 +270,11 @@ def _run(records, target, progress, delete_files):
     processed = removed = cloud = retained = failed = 0
     errors = []
     total = len(records)
+    groups = _batches(records, target)
+    batch_lookup = {id(item): index for index, group in enumerate(groups, 1) for item in group}
     for row in records:
+        # One worker / one preview / one confirmation. Never replay a batch.
+        batch_index = batch_lookup[id(row)]
         try:
             current, primary = _collect(row)
             if current != row['paths'] or primary != row['primary']:
@@ -203,10 +299,11 @@ def _run(records, target, progress, delete_files):
         processed += 1
         progress({'phase': 'deleting', 'total': total, 'processed': processed,
                   'strm_removed': removed, 'cloud_removed': cloud, 'retained': retained,
-                  'error_count': failed, 'current_file': row['name']})
+                  'error_count': failed, 'current_file': row['name'],
+                  'batch_index': batch_index, 'batch_total': len(groups)})
     return {'status': 'success', 'target': target, 'total': total, 'processed': processed,
             'strm_removed': removed, 'cloud_removed': cloud, 'retained': retained,
-            'failed': failed, 'errors': errors[:20]}
+            'failed': failed, 'errors': errors[:20], 'batch_total': len(groups)}
 
 
 def execute(body, delete_files):
