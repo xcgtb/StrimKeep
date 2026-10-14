@@ -11,7 +11,7 @@
 
 StrimKeep 是一款面向 **飞牛 OS / Linux NAS + 302 STRM + Emby** 的影视库治理工具，重点面向使用 **115 网盘、123 云盘、光鸭云盘** 维护个人影视库的用户。不仅管理双库的质量和去留，还提供 **媒体总览、片库映射、影视探索、追更订阅、近 24 小时入库汇报、晨报与 Telegram Bot**。
 
-**独立的 115「我的网盘」与原有 STRM 治理共用一个 Web 控制台。** 支持扫码或手填 Cookie、选择 iPad/iOS 等客户端、保存账号目录、分享转存、自定义命名模板、可选 ffprobe 实测命名、地区归组、五大分类、未识别归档、STRM 和播放反代。已登记本地库源文件按 Cookie 核验明确文件 ID 后删除，不需要 AppID；使用说明见 [我的网盘](docs/CLOUD115_WORKBENCH.md)，两批范围及真实账号待验收项见 [P0-A记录](docs/MY_DRIVE_P0A_ACCEPTANCE.md)、[第二批记录](docs/MY_DRIVE_P0C_ACCEPTANCE.md)及[整理增强记录](docs/MY_DRIVE_ORGANIZE_FFPROBE_ACCEPTANCE.md)。无论 STRM 由哪款工具生成，它直接扫描 NAS 上已存在的本地库与分享库，从 **STRM 文件名、影视目录名、相对路径及季集目录**中提取标题、年份、季集号和画质标签，进行双库匹配、去重与质量对比。
+**独立的 115「我的网盘」与原有 STRM 治理共用一个 Web 控制台。** 支持扫码或手填 Cookie、选择 iPad/iOS 等客户端、保存账号目录、分享转存、自定义命名模板、可选 ffprobe 实测命名、文件过滤、安全停止、独立八维预览、地区归组、五大分类、未识别归档、STRM 和播放反代。已登记本地库源文件按 Cookie 核验明确文件 ID 后删除，不需要 AppID；使用说明见 [我的网盘](docs/CLOUD115_WORKBENCH.md)，两批范围及真实账号待验收项见 [P0-A记录](docs/MY_DRIVE_P0A_ACCEPTANCE.md)、[第二批记录](docs/MY_DRIVE_P0C_ACCEPTANCE.md)、[整理增强记录](docs/MY_DRIVE_ORGANIZE_FFPROBE_ACCEPTANCE.md)及[下一阶段记录](docs/MY_DRIVE_ORGANIZE_CONTROLS_ACCEPTANCE.md)。无论 STRM 由哪款工具生成，它直接扫描 NAS 上已存在的本地库与分享库，从 **STRM 文件名、影视目录名、相对路径及季集目录**中提取标题、年份、季集号和画质标签，进行双库匹配、去重与质量对比。
 
 对于需要腾出网盘空间的本地库，StrimKeep 还可以将 STRM 的**相对目录与文件名**映射到 NAS 上已挂载的真实视频源目录，匹配可靠且确认执行后联动清理。旧的未登记 STRM 沿用此挂载方式，主要适用于 **115、123、光鸭** 等具有相应挂载能力的场景；**302 播放地址本身不能作为删除源文件的依据**。
 
@@ -21,6 +21,8 @@ StrimKeep 是一款面向 **飞牛 OS / Linux NAS + 302 STRM + Emby** 的影视�
 **阅读导航：** [快速部署](#docker-compose-部署) · [302 STRM 工作原理](#302-strm-与双库治理) · [核心功能](#核心功能) · [七维治理规则](#七维画质与治理策略) · [首次使用](#首次使用) · [Web 页面](#web-功能说明) · [安全机制](#文件删除与安全边界) · [更新与备份](#更新备份与排错)
 
 ---
+
+手机端“我的网盘”使用横向功能导航；影视整理的四类目录可在当前页直接浏览 115 并保存，无需跳转文件管理，见[目录选择说明](docs/MY_DRIVE_DIRECTORY_PICKER_ACCEPTANCE.md)。
 
 ## 项目定位
 

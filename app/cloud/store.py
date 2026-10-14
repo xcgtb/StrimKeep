@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS cloud_steps (
  job_id TEXT NOT NULL, step_key TEXT NOT NULL, state TEXT NOT NULL,
  payload TEXT NOT NULL, result TEXT NOT NULL DEFAULT '{}', updated REAL NOT NULL,
  PRIMARY KEY(job_id,step_key));
+CREATE TABLE IF NOT EXISTS cloud_job_controls (
+ job_id TEXT PRIMARY KEY, stop_requested INTEGER NOT NULL, updated REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS cloud_plans (
  id TEXT PRIMARY KEY, account_id TEXT NOT NULL, revision INTEGER NOT NULL,
  state TEXT NOT NULL, payload TEXT NOT NULL, expires REAL NOT NULL);
@@ -123,6 +125,8 @@ def job(job_id):
     )
     value["result"] = json.loads(value["result"])
     with db() as con:
+        control = con.execute("SELECT stop_requested FROM cloud_job_controls WHERE job_id=?", (job_id,)).fetchone()
+        value["stop_requested"] = bool(control and control[0])
         progress = con.execute(
             "SELECT total,processed,phase,current,updated FROM cloud_progress WHERE job_id=?",
             (job_id,),

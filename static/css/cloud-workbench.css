@@ -19,7 +19,6 @@
 .cw-sidebar button:hover{background:var(--surface-hover);color:var(--text)}
 .cw-sidebar button.on{background:var(--surface-active);color:var(--brand);font-weight:600}
 .cw-content{min-width:0}
-#tab-cloud .cw-mobile-nav{display:none}
 .cw-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px}
 .cw-form-grid label{min-width:0;display:block;font-size:13px;line-height:1.8}
 #tab-cloud textarea{box-sizing:border-box;display:block;margin-top:8px;min-height:80px;resize:vertical;font:inherit}
@@ -28,5 +27,20 @@
 .cw-settings-group label{display:block;margin:12px 0;font-size:13px;line-height:1.8}
 .cw-category-options{display:flex;flex-wrap:wrap;gap:0 18px}
 #cw-naming-preview p{padding:10px 0;overflow-wrap:anywhere}
-@media(max-width:760px){.cw-layout{grid-template-columns:minmax(0,1fr);gap:8px}#tab-cloud .cw-sidebar{display:none}#tab-cloud .cw-mobile-nav{display:block;font-size:13px}.cw-form-grid{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:760px){.cw-layout{grid-template-columns:minmax(0,1fr);gap:8px}#tab-cloud .cw-sidebar{display:block;position:static;padding:8px;min-width:0}.cw-sidebar h3{display:none}.cw-sidebar nav{flex-direction:row;overflow-x:auto;gap:6px;padding:2px;scrollbar-width:thin;overscroll-behavior-x:contain}.cw-sidebar button{flex:0 0 auto;white-space:nowrap;overflow-wrap:normal;min-height:44px;padding:10px 12px;font-size:13px}.cw-form-grid{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:700px){#tab-cloud h1{font-size:21px}#tab-cloud .subnav button{padding:8px 12px}#tab-cloud .panel{padding:16px}}
+
+#tab-cloud .cw-directory-field{min-width:0}
+#tab-cloud .cw-directory-field .btn{margin-top:8px}
+#tab-cloud .cw-directory-dialog{box-sizing:border-box;width:min(620px,calc(100% - 28px));max-height:85vh;max-height:85dvh;padding:0;border:1px solid var(--border);border-radius:16px;background:var(--surface);color:var(--text);overflow:auto}
+#tab-cloud .cw-directory-dialog::backdrop{background:rgba(0,0,0,.55)}
+.cw-directory-dialog-body{padding:20px}
+.cw-directory-dialog h3{margin:0 0 12px}
+#cw-directory-path,#cw-directory-status{overflow-wrap:anywhere;line-height:1.7}
+#cw-directory-list{min-height:90px}
+#tab-cloud .cw-directory-entry{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;margin:6px 0;min-height:46px}
+.cw-directory-entry .hint{flex-shrink:0}
+.cw-directory-toolbar,.cw-directory-footer{display:flex;flex-wrap:wrap;gap:4px}
+.cw-directory-footer{margin-top:16px;padding-top:12px;border-top:1px solid var(--border)}
+#tab-cloud .cw-directory-dialog button:disabled{opacity:.5;cursor:default}
+@media(max-width:700px){.cw-directory-dialog-body{padding:16px}.cw-directory-entry{font-size:13px}}

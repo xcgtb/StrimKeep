@@ -15,6 +15,46 @@ _THREAD = None
 _LOCK = threading.RLock()
 
 
+class JobStopped(CloudError):
+    def __init__(self, result=None):
+        super().__init__("已在安全边界停止", 409)
+        self.result = {**(result or {}), "stopped": True}
+
+
+def stopping(job_id):
+    if not job_id:
+        return False
+    with store.db() as con:
+        row = con.execute("SELECT stop_requested FROM cloud_job_controls WHERE job_id=?", (job_id,)).fetchone()
+    return bool(row and row[0])
+
+
+def checkpoint(job_id, result=None):
+    if stopping(job_id):
+        raise JobStopped(result)
+
+
+def request_stop(job_id):
+    with store.db() as con:
+        row = con.execute("SELECT kind,state,payload FROM cloud_jobs WHERE id=?", (job_id,)).fetchone()
+        if not row:
+            raise CloudError("任务不存在", 404)
+        if row[0] not in ("organize", "workflow", "transfer"):
+            raise CloudError("此任务不支持停止整理", 409)
+        if row[1] not in ("queued", "running", "stopped"):
+            raise CloudError("任务已结束，请查看结果", 409)
+        payload = json.loads(row[2])
+        rule_id = payload.get("rule_id")
+        if rule_id:
+            con.execute("UPDATE cloud_rules SET enabled=0,updated=? WHERE id=?", (time.time(), rule_id))
+        con.execute("INSERT OR REPLACE INTO cloud_job_controls VALUES(?,?,?)", (job_id, 1, time.time()))
+        if row[1] == "queued":
+            con.execute("UPDATE cloud_jobs SET state='stopped',message='执行前停止',updated=? WHERE id=? AND state='queued'", (time.time(), job_id))
+            if payload.get("plan_id"):
+                con.execute("UPDATE cloud_plans SET state='stopped' WHERE id=? AND state='queued'", (payload["plan_id"],))
+    return {"stop_requested": True, "rule_paused": bool(rule_id), "message": "停止请求已保存；当前视频及关联文件完成后停止，已发出的转存请求先核实结果"}
+
+
 def enqueue(kind, payload, con=None):
     if kind not in ("transfer", "organize", "sync", "workflow", "categories"):
         raise CloudError("任务类型不受支持")
@@ -92,7 +132,10 @@ def execute(job_id):
         ).fetchone()
     try:
         progress(job_id, None, 0, "准备")
+        checkpoint(job_id)
         result = workflow.run(job_id, row[0], json.loads(row[1]))
+        if stopping(job_id):
+            result["stopped"] = True
         state = (
             "needs_review"
             if result.get("errors")
@@ -100,9 +143,13 @@ def execute(job_id):
             or result.get("refresh_pending")
             else "success"
         )
-        message = "部分项目需要处理" if state == "needs_review" else "任务完成"
+        if result.get("stopped"):
+            state = "stopped"
+        message = "已在安全边界停止" if state == "stopped" else "部分项目需要处理" if state == "needs_review" else "任务完成"
+    except JobStopped as error:
+        result, state, message = error.result, "stopped", str(error)
     except CloudError as error:
-        result = {}
+        result = getattr(error, "partial_result", {})
         state = "uncertain" if error.uncertain else "failed"
         message = str(error)
     except Exception:

@@ -8,6 +8,8 @@ from app import state_store, storage
 from app.cloud.errors import CloudError
 from app.cloud.naming import DEFAULT_TEMPLATES
 from app.cloud.categories import REGION_GROUPS
+from app.cloud.recognition import VIDEO, SIDECAR
+from app.cloud.quality8 import DEFAULT as QUALITY8_DEFAULT
 
 DEFAULTS = {
     "public_url": "",
@@ -35,6 +37,14 @@ DEFAULTS = {
     "animation_movie_folder": False,
     "ffprobe_enabled": False,
     "ffprobe_failure": "skip",
+    "video_extensions": sorted(VIDEO),
+    "metadata_extensions": sorted(SIDECAR),
+    "min_video_mb": 0,
+    "ignore_keywords": [],
+    "ignore_regex": [],
+    "quality8_enabled": False,
+    "quality8_rules": QUALITY8_DEFAULT,
+    "quality8_coexist_dv": True,
     **DEFAULT_TEMPLATES,
 }
 
@@ -122,6 +132,7 @@ def validate(result):
         "rename_enabled", "classification_enabled", "region_classification",
         "year_classification", "unknown_enabled",
         "animation_movie_folder", "ffprobe_enabled",
+        "quality8_enabled", "quality8_coexist_dv",
     ):
         if not isinstance(result[key], bool):
             raise CloudError("开关配置必须为布尔值")
@@ -130,4 +141,7 @@ def validate(result):
     from app.cloud import naming, categories
     naming.validate(result)
     categories.validate(result)
+    from app.cloud import file_filters, quality8
+    file_filters.validate(result)
+    quality8.validate(result["quality8_rules"])
     return result

@@ -406,6 +406,13 @@ def cancel_job(job_id: str):
     return {"status": "success"}
 
 
+@router.post("/jobs/{job_id}/stop")
+def stop_organizing(job_id: str, body: dict):
+    if set(body) != {"confirmed"} or body.get("confirmed") is not True:
+        raise HTTPException(400, "请确认在当前文件组完成后停止；关联定时规则同时暂停")
+    return {"status": "success", **call(jobs.request_stop, job_id)}
+
+
 @router.get("/settings")
 def get_settings():
     from app.cloud import media_probe
@@ -502,6 +509,22 @@ def delete_rule(rule_id: str):
     with store.db() as con:
         con.execute("DELETE FROM cloud_rules WHERE id=?", (rule_id,))
     return {"status": "success"}
+
+
+@router.post("/rules/{rule_id}/enabled")
+def enable_rule(rule_id: str, body: dict):
+    if set(body) != {"enabled"} or not isinstance(body["enabled"], bool):
+        raise HTTPException(400, "请填写 enabled 布尔值")
+    with store.db() as con:
+        row = con.execute("SELECT payload FROM cloud_rules WHERE id=?", (rule_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "规则不存在")
+        payload = json.loads(row[0])
+        account = con.execute("SELECT revision FROM cloud_accounts WHERE id=?", (payload["account_id"],)).fetchone()
+        if body["enabled"] and (not account or account[0] != payload["account_revision"]):
+            raise HTTPException(409, "账号授权已变化，请重新创建规则")
+        con.execute("UPDATE cloud_rules SET enabled=?,next_run=?,updated=? WHERE id=?", (int(body["enabled"]), time.time()+max(300, int(payload.get("interval_seconds", 3600))), time.time(), rule_id))
+    return {"status": "success", "enabled": body["enabled"]}
 
 
 @play_router.api_route("/play/{asset_id}", methods=["GET", "HEAD"])
