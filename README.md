@@ -3,7 +3,7 @@
 **StrimKeep｜面向 302 STRM + Emby 的影视库管理与智能治理工具**
 
 [![License](https://img.shields.io/badge/LICENSE-MIT-blueviolet?style=for-the-badge)](LICENSE)
-[![Python](https://img.shields.io/badge/PYTHON-3.11-3776AB?style=for-the-badge)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/PYTHON-3.12-3776AB?style=for-the-badge)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FASTAPI-READY-009688?style=for-the-badge)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/DOCKER-READY-2496ED?style=for-the-badge)](#docker-compose-部署)
 
@@ -11,7 +11,7 @@
 
 StrimKeep 是一款面向 **飞牛 OS / Linux NAS + 302 STRM + Emby** 的影视库治理工具，重点面向使用 **115 网盘、123 云盘、光鸭云盘** 维护个人影视库的用户。不仅管理双库的质量和去留，还提供 **媒体总览、片库映射、影视探索、追更订阅、近 24 小时入库汇报、晨报与 Telegram Bot**。
 
-**StrimKeep 是 302 STRM 影视库的下游治理工具，不生成 STRM，也不接管 Emby 播放。** 无论 STRM 由哪款工具生成，它直接扫描 NAS 上已存在的本地库与分享库，从 **STRM 文件名、影视目录名、相对路径及季集目录**中提取标题、年份、季集号和画质标签，进行双库匹配、去重与质量对比。
+**1.3.0 源码新增独立的 115 网盘工作台，并保留原有 STRM 治理。** 工作台提供扫码 Cookie 登录、分享转存、云端整理命名、STRM/NFO/字幕、302 播放及可选独立端口 Emby 反代；使用说明及尚未完成的真实账号验收见 [115 工作台](docs/CLOUD115_WORKBENCH.md)。原治理流程继续保留。 无论 STRM 由哪款工具生成，它直接扫描 NAS 上已存在的本地库与分享库，从 **STRM 文件名、影视目录名、相对路径及季集目录**中提取标题、年份、季集号和画质标签，进行双库匹配、去重与质量对比。
 
 对于需要腾出网盘空间的本地库，StrimKeep 还可以将 STRM 的**相对目录与文件名**映射到 NAS 上已挂载的真实视频源目录，匹配可靠且确认执行后联动清理。它不依赖 115 专属删除 API，主要适用于 **115、123、光鸭** 等具有相应挂载能力的场景；**302 播放地址本身不能作为删除源文件的依据**。
 
@@ -346,7 +346,7 @@ Emby 是当前媒体库映射、入库统计与缺集等增强功能的主要集
 
 ## 技术栈
 
-- **后端**：Python 3.11、FastAPI、Uvicorn
+- **后端**：Python 3.12、FastAPI、Uvicorn
 - **前端**：HTML、CSS、原生 JavaScript（无前端构建工具依赖）
 - **数据存储**：SQLite（持久化数据目录 `/data`）
 - **部署**：Docker / Docker Compose，单容器运行，默认端口 `8321`

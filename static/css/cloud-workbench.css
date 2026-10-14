@@ -1,0 +1,14 @@
+/* Keep the workbench inside the shared themes and mobile layout. */
+#tab-cloud .page-intro{margin:8px 0 20px}
+#tab-cloud h1{font-size:24px;margin:6px 0}
+#tab-cloud .eyebrow,#tab-cloud .hint{color:var(--text-dim);font-size:12px;line-height:1.7}
+#tab-cloud .panel>label{display:block;margin:12px 0;font-size:13px;line-height:1.8}
+#tab-cloud label>input:not([type=checkbox]),#tab-cloud label>select{display:block;width:100%;box-sizing:border-box;margin-top:5px;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:10px;color:var(--text);font:inherit}
+#tab-cloud input[type=checkbox]{margin-right:8px}
+#tab-cloud .btn{margin:4px 6px 4px 0;max-width:100%;white-space:normal;text-align:left;overflow-wrap:anywhere}
+#tab-cloud .panel p,#cw-paths{overflow-wrap:anywhere}
+#cw-qr{border:12px solid white;box-sizing:content-box;background:white;margin:14px 0}
+#cw-message{padding:8px 0;min-height:20px;color:var(--text-mid)}
+#cw-job-detail{padding:14px;background:var(--surface);border-radius:10px;font-size:12px;line-height:1.7}
+#tab-cloud [hidden]{display:none!important}
+@media(max-width:700px){#tab-cloud h1{font-size:21px}#tab-cloud .subnav button{padding:8px 12px}#tab-cloud .panel{padding:16px}}

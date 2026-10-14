@@ -31,6 +31,7 @@ from app.routers import library as _r_library
 from app.routers import subscribe as _r_subscribe
 from app.routers import settings as _r_settings
 from app.routers import upstream as _r_upstream
+from app.routers import cloud as _r_cloud
 
 
 def _cd2_ready():
@@ -115,9 +116,20 @@ def _startup():
             _log.warning('后台初始化失败后 Bot 停止失败', exc_info=True)
         return
     readiness.set_state('ready')
+    if WEB_PASSWORD:
+        try:
+            from app.cloud import jobs as cloud_jobs, strm as cloud_strm, emby_proxy as cloud_proxy
+            cloud_strm.recover()
+            cloud_jobs.start()
+            cloud_proxy.start()
+        except Exception:
+            _log.error('网盘工作台后台初始化失败，请查看工作台运行状态')
 
 
 def _shutdown():
+    from app.cloud import jobs as cloud_jobs, emby_proxy as cloud_proxy
+    cloud_jobs.stop()
+    cloud_proxy.stop()
     readiness.set_state('stopping', '后台服务正在停止')
     scheduler.stop()
     bot.stop()
@@ -164,6 +176,8 @@ app.include_router(_r_library.router)
 app.include_router(_r_subscribe.router)
 app.include_router(_r_settings.router)
 app.include_router(_r_upstream.router)
+app.include_router(_r_cloud.router)
+app.include_router(_r_cloud.play_router)
 
 
 if __name__ == '__main__':
