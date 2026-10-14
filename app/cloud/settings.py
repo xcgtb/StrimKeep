@@ -1,10 +1,13 @@
 """Web settings shared by the workbench and optional playback listener."""
 
 import os
+import copy
 from pathlib import Path
 from urllib.parse import urlsplit
 from app import state_store, storage
 from app.cloud.errors import CloudError
+from app.cloud.naming import DEFAULT_TEMPLATES
+from app.cloud.categories import REGION_GROUPS
 
 DEFAULTS = {
     "public_url": "",
@@ -20,6 +23,19 @@ DEFAULTS = {
     "movie_folder": "电影",
     "tv_folder": "电视剧",
     "official_delete_enabled": False,
+    "rename_enabled": True,
+    "classification_enabled": False,
+    "enabled_categories": ["电影", "剧集", "动漫", "纪录片", "综艺"],
+    "custom_categories": [],
+    "region_classification": False,
+    "year_classification": False,
+    "unknown_enabled": False,
+    "region_mode": "country",
+    "region_groups": REGION_GROUPS,
+    "animation_movie_folder": False,
+    "ffprobe_enabled": False,
+    "ffprobe_failure": "skip",
+    **DEFAULT_TEMPLATES,
 }
 
 
@@ -28,7 +44,7 @@ def path():
 
 
 def get():
-    result = dict(DEFAULTS)
+    result = copy.deepcopy(DEFAULTS)
     result.update(state_store.read(path(), {}))
     if not result["open_app_id"]:
         result["open_app_id"] = os.environ.get("STRIMKEEP_115_APP_ID", "").strip()
@@ -40,11 +56,17 @@ def save(value):
         raise CloudError("配置字段无效")
     result = get()
     result.update(value)
+    result = validate(result)
+    state_store.save(path(), result)
+    return result
+
+
+def validate(result):
     from app.cloud.provider115 import numeric
 
     if result["open_app_id"]:
         result["open_app_id"] = numeric(result["open_app_id"])
-    if result["naming_style"] not in ("standard", "compact", "original"):
+    if result["naming_style"] not in ("standard", "compact", "original", "template"):
         raise CloudError("命名样式无效")
     for field in ("movie_folder", "tv_folder"):
         text = result[field]
@@ -97,8 +119,15 @@ def save(value):
         "artwork_enabled",
         "notify_enabled",
         "official_delete_enabled",
+        "rename_enabled", "classification_enabled", "region_classification",
+        "year_classification", "unknown_enabled",
+        "animation_movie_folder", "ffprobe_enabled",
     ):
         if not isinstance(result[key], bool):
             raise CloudError("开关配置必须为布尔值")
-    state_store.save(path(), result)
+    if result["ffprobe_failure"] not in ("skip", "filename"):
+        raise CloudError("媒体信息提取失败策略无效")
+    from app.cloud import naming, categories
+    naming.validate(result)
+    categories.validate(result)
     return result

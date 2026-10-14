@@ -15,6 +15,12 @@ CREATE TABLE IF NOT EXISTS cloud_files (
  account_id TEXT NOT NULL, file_id TEXT NOT NULL, parent_id TEXT NOT NULL,
  name TEXT NOT NULL, size INTEGER NOT NULL, sha1 TEXT NOT NULL, pickcode TEXT NOT NULL,
  is_dir INTEGER NOT NULL, observed REAL NOT NULL, PRIMARY KEY(account_id,file_id));
+CREATE TABLE IF NOT EXISTS cloud_directory_settings (
+ account_id TEXT PRIMARY KEY, payload TEXT NOT NULL, revision INTEGER NOT NULL,
+ updated REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS cloud_media_probes (
+ account_id TEXT NOT NULL, file_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
+ payload TEXT NOT NULL, updated REAL NOT NULL, PRIMARY KEY(account_id,file_id));
 CREATE TABLE IF NOT EXISTS cloud_jobs (
  id TEXT PRIMARY KEY, kind TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL,
  result TEXT NOT NULL DEFAULT '{}', message TEXT NOT NULL DEFAULT '',

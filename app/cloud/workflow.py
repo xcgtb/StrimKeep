@@ -3,9 +3,9 @@
 import json
 import time
 from pathlib import PurePosixPath
-from app.cloud import store, jobs, recognition
+from app.cloud import store, jobs, recognition, settings, directories, categories, naming
 from app.cloud.provider115 import for_account, numeric, parse_share
-from app.cloud.errors import CloudError
+from app.cloud.errors import CloudError, UnrecognizedMedia
 
 
 def verify_account(payload):
@@ -17,7 +17,7 @@ def verify_account(payload):
     return provider
 
 
-def walk(provider, cid, limit=20000):
+def walk(provider, cid, limit=20000, exclude=None):
     queue = [numeric(cid)]
     seen = set()
     result = []
@@ -31,7 +31,8 @@ def walk(provider, cid, limit=20000):
         rows = provider.list(parent)
         for row in rows:
             if row["is_dir"]:
-                queue.append(row["id"])
+                if row["id"] not in (exclude or set()):
+                    queue.append(row["id"])
             else:
                 result.append(row)
         if len(result) > limit:
@@ -62,6 +63,8 @@ def media_choice(account_id, row, overrides):
         if source["size"] != row["size"] or source["sha1"] != row["sha1"]:
             raise CloudError("已绑定源文件的内容指纹变化，请人工核对", 409)
         choice = {k: media.get(k) for k in ("kind", "tmdb_id", "season", "episode")}
+        if media.get("category_override"):
+            choice["category"] = media["category_override"]
         if choice not in choices:
             choices.append(choice)
     if len(choices) > 1:
@@ -96,24 +99,56 @@ def related_companions(rows, video):
     return result
 
 
-def plan(account_id, source_cid, target_cid, overrides=None):
+NAMING_KEYS = tuple(naming.DEFAULT_TEMPLATES) + ("naming_style", "rename_enabled", "movie_folder", "tv_folder", "classification_enabled", "enabled_categories", "custom_categories", "region_classification", "year_classification", "unknown_enabled", "region_mode", "region_groups", "animation_movie_folder", "ffprobe_enabled", "ffprobe_failure")
+
+
+def naming_snapshot(config):
+    return {k: config[k] for k in NAMING_KEYS}
+
+
+def recognize_source(account_id, provider, row, overrides, config):
+    def probe():
+        from app.cloud import media_probe
+        try:
+            return media_probe.extract(account_id, provider, row)
+        except CloudError as error:
+            if config["ffprobe_failure"] == "skip" or error.status == 409:
+                raise
+            return {"status": "fallback", "fields": {}, "warning": str(error).replace("，保留源文件", "")+"；已按设置回退文件名解析"}
+    return recognition.recognize(row["name"], media_choice(account_id, row, overrides), config, probe if config["ffprobe_enabled"] else None)
+
+
+def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None):
     account = store.account(account_id)
     if not account:
         raise CloudError("请先扫码登录", 409)
     provider = for_account(account_id)
     _directory(provider, source_cid)
     _directory(provider, target_cid)
-    files = walk(provider, source_cid)
+    if str(source_cid) == str(target_cid):
+        raise CloudError("来源和归档不能是同一目录", 409)
+    config = settings.get()
+    if config["unknown_enabled"] and unknown_cid is None:
+        selected = directories.get(account_id)["directories"]["unknown"]
+        unknown_cid = selected["id"] if selected else None
+    if config["unknown_enabled"]:
+        if not unknown_cid:
+            raise CloudError("请先在文件管理中选择未识别目录", 409)
+        _directory(provider, unknown_cid)
+        if str(unknown_cid) == str(target_cid):
+            raise CloudError("未识别目录不能与归档目录相同", 409)
+    else:
+        unknown_cid = None
+    files = walk(provider, source_cid, exclude={str(target_cid), str(unknown_cid)} - {str(source_cid)})
     items = []
     skipped = []
+    unknown_items = []
     paths = set()
     for row in files:
         if PurePosixPath(row["name"]).suffix.lower() not in recognition.VIDEO:
             continue
         try:
-            media = recognition.recognize(
-                row["name"], media_choice(account_id, row, overrides)
-            )
+            media = recognize_source(account_id, provider, row, overrides, config)
             path = (media["directory"] + "/" + media["name"]).casefold()
             if path in paths:
                 raise CloudError("两个文件将生成相同名称，请选择版本或修正作品", 409)
@@ -121,9 +156,16 @@ def plan(account_id, source_cid, target_cid, overrides=None):
             related = related_companions(files, row)
             items.append({"source": row, "media": media, "followers": related})
         except CloudError as error:
-            skipped.append(
-                {"file_id": row["id"], "name": row["name"], "reason": str(error)}
-            )
+            entry = {"file_id": row["id"], "name": row["name"], "reason": str(error)}
+            if isinstance(error, UnrecognizedMedia) and unknown_cid and str(unknown_cid) != str(source_cid):
+                with store.db() as con:
+                    bound = con.execute("SELECT 1 FROM cloud_assets WHERE account_id=? AND file_id=? AND state IN ('active','publishing','needs_review')", (account_id, row["id"])).fetchone()
+                if not bound:
+                    folder = "来源-" + row["parent_id"]
+                    related = related_companions(files, row)
+                    unknown_items.append({"source": row, "followers": related, "unknown": True, "directory": folder, "reason": str(error)})
+                    entry.update({"action": "unknown", "target": folder+"/"+row["name"]})
+            skipped.append(entry)
     pid = store.ident()
     payload = {
         "account_id": account_id,
@@ -132,6 +174,9 @@ def plan(account_id, source_cid, target_cid, overrides=None):
         "target_cid": numeric(target_cid),
         "items": items,
         "skipped": skipped,
+        "unknown_items": unknown_items,
+        "unknown_cid": unknown_cid,
+        "naming_snapshot": naming_snapshot(config),
     }
     with store.db() as con:
         con.execute(
@@ -145,7 +190,7 @@ def plan(account_id, source_cid, target_cid, overrides=None):
                 time.time() + 900,
             ),
         )
-    return {"id": pid, "items": items, "skipped": skipped, "expires_in": 900}
+    return {"id": pid, "items": items, "skipped": skipped, "unknown_items": unknown_items, "unknown_cid": unknown_cid, "expires_in": 900}
 
 
 def apply(plan_id, confirmed=False, generate=True):
@@ -157,7 +202,11 @@ def apply(plan_id, confirmed=False, generate=True):
         ).fetchone()
         if not row or row[1] < time.time() or row[2] != "pending":
             raise CloudError("计划已过期或已提交，请重新预览", 409)
-        if not json.loads(row[0])["items"]:
+        data = json.loads(row[0])
+        if data.get("naming_snapshot") != naming_snapshot(settings.get()):
+            if "naming_snapshot" in data:
+                raise CloudError("命名或分类配置已变化，请重新预览", 409)
+        if not data["items"] and not data.get("unknown_items"):
             raise CloudError("计划没有可执行项目", 409)
         con.execute(
             "UPDATE cloud_plans SET state='queued' WHERE id=? AND state='pending'",
@@ -290,25 +339,33 @@ def organize(job_id, payload):
     if not row or row[1] != "queued":
         raise CloudError("整理计划状态无效", 409)
     data = json.loads(row[0])
+    if "naming_snapshot" in data and data["naming_snapshot"] != naming_snapshot(settings.get()):
+        raise CloudError("命名或分类配置已变化，请重新预览", 409)
     provider = verify_account(data)
     if hasattr(provider, "require"):
         provider.require("organize")
-    result = {"files": [], "skipped": data["skipped"], "errors": [], "generated": []}
-    jobs.progress(job_id, len(data["items"]), 0, "整理")
-    for index, item in enumerate(data["items"]):
-        jobs.progress(job_id, len(data["items"]), index, "整理", item["source"]["name"])
+    result = {"files": [], "skipped": list(data["skipped"]), "errors": [], "generated": [], "unknown": [], "warnings": [], "media_info": []}
+    all_items = [*data["items"], *data.get("unknown_items", [])]
+    jobs.progress(job_id, len(all_items), 0, "整理")
+    for index, item in enumerate(all_items):
+        jobs.progress(job_id, len(all_items), index, "整理", item["source"]["name"])
         try:
             for source in [item["source"], *item["followers"]]:
                 if not _snapshot_equal(source, provider.info(source["id"])):
                     raise CloudError("源文件在预览后变化，请重新预览", 409)
             target = ensure_directory(
-                provider, job_id, data["target_cid"], item["media"]["directory"]
+                provider, job_id, data["unknown_cid"] if item.get("unknown") else data["target_cid"], item["directory"] if item.get("unknown") else item["media"]["directory"]
             )
             row = relocate(
-                provider, job_id, item["source"], target, item["media"]["name"]
+                provider, job_id, item["source"], target, item["source"]["name"] if item.get("unknown") else item["media"]["name"]
             )
             store.save_file(data["account_id"], row)
-            result["files"].append(row)
+            result["unknown" if item.get("unknown") else "files"].append(row)
+            if not item.get("unknown"):
+                information = item["media"].get("media_info", {"status": "filename"})
+                result["media_info"].append({"file_id": row["id"], "name": row["name"], **information})
+                if information.get("warning"):
+                    result["warnings"].append({"name": row["name"], "reason": information["warning"]})
             old_stem = PurePosixPath(item["source"]["name"]).stem
             new_stem = PurePosixPath(row["name"]).stem
             companions = []
@@ -317,7 +374,9 @@ def organize(job_id, payload):
                 related = relocate(provider, job_id, follower, target, new_name)
                 store.save_file(data["account_id"], related)
                 companions.append(related)
-            if payload.get("generate", True):
+            if item.get("unknown"):
+                result["skipped"] = [x for x in result["skipped"] if x["file_id"] != row["id"]]
+            elif payload.get("generate", True):
                 from app.cloud import strm
 
                 asset = strm.generate(
@@ -340,7 +399,7 @@ def organize(job_id, payload):
                 {"file_id": item["source"]["id"], "reason": str(error)}
             )
         jobs.progress(
-            job_id, len(data["items"]), index + 1, "整理", item["source"]["name"]
+            job_id, len(all_items), index + 1, "整理", item["source"]["name"]
         )
     with store.db() as con:
         con.execute(
@@ -349,6 +408,18 @@ def organize(job_id, payload):
         )
     if result["generated"]:
         result["refresh_pending"] = not refresh_emby()
+    return result
+
+
+def create_categories(job_id, payload):
+    provider = verify_account(payload)
+    _directory(provider, payload["target_cid"])
+    result = {"directories": []}
+    for index, name in enumerate(payload["categories"]):
+        jobs.progress(job_id, len(payload["categories"]), index, "创建分类", name)
+        cid = ensure_directory(provider, job_id, payload["target_cid"], name)
+        result["directories"].append({"id": cid, "name": name})
+    jobs.progress(job_id, len(payload["categories"]), len(payload["categories"]), "创建分类")
     return result
 
 
@@ -512,7 +583,8 @@ def sync(job_id, payload):
     provider = verify_account(payload)
     _directory(provider, payload["source_cid"])
     rows = walk(provider, payload["source_cid"])
-    result = {"generated": [], "skipped": [], "errors": []}
+    result = {"generated": [], "skipped": [], "errors": [], "warnings": []}
+    config = settings.get()
     videos = [
         x for x in rows if PurePosixPath(x["name"]).suffix.lower() in recognition.VIDEO
     ]
@@ -522,10 +594,9 @@ def sync(job_id, payload):
         if PurePosixPath(row["name"]).suffix.lower() not in recognition.VIDEO:
             continue
         try:
-            media = recognition.recognize(
-                row["name"],
-                media_choice(payload["account_id"], row, payload.get("overrides")),
-            )
+            media = recognize_source(payload["account_id"], provider, row, payload.get("overrides"), config)
+            if media.get("media_info", {}).get("warning"):
+                result["warnings"].append({"name": row["name"], "reason": media["media_info"]["warning"]})
             from app.cloud import strm
 
             companions = related_companions(rows, row)
@@ -568,6 +639,8 @@ def refresh_emby():
 
 
 def run(job_id, kind, payload):
+    if kind == "categories":
+        return create_categories(job_id, payload)
     if kind == "transfer":
         return transfer(job_id, payload)
     if kind == "organize":
@@ -582,6 +655,7 @@ def run(job_id, kind, payload):
             payload["source_cid"],
             payload["target_cid"],
             payload.get("overrides"),
+            payload.get("unknown_cid"),
         )
         with store.db() as con:
             con.execute(

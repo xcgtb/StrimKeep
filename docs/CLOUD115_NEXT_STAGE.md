@@ -1,5 +1,7 @@
 # 115 生产完善与身份治理阶段记录
 
+> 本文件记录v1.3.2时期的历史OpenAPI方案；当前「我的网盘」已改为Cookie接入，最新状态请读取[实施计划](implementation-plan.md)及[P0-A记录](MY_DRIVE_P0A_ACCEPTANCE.md)。下文不再作为当前AppID配置要求。
+
 基线：远程 main `6da8a83`，发布 `v1.3.1`。2026-10-14 已核实 Actions 回归、生产镜像、历史数据库/HTTP 检查、多架构镜像发布均成功；未检查用户 NAS 运行容器。
 
 分支：`feature/115-production-governance`。本阶段尚未发布，没有确定新版本号，不改已有标签。

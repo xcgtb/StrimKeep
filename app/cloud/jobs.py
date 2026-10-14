@@ -16,7 +16,7 @@ _LOCK = threading.RLock()
 
 
 def enqueue(kind, payload, con=None):
-    if kind not in ("transfer", "organize", "sync", "workflow"):
+    if kind not in ("transfer", "organize", "sync", "workflow", "categories"):
         raise CloudError("任务类型不受支持")
     job_id = store.ident()
     now = time.time()
@@ -140,6 +140,7 @@ def notify(job_id, kind, state, message):
         "organize": "整理",
         "sync": "STRM 更新",
         "workflow": "自动整理",
+        "categories": "创建分类",
     }
     try:
         sent = bool(notify_telegram("115 " + names[kind] + "：" + html.escape(message)))

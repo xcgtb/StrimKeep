@@ -17,6 +17,9 @@ from app.cloud import (
     recognition,
     strm,
     emby_proxy,
+    directories,
+    naming,
+    categories,
 )
 from app.cloud.provider115 import for_account, numeric
 from app.cloud.errors import CloudError
@@ -59,6 +62,11 @@ class AccountInput(BaseModel):
     account_id: str = Field(pattern=r"^[a-f0-9]{32}$")
 
 
+class DirectoryInput(BaseModel):
+    directories: dict[str, str | None] = Field(max_length=4)
+    expected_revision: int = Field(ge=0)
+
+
 class ShareInput(AccountInput):
     link: str = Field(min_length=6, max_length=2000)
     password: str = Field(default="", max_length=12)
@@ -80,12 +88,19 @@ class MediaChoice(BaseModel):
     tmdb_id: str = Field(pattern=r"^[0-9]{1,12}$")
     season: int | None = Field(default=None, ge=0, le=99)
     episode: int | None = Field(default=None, ge=1, le=999)
+    category: str = Field(default="", max_length=80)
 
 
 class PlanInput(AccountInput):
     source_cid: str = Field(pattern=r"^[0-9]{1,25}$")
     target_cid: str = Field(pattern=r"^[0-9]{1,25}$")
     overrides: dict[str, MediaChoice] = Field(default_factory=dict, max_length=2000)
+    unknown_cid: str | None = Field(default=None, pattern=r"^[0-9]{1,25}$")
+
+
+class CategoryInput(AccountInput):
+    target_cid: str = Field(pattern=r"^[0-9]{1,25}$")
+    confirmed: bool = False
 
 
 class ApplyInput(BaseModel):
@@ -112,6 +127,7 @@ def status(response: Response):
     return {
         "status": "success",
         "accounts": call(accounts.describe),
+        "devices": [{"id": k, "name": v} for k,v in accounts.DEVICE_LABELS.items()],
         "proxy": call(emby_proxy.status),
         "pending": sum(
             x["state"] in ("queued", "running", "uncertain", "needs_review")
@@ -154,6 +170,27 @@ def check_account(account_id: str):
     return {"status": "success", "profile": call(provider.profile)}
 
 
+@router.post("/accounts/cookie")
+def import_cookie(body: dict, response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    import re
+    account_id = body.get("account_id")
+    if set(body) - {"cookie", "account_id"} or (account_id is not None and (not isinstance(account_id, str) or not re.fullmatch(r"[a-f0-9]{32}", account_id))):
+        raise HTTPException(400, "登录请求格式无效")
+    return {"status": "success", "account_id": call(accounts.save_cookie, body.get("cookie"), account_id)}
+
+
+@router.get("/accounts/{account_id}/directories")
+def directory_settings(account_id: str, response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    return {"status": "success", **call(directories.get, account_id)}
+
+
+@router.post("/accounts/{account_id}/directories")
+def save_directories(account_id: str, body: DirectoryInput):
+    return {"status": "success", **call(directories.save, account_id, body.directories, body.expected_revision)}
+
+
 @router.post("/accounts/{account_id}/open/check")
 def check_open(account_id: str):
     from app.cloud import open115
@@ -174,6 +211,8 @@ def disconnect(account_id: str):
         if active:
             raise HTTPException(409, "账号有未完成任务，请先处理任务")
         con.execute("DELETE FROM cloud_accounts WHERE id=?", (account_id,))
+        con.execute("DELETE FROM cloud_directory_settings WHERE account_id=?", (account_id,))
+        con.execute("DELETE FROM cloud_media_probes WHERE account_id=?", (account_id,))
         con.execute(
             "UPDATE cloud_assets SET state='disconnected' WHERE account_id=?",
             (account_id,),
@@ -239,6 +278,7 @@ def create_plan(body: PlanInput):
             body.source_cid,
             body.target_cid,
             body.model_dump()["overrides"],
+            body.unknown_cid,
         ),
     }
 
@@ -368,7 +408,8 @@ def cancel_job(job_id: str):
 
 @router.get("/settings")
 def get_settings():
-    return {"status": "success", "settings": call(settings.get)}
+    from app.cloud import media_probe
+    return {"status": "success", "settings": call(settings.get), "capabilities": {"ffprobe_available": media_probe.available()}}
 
 
 @router.post("/settings")
@@ -380,6 +421,31 @@ def save_settings(body: dict):
         emby_proxy.stop()
         emby_proxy.start()
     return {"status": "success", "settings": result, "proxy": emby_proxy.status()}
+
+
+@router.post("/naming/preview")
+def naming_preview(body: dict):
+    if set(body) - {"settings"} or not isinstance(body.get("settings", {}), dict):
+        raise HTTPException(400, "模板预览配置格式无效")
+    patch = body.get("settings", {})
+    if set(patch) - set(workflow.NAMING_KEYS):
+        raise HTTPException(400, "模板预览字段无效")
+    config = call(settings.validate, {**settings.get(), **patch})
+    return {"status": "success", "items": [call(naming.preview, {**config, "naming_style": "template"}, kind) for kind in ("movie", "tv")], "fields": sorted(naming.FIELDS)}
+
+
+@router.post("/categories/create", status_code=202)
+def create_categories(body: CategoryInput):
+    if not body.confirmed:
+        raise HTTPException(400, "请确认创建分类目录")
+    account = call(store.account, body.account_id)
+    if not account:
+        raise HTTPException(404, "账号不存在")
+    config = settings.get()
+    names = categories.directory_paths(config)
+    if not names:
+        raise HTTPException(400, "请先选择并保存分类")
+    return {"status": "success", "job_id": call(jobs.enqueue, "categories", {"account_id": body.account_id, "account_revision": account["revision"], "target_cid": body.target_cid, "categories": names})}
 
 
 @router.post("/emby/refresh")

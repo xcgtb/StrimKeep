@@ -8,7 +8,7 @@ import re
 import time
 from urllib.parse import urlsplit, parse_qs
 from app import plan_guard
-from app.cloud import store, settings, strm, open115, credentials
+from app.cloud import store, settings, strm, credentials, provider115
 from app.cloud.errors import CloudError
 
 
@@ -104,7 +104,7 @@ def preview(path, root, local=True):
     if bound is None:
         return None
     try:
-        value = credentials.load(bound["account_id"])[1].get("open") or {}
+        cookie = credentials.load(bound["account_id"])[1].get("cookie")
     except CloudError as error:
         return {"mode": "115_file_id", "blocked": str(error)}
     configured = bool(settings.get()["official_delete_enabled"])
@@ -128,8 +128,9 @@ def preview(path, root, local=True):
             else "仅清理 NAS 引用，保留 115 源文件"
         ),
         "delete_configured": configured,
-        "authorization_state": value.get("state", "not_connected"),
-        "enabled": configured and value.get("state") == "ready",
+        "authorization_state": "ready" if cookie else "not_connected",
+        "authorization_mode": "cookie",
+        "enabled": configured and bool(cookie),
     }
 
 
@@ -187,7 +188,7 @@ def _proof(provider, source, previous):
 def delete_sources(bound, root, selected, dry_run=False):
     if not settings.get()["official_delete_enabled"]:
         raise CloudError(
-            "此来源已绑定 115；请先启用官方 ID 删除，不使用挂载路径兜底", 409
+            "此来源已绑定 115；请在我的网盘启用 Cookie 源文件删除", 409
         )
     refreshed = lookup(bound["path"], root)
     if refreshed != bound:
@@ -202,7 +203,7 @@ def delete_sources(bound, root, selected, dry_run=False):
                 raise CloudError(
                     "同一 115 源文件仍有未选中的播放引用，保留来源与 STRM", 409
                 )
-    provider = open115.for_account(bound["account_id"])
+    provider = provider115.for_account(bound["account_id"])
     provider.require("official_delete")
     provider.profile()
     prepared = []
@@ -314,7 +315,7 @@ def verify(asset_id):
     bound = lookup(asset["local_path"], Path(asset["payload"]["output_root"]))
     if not bound:
         raise CloudError("本地来源身份缺失", 409)
-    provider = open115.for_account(bound["account_id"])
+    provider = provider115.for_account(bound["account_id"])
     results = []
     for source in bound["sources"]:
         previous = record(bound["account_id"], source["id"])
@@ -342,7 +343,7 @@ def reset_rejected(asset_id):
     bound = lookup(asset["local_path"], Path(asset["payload"]["output_root"]))
     if not bound:
         raise CloudError("本地来源身份缺失", 409)
-    provider = open115.for_account(bound["account_id"])
+    provider = provider115.for_account(bound["account_id"])
     checked_ids = []
     for source in bound["sources"]:
         previous = record(bound["account_id"], source["id"])

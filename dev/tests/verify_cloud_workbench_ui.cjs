@@ -2,14 +2,14 @@
 const fs=require('fs'),path=require('path'),vm=require('vm'),assert=require('assert');
 const nodes={},events={},requests=[],timers=[];
 function node(id){return nodes[id]||(nodes[id]={dataset:{},value:'',textContent:'',innerHTML:'',hidden:false,checked:false,
-  classList:{toggle(){}},replaceChildren(){this.innerHTML='';this.children=[];},children:[],append(x){this.children.push(x);},
+  setAttribute(){},classList:{toggle(){}},replaceChildren(){this.innerHTML='';this.children=[];},children:[],append(x){this.children.push(x);},
   querySelectorAll(){return [];},addEventListener(name,fn){events[id+':'+name]=fn;}});}
 const ctx=vm.createContext({console,URLSearchParams,Promise,Object,Array,Number,String,JSON,
   esc:s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;'),
   document:{getElementById:node,createElement:()=>node('generated-'+Math.random())},
   setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length;},clearTimeout(){},
   showModalConfirm:async()=>true,
-  fetch:(url,opt)=>url==='/api/cloud/settings'&&(!opt.method||opt.method==='GET')?Promise.resolve({ok:true,json:async()=>({settings:{open_app_id:'123456',official_delete_enabled:false,naming_style:'standard'}})}):new Promise(resolve=>requests.push({url,opt,resolve}))});
+  fetch:(url,opt)=>url.includes('/directories')&&(!opt.method||opt.method==='GET')?Promise.resolve({ok:true,json:async()=>({directories:{source:null,target:null,transfer:null,unknown:null},revision:0})}):url==='/api/cloud/settings'&&(!opt.method||opt.method==='GET')?Promise.resolve({ok:true,json:async()=>({settings:{open_app_id:'123456',official_delete_enabled:false,naming_style:'standard'}})}):new Promise(resolve=>requests.push({url,opt,resolve}))});
 ctx.window=ctx;ctx.__activeTab='cloud';
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../../static/js/cloud-workbench.js'),'utf8'),ctx);
 function respond(request,body,status=200){request.resolve({ok:status<400,status,json:async()=>body});}
@@ -24,7 +24,7 @@ async function run(){
   respond(requests.shift(),{items:[{id:'2',name:'乙目录',is_dir:true}],total:1});await flush();
   respond(first,{items:[{id:'1',name:'甲旧目录',is_dir:true}],total:1});await flush();
   assert(node('cw-file-list').innerHTML.includes('乙目录')&&!node('cw-file-list').innerHTML.includes('甲旧目录'));
-  assert(node('tab-cloud').innerHTML.includes('扫码登录 115'));
+  assert(node('tab-cloud').innerHTML.includes('扫码登录 115'));assert(node('tab-cloud').innerHTML.includes('cw-sidebar'));assert(!node('tab-cloud').innerHTML.includes('OpenAPI'));assert(node('tab-cloud').innerHTML.includes('value="ipad"'));
   assert(!/placeholder="[^"]*(?:UID|CID|SEID|AppID)/i.test(node('tab-cloud').innerHTML));
   node('cw-share').value='abcdefghi';node('cw-password').value='';click('preview');await flush();const share=requests.shift();
   node('cw-account').value='A';node('cw-account').onchange();await flush();respond(requests.shift(),{items:[],total:0});
@@ -36,10 +36,9 @@ async function run(){
   const count=timers.length;click('qr');await flush();assert(requests[0].url==='/api/cloud/qr');
   respond(requests.shift(),{flow_id:'flow-2'});await flush();assert(timers.length===count+1);
   click('cancelQR');await flush();respond(requests.shift(),{});await flush();
-  node('cw-auth-mode').value='open';click('qr');await flush();var open=requests.shift();assert.deepStrictEqual(JSON.parse(open.opt.body),{device:'alipaymini',mode:'open',account_id:'A'});respond(open,{flow_id:'open-flow'});await flush();
-  node('cw-app-id').value='123456';node('cw-official-delete').checked=true;click('saveAuthorization');await flush();var config=requests.shift();assert.deepStrictEqual(JSON.parse(config.opt.body),{open_app_id:'123456',official_delete_enabled:true});respond(config,{});await flush();
+  node('cw-official-delete').checked=true;click('saveAuthorization');await flush();var config=requests.shift();assert.deepStrictEqual(JSON.parse(config.opt.body),{official_delete_enabled:true});respond(config,{});await flush();
   tab('jobs');await flush();respond(requests.shift(),{items:[{id:'job',kind:'transfer',state:'success',message:'已核实',progress:{total:3,processed:3,phase:'核实'}}]});await flush();assert(node('cw-job-list').innerHTML.includes('3 / 3'));
   node('cw-job-list').onclick({target:{closest:q=>q==='[data-job]'?{dataset:{job:'job'}}:null}});await flush();respond(requests.shift(),{job:{state:'success',message:'已核实',steps:[],result:{continuation_required:true}}});await flush();var continueButton=node('cw-job-summary').children.find(i=>i.textContent==='继续整理已核实的转存文件');assert(continueButton);continueButton.onclick();await flush();var continuation=requests.shift();assert(continuation.url==='/api/cloud/jobs/job/continue'&&JSON.parse(continuation.opt.body).confirmed===true);
-  console.log('PASS cloud workbench account switching, stale directory/share responses, QR expiry/restart and no manual account IDs');
+  console.log('PASS my drive theme navigation, account switching, stale responses, Cookie-only QR and deletion configuration');
 }
 run().catch(error=>{console.error(error);process.exitCode=1;});

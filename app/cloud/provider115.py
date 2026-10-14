@@ -135,13 +135,13 @@ def parse_share(link, password=""):
 
 class Provider115:
     def require(self, operation):
-        if operation not in ("read", "organize", "transfer", "play"):
-            raise CloudError("此操作需要本应用 OpenAPI 授权", 409)
+        if operation not in ("read", "organize", "transfer", "play", "official_delete"):
+            raise CloudError("此操作暂不受支持", 409)
 
     def __init__(self, credentials, expected_uid=None):
         cookie = credentials.get("cookie")
         if not cookie:
-            raise CloudError("请先扫码登录 115", 409)
+            raise CloudError("请先扫码或填写 Cookie 登录 115", 409)
         self.client = sdk()(cookie, console_qrcode=False)
         self.uid = numeric(self.client.user_id)
         if expected_uid and self.uid != str(expected_uid):
@@ -333,13 +333,20 @@ class Provider115:
             "size": int(url.get("size") or 0),
         }
 
+    def delete(self, file_id):
+        return self.call("fs_delete", {"fid": numeric(file_id)}, write=True)
+
+    def removed_receipt(self, file_id, source, acknowledged=False):
+        from app.cloud.deletion_receipts import removed
+        return removed(self, numeric(file_id), source, acknowledged)
+
+    def receipt(self, file_id, source):
+        from app.cloud.deletion_receipts import receipt
+        return receipt(self, numeric(file_id), source)
+
 
 def for_account(account_id):
     from app.cloud import credentials
 
     row, saved = credentials.load(account_id)
-    if not saved.get("cookie") and saved.get("open"):
-        from app.cloud import open115
-
-        return open115.for_account(account_id)
     return Provider115(saved, row["uid"])

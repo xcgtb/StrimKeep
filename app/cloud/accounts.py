@@ -6,19 +6,59 @@ import hashlib
 import secrets
 import threading
 import time
+from http.cookies import SimpleCookie, CookieError
 from app.cloud import credentials, store
 from app.cloud.errors import CloudError
 from app.cloud.provider115 import Provider115, sdk, checked, numeric
 
 _LOCK = threading.RLock()
 _FLOWS = {}
-DEVICES = {"alipaymini", "wechatmini", "web", "android", "ios", "tv"}
+DEVICE_LABELS = {
+    "ios": "iOS · 115生活", "ipad": "iPad · 115生活",
+    "android": "Android · 115生活", "115ios": "iOS · 115网盘",
+    "115ipad": "iPad · 115网盘", "115android": "Android · 115网盘",
+    "alipaymini": "支付宝小程序", "wechatmini": "微信小程序",
+    "tv": "电视端", "web": "网页端",
+}
+DEVICES = set(DEVICE_LABELS)
 
 
-def save_cookie(cookie):
+def validate_cookie(cookie):
+    if not isinstance(cookie, str) or not 10 <= len(cookie) <= 16384:
+        raise CloudError("请填写完整的 115 Cookie")
+    cookie = cookie.strip()
+    if any(ord(c) < 32 or ord(c) > 126 for c in cookie):
+        raise CloudError("Cookie 包含无效字符，请粘贴原始凭证")
+    parsed = SimpleCookie()
+    try:
+        parsed.load(cookie)
+    except CookieError:
+        raise CloudError("Cookie 格式无效") from None
+    if not all(parsed.get(k) and parsed[k].value for k in ("UID", "CID", "SEID")):
+        raise CloudError("Cookie 必须包含 UID、CID、SEID")
+    return cookie
+
+
+def device_of(cookie):
+    try:
+        from p115client.const import SSOENT_TO_APP
+        parsed = SimpleCookie()
+        parsed.load(cookie)
+        return SSOENT_TO_APP.get(parsed["UID"].value.split("_")[1], "unknown")
+    except (KeyError, IndexError, CookieError, ImportError):
+        return "unknown"
+
+
+def save_cookie(cookie, account_id=None):
+    cookie = validate_cookie(cookie)
+    target = store.account(account_id) if account_id else None
+    if account_id and not target:
+        raise CloudError("当前账号不存在", 404)
     provider = Provider115({"cookie": cookie})
     profile = provider.profile()
-    return save_verified(cookie, provider, profile)
+    if target and str(provider.uid) != target["uid"]:
+        raise CloudError("Cookie 属于其他账号，请添加新账号或重新选择", 409)
+    return save_authorization(provider.uid, profile, {"cookie": cookie, "device": device_of(cookie)})
 
 
 def start(owner, device="alipaymini", mode="cookie", account_id=None):
@@ -154,7 +194,10 @@ def poll(flow_id, owner):
         profile = provider.profile()
         with _LOCK:
             _flow(flow_id, owner)
-            account_id = save_verified(cookie, provider, profile)
+            if flow["target_uid"] and provider.uid != flow["target_uid"]:
+                _FLOWS.pop(flow_id, None)
+                raise CloudError("扫码账号与当前账号不一致，请添加新账号", 409)
+            account_id = save_authorization(provider.uid, profile, {"cookie": cookie, "device": flow["device"]})
             _FLOWS.pop(flow_id, None)
         return {"phase": "connected", "account_id": account_id}
     except CloudError:
@@ -257,6 +300,8 @@ def describe():
             value = saved.get("open") or {}
             item["authorization"] = {
                 "cookie": bool(saved.get("cookie")),
+                "device": saved.get("device") or device_of(saved.get("cookie", "")),
+                "cookie_delete": bool(saved.get("cookie")),
                 "open": bool(value),
                 "open_state": value.get("state", "not_connected"),
                 "expires_at": value.get("expires_at"),

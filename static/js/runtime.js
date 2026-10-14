@@ -5,7 +5,7 @@ var MENU = [
   { id: 'governance', name: '双库治理', icon: 'scale' },
   { id: 'mapping',    name: '片库映射', icon: 'map' },
   { id: 'explore',    name: '影视探索', icon: 'film' },
-  { id: 'cloud',      name: '网盘工作台', icon: 'folder' },
+  { id: 'cloud',      name: '我的网盘', icon: 'folder' },
   { id: 'subscribe',  name: '追更订阅', icon: 'bell' },
   { id: 'daily',      name: '入库与晨报', icon: 'file' },
   { id: 'history',    name: '日志中心', icon: 'list' },
@@ -727,7 +727,7 @@ function renderMenu(){
   var nav = $('menu');
   var current = window.__activeTab || 'dashboard';
   var groups = [
-    {title:'媒体库',items:[['dashboard','媒体总览','grid','main'],['mapping','片库映射','map','main'],['explore','影视探索','film','main'],['cloud','网盘工作台','folder','main']]},
+    {title:'媒体库',items:[['dashboard','媒体总览','grid','main'],['mapping','片库映射','map','main'],['explore','影视探索','film','main'],['cloud','我的网盘','folder','main']]},
     {title:'治理与追更',items:[['governance','双库治理','scale','main'],['orphans','目录清理','trash','main'],['subscribe','追更订阅','bell','main'],['daily','入库与晨报','file','main']]},
     {title:'运行与设置',items:[['history','日志中心','activity','main'],['plans','计划存档','archive','main'],['settings','规则设置','gear','main']]}
   ];

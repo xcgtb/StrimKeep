@@ -20,3 +20,5 @@ p115oss LICENSE        8b1ba204bb69a0ade2bfcf65ef294a920f6bb361b317dba43c7ef29d9
 ```
 
 适配器参考 [p115client](https://github.com/ChenyangGao/p115client) 的公开 SDK 接口与已安装版本方法，未复制 FunPan Go 业务代码。账号、任务、媒体整理、来源存储与页面都由本项目实现。锁文件固定本次验证的运行依赖，pytest/Black 等维护工具不进入生产镜像。httpx 现在是播放反代的运行依赖，因此历史数据库测试不再把它当作只能用于 TestClient 的包。
+
+整理增强（2026-10-15）：Docker 通过 Debian 系统包安装 ffmpeg 提供 ffprobe，不新增 Python 依赖；裸源码运行需自行安装。只使用探测器读取限量视频片段，不做转码。系统包及其所含编解码器遵循发行版构建对应的许可证，不能由本项目 MIT 标签推断其全部依赖许可。探测约束与验收见 [整理增强](MY_DRIVE_ORGANIZE_FFPROBE_ACCEPTANCE.md)。

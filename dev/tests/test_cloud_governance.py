@@ -10,6 +10,7 @@ from dev.tests.test_cloud_workbench import cloud
 from app import engine, wash, plan_guard, cloud_bridge, governance as legacy_governance
 from app.cloud import (
     governance,
+    provider115,
     open115,
     settings,
     store,
@@ -73,7 +74,7 @@ def bound(cloud, monkeypatch):
         delete=delete,
         removed_receipt=proof,
     )
-    monkeypatch.setattr(open115, "for_account", lambda aid: provider)
+    monkeypatch.setattr(provider115, "for_account", lambda aid: provider)
     monkeypatch.setattr(engine, "L_ROOT", cloud.root)
     monkeypatch.setattr(
         engine, "cloud_videos", Mock(side_effect=AssertionError("no path fallback"))
@@ -136,7 +137,7 @@ def test_share_bound_reference_only_deletes_nas_and_revokes_playback(
         "companion",
         "directory",
         "disabled",
-        "no_open",
+        "no_cookie",
     ],
 )
 def test_identity_or_permission_change_keeps_nas_and_never_guesses_source(
@@ -159,7 +160,7 @@ def test_identity_or_permission_change_keeps_nas_and_never_guesses_source(
         settings.save({"official_delete_enabled": False})
     else:
         monkeypatch.setattr(
-            open115, "for_account", Mock(side_effect=CloudError("需要扫码", 409))
+            provider115, "for_account", Mock(side_effect=CloudError("需要 Cookie", 409))
         )
     result = clean(bound)
     assert result["strm_removed"] == 0 and result["errors"] and bound.path.exists()
@@ -500,7 +501,7 @@ def test_movie_delete_api_requires_the_single_use_source_confirmation(
     execute.assert_called_once()
 
 
-def test_preview_checks_official_authorization_state_without_network(
+def test_preview_checks_cookie_state_without_network(
     bound, monkeypatch
 ):
     from app.cloud import accounts
@@ -508,7 +509,7 @@ def test_preview_checks_official_authorization_state_without_network(
     monkeypatch.setattr(
         open115, "for_account", Mock(side_effect=AssertionError("no HTTP preview"))
     )
-    accounts.save_authorization("123", {}, {"open": {}})
+    accounts.save_authorization("123", {}, {"cookie": ""})
     value = governance.preview(bound.path, bound.cloud.root)
     assert value["delete_configured"] and not value["enabled"]
     assert value["authorization_state"] == "not_connected"
