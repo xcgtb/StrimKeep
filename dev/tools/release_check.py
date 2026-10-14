@@ -4,6 +4,7 @@ import argparse
 import os
 from pathlib import Path
 import re
+import shlex
 
 ROOT = Path(__file__).resolve().parents[2]
 PRIVATE_DIRS = {'data', 'preview-data', 'state', 'records', '.env', '.venv', 'venv', 'node_modules'}
@@ -17,6 +18,46 @@ def placeholder(value):
     value = value.strip().strip('"').strip("'")
     return not value or value.lower() in {'change-me', 'change-me-please', 'your-secret', 'your-token'} or \
         value.startswith(('CHANGE_ME', '你的', '请改成', '${', '<your-'))
+
+
+def docker_requirements_errors(root):
+    """Check the requirements include chain against this image's flat install stage."""
+    root = Path(root)
+    copied = set()
+    for line in (root/'Dockerfile').read_text(encoding='utf-8').splitlines():
+        if not re.match(r'^\s*COPY\s', line, flags=re.I):
+            continue
+        tokens = shlex.split(line, comments=True)
+        if len(tokens) < 3 or tokens[0].upper() != 'COPY' or tokens[-1] not in ('.', './', '/app', '/app/'):
+            continue
+        for pattern in tokens[1:-1]:
+            if pattern.startswith('--'):
+                continue
+            copied.update(p.name for p in root.glob(pattern) if p.is_file())
+    errors = []
+    pending = [Path('requirements.txt')]
+    seen = set()
+    while pending:
+        relative = pending.pop()
+        if relative in seen:
+            continue
+        seen.add(relative)
+        if relative.as_posix() not in copied:
+            errors.append(f'Docker install stage missing requirements file: {relative.as_posix()}')
+            continue
+        source = root/relative
+        if not source.is_file():
+            errors.append(f'requirements source missing: {relative.as_posix()}')
+            continue
+        for line in source.read_text(encoding='utf-8').splitlines():
+            tokens = shlex.split(line, comments=True)
+            if not tokens:
+                continue
+            if tokens[0] in ('-r', '--requirement', '-c', '--constraint') and len(tokens) == 2:
+                pending.append(relative.parent/tokens[1])
+            elif tokens[0].startswith(('--requirement=', '--constraint=')):
+                pending.append(relative.parent/tokens[0].split('=', 1)[1])
+    return errors
 
 
 def check(root, archive=False):
@@ -54,6 +95,7 @@ def check(root, archive=False):
         if not match or match[1] != '0.0.0+local':
             errors.append('source version must be non-release fallback 0.0.0+local')
         dockerfile = (root/'Dockerfile').read_text(encoding='utf-8')
+        errors.extend(docker_requirements_errors(root))
         for line in dockerfile.splitlines():
             if re.match(r'^\s*(?:ARG|ENV)\s+APP_VERSION\b', line) and line.strip() not in {
                     'ARG APP_VERSION', 'ENV APP_VERSION=${APP_VERSION}'}:
