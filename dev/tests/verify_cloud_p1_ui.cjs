@@ -10,6 +10,16 @@ const legacy = fs.readFileSync(path.join(root,'static/js/cloud-workbench.js'),'u
 const overlay = fs.readFileSync(path.join(root,'static/js/cloud-workbench-ui.js'),'utf8');
 const index = fs.readFileSync(path.join(root,'static/index.html'),'utf8');
 const css = fs.readFileSync(path.join(root,'static/css/cloud-workbench-ui.css'),'utf8');
+// The current Cookie workbench supersedes this historical, uninstalled overlay.
+// Validate its real interactions instead of requiring the v1.3.1 injection.
+if (!index.includes('/static/js/cloud-workbench-ui.js?v=') && legacy.includes('cw-ffprobe-enabled')) {
+  assert(!index.includes('/static/css/cloud-workbench-ui.css?v='), 'old overlay must be fully disabled');
+  const {spawnSync} = require('node:child_process');
+  const result = spawnSync(process.execPath, [path.join(__dirname,'verify_my_drive_templates_ui.cjs')], {stdio:'inherit', cwd:root});
+  if (result.status !== 0) process.exit(result.status || 1);
+  console.log('PASS historical P1 compatibility: current Cookie workbench interaction suite');
+  process.exit(0);
+}
 new vm.Script(overlay, {filename:'cloud-workbench-ui.js'});
 assert(index.includes('/static/js/cloud-workbench-ui.js?v='), 'P1 script included in HTML');
 assert(index.includes('/static/css/cloud-workbench-ui.css?v='), 'P1 stylesheet included in HTML');
