@@ -31,6 +31,9 @@ CREATE TABLE IF NOT EXISTS cloud_steps (
  PRIMARY KEY(job_id,step_key));
 CREATE TABLE IF NOT EXISTS cloud_job_controls (
  job_id TEXT PRIMARY KEY, stop_requested INTEGER NOT NULL, updated REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS cloud_job_due (
+ job_id TEXT PRIMARY KEY, due REAL NOT NULL, origin_job TEXT NOT NULL,
+ file_id TEXT NOT NULL, created REAL NOT NULL, UNIQUE(origin_job,file_id));
 CREATE TABLE IF NOT EXISTS cloud_plans (
  id TEXT PRIMARY KEY, account_id TEXT NOT NULL, revision INTEGER NOT NULL,
  state TEXT NOT NULL, payload TEXT NOT NULL, expires REAL NOT NULL);
@@ -125,6 +128,10 @@ def job(job_id):
     )
     value["result"] = json.loads(value["result"])
     with db() as con:
+        due = con.execute("SELECT due,origin_job FROM cloud_job_due WHERE job_id=?", (job_id,)).fetchone()
+        if due:
+            value["due"] = due[0]
+            value["origin_job"] = due[1]
         control = con.execute("SELECT stop_requested FROM cloud_job_controls WHERE job_id=?", (job_id,)).fetchone()
         value["stop_requested"] = bool(control and control[0])
         progress = con.execute(

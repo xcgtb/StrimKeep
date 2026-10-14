@@ -39,10 +39,12 @@ def request_stop(job_id):
         row = con.execute("SELECT kind,state,payload FROM cloud_jobs WHERE id=?", (job_id,)).fetchone()
         if not row:
             raise CloudError("任务不存在", 404)
-        if row[0] not in ("organize", "workflow", "transfer"):
+        if row[0] not in ("organize", "workflow", "transfer", "sync"):
             raise CloudError("此任务不支持停止整理", 409)
         if row[1] not in ("queued", "running", "stopped"):
             raise CloudError("任务已结束，请查看结果", 409)
+        if row[1] == "stopped":
+            return {"stop_requested": True, "rule_paused": False, "message": "任务已安全停止"}
         payload = json.loads(row[2])
         rule_id = payload.get("rule_id")
         if rule_id:
@@ -56,7 +58,7 @@ def request_stop(job_id):
 
 
 def enqueue(kind, payload, con=None):
-    if kind not in ("transfer", "organize", "sync", "workflow", "categories"):
+    if kind not in ("transfer", "organize", "sync", "workflow", "categories", "publish"):
         raise CloudError("任务类型不受支持")
     job_id = store.ident()
     now = time.time()
@@ -122,8 +124,9 @@ def execute(job_id):
 
     with store.db() as con:
         changed = con.execute(
-            "UPDATE cloud_jobs SET state='running',updated=? WHERE id=? AND state='queued'",
-            (time.time(), job_id),
+            "UPDATE cloud_jobs SET state='running',updated=? WHERE id=? AND state='queued' "
+            "AND NOT EXISTS (SELECT 1 FROM cloud_job_due WHERE job_id=cloud_jobs.id AND due>?)",
+            (time.time(), job_id, time.time()),
         ).rowcount
         if not changed:
             return {"status": "error", "message": "任务已被领取或结束"}
@@ -188,6 +191,7 @@ def notify(job_id, kind, state, message):
         "sync": "STRM 更新",
         "workflow": "自动整理",
         "categories": "创建分类",
+        "publish": "延时 STRM",
     }
     try:
         sent = bool(notify_telegram("115 " + names[kind] + "：" + html.escape(message)))
@@ -349,6 +353,7 @@ def verify_transfer(job_id):
 
 
 def schedule():
+    from app.cloud import schedules
     now = time.time()
     with store.db() as con:
         rows = con.execute(
@@ -357,15 +362,24 @@ def schedule():
         for rid, raw in rows:
             # One pending run per rule; a failed run does not duplicate remote writes.
             data = json.loads(raw)
+            try:
+                account = con.execute("SELECT revision FROM cloud_accounts WHERE id=?", (data["account_id"],)).fetchone()
+                if not account or account[0] != data["account_revision"]:
+                    raise CloudError("账号授权变化，规则已暂停，请重新创建")
+                due = schedules.next_run(data, now)
+            except CloudError as error:
+                data["schedule_error"] = str(error)
+                con.execute("UPDATE cloud_rules SET enabled=0,payload=?,updated=? WHERE id=?", (store.encode(data), now, rid))
+                continue
             active = con.execute(
                 "SELECT 1 FROM cloud_jobs WHERE state IN ('queued','running') AND json_extract(payload,'$.rule_id')=?",
                 (rid,),
             ).fetchone()
             if not active:
-                enqueue("workflow", {**data, "rule_id": rid}, con)
+                enqueue("sync" if data.get("kind") == "sync" else "workflow", {**data, "rule_id": rid}, con)
             con.execute(
                 "UPDATE cloud_rules SET next_run=?,updated=? WHERE id=?",
-                (now + max(300, int(data.get("interval_seconds", 3600))), now, rid),
+                (due, now, rid),
             )
 
 
@@ -375,7 +389,8 @@ def _loop():
             schedule()
             with store.db() as con:
                 row = con.execute(
-                    "SELECT id FROM cloud_jobs WHERE state='queued' ORDER BY created LIMIT 1"
+                    "SELECT j.id FROM cloud_jobs j LEFT JOIN cloud_job_due d ON d.job_id=j.id "
+                    "WHERE j.state='queued' AND (d.due IS NULL OR d.due<=?) ORDER BY j.created LIMIT 1", (time.time(),)
                 ).fetchone()
             if row:
                 try:

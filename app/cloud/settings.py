@@ -37,6 +37,8 @@ DEFAULTS = {
     "animation_movie_folder": False,
     "ffprobe_enabled": False,
     "ffprobe_failure": "skip",
+    "cleanup_empty_directories": False,
+    "strm_delay_seconds": 0,
     "video_extensions": sorted(VIDEO),
     "metadata_extensions": sorted(SIDECAR),
     "min_video_mb": 0,
@@ -133,11 +135,14 @@ def validate(result):
         "year_classification", "unknown_enabled",
         "animation_movie_folder", "ffprobe_enabled",
         "quality8_enabled", "quality8_coexist_dv",
+        "cleanup_empty_directories",
     ):
         if not isinstance(result[key], bool):
             raise CloudError("开关配置必须为布尔值")
     if result["ffprobe_failure"] not in ("skip", "filename"):
         raise CloudError("媒体信息提取失败策略无效")
+    if type(result["strm_delay_seconds"]) is not int or not 0 <= result["strm_delay_seconds"] <= 86400:
+        raise CloudError("STRM 联动延时应为 0 至 86400 秒")
     from app.cloud import naming, categories
     naming.validate(result)
     categories.validate(result)

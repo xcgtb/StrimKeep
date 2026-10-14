@@ -17,7 +17,7 @@ def verify_account(payload):
     return provider
 
 
-def walk(provider, cid, limit=20000, exclude=None, job_id=None):
+def walk(provider, cid, limit=20000, exclude=None, job_id=None, directory_rows=None):
     queue = [numeric(cid)]
     seen = set()
     result = []
@@ -34,6 +34,8 @@ def walk(provider, cid, limit=20000, exclude=None, job_id=None):
             if row["is_dir"]:
                 if row["id"] not in (exclude or set()):
                     queue.append(row["id"])
+                    if directory_rows is not None:
+                        directory_rows.append(row)
             else:
                 result.append(row)
         if len(result) > limit:
@@ -102,7 +104,7 @@ def related_companions(rows, video, config=None):
     return result
 
 
-NAMING_KEYS = tuple(naming.DEFAULT_TEMPLATES) + file_filters.KEYS + ("naming_style", "rename_enabled", "movie_folder", "tv_folder", "classification_enabled", "enabled_categories", "custom_categories", "region_classification", "year_classification", "unknown_enabled", "region_mode", "region_groups", "animation_movie_folder", "ffprobe_enabled", "ffprobe_failure", "quality8_enabled", "quality8_rules", "quality8_coexist_dv")
+NAMING_KEYS = tuple(naming.DEFAULT_TEMPLATES) + file_filters.KEYS + ("naming_style", "rename_enabled", "movie_folder", "tv_folder", "classification_enabled", "enabled_categories", "custom_categories", "region_classification", "year_classification", "unknown_enabled", "region_mode", "region_groups", "animation_movie_folder", "ffprobe_enabled", "ffprobe_failure", "quality8_enabled", "quality8_rules", "quality8_coexist_dv", "cleanup_empty_directories", "strm_delay_seconds")
 
 
 def naming_snapshot(config):
@@ -146,13 +148,14 @@ def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, j
         unknown_cid = selected["id"] if selected else None
     if config["unknown_enabled"]:
         if not unknown_cid:
-            raise CloudError("请先在文件管理中选择未识别目录", 409)
+            raise CloudError("请先选择未识别目录", 409)
         _directory(provider, unknown_cid)
         if str(unknown_cid) == str(target_cid):
             raise CloudError("未识别目录不能与归档目录相同", 409)
     else:
         unknown_cid = None
-    files = walk(provider, source_cid, exclude={str(target_cid), str(unknown_cid)} - {str(source_cid)}, job_id=job_id)
+    cleanup_candidates = []
+    files = walk(provider, source_cid, exclude={str(target_cid), str(unknown_cid)} - {str(source_cid)}, job_id=job_id, directory_rows=cleanup_candidates if config["cleanup_empty_directories"] else None)
     videos, filtered = file_filters.select(files, config)
     items = []
     skipped = []
@@ -198,6 +201,7 @@ def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, j
         "naming_snapshot": naming_snapshot(config),
         "filtered": filtered,
         "quality8": comparisons,
+        "cleanup_candidates": cleanup_candidates,
     }
     with store.db() as con:
         con.execute(
@@ -211,7 +215,7 @@ def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, j
                 time.time() + 900,
             ),
         )
-    return {"id": pid, "items": items, "skipped": skipped, "unknown_items": unknown_items, "unknown_cid": unknown_cid, "filtered": filtered, "quality8": comparisons, "expires_in": 900}
+    return {"id": pid, "items": items, "skipped": skipped, "unknown_items": unknown_items, "unknown_cid": unknown_cid, "filtered": filtered, "quality8": comparisons, "cleanup_candidates": cleanup_candidates, "expires_in": 900}
 
 
 def quality_preview(provider, account, target_cid, candidates, config, job_id=None):
@@ -411,6 +415,8 @@ def organize(job_id, payload):
     if hasattr(provider, "require"):
         provider.require("organize")
     result = {"files": [], "skipped": list(data["skipped"]), "errors": [], "generated": [], "unknown": [], "warnings": [], "media_info": [], "filtered": data.get("filtered", []), "quality8": data.get("quality8", {})}
+    config = settings.get()
+    moved_parents = set()
     all_items = [*data["items"], *data.get("unknown_items", [])]
     jobs.progress(job_id, len(all_items), 0, "整理")
     for index, item in enumerate(all_items):
@@ -448,19 +454,17 @@ def organize(job_id, payload):
             elif payload.get("generate", True):
                 from app.cloud import strm
 
-                asset = strm.generate(
-                    data["account_id"],
-                    row,
-                    item["media"],
-                    data["target_cid"],
-                    companions,
-                    provider,
-                )
-                result["generated"].append(
-                    {"asset_id": asset["id"], "path": asset["local_path"]}
-                )
-                for warning in asset["payload"].get("warnings", []):
-                    result["errors"].append({"file_id": row["id"], "reason": warning})
+                if config["strm_delay_seconds"]:
+                    from app.cloud import automation
+                    deferred = automation.defer(job_id, data["account_id"], data["account_revision"], data["target_cid"], row, item["media"], companions, config["strm_delay_seconds"])
+                    result.setdefault("deferred", []).append(deferred)
+                else:
+                    asset = strm.generate(data["account_id"], row, item["media"], data["target_cid"], companions, provider)
+                    result["generated"].append({"asset_id": asset["id"], "path": asset["local_path"]})
+                    for warning in asset["payload"].get("warnings", []):
+                        result["errors"].append({"file_id": row["id"], "reason": warning})
+            if row["parent_id"] != item["source"]["parent_id"]:
+                moved_parents.add(item["source"]["parent_id"])
         except CloudError as error:
             if error.uncertain:
                 error.partial_result = result
@@ -471,6 +475,16 @@ def organize(job_id, payload):
         jobs.progress(
             job_id, len(all_items), index + 1, "整理", item["source"]["name"]
         )
+    if config["cleanup_empty_directories"] and not result.get("stopped") and not result["errors"] and not jobs.stopping(job_id):
+        from app.cloud import automation
+        try:
+            result["cleanup"] = automation.cleanup(provider, job_id, data, moved_parents)
+            if result["cleanup"].get("stopped"):
+                result["stopped"] = True
+        except CloudError as error:
+            result["cleanup"] = getattr(error, "cleanup_result", {})
+            error.partial_result = result
+            raise
     with store.db() as con:
         con.execute(
             "UPDATE cloud_plans SET state=? WHERE id=?",
@@ -662,12 +676,15 @@ def receipt_mapping(payload, received):
 def sync(job_id, payload):
     provider = verify_account(payload)
     _directory(provider, payload["source_cid"])
-    rows = walk(provider, payload["source_cid"])
+    rows = walk(provider, payload["source_cid"], job_id=job_id)
     result = {"generated": [], "skipped": [], "errors": [], "warnings": []}
     config = settings.get()
     videos, result["filtered"] = file_filters.select(rows, config)
     jobs.progress(job_id, len(videos), 0, "生成 STRM")
     for index, row in enumerate(videos):
+        if jobs.stopping(job_id):
+            result.update(stopped=True, remaining=[{"file_id": r["id"], "name": r["name"]} for r in videos[index:]])
+            break
         jobs.progress(job_id, len(videos), index, "生成 STRM", row["name"])
         try:
             media = recognize_source(payload["account_id"], provider, row, payload.get("overrides"), config)
@@ -693,7 +710,7 @@ def sync(job_id, payload):
                 {"file_id": row["id"], "name": row["name"], "reason": str(error)}
             )
         jobs.progress(job_id, len(videos), index + 1, "生成 STRM", row["name"])
-    if not result["errors"]:
+    if not result["errors"] and not result.get("stopped") and not jobs.stopping(job_id):
         from app.cloud import strm
 
         result["reconciliation"] = strm.reconcile(
@@ -715,6 +732,9 @@ def refresh_emby():
 
 
 def run(job_id, kind, payload):
+    if kind == "publish":
+        from app.cloud import automation
+        return automation.publish(job_id, payload)
     if kind == "categories":
         return create_categories(job_id, payload)
     if kind == "transfer":

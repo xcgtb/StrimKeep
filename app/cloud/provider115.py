@@ -336,6 +336,22 @@ class Provider115:
     def delete(self, file_id):
         return self.call("fs_delete", {"fid": numeric(file_id)}, write=True)
 
+    def remove_empty_directory(self, snapshot):
+        fid = numeric(snapshot["id"])
+        current = self.info(fid)
+        if fid == "0" or not current["is_dir"] or any(current[k] != snapshot[k] for k in ("id", "parent_id", "name")):
+            raise CloudError("空目录身份变化，保留目录", 409)
+        if self.list(fid):
+            return {"kept": True, "reason": "目录新增内容，已保留"}
+        self.delete(fid)
+        try:
+            receipt = self.removed_receipt(fid, snapshot, acknowledged=True)
+        except CloudError:
+            receipt = None
+        if not receipt:
+            raise CloudError("空目录删除结果待核实，不重复删除", 409, uncertain=True)
+        return {"receipt": receipt}
+
     def removed_receipt(self, file_id, source, acknowledged=False):
         from app.cloud.deletion_receipts import removed
         return removed(self, numeric(file_id), source, acknowledged)

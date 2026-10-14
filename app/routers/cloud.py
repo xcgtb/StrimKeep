@@ -20,6 +20,7 @@ from app.cloud import (
     directories,
     naming,
     categories,
+    schedules,
 )
 from app.cloud.provider115 import for_account, numeric
 from app.cloud.errors import CloudError
@@ -63,7 +64,7 @@ class AccountInput(BaseModel):
 
 
 class DirectoryInput(BaseModel):
-    directories: dict[str, str | None] = Field(max_length=4)
+    directories: dict[str, str | None] = Field(max_length=5)
     expected_revision: int = Field(ge=0)
 
 
@@ -115,10 +116,21 @@ class SyncInput(AccountInput):
     overrides: dict[str, MediaChoice] = Field(default_factory=dict, max_length=2000)
 
 
-class RuleInput(PlanInput):
+class ScheduleInput(BaseModel):
+    schedule_mode: Literal["interval", "cron"] = "interval"
+    interval_seconds: int = Field(default=3600, ge=300, le=604800)
+    cron_expression: str = Field(default="0 3 * * *", max_length=120)
+    timezone: str = Field(default="Asia/Shanghai", max_length=80)
+
+
+class RuleInput(AccountInput, ScheduleInput):
+    kind: Literal["workflow", "sync"] = "workflow"
+    source_cid: str = Field(pattern=r"^[0-9]{1,25}$")
+    target_cid: str | None = Field(default=None, pattern=r"^[0-9]{1,25}$")
+    unknown_cid: str | None = Field(default=None, pattern=r"^[0-9]{1,25}$")
+    overrides: dict[str, MediaChoice] = Field(default_factory=dict, max_length=2000)
     name: str = Field(min_length=1, max_length=100)
     enabled: bool = False
-    interval_seconds: int = Field(default=3600, ge=300, le=604800)
 
 
 @router.get("/status")
@@ -479,14 +491,23 @@ def rules():
 
 @router.post("/rules")
 def save_rule(body: RuleInput):
+    call(schedules.zone, body.timezone)
+    due = call(schedules.next_run, body.model_dump(), time.time())
+    if body.kind == "workflow" and (body.target_cid is None or body.target_cid == body.source_cid):
+        raise HTTPException(400, "整理规则需选择不同的来源和归档目录")
     account = call(store.account, body.account_id)
     if not account:
         raise HTTPException(404, "账号不存在")
     provider = call(for_account, body.account_id)
     if hasattr(provider, "require"):
-        call(provider.require, "organize")
+        call(provider.require, "organize" if body.kind == "workflow" else "read")
     call(workflow._directory, provider, body.source_cid)
-    call(workflow._directory, provider, body.target_cid)
+    if body.kind == "workflow":
+        call(workflow._directory, provider, body.target_cid)
+        if body.unknown_cid:
+            call(workflow._directory, provider, body.unknown_cid)
+            if body.unknown_cid == body.target_cid:
+                raise HTTPException(400, "未识别目录不能与归档相同")
     rid = store.ident()
     payload = body.model_dump()
     payload["account_revision"] = account["revision"]
@@ -497,11 +518,18 @@ def save_rule(body: RuleInput):
                 rid,
                 store.encode(payload),
                 int(body.enabled),
-                time.time() + body.interval_seconds,
+                due,
                 time.time(),
             ),
         )
-    return {"status": "success", "id": rid}
+    return {"status": "success", "id": rid, "next_run": due}
+
+
+@router.post("/schedules/preview")
+def preview_schedule(body: ScheduleInput):
+    call(schedules.zone, body.timezone)
+    due = call(schedules.next_run, body.model_dump(), time.time())
+    return {"status": "success", "next_run": due, "timezone": body.timezone}
 
 
 @router.delete("/rules/{rule_id}")
@@ -523,7 +551,9 @@ def enable_rule(rule_id: str, body: dict):
         account = con.execute("SELECT revision FROM cloud_accounts WHERE id=?", (payload["account_id"],)).fetchone()
         if body["enabled"] and (not account or account[0] != payload["account_revision"]):
             raise HTTPException(409, "账号授权已变化，请重新创建规则")
-        con.execute("UPDATE cloud_rules SET enabled=?,next_run=?,updated=? WHERE id=?", (int(body["enabled"]), time.time()+max(300, int(payload.get("interval_seconds", 3600))), time.time(), rule_id))
+        due = call(schedules.next_run, payload, time.time()) if body["enabled"] else time.time()
+        payload.pop("schedule_error", None)
+        con.execute("UPDATE cloud_rules SET enabled=?,next_run=?,updated=?,payload=? WHERE id=?", (int(body["enabled"]), due, time.time(), store.encode(payload), rule_id))
     return {"status": "success", "enabled": body["enabled"]}
 
 

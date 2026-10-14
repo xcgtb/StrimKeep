@@ -22,6 +22,8 @@ StrimKeep 是一款面向 **飞牛 OS / Linux NAS + 302 STRM + Emby** 的影视�
 
 ---
 
+整理与 STRM 定时任务支持 Cron 和时区；可选来源空目录清理、持久化延时 STRM 联动及独立 STRM 来源目录，见[整理自动化说明](docs/MY_DRIVE_AUTOMATION_ACCEPTANCE.md)。
+
 手机端“我的网盘”使用横向功能导航；影视整理的四类目录可在当前页直接浏览 115 并保存，无需跳转文件管理，见[目录选择说明](docs/MY_DRIVE_DIRECTORY_PICKER_ACCEPTANCE.md)。
 
 ## 项目定位
