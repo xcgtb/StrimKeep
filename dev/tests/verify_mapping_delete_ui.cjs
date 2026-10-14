@@ -21,6 +21,7 @@ function environment(api){
     applySeriesDeleteResult:(id,r)=>patches.push({id,r}),
     setTimeout:fn=>{fn();},confirms:0,closed:0};
   vm.createContext(ctx);
+  vm.runInContext(source.slice(source.indexOf('function cloudSourceSummary(')),ctx);
   const start=source.indexOf('var mappingDeleteBusy =');
   if(start>=0) vm.runInContext(source.slice(start,source.indexOf('function showMovieDetailById(')),ctx);
   vm.runInContext(source.slice(source.indexOf('async function deleteMovieByTmdb('),source.indexOf('function showEmbyDetailById(')),ctx);

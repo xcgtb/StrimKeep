@@ -10,7 +10,7 @@ import threading
 import time
 import uuid
 
-from . import deletion_progress, engine, library_pagination, library_response
+from . import deletion_progress, engine, library_pagination, library_response, cloud_bridge
 
 _lock = threading.RLock()
 _previews = {}
@@ -236,7 +236,11 @@ def preview(body, progress=None):
             files, primary = _collect(row)
             if not files or not primary:
                 raise ValueError('《%s》没有核实到目标库 STRM，请刷新片库筛选' % row['name'])
-            row.update(paths=files, primary=primary, count=len(files))
+            root = engine.L_ROOT if target == 'local' else engine.S_ROOT
+            sources = cloud_bridge.snapshots(files, root, target == 'local')
+            if any(v.get('blocked') or not v.get('enabled') for v in sources.values()):
+                raise ValueError('115 来源尚未完成身份或官方删除授权，请在网盘工作台处理后重新预览')
+            row.update(paths=files, primary=primary, count=len(files), cloud_sources=sources)
             total += len(files)
             max_files = _MAX_FILES if target == 'local' else _MAX_SHARE_FILES
             if total > max_files:
@@ -261,6 +265,7 @@ def preview(body, progress=None):
                 'count': len(ready), 'strm_count': total, 'max_titles': maximum,
                 'batch_count': len(groups), 'batch_size': _BATCH_SHARE if target == 'share' else maximum,
                 'series': [{'name': r['name'], 'count': r['count']} for r in ready[:25]],
+                'cloud_sources': [v for r in ready for v in r.get('cloud_sources',{}).values()][:25],
                 'notice': '本地库会按原治理逻辑联动删除源视频；分享库仅清理 NAS STRM'}
     except Exception as exc:
         return _error(str(exc))
@@ -279,6 +284,10 @@ def _run(records, target, progress, delete_files):
             current, primary = _collect(row)
             if current != row['paths'] or primary != row['primary']:
                 raise ValueError('源文件或库归属与预览不同，本部跳过，请重新预览')
+            root = engine.L_ROOT if target == 'local' else engine.S_ROOT
+            sources = cloud_bridge.snapshots(current, root, target == 'local')
+            if sources != row.get('cloud_sources', {}):
+                raise ValueError('115 来源身份或授权配置与预览不同，请重新预览')
             from pathlib import Path
             files = [Path(p) for p in current]
             result = (delete_files(files, target, row['name'], '电影', tmdb_id=row['tmdb_id'])

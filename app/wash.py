@@ -2,8 +2,10 @@
 """从 engine.py 拆出。跨层符号统一经 _eng() 惰性访问（monkeypatch 穿透 + 双导入兼容）。"""
 if __package__:
     from . import state_store as _state
+    from . import cloud_bridge as _cloud_bridge
 else:
     import state_store as _state
+    import cloud_bridge as _cloud_bridge
 import os, re, sys, json, threading, shutil, fcntl, time, argparse, datetime, hashlib, logging, traceback
 import urllib.parse, urllib.request, urllib.error
 from pathlib import Path
@@ -368,6 +370,7 @@ def safe_delete_files(files, base_root, cloud_root=None, dry_run=False, progress
           'cloud_missing': 0, 'cloud_ambiguous': 0, 'cloud_fallback': 0,
           'sidecars_removed': 0, 'sidecar_residuals': [],
           'cloud_sidecars_removed': 0, 'cloud_sidecar_residuals': [], 'errors': []}
+    selected = {str(f) for f in files}
     parents = set(); cloud_parents = set()
     processed = 0
     def emit(phase, current_file=''):
@@ -387,7 +390,28 @@ def safe_delete_files(files, base_root, cloud_root=None, dry_run=False, progress
                 st['errors'].append(f'跳过非法路径: {f}')
                 continue
 
-            if cloud_root is not None:
+            bound = None
+            if _cloud_bridge.owned(f):
+                service = _cloud_bridge.service()
+                try:
+                    if cloud_root is None:
+                        asset = service.share_identity(f)
+                        bound = {'asset_id':asset['id']} if asset else None
+                    else:
+                        bound = service.lookup(f, base_root)
+                        result = service.delete_sources(bound, base_root, selected, dry_run)
+                        new_ids = result['new_ids']
+                        st['cloud_removed'] += int(bound['sources'][0]['id'] in new_ids)
+                        st['cloud_sidecars_removed'] += len(new_ids) - int(bound['sources'][0]['id'] in new_ids)
+                except Exception as error:
+                    log.warning('115 身份删除停止: %s', type(error).__name__)
+                    message = str(error) if type(error).__name__ == 'CloudError' else '来源身份或回执核验失败'
+                    st['errors'].append(f'{f.name}: {message}，STRM 保留')
+                    continue
+
+            if bound is not None:
+                vids, conf = [], '115_file_id'
+            elif cloud_root is not None:
                 if not cloud_root.exists():
                     st['cloud_missing'] += 1
                     st['errors'].append(f'{f.name}: 云端根目录不可用 ({cloud_root})，STRM 保留')
@@ -436,8 +460,17 @@ def safe_delete_files(files, base_root, cloud_root=None, dry_run=False, progress
             if not ok:
                 continue  # 云端没删成功 -> STRM 保留
 
+            if bound is not None and 'fingerprint' in bound:
+                try:
+                    if service.lookup(f, base_root) != bound:
+                        raise ValueError('identity changed')
+                except Exception:
+                    st['errors'].append(f'{f.name}: 115 回执已核实，但本地引用在执行中变化，STRM 保留')
+                    continue
             try:
                 rr = _remove_strm(f)
+                if bound is not None:
+                    service.local_removed(bound)
                 st['strm_removed'] += 1
                 st['sidecars_removed'] += rr.get('sidecars_removed', 0)
                 st['sidecar_residuals'].extend(rr.get('sidecars_failed', []))

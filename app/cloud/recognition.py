@@ -140,6 +140,9 @@ def recognize(name, override=None):
                 "TMDB 季集信息无法核实，请检查季集号后重新预览", 409
             ) from None
     base = f"{title} ({year}) [tmdb-{tmdb_id}]"
+    from app.cloud import settings
+
+    naming = settings.get()
     ext = PurePosixPath(name).suffix.lower()
     tags = []
     for field in ("screen_size", "video_codec", "source", "audio_codec"):
@@ -148,7 +151,18 @@ def recognize(name, override=None):
             tags.append(safe_name(str(value)))
     quality = " - " + " ".join(tags) if tags else ""
     stem = base + (f" - S{season:02d}E{episode:02d}" if kind == "tv" else "") + quality
-    relative = f'{"电视剧" if kind=="tv" else "电影"}/{base}'
+    if naming["naming_style"] == "compact":
+        stem = (
+            f"{title} ({year})"
+            + (f" - S{season:02d}E{episode:02d}" if kind == "tv" else "")
+            + quality
+        )
+    filename = (
+        safe_name(name)
+        if naming["naming_style"] == "original"
+        else safe_name(stem + ext)
+    )
+    relative = f'{safe_name(naming["tv_folder"] if kind=="tv" else naming["movie_folder"])}/{base}'
     if kind == "tv":
         relative += f"/Season {season:02d}"
     return {
@@ -159,7 +173,7 @@ def recognize(name, override=None):
         "season": season,
         "episode": episode,
         "directory": relative,
-        "name": safe_name(stem + ext),
+        "name": filename,
         "poster_path": detail.get("poster_path") or "",
         "plot": str(detail.get("overview") or "")[:10000],
         "episode_id": str(episode_detail.get("id") or ""),

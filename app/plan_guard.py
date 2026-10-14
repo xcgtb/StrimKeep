@@ -76,4 +76,20 @@ def validate(action, snapshots, roots):
             old = snapshots.get(path)
             if not isinstance(old, dict) or fingerprint(path, roots) != old:
                 return f'{label}已变化、不可读或不存在，跳过并请重新扫描: {Path(path).name}'
+    if __package__:
+        from . import cloud_bridge
+    else:
+        import cloud_bridge
+    current = {}
+    for path in targets:
+        root = next((r for r in roots if Path(path).is_relative_to(Path(r))), None)
+        if root is None:
+            return '来源路径归属变化，请重新扫描'
+        value = cloud_bridge.preview(path, root, action.get('kind') != 'shr')
+        if value is not None:
+            current[path] = value
+    if current != guard.get('cloud_sources', {}):
+        return '网盘来源身份或授权配置变化，请重新扫描并确认'
+    if any(x.get('blocked') or not x.get('enabled') for x in current.values()):
+        return '网盘来源未完成授权或身份核验，STRM 保留'
     return ''

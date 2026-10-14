@@ -126,6 +126,7 @@ function showGovDetail(d, type, ctx){
   rows.push('<div class="meta-row"><span class="k">标题</span><span class="v">' + esc(d.text) + '</span></div>');
   if (done) rows.push(recResultRows(ctx));
   if (d.reason_label) rows.push('<div class="meta-row"><span class="k">原因</span><span class="v">' + esc(d.reason_label) + '</span></div>');
+  (meta.cloud_sources||[]).slice(0,20).forEach(function(v){rows.push('<div class="meta-row"><span class="k">115 来源</span><span class="v">'+esc(v.blocked||v.effect)+' · ID '+esc(v.file_id||'待核实')+(v.enabled?'':' · 官方删除未就绪')+'</span></div>');});
   if (meta.title) rows.push('<div class="meta-row"><span class="k">剧名</span><span class="v">' + esc(meta.title) + '</span></div>');
   if (meta.season != null) rows.push('<div class="meta-row"><span class="k">季</span><span class="v">S' + String(meta.season).padStart(2,'0') + '</span></div>');
   if (meta.local_seasons != null) rows.push('<div class="meta-row"><span class="k">本地季数</span><span class="v">' + esc(meta.local_seasons) + '</span></div>');

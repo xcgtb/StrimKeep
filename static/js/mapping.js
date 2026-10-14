@@ -920,7 +920,7 @@ async function mappingBatchDelete(){
       throw Error('预览期间筛选或选择发生变化，请重新预览');
     if (preview.status !== 'success') throw new Error(preview.message || '预览失败');
     var isLocal = preview.target === 'local';
-    var display = (preview.series || []).slice(0,12).map(function(x){return '· ' + x.name + '（' + x.count + ' STRM）';}).join('\n');
+    var display = (preview.series || []).slice(0,12).map(function(x){return '· ' + x.name + '（' + x.count + ' STRM）';}).join('\n') + cloudSourceSummary(preview.cloud_sources);
     var label = isLocal ? '本地库' : '分享库';
     var danger = isLocal ? '\n⚠️ 本地库将按原有治理规则联动删除对应的 CD2 源视频！' : '\n分享库只删除 NAS STRM，不删除源视频。';
     var summary = '确定清理【' + label + '】吗？\n筛选：' + (body.filter||'all') +
@@ -1264,12 +1264,13 @@ async function deleteMovieByTmdb(tmdbId, target, movieName){
               '\u5c06\u5220\u9664 ' + count + ' \u4e2a\u6587\u4ef6' +
               (target === 'local' ? '\uff0c\u5e76\u8054\u52a8\u5220\u9664 115 \u7f51\u76d8\u4e0a\u7684\u6e90\u6587\u4ef6' : '') +
               '\n\n\u6b64\u64cd\u4f5c\u4e0d\u53ef\u6062\u590d\uff01';
+    msg += cloudSourceSummary(r1.cloud_sources);
     if (!confirm(msg)) return;
 
     phase = 'delete';
     showMappingDeleteProgress(target, movieName, count, 'movie', tmdbId);
     r2 = await executeMappingDelete('/api/emby/movie/delete_by_tmdb',
-      {tmdb_id:tmdbId, target:target, dry_run:false, name:movieName});
+      {tmdb_id:tmdbId, target:target, dry_run:false, name:movieName, source_preview_id:r1.source_preview_id});
     if (r2.status === 'busy') { showMappingDeleteResult('正在处理其他任务', r2.message || '已有治理任务正在执行，请稍后再试', '本次未提交删除。'); toast(r2.message || '已有治理任务正在执行，请稍后再试', '', 5000); return; }
     if (r2.status !== 'success') throw new Error(r2.message || '\u5931\u8d25');
 
@@ -1406,13 +1407,14 @@ async function deleteSeriesFromLib(seriesId, target, seriesName){
               '\u5c06\u5220\u9664 ' + count + ' \u4e2a\u6587\u4ef6' +
               (target === 'local' ? '\uff0c\u5e76\u8054\u52a8\u5220\u9664 115 \u7f51\u76d8\u4e0a\u7684\u6e90\u6587\u4ef6' : '') +
               '\n\n\u6b64\u64cd\u4f5c\u4e0d\u53ef\u6062\u590d\uff01';
+    msg += cloudSourceSummary(r1.cloud_sources);
     if (!confirm(msg)) return;
 
     // 3. 真\u5220
     phase = 'delete';
     showMappingDeleteProgress(target, seriesName, count, 'series', seriesId);
     r2 = await executeMappingDelete('/api/emby/series/' + seriesId + '/delete',
-      {target:target, dry_run:false, series_name:seriesName});
+      {target:target, dry_run:false, series_name:seriesName, source_preview_id:r1.source_preview_id});
     if (r2.status === 'busy') { showMappingDeleteResult('正在处理其他任务', r2.message || '已有治理任务正在执行，请稍后再试', '本次未提交删除。'); toast(r2.message || '已有治理任务正在执行，请稍后再试', '', 5000); return; }
     if (r2.status !== 'success') throw new Error(r2.message || '\u5931\u8d25');
 
@@ -1714,3 +1716,11 @@ async function pollLibraryLiveChanges(){
   if (document.readyState === 'loading') window.addEventListener('load', start);
   else start();
 })();
+
+
+function cloudSourceSummary(sources){
+  if (!sources || !sources.length) return '';
+  return '\n\n已登记的 115 来源：'+sources.length+' 个引用\n'+sources.slice(0,10).map(function(v){
+    return '账号 '+v.uid+' · 文件 ID '+v.file_id+' · '+v.effect;
+  }).join('\n')+(sources.length>10?'\n其余来源可在工作台记录查看':'');
+}

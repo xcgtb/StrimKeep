@@ -134,6 +134,10 @@ def parse_share(link, password=""):
 
 
 class Provider115:
+    def require(self, operation):
+        if operation not in ("read", "organize", "transfer", "play"):
+            raise CloudError("此操作需要本应用 OpenAPI 授权", 409)
+
     def __init__(self, credentials, expected_uid=None):
         cookie = credentials.get("cookie")
         if not cookie:
@@ -334,4 +338,8 @@ def for_account(account_id):
     from app.cloud import credentials
 
     row, saved = credentials.load(account_id)
+    if not saved.get("cookie") and saved.get("open"):
+        from app.cloud import open115
+
+        return open115.for_account(account_id)
     return Provider115(saved, row["uid"])

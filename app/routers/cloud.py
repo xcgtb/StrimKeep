@@ -51,6 +51,8 @@ def call(fn, *args, **kwargs):
 
 class QRInput(BaseModel):
     device: str = Field(default="alipaymini", max_length=20)
+    mode: Literal["cookie", "open"] = "cookie"
+    account_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
 
 
 class AccountInput(BaseModel):
@@ -109,7 +111,7 @@ def status(response: Response):
     response.headers["Cache-Control"] = "no-store"
     return {
         "status": "success",
-        "accounts": call(store.accounts),
+        "accounts": call(accounts.describe),
         "proxy": call(emby_proxy.status),
         "pending": sum(
             x["state"] in ("queued", "running", "uncertain", "needs_review")
@@ -120,7 +122,10 @@ def status(response: Response):
 
 @router.post("/qr")
 def start_qr(body: QRInput, request: Request):
-    return {"status": "success", **call(accounts.start, owner(request), body.device)}
+    return {
+        "status": "success",
+        **call(accounts.start, owner(request), body.device, body.mode, body.account_id),
+    }
 
 
 @router.get("/qr/{flow_id}/image")
@@ -146,6 +151,14 @@ def cancel_qr(flow_id: str, request: Request):
 @router.post("/accounts/{account_id}/check")
 def check_account(account_id: str):
     provider = call(for_account, account_id)
+    return {"status": "success", "profile": call(provider.profile)}
+
+
+@router.post("/accounts/{account_id}/open/check")
+def check_open(account_id: str):
+    from app.cloud import open115
+
+    provider = call(open115.for_account, account_id)
     return {"status": "success", "profile": call(provider.profile)}
 
 
@@ -260,6 +273,64 @@ def revoke(asset_id: str):
     return {"status": "success", "revoked": call(strm.revoke, asset_id)}
 
 
+@router.get("/assets/{asset_id}/source")
+def asset_source(asset_id: str):
+    from pathlib import Path
+    from app.cloud import governance
+
+    asset = call(store.asset, asset_id)
+    if not asset:
+        raise HTTPException(404, "播放引用不存在")
+    sources = asset["payload"].get("companions", [])
+    return {
+        "status": "success",
+        "source": call(
+            governance.preview,
+            asset["local_path"],
+            Path(asset["payload"]["output_root"]),
+        ),
+        "deletions": [
+            {
+                "file_id": r["id"],
+                "record": call(governance.record, asset["account_id"], r["id"]),
+            }
+            for r in [asset["payload"]["source"], *sources]
+        ],
+    }
+
+
+def receipt_operation(fn, asset_id):
+    from app import engine
+
+    try:
+        with engine.mutation_lock():
+            return call(fn, asset_id)
+    except engine.MutationBusy:
+        raise HTTPException(409, "有文件操作正在执行，请完成后再核验") from None
+
+
+@router.post("/assets/{asset_id}/deletion/verify")
+def verify_deletion(asset_id: str):
+    from app.cloud import governance
+
+    return {
+        "status": "success",
+        "result": receipt_operation(governance.verify, asset_id),
+    }
+
+
+@router.post("/assets/{asset_id}/deletion/reset")
+def reset_deletion(asset_id: str, body: dict):
+    from app.cloud import governance
+
+    if body.get("confirmed") is not True:
+        raise HTTPException(400, "请确认重置被拒绝记录")
+    return {
+        "status": "success",
+        "result": receipt_operation(governance.reset_rejected, asset_id),
+    }
+
+
 @router.get("/jobs")
 def list_jobs():
     return {"status": "success", "items": call(store.jobs)}
@@ -273,6 +344,14 @@ def job_details(job_id: str):
 @router.post("/jobs/{job_id}/verify")
 def verify_transfer(job_id: str):
     return {"status": "success", "result": call(jobs.verify_transfer, job_id)}
+
+
+@router.post("/jobs/{job_id}/continue", status_code=202)
+def continue_transfer(job_id: str, body: dict):
+    return {
+        "status": "success",
+        **call(jobs.continue_transfer, job_id, body.get("confirmed", False)),
+    }
 
 
 @router.post("/jobs/{job_id}/cancel")
@@ -294,10 +373,12 @@ def get_settings():
 
 @router.post("/settings")
 def save_settings(body: dict):
+    previous = call(settings.get)
     result = call(settings.save, body)
-    # Credentials remain untouched. Only restart this optional listener.
-    emby_proxy.stop()
-    emby_proxy.start()
+    # Naming/authorization changes must not interrupt active playback listeners.
+    if any(previous[k] != result[k] for k in ("proxy_enabled", "proxy_port")):
+        emby_proxy.stop()
+        emby_proxy.start()
     return {"status": "success", "settings": result, "proxy": emby_proxy.status()}
 
 
@@ -329,6 +410,8 @@ def save_rule(body: RuleInput):
     if not account:
         raise HTTPException(404, "账号不存在")
     provider = call(for_account, body.account_id)
+    if hasattr(provider, "require"):
+        call(provider.require, "organize")
     call(workflow._directory, provider, body.source_cid)
     call(workflow._directory, provider, body.target_cid)
     rid = store.ident()

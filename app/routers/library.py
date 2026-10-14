@@ -566,8 +566,12 @@ def _series_delete(series_id, body, progress=None):
         if not files:
             return {'status': 'success', 'count': 0, 'target': target,
                     'message': '该库无此剧文件', 'ghost': True}
+        from app import cloud_bridge
+        root = engine.L_ROOT if target == 'local' else engine.S_ROOT
         if dry_run:
-            return {'status': 'success', 'dry_run': True, 'count': len(files), 'target': target}
+            return {'status': 'success', 'dry_run': True, 'count': len(files), 'target': target,
+                    **cloud_bridge.capture(files, root, target == 'local')}
+        cloud_bridge.confirm(body.get('source_preview_id'), files, root, target == 'local')
         return _delete_title_files(files, target, series_name, media_type, series_id=series_id, progress=progress)
     except Exception as e:
         return {'status': 'error', 'message': str(e)}
@@ -627,6 +631,12 @@ def _movie_delete(body, progress=None):
     files = engine.find_movie_strms_by_tmdb(root, tmdb_id)
     if not files:
         return {'status': 'success', 'count': 0, 'target': target}
-    if dry_run:
-        return {'status': 'success', 'dry_run': True, 'count': len(files), 'target': target}
+    from app import cloud_bridge
+    try:
+        if dry_run:
+            return {'status': 'success', 'dry_run': True, 'count': len(files), 'target': target,
+                    **cloud_bridge.capture(files, root, target == 'local')}
+        cloud_bridge.confirm(body.get('source_preview_id'), files, root, target == 'local')
+    except ValueError as error:
+        return {'status':'error', 'message':str(error)}
     return _delete_title_files(files, target, movie_name, '电影', tmdb_id=tmdb_id, progress=progress)

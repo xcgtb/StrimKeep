@@ -15,6 +15,11 @@ DEFAULTS = {
     "nfo_enabled": True,
     "artwork_enabled": False,
     "notify_enabled": False,
+    "open_app_id": "",
+    "naming_style": "standard",
+    "movie_folder": "电影",
+    "tv_folder": "电视剧",
+    "official_delete_enabled": False,
 }
 
 
@@ -25,6 +30,8 @@ def path():
 def get():
     result = dict(DEFAULTS)
     result.update(state_store.read(path(), {}))
+    if not result["open_app_id"]:
+        result["open_app_id"] = os.environ.get("STRIMKEEP_115_APP_ID", "").strip()
     return result
 
 
@@ -33,6 +40,25 @@ def save(value):
         raise CloudError("配置字段无效")
     result = get()
     result.update(value)
+    from app.cloud.provider115 import numeric
+
+    if result["open_app_id"]:
+        result["open_app_id"] = numeric(result["open_app_id"])
+    if result["naming_style"] not in ("standard", "compact", "original"):
+        raise CloudError("命名样式无效")
+    for field in ("movie_folder", "tv_folder"):
+        text = result[field]
+        if (
+            not isinstance(text, str)
+            or not text.strip()
+            or text != text.strip()
+            or text in (".", "..")
+            or any(ord(c) < 32 or c in '/\\<>:"|?*' for c in text)
+            or text.startswith(".")
+            or text.endswith(".")
+            or len(text.encode()) > 80
+        ):
+            raise CloudError("归档分类应为一个有效的目录名")
     raw_url = str(result["public_url"])
     try:
         parsed = urlsplit(raw_url)
@@ -65,7 +91,13 @@ def save(value):
     if not 1024 <= port <= 65535 or port == 8321:
         raise CloudError("反代端口必须为空闲端口且不同于管理端口")
     result["proxy_port"] = port
-    for key in ("proxy_enabled", "nfo_enabled", "artwork_enabled", "notify_enabled"):
+    for key in (
+        "proxy_enabled",
+        "nfo_enabled",
+        "artwork_enabled",
+        "notify_enabled",
+        "official_delete_enabled",
+    ):
         if not isinstance(result[key], bool):
             raise CloudError("开关配置必须为布尔值")
     state_store.save(path(), result)

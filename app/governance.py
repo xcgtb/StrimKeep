@@ -1146,7 +1146,15 @@ def _execution_snapshots(todo):
             _tasks.checkpoint()
             if path not in snapshots:
                 snapshots[path] = _plan_guard.fingerprint(path, roots)
-        guard = {'version': _plan_guard.VERSION, 'targets': targets, 'retained': retained}
+        if __package__:
+            from . import cloud_bridge
+        else:
+            import cloud_bridge
+        source_root = _eng().L_ROOT if a.kind == 'loc' else _eng().S_ROOT
+        sources = cloud_bridge.snapshots(targets, source_root, a.kind == 'loc')
+        guard = {'version': _plan_guard.VERSION, 'targets': targets, 'retained': retained, 'cloud_sources': sources}
+        if sources:
+            a.meta['cloud_sources'] = list(sources.values())
         # 补集可能让“残次品”变完整；此类动作还需核对关联季目录的 STRM 集合。
         if str(a.meta.get('reason') or '').startswith('incomplete_delete_'):
             guard['directories'] = {d: _plan_guard.directory_strms(d)
@@ -1485,7 +1493,7 @@ def _run_inter_clean(args):
                 if a.kind not in ('keep', 'exempt')]
         snapshots, guards = _execution_snapshots(todo)
         plan = {'file_snapshots': snapshots}
-        validated_actions = {a.action_id: {'files': [str(f) for f in a.files], 'file_guard': guard}
+        validated_actions = {a.action_id: {'files': [str(f) for f in a.files], 'kind': a.kind, 'file_guard': guard}
                              for a, guard in zip(todo, guards)}
         skipped = 0
 

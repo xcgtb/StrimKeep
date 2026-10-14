@@ -69,6 +69,33 @@ def media_choice(account_id, row, overrides):
     return choices[0] if choices else None
 
 
+def related_companions(rows, video):
+    stem = PurePosixPath(video["name"]).stem
+    result = []
+    for row in rows:
+        path = PurePosixPath(row["name"])
+        if (
+            row["parent_id"] != video["parent_id"]
+            or path.suffix.lower() not in recognition.SIDECAR
+        ):
+            continue
+        if path.stem != stem and not path.stem.startswith(stem + "."):
+            continue
+        owners = [
+            r
+            for r in rows
+            if r["parent_id"] == row["parent_id"]
+            and PurePosixPath(r["name"]).suffix.lower() in recognition.VIDEO
+            and (
+                path.stem == PurePosixPath(r["name"]).stem
+                or path.stem.startswith(PurePosixPath(r["name"]).stem + ".")
+            )
+        ]
+        if len(owners) == 1:
+            result.append(row)
+    return result
+
+
 def plan(account_id, source_cid, target_cid, overrides=None):
     account = store.account(account_id)
     if not account:
@@ -91,29 +118,7 @@ def plan(account_id, source_cid, target_cid, overrides=None):
             if path in paths:
                 raise CloudError("两个文件将生成相同名称，请选择版本或修正作品", 409)
             paths.add(path)
-            related = []
-            stem = PurePosixPath(row["name"]).stem
-            for follower in files:
-                other = PurePosixPath(follower["name"])
-                if (
-                    follower["parent_id"] == row["parent_id"]
-                    and other.suffix.lower() in recognition.SIDECAR
-                    and (other.stem == stem or other.stem.startswith(stem + "."))
-                ):
-                    owners = [
-                        r
-                        for r in files
-                        if r["parent_id"] == row["parent_id"]
-                        and PurePosixPath(r["name"]).suffix.lower() in recognition.VIDEO
-                        and (
-                            other.stem == PurePosixPath(r["name"]).stem
-                            or other.stem.startswith(
-                                PurePosixPath(r["name"]).stem + "."
-                            )
-                        )
-                    ]
-                    if len(owners) == 1:
-                        related.append(follower)
+            related = related_companions(files, row)
             items.append({"source": row, "media": media, "followers": related})
         except CloudError as error:
             skipped.append(
@@ -286,8 +291,12 @@ def organize(job_id, payload):
         raise CloudError("整理计划状态无效", 409)
     data = json.loads(row[0])
     provider = verify_account(data)
+    if hasattr(provider, "require"):
+        provider.require("organize")
     result = {"files": [], "skipped": data["skipped"], "errors": [], "generated": []}
-    for item in data["items"]:
+    jobs.progress(job_id, len(data["items"]), 0, "整理")
+    for index, item in enumerate(data["items"]):
+        jobs.progress(job_id, len(data["items"]), index, "整理", item["source"]["name"])
         try:
             for source in [item["source"], *item["followers"]]:
                 if not _snapshot_equal(source, provider.info(source["id"])):
@@ -330,6 +339,9 @@ def organize(job_id, payload):
             result["errors"].append(
                 {"file_id": item["source"]["id"], "reason": str(error)}
             )
+        jobs.progress(
+            job_id, len(data["items"]), index + 1, "整理", item["source"]["name"]
+        )
     with store.db() as con:
         con.execute(
             "UPDATE cloud_plans SET state=? WHERE id=?",
@@ -407,12 +419,18 @@ def transfer_submit(
 
 def transfer(job_id, payload):
     provider = verify_account(payload)
+    if hasattr(provider, "require"):
+        provider.require("transfer")
+    jobs.progress(job_id, len(payload["source_ids"]), 0, "准备转存目录")
     target = _directory(provider, payload["target_cid"])
     stage = ensure_directory(provider, job_id, target, "转存待整理-" + job_id[:12])
     if provider.list(stage):
         raise CloudError("转存目录已存在内容，禁止重复接收", 409, uncertain=True)
 
     def receive():
+        jobs.progress(
+            job_id, len(payload["source_ids"]), 0, "转存中；结果确认前不会重复提交"
+        )
         provider.receive(
             payload["code"], payload["password"], payload["source_ids"], stage
         )
@@ -439,6 +457,9 @@ def transfer(job_id, payload):
         "receive",
         {"source_ids": payload["source_ids"], "stage_id": stage},
         receive,
+    )
+    jobs.progress(
+        job_id, len(payload["source_ids"]), len(payload["source_ids"]), "转存已核实"
     )
     if payload.get("organize_target"):
         planned = plan(payload["account_id"], stage, payload["organize_target"])
@@ -492,7 +513,12 @@ def sync(job_id, payload):
     _directory(provider, payload["source_cid"])
     rows = walk(provider, payload["source_cid"])
     result = {"generated": [], "skipped": [], "errors": []}
-    for row in rows:
+    videos = [
+        x for x in rows if PurePosixPath(x["name"]).suffix.lower() in recognition.VIDEO
+    ]
+    jobs.progress(job_id, len(videos), 0, "生成 STRM")
+    for index, row in enumerate(videos):
+        jobs.progress(job_id, len(videos), index, "生成 STRM", row["name"])
         if PurePosixPath(row["name"]).suffix.lower() not in recognition.VIDEO:
             continue
         try:
@@ -502,17 +528,7 @@ def sync(job_id, payload):
             )
             from app.cloud import strm
 
-            stem = PurePosixPath(row["name"]).stem
-            companions = [
-                r
-                for r in rows
-                if r["parent_id"] == row["parent_id"]
-                and (
-                    PurePosixPath(r["name"]).stem == stem
-                    or PurePosixPath(r["name"]).stem.startswith(stem + ".")
-                )
-                and PurePosixPath(r["name"]).suffix.lower() not in recognition.VIDEO
-            ]
+            companions = related_companions(rows, row)
             asset = strm.generate(
                 payload["account_id"],
                 row,
@@ -529,6 +545,7 @@ def sync(job_id, payload):
             result["skipped"].append(
                 {"file_id": row["id"], "name": row["name"], "reason": str(error)}
             )
+        jobs.progress(job_id, len(videos), index + 1, "生成 STRM", row["name"])
     if not result["errors"]:
         from app.cloud import strm
 

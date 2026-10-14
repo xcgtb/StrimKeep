@@ -59,6 +59,24 @@ def step(job_id, key, payload, fn):
     return result
 
 
+def progress(job_id, total, processed, phase, current=""):
+    if processed < 0 or (total is not None and not processed <= total <= 100000):
+        raise CloudError("任务进度无效")
+    with store.db() as con:
+        con.execute(
+            "INSERT INTO cloud_progress VALUES(?,?,?,?,?,?) ON CONFLICT(job_id) DO UPDATE SET "
+            "total=excluded.total,processed=excluded.processed,phase=excluded.phase,current=excluded.current,updated=excluded.updated",
+            (
+                job_id,
+                total,
+                processed,
+                str(phase)[:80],
+                str(current)[:512],
+                time.time(),
+            ),
+        )
+
+
 def execute(job_id):
     from app.cloud import workflow
 
@@ -73,6 +91,7 @@ def execute(job_id):
             "SELECT kind,payload FROM cloud_jobs WHERE id=?", (job_id,)
         ).fetchone()
     try:
+        progress(job_id, None, 0, "准备")
         result = workflow.run(job_id, row[0], json.loads(row[1]))
         state = (
             "needs_review"
@@ -155,6 +174,71 @@ def details(job_id):
     return result
 
 
+def continue_transfer(job_id, confirmed=False):
+    """Continue a reconciled receipt once, without resending its share_receive."""
+    from app.cloud import workflow
+    from app.cloud.provider115 import for_account
+
+    if confirmed is not True:
+        raise CloudError("请确认继续整理")
+    with store.db() as con:
+        row = con.execute(
+            "SELECT kind,state,payload,result FROM cloud_jobs WHERE id=?", (job_id,)
+        ).fetchone()
+        existing = con.execute(
+            "SELECT result FROM cloud_steps WHERE job_id=? AND step_key='continue'",
+            (job_id,),
+        ).fetchone()
+    if existing:
+        return json.loads(existing[0])
+    if not row or row[0] != "transfer" or row[1] != "success":
+        raise CloudError("请先核实转存结果", 409)
+    data = json.loads(row[2])
+    receipt = json.loads(row[3])
+    if not receipt.get("continuation_required") or not data.get("organize_target"):
+        raise CloudError("此任务没有待继续的整理", 409)
+    provider = for_account(data["account_id"])
+    provider.profile()
+    stage = provider.info(receipt["stage_id"])
+    if (
+        not stage["is_dir"]
+        or stage["parent_id"] != data["target_cid"]
+        or stage["name"] != "转存待整理-" + job_id[:12]
+    ):
+        raise CloudError("任务目录身份已变化，请重新选择来源预览", 409)
+    files = workflow.walk(provider, stage["id"])
+    old = {x["id"]: x for x in receipt["files"]}
+    if {x["id"] for x in files} != set(old) or any(
+        not workflow._snapshot_equal(old[x["id"]], x) for x in files
+    ):
+        raise CloudError("转存内容在核实后变化，请重新预览", 409)
+    planned = workflow.plan(data["account_id"], stage["id"], data["organize_target"])
+    if not planned["items"]:
+        raise CloudError("没有可以继续整理的项目，请在整理页修正作品", 409)
+    with store.db() as con:
+        existing = con.execute(
+            "SELECT result FROM cloud_steps WHERE job_id=? AND step_key='continue'",
+            (job_id,),
+        ).fetchone()
+        if existing:
+            return json.loads(existing[0])
+        con.execute(
+            "UPDATE cloud_plans SET state='queued' WHERE id=? AND state='pending'",
+            (planned["id"],),
+        )
+        next_id = enqueue(
+            "organize",
+            {"plan_id": planned["id"], "generate": data.get("generate", True)},
+            con,
+        )
+        result = {"job_id": next_id, "message": "继续整理已入队，转存请求没有重发"}
+        con.execute(
+            "INSERT INTO cloud_steps VALUES(?,?,?,?,?,?)",
+            (job_id, "continue", "verified", "{}", store.encode(result), time.time()),
+        )
+    return result
+
+
 def verify_transfer(job_id):
     """Read-only reconciliation. Never resends a timed-out receive request."""
     from app.cloud.provider115 import for_account
@@ -197,7 +281,7 @@ def verify_transfer(job_id):
         "mapping": mapping,
         "continuation_required": bool(payload.get("organize_target")),
         "message": (
-            "转存已核实，未重新发送请求；后续整理请在文件页选择此任务目录并重新预览"
+            "转存已核实，未重新发送请求；可继续整理已核实的文件，或在文件页手动预览"
             if payload.get("organize_target")
             else "转存已核实，未重新发送请求"
         ),

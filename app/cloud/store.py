@@ -34,6 +34,13 @@ CREATE INDEX IF NOT EXISTS cloud_assets_source ON cloud_assets(account_id,file_i
 CREATE TABLE IF NOT EXISTS cloud_rules (
  id TEXT PRIMARY KEY, payload TEXT NOT NULL, enabled INTEGER NOT NULL,
  next_run REAL NOT NULL, updated REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS cloud_progress (
+ job_id TEXT PRIMARY KEY, total INTEGER, processed INTEGER NOT NULL,
+ phase TEXT NOT NULL, current TEXT NOT NULL, updated REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS cloud_deletions (
+ account_id TEXT NOT NULL, file_id TEXT NOT NULL, asset_id TEXT NOT NULL,
+ state TEXT NOT NULL, payload TEXT NOT NULL, result TEXT NOT NULL,
+ updated REAL NOT NULL, PRIMARY KEY(account_id,file_id));
 """
 
 
@@ -109,6 +116,15 @@ def job(job_id):
         zip(("id", "kind", "state", "result", "message", "created", "updated"), row)
     )
     value["result"] = json.loads(value["result"])
+    with db() as con:
+        progress = con.execute(
+            "SELECT total,processed,phase,current,updated FROM cloud_progress WHERE job_id=?",
+            (job_id,),
+        ).fetchone()
+    if progress:
+        value["progress"] = dict(
+            zip(("total", "processed", "phase", "current", "updated"), progress)
+        )
     return value
 
 

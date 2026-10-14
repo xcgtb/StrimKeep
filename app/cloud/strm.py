@@ -206,6 +206,11 @@ def fetch_artwork(poster_path):
 
 
 def generate(account_id, row, media, scope_cid=None, companions=None, provider=None):
+    companions = companions or []
+    if len({r["id"] for r in [row, *companions]}) != 1 + len(companions) or any(
+        r["is_dir"] or r["parent_id"] != row["parent_id"] for r in companions
+    ):
+        raise CloudError("关联文件必须为同目录内不重复的普通文件", 409)
     base = root()
     cfg = settings.get()
     relative = (
@@ -263,6 +268,7 @@ def generate(account_id, row, media, scope_cid=None, companions=None, provider=N
             "content": content.decode(),
             "owned": [],
             "warnings": [],
+            "companions": companions or [],
         }
         with store.db() as con:
             con.execute(
