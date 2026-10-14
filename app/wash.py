@@ -4,7 +4,7 @@ if __package__:
     from . import state_store as _state
 else:
     import state_store as _state
-import os, re, sys, json, threading, shutil, fcntl, time, argparse, datetime, hashlib, logging, traceback, sqlite3
+import os, re, sys, json, threading, shutil, fcntl, time, argparse, datetime, hashlib, logging, traceback
 import urllib.parse, urllib.request, urllib.error
 from pathlib import Path
 from collections import defaultdict
@@ -386,42 +386,6 @@ def safe_delete_files(files, base_root, cloud_root=None, dry_run=False, progress
             if f.suffix.lower() != '.strm' or not _inside(f, base_root):
                 st['errors'].append(f'跳过非法路径: {f}')
                 continue
-
-            if cloud_root is not None:
-                # An identity-managed STRM must never reach filename/CD2 matching,
-                # including failed, missing or modified binding states.
-                if __package__:
-                    from . import cloud115
-                else:
-                    import cloud115
-                try:
-                    bound = cloud115.delete_source(f, base_root, dry_run=dry_run)
-                    if bound is not None:
-                        st['cloud_removed'] += bound['cloud_removed']
-                        st['cloud_sidecars_removed'] += bound['cloud_sidecars_removed']
-                        if not dry_run:
-                            binding = cloud115.repo.binding(path=f)
-                            cloud115.verify_binding(binding, f, base_root)
-                            rr = _remove_strm(f)
-                            st['strm_removed'] += 1
-                            st['sidecars_removed'] += rr.get('sidecars_removed', 0)
-                            st['sidecar_residuals'].extend(rr.get('sidecars_failed', []))
-                            if rr.get('sidecars_failed'):
-                                st['errors'].append(f'{f.name}: {len(rr["sidecars_failed"])} 个附属文件删除失败，已登记洗版残留')
-                            parents.add(f.parent)
-                            cloud115.finish_local(bound['binding_id'])
-                        else:
-                            st['strm_removed'] += 1
-                        continue
-                except (ValueError, OSError) as error:
-                    confirmed=getattr(error,'confirmed_counts',{})
-                    st['cloud_removed'] += confirmed.get('cloud_removed',0)
-                    st['cloud_sidecars_removed'] += confirmed.get('cloud_sidecars_removed',0)
-                    st['errors'].append(f'{f.name}: {error}')
-                    continue
-                except sqlite3.Error:
-                    st['errors'].append(f'{f.name}: 115 身份状态存储不可用，请核对文件与原 ID；不会回退路径匹配')
-                    continue
 
             if cloud_root is not None:
                 if not cloud_root.exists():

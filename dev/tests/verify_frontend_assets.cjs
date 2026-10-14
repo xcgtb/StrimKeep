@@ -4,8 +4,7 @@ const {asset}=require('./frontend_source.cjs');
 const html=fs.readFileSync(path.join(__dirname,'../../static/index.html'),'utf8');
 const scripts=Array.from(html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g));
 const urls=scripts.map(m=>m[1].match(/src="([^"]+)"/)).filter(Boolean).map(m=>m[1]);
-assert.equal(urls.length,17);
-assert(urls.some(url=>url.startsWith('/static/js/cloud115.js?')));
+assert.equal(urls.length,15);
 for(const url of urls.concat(Array.from(html.matchAll(/<link\b[^>]*href="([^"]+)"/g),m=>m[1]))){
   const file=path.join(__dirname,'../../',new URL(url,'http://fixture').pathname.slice(1));
   const content=fs.readFileSync(file),version=new URL(url,'http://fixture').searchParams.get('v');
@@ -38,7 +37,7 @@ for(const [i,m] of scripts.entries()){
   vm.runInContext(code,context,{filename:src?src[1]:'inline-'+i});
 }
 assert.equal(events.DOMContentLoaded.length,1); // Main initialization; CSS owns dashboard layout.
-for(const name of ['scanLibrary','onTaskHintClose','loadExplore','exploreMore','loadEmbyLibrary','embyMore','scanEmptyDirs','cleanEmptyDirs','toggleSubscribe','loadRecords','saveConfig','switchTab','loadCloud115','cloud115SaveAccount','cloud115Generate']){
+for(const name of ['scanLibrary','onTaskHintClose','loadExplore','exploreMore','loadEmbyLibrary','embyMore','scanEmptyDirs','cleanEmptyDirs','toggleSubscribe','loadRecords','saveConfig','switchTab']){
   assert.equal(typeof context[name],'function',name+' must stay reachable by HTML events');
 }
 assert.equal(Object.keys(context.__taskHintControl||{}).length,0);

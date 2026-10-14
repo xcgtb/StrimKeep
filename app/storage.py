@@ -179,46 +179,11 @@ CREATE TABLE IF NOT EXISTS runtime_logs (
     source TEXT NOT NULL,
     message TEXT NOT NULL
 );
--- 115 OpenAPI identity records. Credentials are never projected to public APIs.
-CREATE TABLE IF NOT EXISTS cloud115_accounts (
-    id TEXT PRIMARY KEY, uid TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
-    access_token TEXT NOT NULL, refresh_token TEXT NOT NULL,
-    expires_at REAL NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1,
-    revision INTEGER NOT NULL DEFAULT 1, updated_at REAL NOT NULL
-);
-CREATE TABLE IF NOT EXISTS cloud115_bindings (
-    id TEXT PRIMARY KEY, account_id TEXT NOT NULL, file_id TEXT NOT NULL,
-    strm_path TEXT NOT NULL, root TEXT NOT NULL,
-    remote TEXT NOT NULL, sidecars TEXT NOT NULL DEFAULT '[]',
-    fingerprint TEXT NOT NULL DEFAULT '{}', token_hash TEXT NOT NULL,
-    state TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL,
-    UNIQUE(account_id,file_id)
-);
-CREATE UNIQUE INDEX IF NOT EXISTS cloud115_active_path ON cloud115_bindings(strm_path) WHERE state!='deleted';
-CREATE INDEX IF NOT EXISTS cloud115_path_history ON cloud115_bindings(strm_path,updated_at DESC);
-CREATE INDEX IF NOT EXISTS cloud115_recent_bindings ON cloud115_bindings(created_at DESC);
-CREATE TABLE IF NOT EXISTS cloud115_deletions (
-    binding_id TEXT NOT NULL, file_id TEXT NOT NULL,
-    expected TEXT NOT NULL, state TEXT NOT NULL, message TEXT NOT NULL DEFAULT '',
-    updated_at REAL NOT NULL, PRIMARY KEY(binding_id,file_id)
-);
-CREATE INDEX IF NOT EXISTS cloud115_recent_deletions ON cloud115_deletions(updated_at DESC);
-CREATE TABLE IF NOT EXISTS cloud115_binding_files (
-    account_id TEXT NOT NULL, file_id TEXT NOT NULL, binding_id TEXT NOT NULL,
-    PRIMARY KEY(account_id,file_id)
-);
-CREATE TABLE IF NOT EXISTS cloud115_received_files (
-    account_id TEXT NOT NULL, file_id TEXT NOT NULL, transfer_id TEXT NOT NULL,
-    share_code TEXT NOT NULL, source_file_id TEXT NOT NULL, role TEXT NOT NULL,
-    remote TEXT NOT NULL, related_ids TEXT NOT NULL, created_at REAL NOT NULL,
-    PRIMARY KEY(account_id,file_id)
-);
-CREATE INDEX IF NOT EXISTS cloud115_received_source ON cloud115_received_files(account_id,share_code,source_file_id);
 """
 
 # schema 版本（PRAGMA user_version）：新增表/列且向后兼容时递增。
 # v1 = 原 6 张表；v2 = 增加 docs。老库打开时 CREATE IF NOT EXISTS 会自动补表，无需数据迁移。
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 4
 
 
 def _state_dir() -> Path:

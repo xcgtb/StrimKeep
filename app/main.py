@@ -30,9 +30,6 @@ from app.routers import library as _r_library
 from app.routers import subscribe as _r_subscribe
 from app.routers import settings as _r_settings
 from app.routers import upstream as _r_upstream
-from app.routers import cloud115 as _r_cloud115
-
-_sec.install_cloud115_access_filter()
 
 
 def _cd2_ready():
@@ -147,8 +144,6 @@ app.include_router(_r_library.router)
 app.include_router(_r_subscribe.router)
 app.include_router(_r_settings.router)
 app.include_router(_r_upstream.router)
-app.include_router(_r_cloud115.router)
-app.include_router(_r_cloud115.play_router)
 
 
 if __name__ == '__main__':

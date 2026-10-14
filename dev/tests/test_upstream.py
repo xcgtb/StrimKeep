@@ -362,12 +362,3 @@ def test_candidate_limit_and_single_write_concurrency(env, monkeypatch):
         u.transfer(dict(body,handle=result['items'][1]['handle'],operation_id='operation_id_0002'))
     assert len(workers)==1
     workers[0]()
-
-
-def test_nested_apifox_transfer_targets_do_not_include_unconfigured_or_sources(env,monkeypatch):
-    monkeypatch.setattr(u,'capabilities',lambda cfg:{'providers':True})
-    monkeypatch.setattr(u,'request',lambda *a,**k:{'data':{
-        'providers':[{'id':'re0','name':'资源来源'}],
-        'transfer':{'targets':{'115':{'name':'115 网盘','configured':True},
-                              '123':{'name':'123 云盘','configured':False}}}}})
-    assert u.providers()=={'items':[{'id':'115','name':'115 网盘','directory_id':'','directory_path':''}]}

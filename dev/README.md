@@ -12,7 +12,7 @@
 
 ## 本地回归
 
-从项目根目录执行，使用 Python 3.12 和 Node 24：
+从项目根目录执行，使用 Python 3.11 和 Node 20：
 
 ```bash
 python3 -m venv .venv

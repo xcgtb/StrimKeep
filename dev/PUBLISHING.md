@@ -20,22 +20,22 @@ git status --short
 
 ## 自动发布（版本 Tag 触发）
 
-只有 `vX.Y.Z` Tag 推送会自动触发一次 `publish-image`，Github Actions 运行标题和蓝色引用标签均显示 `vX.Y.Z`（例如本次用户指定的 `v1.12.11`），方便确认目前发布到哪一版。`main` 推送本身不发布镜像，也不触发第二套检查；Pull Request 仍独立运行 `checks.yml`。
+只有 `vX.Y.Z` Tag 推送会自动触发一次 `publish-image`，Github Actions 运行标题和蓝色引用标签均显示 `vX.Y.Z`（例如 `v1.2.9`），方便确认目前发布到哪一版。`main` 推送本身不发布镜像，也不触发第二套检查；Pull Request 仍独立运行 `checks.yml`。
 
 正式发布必须先把 `CHANGELOG.md` 中的版本标题 `## X.Y.Z（日期）` 写好并提交。发布前检查远程 Tag，确保未复用旧版本号：
 
 ```bash
 git fetch --tags origin
 git tag --list 'v*' --sort=-v:refname | head -n 10
-git tag --list v1.12.11
+git tag --list v1.2.9
 git status --short
-GITHUB_REF_TYPE=tag GITHUB_REF_NAME=v1.12.11 python3 dev/tools/release_check.py
+GITHUB_REF_TYPE=tag GITHUB_REF_NAME=v1.2.9 python3 dev/tools/release_check.py
 # 检查无误后提交本次实际变更；不使用 git add .，避免混入私人文件
 git add <本次实际修改的文件>
 git diff --cached --check
-git commit -m "release: v1.12.11 - 115 transfer and identity governance"
-git tag -a v1.12.11 -m "StrimKeep v1.12.11"
-git push --atomic origin main v1.12.11
+git commit -m "release: v1.2.9 - share batch and mobile selection"
+git tag -a v1.2.9 -m "StrimKeep v1.2.9"
+git push --atomic origin main v1.2.9
 ```
 
 发布流程严格核对 Tag 指向当前提交，并检查对应 CHANGELOG。通过 Python、前端和生产镜像回归后，同一次 amd64/arm64 镜像构建仅发布 `latest` 与 `X.Y.Z`，不发布 `X.Y` 这种浮动次版本标签。Docker 镜像标签 `X.Y.Z` 与源码 Git Tag `vX.Y.Z` 是刻意不同的命名规范。

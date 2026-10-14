@@ -9,28 +9,9 @@
 import hashlib
 import hmac
 import time
-import logging
 from urllib.parse import urlsplit
 
 SAFE_METHODS = frozenset({'GET', 'HEAD', 'OPTIONS', 'TRACE'})
-
-
-class Cloud115AccessFilter(logging.Filter):
-    """Hide bearer playback/session query strings in Uvicorn access logs."""
-    def filter(self, record):
-        args=record.args
-        if isinstance(args,tuple) and len(args)==5:
-            target=args[2]
-            if isinstance(target,str) and ('/play/115/' in target or '/api/cloud115/authorization/' in target):
-                target=target.split('/api/cloud115/authorization/',1)[0]+'/api/cloud115/authorization/[session]' if '/api/cloud115/authorization/' in target else target.split('?',1)[0]
-                record.args=args[:2]+(target,)+args[3:]
-        return True
-
-
-def install_cloud115_access_filter():
-    logger=logging.getLogger('uvicorn.access')
-    if not any(isinstance(f,Cloud115AccessFilter) for f in logger.filters):
-        logger.addFilter(Cloud115AccessFilter())
 
 # 只收紧「不会破坏现有功能」的头：
 #  - frame-ancestors / X-Frame-Options：禁止被别的站点 iframe 嵌入（点击劫持）

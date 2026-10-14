@@ -295,9 +295,6 @@ def providers():
     for _ in range(8):
         if not isinstance(value, dict):
             break
-        transfer=value.get('transfer')
-        if isinstance(transfer,dict) and isinstance(transfer.get('targets'),(dict,list)):
-            value=transfer
         for key in ('transfer_targets', 'transfer_providers', 'targets', 'netdisk_providers'):
             group = value.get(key)
             if isinstance(group, list):
@@ -316,7 +313,7 @@ def providers():
     for row in rows[:40]:
         if isinstance(row, str):
             row = {'id': row, 'name': row}
-        if not isinstance(row, dict) or row.get('enabled') is False or row.get('configured') is False:
+        if not isinstance(row, dict) or row.get('enabled') is False:
             continue
         key = text(row.get('id') or row.get('provider') or row.get('key'), 50)
         if not re.fullmatch(r'[A-Za-z0-9_-]{1,50}', key) or key in seen:
