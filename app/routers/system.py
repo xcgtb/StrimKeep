@@ -2,7 +2,7 @@
 """系统：健康 / 任务查询 / 仪表盘 / 一致性 / 缓存 / Bot 状态"""
 import time, threading
 from fastapi import APIRouter, Depends, HTTPException
-from app import overview
+from app import overview, readiness, stats
 
 try:
     from app.routers.deps import auth, engine, bot, tasks, _current_task_dict, APP_VERSION
@@ -56,7 +56,18 @@ def api_runtime_status():
              'cancel_requested': current.cancel_event.is_set()} if current else None)
     return {'status': 'success', 'ts': time.time(), 'version': APP_VERSION,
             'bot': bot.status(), 'storage': storage.storage_health(), 'task': task,
-            'comparison': engine.get_tmdb_scan_progress(), 'memory': _memory_status()}
+            'comparison': engine.get_tmdb_scan_progress(), 'memory': _memory_status(),
+            'readiness': readiness.snapshot(), 'statistics': stats.scan_status()}
+
+
+@router.get('/api/ready')
+def ready():
+    state = readiness.snapshot()
+    # The public probe omits exception text, paths, credentials and task payloads.
+    from fastapi.responses import JSONResponse
+    return JSONResponse({'status': 'ok' if state['ready'] else 'not_ready', 'phase': state['phase']},
+                        status_code=200 if state['ready'] else 503,
+                        headers={'Cache-Control': 'no-store'})
 
 
 @router.get('/api/health')

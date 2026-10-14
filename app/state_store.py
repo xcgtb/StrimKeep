@@ -165,6 +165,25 @@ def save(path, value):
     return True
 
 
+def compare_and_save(path, expected, value):
+    """Atomically replace a confirmed document, including across CLI processes.
+
+    Acquire SQLite's writer reservation before reading, so another process
+    cannot claim the same plan between the check and its durable state update.
+    """
+    identity = prepare(path)
+    with _LOCK:
+        with _access(path, 'state_compare_write') as (_, name, con):
+            if not con.in_transaction:
+                con.execute('BEGIN IMMEDIATE')
+            row = _payload(con, name)
+            if row is None or json.loads(row[0]) != expected:
+                return False
+            _put(con, name, value)
+        _REVISIONS[identity] = _REVISIONS.get(identity, 0) + 1
+    return True
+
+
 def save_many(documents):
     """Commit related state documents together; revisions advance after commit."""
     documents = list(documents)

@@ -47,7 +47,8 @@ def _read_or_recompute_stats(forced):
     if not forced and isinstance(cached.get('rows'), list) and time.time() - float(cached.get('verified_ts') or cached.get('ts') or 0) < interval:
         return cached
     with engine._strm_count_refreshing:
-        return engine._recompute_all_stats()
+        return (engine._recompute_all_stats(allow_root_change=True) if forced
+                else engine._recompute_all_stats())
 
 
 
@@ -186,12 +187,11 @@ def request_refresh(force=False):
         if not force and now - _job['finished_at'] < _RETRY_SECONDS:
             return dict(_job)
         if force:
-            # Derived persistent caches really are removed from SQLite, not
-            # merely from retired JSON exports. Keep current screen as fallback.
-            for path in (_path(), engine.STATE_DIR / 'library_stats_cache.json',
-                         engine._STRM_COUNT_CACHE_FILE, engine._EMBY_OVERVIEW_CACHE_FILE):
+            # Reset derived overview documents and force a real recount, while
+            # preserving the last verified counts until the replacement commits.
+            for path in (_path(), engine._EMBY_OVERVIEW_CACHE_FILE):
                 state_store.remove(path)
-            stats.invalidate_stats_cache()
+            stats.invalidate_stats_cache(preserve_persisted=True)
             _memory.update(path=_path(), stamp=state_store.stamp(_path()), data=data)
         _job.update(running=True, id=_job['id'] + 1, started_at=now,
                     finished_at=0, phase='正在更新双库统计', error='', warnings=[], forced=force)
@@ -226,10 +226,13 @@ def get_overview():
                            movies=imported.get('movies', 0), series=imported.get('series', 0),
                            episodes=imported.get('episodes', 0))
         live_stats = state_store.read(engine.STATE_DIR / 'library_stats_cache.json', {})
-        if result and live_stats.get('ts', 0) > (result.get('library_stats') or {}).get('ts', 0):
+        valid_counts = (isinstance(live_stats, dict) and isinstance(live_stats.get('rows'), list)
+                        and all(isinstance(live_stats.get(k), int) and not isinstance(live_stats[k], bool)
+                                and live_stats[k] >= 0 for k in ('local_total', 'share_total')))
+        if result and valid_counts and live_stats.get('ts', 0) > (result.get('library_stats') or {}).get('ts', 0):
             result['library_stats'] = live_stats
-            result['dashboard']['localCount'] = f"{live_stats.get('local_total', 0):,}"
-            result['dashboard']['shareCount'] = f"{live_stats.get('share_total', 0):,}"
+            result['dashboard']['localCount'] = f"{live_stats['local_total']:,}"
+            result['dashboard']['shareCount'] = f"{live_stats['share_total']:,}"
         # Local facts/manual-done changes should appear immediately, while a
         # repeated view does not deep-copy the whole library on every request.
         stamp = _health_stamp()

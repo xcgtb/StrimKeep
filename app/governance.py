@@ -10,7 +10,7 @@ from pathlib import Path
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-import contextlib, dataclasses, html
+import contextlib, dataclasses, html, copy
 
 log = logging.getLogger('strimkeep')
 
@@ -1213,7 +1213,7 @@ def load_plan(plan_id):
     except (OSError, ValueError):
         return None
 
-def save_plan_state(plan_id, state, extra=None):
+def save_plan_state(plan_id, state, extra=None, expected=None):
     data = load_plan(plan_id)
     if not data:
         return False
@@ -1221,7 +1221,10 @@ def save_plan_state(plan_id, state, extra=None):
     if extra:
         data.update(extra)
     try:
-        _state.save(_eng().STATE_DIR / ('plan_' + data['id'] + '.json'), data)
+        path = _eng().STATE_DIR / ('plan_' + data['id'] + '.json')
+        if expected is not None:
+            return _state.compare_and_save(path, expected, data)
+        _state.save(path, data)
         return True
     except OSError:
         return False
@@ -1400,6 +1403,14 @@ def _run_inter_clean(args):
     skipped_details = []
     unconfirmed = 0
     validated_actions = {}
+    prepared_acts = None
+    if not args.plan and not args.dry_run:
+        # Legacy CLI cleanup still works, but mutations need a durable plan too.
+        prepared_acts = _eng().build_plan()
+        pid = save_plan(prepared_acts)
+        if pid:
+            args = copy.copy(args)
+            args.plan = pid
     if args.plan:
         scan_status = load_scan_status()
         if scan_status.get('status') == 'failed':
@@ -1410,6 +1421,12 @@ def _run_inter_clean(args):
             return {'status': 'error', 'code': 'plan_not_found',
                     'message': '清理计划不存在/已损坏（可能是旧格式），请重新诊断'}
         st = plan.get('state')
+        if st in ('executing', 'interrupted'):
+            return {'status': 'error', 'code': 'plan_interrupted',
+                    'message': '上次清理结果尚未核实，禁止重复执行；请核对片库后重新扫描生成新计划'}
+        if st not in ('pending', 'done', 'failed', 'stale', 'expired'):
+            return {'status': 'error', 'code': 'plan_state_invalid',
+                    'message': '清理计划状态无法确认，请重新扫描；本次未删除文件'}
         current_rule_sig = _current_rule_snapshot()['sig']
         plan_rule_sig = str(plan.get('rule_sig') or '')
         if plan_rule_sig and plan_rule_sig != current_rule_sig:
@@ -1437,7 +1454,9 @@ def _run_inter_clean(args):
             return {'status': 'error', 'code': 'plan_snapshot_missing',
                     'message': '旧清理计划缺少文件校验快照，请重新扫描生成新计划'}
         if not args.dry_run:
-            save_plan_state(args.plan, 'executing')
+            if not save_plan_state(args.plan, 'executing', expected=plan):
+                return {'status': 'error', 'code': 'plan_state_unsaved',
+                        'message': '清理执行状态未能保存或计划已变化，本次未删除文件；请检查存储状态后重新核实'}
 
         # 重要：执行治理单不再重新 build_plan。
         # 扫描阶段已经执行 15 分钟入库静默过滤，随后生成治理单并由用户确认。
@@ -1462,7 +1481,8 @@ def _run_inter_clean(args):
             validated_actions[cur.action_id] = old_act
         skipped = len(old_actions) - len(todo)
     else:
-        todo = [a for a in _eng().build_plan() if a.kind not in ('keep', 'exempt')]
+        todo = [a for a in (prepared_acts if prepared_acts is not None else _eng().build_plan())
+                if a.kind not in ('keep', 'exempt')]
         snapshots, guards = _execution_snapshots(todo)
         plan = {'file_snapshots': snapshots}
         validated_actions = {a.action_id: {'files': [str(f) for f in a.files], 'file_guard': guard}

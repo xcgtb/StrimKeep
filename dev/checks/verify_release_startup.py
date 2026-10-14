@@ -54,6 +54,7 @@ def start_and_check(data, expected_interval, update=False):
                     raise AssertionError('server exited before readiness')
                 try:
                     assert json.loads(request(port, '/api/health', False))['status'] == 'ok'
+                    assert json.loads(request(port, '/api/ready', False))['status'] == 'ok'
                     break
                 except (OSError, urllib.error.URLError):
                     if time.monotonic() >= deadline: raise AssertionError('HTTP startup timed out')
@@ -66,6 +67,7 @@ def start_and_check(data, expected_interval, update=False):
             source_version = re.search(r"__version__\s*=\s*'([^']+)'", (REPO/'app/version.py').read_text())[1]
             runtime = json.loads(request(port, '/api/runtime/status'))
             assert runtime['version'] == source_version, runtime['version']
+            assert runtime['readiness']['ready'] is True
             assert json.loads(request(port, '/api/config'))['config']['subscribe_interval_min'] == expected_interval
             assert json.loads(request(port, '/api/plans'))['status'] == 'success'
             html = request(port, '/', False)
@@ -128,7 +130,55 @@ def start_and_check(data, expected_interval, update=False):
     return overview_ts
 
 
+def failed_startup_check():
+    """Broken required legacy state must leave HTTP diagnostics, not a false ready."""
+    with tempfile.TemporaryDirectory(prefix='strimkeep-not-ready-') as temp:
+        data = Path(temp); (data/'state').mkdir()
+        (data/'config.json').write_text(json.dumps({'ingest_enabled':'0', 'subscribe_enabled':'0',
+                                                  'tmdb_scan_enabled':'0', 'morning_report_enabled':'0'}))
+        (data/'state/manual_done.json').write_text('{broken-required-state')
+        env = dict(os.environ, AGENT_DATA=str(data), WEB_USER='admin', WEB_PASSWORD='isolated-only',
+                   ENABLE_CD2_WATCHDOG='0', TG_BOT_TOKEN='', TG_CHAT_ID='', TMDB_KEY='', EMBY_KEY='',
+                   EMBY_HOST='http://127.0.0.1:9')
+        for name in ('L_ROOT','S_ROOT','CLOUD_L_ROOT'):
+            folder=data/name; folder.mkdir(); env[name]=str(folder)
+        with socket.socket() as sock:
+            sock.bind(('127.0.0.1',0)); port=sock.getsockname()[1]
+        with tempfile.TemporaryFile(mode='w+') as log:
+            process=subprocess.Popen([sys.executable,'-m','uvicorn','app.main:app','--host','127.0.0.1',
+                                      '--port',str(port)],cwd=REPO,env=env,stdout=log,stderr=log)
+            try:
+                deadline=time.monotonic()+12
+                while True:
+                    if process.poll() is not None: raise AssertionError('failed initialization hid HTTP diagnostics')
+                    try:
+                        assert json.loads(request(port,'/api/health',False))['status']=='ok'
+                        break
+                    except (OSError,urllib.error.URLError):
+                        if time.monotonic()>=deadline: raise AssertionError('diagnostic startup timed out')
+                        time.sleep(.1)
+                for endpoint,body in (('/api/ready',None),('/api/config',{'subscribe_interval_min':'99'}),
+                                      ('/api/ingest?force=1',None)):
+                    try:
+                        request(port,endpoint,False,body=body)
+                        raise AssertionError('not-ready business/probe request incorrectly succeeded')
+                    except urllib.error.HTTPError as error:
+                        assert error.code==503
+                runtime=json.loads(request(port,'/api/runtime/status'))
+                assert runtime['readiness']['ready'] is False
+                assert runtime['readiness']['phase']=='failed'
+                assert (data/'state/manual_done.json').read_text()=='{broken-required-state'
+                print('PASS failed migration: live diagnostics, readiness 503 and no submitted business operation')
+            except Exception:
+                log.seek(0); print(log.read()[-4000:],file=sys.stderr); raise
+            finally:
+                process.terminate()
+                try: process.wait(timeout=6)
+                except subprocess.TimeoutExpired: process.kill(); process.wait()
+
+
 def main():
+    failed_startup_check()
     with tempfile.TemporaryDirectory(prefix='strimkeep-release-') as temp:
         for historical in (False, True):
             data = Path(temp) / ('historical' if historical else 'fresh')

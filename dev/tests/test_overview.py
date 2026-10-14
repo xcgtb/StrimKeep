@@ -62,7 +62,7 @@ def test_expiry_is_cache_first_and_singleflight_including_manual_clicks(isolated
     assert len(calls) == 1
 
 
-def test_manual_reset_really_removes_only_derived_sqlite_caches(isolated, monkeypatch):
+def test_manual_reset_removes_overview_but_keeps_verified_counts_until_success(isolated, monkeypatch):
     save(); write_cache([series()]); state_store.save(engine.MANUAL_DONE_FILE, {'s1': {}})
     derived = [engine.STATE_DIR / 'library_stats_cache.json', engine._STRM_COUNT_CACHE_FILE,
                engine._EMBY_OVERVIEW_CACHE_FILE]
@@ -71,7 +71,8 @@ def test_manual_reset_really_removes_only_derived_sqlite_caches(isolated, monkey
     result = overview.request_refresh(force=True)
     assert result['running'] and len(calls) == 1
     assert state_store.read(overview._path(), None) is None
-    assert all(state_store.read(path, None) is None for path in derived)
+    assert state_store.read(engine._EMBY_OVERVIEW_CACHE_FILE, None) is None
+    assert all(state_store.read(path) == {'ts': 1} for path in derived[:2])
     assert state_store.read(engine.EMBY_LIB_CACHE_FILE)['series'][0]['have_eps'] == 13
     assert state_store.read(engine.MANUAL_DONE_FILE) == {'s1': {}}
     assert overview.get_overview()['dashboard']['localCount'] == '18'
@@ -79,7 +80,7 @@ def test_manual_reset_really_removes_only_derived_sqlite_caches(isolated, monkey
 
 def test_failure_after_manual_clear_preserves_visible_fallback_and_retry(isolated, monkeypatch):
     save(); no_threads(monkeypatch); overview.request_refresh(force=True)
-    monkeypatch.setattr(engine, '_recompute_all_stats', lambda: (_ for _ in ()).throw(OSError('offline')))
+    monkeypatch.setattr(engine, '_recompute_all_stats', lambda **kw: (_ for _ in ()).throw(OSError('offline')))
     overview._refresh_worker(True)
     r = overview.get_overview()
     assert r['dashboard']['localCount'] == '18'

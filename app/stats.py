@@ -4,7 +4,7 @@ if __package__:
     from . import state_store as _state
 else:
     import state_store as _state
-import os, re, sys, json, threading, shutil, fcntl, time, argparse, datetime, hashlib, logging, traceback
+import os, re, sys, json, threading, shutil, fcntl, time, argparse, datetime, hashlib, logging, traceback, stat
 import urllib.parse, urllib.request, urllib.error
 from pathlib import Path
 from collections import defaultdict
@@ -22,6 +22,19 @@ except ImportError:
     from core import (esc, parse_season_dir, get_ep, title_key,
                       governance_title_key, analyze_season_episodes, parse_emby_library,
                       quality_label, RE_SXXEXX)
+
+try:
+    from .lib import _root_identity, LibraryScanError
+except ImportError:
+    from lib import _root_identity, LibraryScanError
+
+_STATS_STATUS_LOCK = threading.Lock()
+_STATS_STATUS = {'running': False, 'error': '', 'checked_at': 0, 'success_at': 0}
+
+
+def scan_status():
+    with _STATS_STATUS_LOCK:
+        return dict(_STATS_STATUS)
 
 
 try:
@@ -58,7 +71,41 @@ CATS = [
     ('\U0001F310 外语电影', ['欧美电影', '日韩电影', '外语电影', '其他电影']),
 ]
 
-def _recompute_all_stats():
+def _recompute_all_stats(allow_root_change=False):
+    """Publish only a complete scan; keep previous totals on mount/IO failure."""
+    with _STATS_STATUS_LOCK:
+        _STATS_STATUS.update(running=True, checked_at=time.time())
+    try:
+        result = _verified_stats(allow_root_change)
+    except Exception as error:
+        with _STATS_STATUS_LOCK:
+            _STATS_STATUS.update(running=False, error='统计扫描未完成，原数据保留：' + str(error),
+                                 checked_at=time.time())
+        raise
+    with _STATS_STATUS_LOCK:
+        _STATS_STATUS.update(running=False, error='', checked_at=time.time(), success_at=time.time())
+    return result
+
+
+def _statistics_files(root):
+    """Stream verified paths, rejecting incomplete traversal like governance."""
+    def walk_error(error):
+        raise LibraryScanError(root, error.filename or root, error) from error
+    visited = False
+    for directory, children, names in os.walk(root, onerror=walk_error):
+        visited = True
+        for name in children:
+            child = Path(directory) / name
+            if child.is_symlink():
+                raise LibraryScanError(root, child, '不支持跳过目录软链接')
+        for name in names:
+            if name.endswith('.strm'):
+                yield Path(directory) / name
+    if not visited:
+        raise LibraryScanError(root, root, '根目录未完成遍历')
+
+
+def _verified_stats(allow_root_change):
     """单次遍历双库，同时更新「分类统计」与「STRM 计数」两套缓存。
     之前两处各自独立遍历，时间不同/网络挂载抖动会导致数字对不上；
     统一从同一次遍历取数，保证总览卡片与总库分类统计永远一致。"""
@@ -75,11 +122,22 @@ def _recompute_all_stats():
 
     directories = {}
     buckets = {}
+    roots = (_eng().L_ROOT, _eng().S_ROOT)
+    identities = {str(root): list(_root_identity(root)) for root in roots}
+    previous = _state.read(_eng().STATE_DIR / 'strm_directory_counts.json', {})
+    if previous.get('roots') == list(map(str, roots)) and not allow_root_change:
+        for root in roots:
+            old = previous.get('identities', {}).get(str(root))
+            if old and old != identities[str(root)]:
+                raise LibraryScanError(root, root, '根目录挂载身份已变化，请确认挂载后手动刷新总览')
 
     for root, key in ((_eng().L_ROOT, 'local'), (_eng().S_ROOT, 'share')):
-        if not root.exists():
-            continue
-        for f in root.rglob('*.strm'):
+        for f in _statistics_files(root):
+            try:
+                if not stat.S_ISREG(f.lstat().st_mode):
+                    raise OSError('STRM 不是普通文件或是软链接')
+            except OSError as error:
+                raise LibraryScanError(root, f, error) from error
             try:
                 parts = f.relative_to(root).parts
             except ValueError:
@@ -126,9 +184,10 @@ def _recompute_all_stats():
     now = time.time()
     result['ts'] = now
     result['verified_ts'] = now
-    ledger = {'roots': [str(_eng().L_ROOT), str(_eng().S_ROOT)],
-              'identities': {str(root): [root.stat().st_dev, root.stat().st_ino]
-                             for root in (_eng().L_ROOT, _eng().S_ROOT) if root.is_dir()},
+    # Verify both roots again after traversing both libraries, before any write.
+    if any(list(_root_identity(root)) != identities[str(root)] for root in roots):
+        raise LibraryScanError(roots[0], roots[0], '扫描期间根目录挂载身份已变化')
+    ledger = {'roots': list(map(str, roots)), 'identities': identities,
               'directories': directories, 'buckets': buckets, 'verified_ts': now}
     _state.save_many([(_eng().STATE_DIR / 'library_stats_cache.json', result),
                       (_eng().STATE_DIR / 'strm_directory_counts.json', ledger),
@@ -244,8 +303,11 @@ def action_library_stats(args):
 def _load_strm_count_disk():
     try:
         data = _state.read(_eng()._STRM_COUNT_CACHE_FILE)
-        return int(data.get('local', 0)), int(data.get('share', 0)), float(data.get('ts', 0))
-    except (OSError, ValueError):
+        local, share = int(data['local']), int(data['share'])
+        if local < 0 or share < 0:
+            return None
+        return local, share, float(data['ts'])
+    except (OSError, ValueError, TypeError, KeyError):
         return None
 
 def _save_strm_count_disk(local, share):
@@ -289,18 +351,21 @@ def _get_strm_counts():
                              name='strm-count-refresh').start()
         return _eng()._strm_count_cache['local'], _eng()._strm_count_cache['share']
     # 首次无任何缓存：同步算一次并落盘
-    l = sum(1 for _ in _eng().L_ROOT.rglob('*.strm')) if _eng().L_ROOT.exists() else 0
-    s_ = sum(1 for _ in _eng().S_ROOT.rglob('*.strm')) if _eng().S_ROOT.exists() else 0
-    _eng()._strm_count_cache.update({'ts': now, 'local': l, 'share': s_})
-    _save_strm_count_disk(l, s_)
+    with _eng()._strm_count_refreshing:
+        result = _recompute_all_stats()
+    l, s_ = result['local_total'], result['share_total']
     log.info('缓存刷新 STRM 计数: local=%d share=%d', l, s_)
     return l, s_
 
-def invalidate_stats_cache():
+def invalidate_stats_cache(preserve_persisted=False):
     """清空统计缓存（删除后调用）"""
     _eng()._strm_count_cache['ts'] = 0
     _eng()._lib_stats_cache['ts'] = 0
     _eng()._lib_stats_cache['data'] = None
+    if preserve_persisted:
+        # Manual refresh ignores these values while rebuilding. Keep the last
+        # successful counts across an interrupted refresh or process restart.
+        return
     # A confirmed deletion must invalidate SQLite totals, not just RAM values.
     for path in (_eng().STATE_DIR / 'library_stats_cache.json', _eng()._STRM_COUNT_CACHE_FILE):
         try:

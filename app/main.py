@@ -18,6 +18,7 @@ from app import engine, bot, logger, scheduler, tasks  # noqa: F401  (兼容旧�
 from app import config as _cfg  # noqa: F401
 from app import security as _sec
 from app import state_store as _state
+from app import readiness, storage_status
 from app.routers.deps import (  # noqa: F401
     auth, spawn, Args, STATIC_DIR,
     WEB_USER, WEB_PASSWORD, ALLOW_NO_AUTH, APP_VERSION,
@@ -87,11 +88,13 @@ def _cd2_watchdog(max_wait=60, max_retries=5):
 def _startup():
     """进程级副作用统一在这里启动（以前散落在模块导入时，测试/工具一 import 就起线程）"""
     _log = logging.getLogger('strimkeep')
+    readiness.set_state('starting', '正在初始化运行数据与后台服务')
     try:
         _m = engine.db_migrate()
         engine.reload_config()
         _log.info('SQLite 单存储就绪：%s', _m)
     except Exception as error:
+        readiness.set_state('failed', '运行数据初始化失败：' + storage_status._reason(error)[1])
         _log.error('SQLite 迁移失败，后台任务未启动：%s', error)
         return
     # CD2 启动守门员：仅在显式开启时运行
@@ -101,12 +104,24 @@ def _startup():
         bot.start()
     except Exception as e:
         _log.warning('Bot 启动失败: %s', e)
-    scheduler.start()
+    try:
+        scheduler.start()
+    except Exception as error:
+        readiness.set_state('failed', '后台调度启动失败，请检查日志并重启服务')
+        _log.error('后台调度启动失败：%s', error)
+        try:
+            bot.stop()
+        except Exception:
+            _log.warning('后台初始化失败后 Bot 停止失败', exc_info=True)
+        return
+    readiness.set_state('ready')
 
 
 def _shutdown():
+    readiness.set_state('stopping', '后台服务正在停止')
     scheduler.stop()
     bot.stop()
+    readiness.set_state('stopped', '后台服务已停止')
 
 
 @asynccontextmanager
@@ -127,6 +142,11 @@ async def _security_mw(request: Request, call_next):
             request.method, request.headers, bool(request.cookies.get(SESSION_COOKIE)), _ALLOWED_HOSTS):
         return JSONResponse({'status': 'error', 'detail': '跨站请求被拒绝（Origin 校验失败）。'
                              '如通过反向代理访问，请设置 ALLOWED_ORIGINS。'}, status_code=403)
+    diagnostics = {'/api/login', '/api/logout', '/api/health', '/api/ready',
+                   '/api/runtime/status', '/api/storage/status', '/api/logs', '/api/logs/download'}
+    if readiness.failed() and request.url.path.startswith('/api/') and request.url.path not in diagnostics:
+        return JSONResponse({'status': 'error', 'detail': '后台服务未就绪，操作未提交；请查看运行状态与日志，修复后重启服务'},
+                            status_code=503, headers={'Cache-Control': 'no-store'})
     resp = await call_next(request)
     for k, v in _sec.SECURITY_HEADERS.items():
         resp.headers.setdefault(k, v)

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Container liveness probe for Docker HEALTHCHECK.
-Only does one thing: request /api/health on localhost, treat 2xx as healthy.
+Container readiness probe for Docker HEALTHCHECK.
+Only does one thing: request /api/ready on localhost, treat 2xx as healthy.
 Deliberately minimal and decoupled from frontend implementation details.
 For full project diagnostics use dev/tools/storage_audit.py instead.
 """
@@ -11,7 +11,7 @@ import sys
 import urllib.request
 
 PORT = os.environ.get('PORT', '8321')
-URL = 'http://127.0.0.1:%s/api/health' % PORT
+URL = 'http://127.0.0.1:%s/api/ready' % PORT
 
 
 def main():

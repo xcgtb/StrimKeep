@@ -19,6 +19,13 @@ vm.runInContext(fs.readFileSync(path.join(__dirname,'../../static/js/dashboard.j
  ctx.renderRuntimeStatus({ts:101,bot:{state:'ok'},comparison:{running:true,percent:48},storage:{issues:[]}});
  assert(nodes.sideTask.textContent==='片库对照 48%'&&nodes.sideBot.textContent==='轮询正常');
  console.log('PASS backend task, bot degradation, comparison progress and storage errors have distinct labels');
+ ctx.renderRuntimeStatus({ts:102,readiness:{ready:false,phase:'failed',message:'运行数据初始化失败'},storage:{issues:[]}});
+ assert(nodes.headerRuntime.textContent==='后台未就绪'&&nodes.headerRuntime.attrs['data-tone']==='bad');
+ assert(nodes.sideTask.textContent==='后台未启动'&&nodes.sideStatusTime.textContent==='运行数据初始化失败');
+ ctx.renderRuntimeStatus({ts:103,readiness:{ready:true},statistics:{error:'fixture scan error'},storage:{issues:[]}});
+ assert(nodes.headerRuntime.textContent==='已连接'&&nodes.sideStorage.textContent==='统计待核实');
+ assert(nodes.sideStatusTime.textContent.includes('已保留原数据'));
+ console.log('PASS startup failures and incomplete statistics do not appear healthy or empty');
  let task=ctx.pollRuntimeStatus();assert(pending[0].url==='/api/runtime/status');pending.shift().reject(Error('offline'));await task;
  assert(nodes.headerRuntime.textContent==='连接中断'&&nodes.sideTask.textContent==='状态待更新');
  assert(timers.size===1);

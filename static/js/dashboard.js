@@ -197,16 +197,18 @@ function renderSidebarServices(services){
 }
 function renderRuntimeStatus(r){
   var b=r.bot||{},state=b.state||(b.running?'ok':'stopped');
+  var initialization=r.readiness||{},notReady=initialization.ready===false;
   var botLabels={ok:'轮询正常',starting:'启动中',degraded:'连接重试中',down:'无响应',stopped:'未启动'};
-  setRuntimeLabel('sideConnection','已连接','ok');
-  setRuntimeLabel('headerRuntime','已连接','ok');
+  setRuntimeLabel('sideConnection',notReady?'后台未就绪':'已连接',notReady?'bad':'ok');
+  setRuntimeLabel('headerRuntime',notReady?'后台未就绪':'已连接',notReady?'bad':'ok');
   setRuntimeLabel('sideBot',botLabels[state]||'状态未知',state==='ok'?'ok':state==='down'?'bad':state==='stopped'?'unknown':'warn');
   var issues=(r.storage||{}).issues||[];
-  setRuntimeLabel('sideStorage',issues.length?'有 '+issues.length+' 项异常':'未发现异常',issues.length?'bad':'ok');
+  var statsError=(r.statistics||{}).error;
+  setRuntimeLabel('sideStorage',notReady?'初始化未完成':issues.length?'有 '+issues.length+' 项异常':statsError?'统计待核实':'未发现异常',notReady||issues.length||statsError?'bad':'ok');
   var task=r.task,p=r.comparison||{},names={inter_check:'双库扫描',inter_clean:'治理清理',empty_dirs_scan:'目录扫描',empty_dirs_clean:'目录清理',clean_orphans:'目录清理'};
-  var taskText=task?(task.cancel_requested?'正在取消':names[task.kind]||'任务执行中'):(p.running?'片库对照 '+(Number(p.percent)||0)+'%':'空闲');
-  setRuntimeLabel('sideTask',taskText,task||p.running?'running':'unknown');
-  var ts=$('sideStatusTime');if(ts)ts.textContent='更新于 '+new Date((r.ts||Date.now()/1000)*1000).toLocaleTimeString();
+  var taskText=notReady?'后台未启动':task?(task.cancel_requested?'正在取消':names[task.kind]||'任务执行中'):(p.running?'片库对照 '+(Number(p.percent)||0)+'%':'空闲');
+  setRuntimeLabel('sideTask',taskText,notReady?'bad':task||p.running?'running':'unknown');
+  var ts=$('sideStatusTime');if(ts)ts.textContent=notReady?(initialization.message||'请检查日志，修复后重启服务'):statsError?'统计更新失败，已保留原数据':'更新于 '+new Date((r.ts||Date.now()/1000)*1000).toLocaleTimeString();
   if(r.version){if($('sideVersion'))$('sideVersion').textContent=r.version;if($('headerVersion'))$('headerVersion').textContent=r.version;}
 }
 async function pollRuntimeStatus(){
