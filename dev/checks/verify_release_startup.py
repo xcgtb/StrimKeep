@@ -68,6 +68,19 @@ def start_and_check(data, expected_interval, update=False):
             assert runtime['version'] == source_version, runtime['version']
             assert json.loads(request(port, '/api/config'))['config']['subscribe_interval_min'] == expected_interval
             assert json.loads(request(port, '/api/plans'))['status'] == 'success'
+            cloud115 = json.loads(request(port, '/api/cloud115/status'))
+            assert cloud115['accounts'] == [] and cloud115['bindings'] == []
+            assert cloud115['require_binding'] is False and cloud115['capabilities']['identity_delete']
+            try:
+                request(port, '/api/cloud115/status', False)
+                raise AssertionError('115 management accepted an unauthenticated request')
+            except urllib.error.HTTPError as error:
+                assert error.code == 401
+            try:
+                request(port, '/play/115/missing?token=isolated-play-secret', False)
+                raise AssertionError('missing binding accepted playback')
+            except urllib.error.HTTPError as error:
+                assert error.code == 404
             html = request(port, '/', False)
             assert '<title>StrimKeep</title>' in html
             assets = re.findall(r'(?:src|href)="(/static/[^\"]+)"', html)
@@ -111,6 +124,8 @@ def start_and_check(data, expected_interval, update=False):
             assert json.loads(request(port, '/api/overview/recommendations'))['status'] == 'error'
             assert request(port, '/static/images/overview-hero.webp', False, binary=True)[:4] == b'RIFF'
             overview_ts = snapshot['ts']
+            log.seek(0)
+            assert 'isolated-play-secret' not in log.read(), 'playback token appeared in server access logs'
             if update:
                 result = json.loads(request(port, '/api/config', body={'subscribe_interval_min':'42'}))
                 assert result['status'] == 'success'

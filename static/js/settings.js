@@ -530,6 +530,7 @@ async function saveGovAuto(){
 
 /* ═══════════ 服务配置 ═══════════ */
 async function loadConfig(){
+  if (typeof loadCloud115 === 'function') loadCloud115();
   if (typeof loadTgtoConfig === 'function') loadTgtoConfig();
   if (typeof loadAppearance === 'function') loadAppearance(true);
   try {

@@ -716,6 +716,42 @@ window.addEventListener('unhandledrejection', function(e){
           <div id="exemptMatches"></div>
         </div>
 
+        <div class="panel" id="settingsCloud115" data-sg="conn">
+          <h3 data-icon="cloud">115 官方接口与身份治理</h3>
+          <p class="hint">为已整理的视频生成 STRM，登记账号与文件 ID。治理按官方接口复核和删除；绑定异常时保留文件。</p>
+          <details id="cloud115AuthPanel"><summary>添加或更新官方授权</summary>
+            <p class="hint">填写你有权使用的开放平台 AppID 后扫码授权；也可使用已有授权令牌。独立分享转存使用另行核验的辅助 Cookie；自动识别将在后续阶段加入。</p>
+            <div class="form-row"><label for="cloud115Name">账号名称</label><input id="cloud115Name" value="115" maxlength="80" autocomplete="off"></div>
+            <div class="form-row"><label for="cloud115AppId">开放平台 AppID</label><input id="cloud115AppId" inputmode="numeric" maxlength="30" autocomplete="off" placeholder="使用你已获准接入的应用 ID"></div>
+            <button class="btn gray" id="cloud115QrBtn" onclick="cloud115StartQr()">生成授权二维码</button>
+            <div id="cloud115Qr" style="max-width:260px;margin:12px 0"></div><p id="cloud115QrStatus" class="hint" role="status"></p>
+            <div class="form-row"><label for="cloud115Access">Access Token</label><input id="cloud115Access" type="password" autocomplete="new-password" maxlength="8192" placeholder="完整令牌，不含 Bearer 前缀"></div>
+            <div class="form-row"><label for="cloud115Refresh">Refresh Token（可选）</label><input id="cloud115Refresh" type="password" autocomplete="new-password" maxlength="8192" placeholder="本次授权对应的刷新令牌"></div>
+            <button class="btn" id="cloud115AccountBtn" onclick="cloud115SaveAccount()">验证身份并保存</button>
+          </details>
+          <div class="form-row"><label for="cloud115Base">播放服务地址</label><input id="cloud115Base" type="url" maxlength="1024" placeholder="http://NAS地址:8321"><div class="hint">填写 Emby 和实际播放器能访问的 StrimKeep 地址，可含反代路径前缀。</div></div>
+          <label class="check-item"><input id="cloud115Strict" type="checkbox">本地源文件删除只允许已核验绑定</label>
+          <p class="hint">开启后，未绑定的本地 STRM 保留；关闭时旧文件沿用 CD2 清理，新绑定文件始终按 ID 操作。分享库仍只删 STRM。</p>
+          <div class="settings-actions"><button class="btn" onclick="cloud115SavePolicy()">保存设置</button><button class="btn gray" onclick="loadCloud115()">刷新记录</button></div>
+          <p class="hint" id="cloud115Status" role="status" aria-live="polite">尚未加载</p>
+          <div class="form-row"><label for="cloud115Account">浏览账号</label><select id="cloud115Account" onchange="cloud115ResetBrowser()"></select></div>
+          <div class="settings-actions"><button class="btn gray" onclick="cloud115Files('0',0)">浏览根目录</button><button class="btn gray" onclick="cloud115Parent()">返回上级</button><button class="btn gray" id="cloud115Next" hidden onclick="cloud115More()">下一页</button></div>
+          <div id="cloud115Breadcrumb" class="hint"></div><div id="cloud115Files"></div>
+          <details><summary>核验接管旧 STRM</summary><p class="hint">仅支持 URL 明确带 pickcode 或 pick_code 参数的旧 STRM。官方接口解析并复核 ID；不按名称匹配、不修改原播放地址；已登记转存关联文件自动沿用，其余不猜测。</p><div class="form-row"><label for="cloud115AdoptPath">本地库内相对路径</label><input id="cloud115AdoptPath" maxlength="2048" placeholder="电影/作品/视频.strm"></div><button class="btn gray" id="cloud115AdoptBtn" onclick="cloud115Adopt()">核验身份并接管</button><p id="cloud115AdoptResult" class="hint" role="status"></p></details>
+          <details><summary>STRM 身份绑定（最近 50 条）</summary><div id="cloud115Bindings"></div></details>
+          <details><summary>官方删除记录（最近 50 条）</summary><div id="cloud115Deletions"></div></details>
+          <details><summary>按 ID 整理记录（最近 50 条）</summary><div id="cloud115OrganizeRecords"></div></details>
+          <details><summary>独立分享转存（辅助 Web 授权）</summary>
+            <p class="hint">分享接收使用同账号 Web Cookie；读取、整理和源删除仍使用官方授权。核验新 ID 后再整理和生成 STRM。</p>
+            <div class="form-row"><label for="cloud115Cookie">分享转存 Cookie</label><input id="cloud115Cookie" type="password" autocomplete="new-password" maxlength="8192" placeholder="UID=...; CID=...; SEID=...; KID=..."></div>
+            <button class="btn gray" id="cloud115CookieBtn" onclick="cloud115SaveCookie()">验证同账号辅助授权</button>
+            <div class="form-row"><label for="cloud115ShareUrl">115 分享地址</label><input id="cloud115ShareUrl" type="url" maxlength="2048" oninput="cloud115ResetShare()" placeholder="https://115.com/s/分享码?password=访问码"></div>
+            <div class="form-row"><label for="cloud115TransferRoot">本账号暂存父目录 ID</label><input id="cloud115TransferRoot" inputmode="numeric" maxlength="30" value="0"></div>
+            <div class="settings-actions"><button class="btn gray" onclick="cloud115InspectShare('0',0)">只读查看分享根目录</button><button class="btn gray" id="cloud115ShareNext" hidden onclick="cloud115ShareMore()">下一页</button></div>
+            <p id="cloud115ShareStatus" class="hint" role="status"></p><div id="cloud115ShareFiles"></div>
+          </details>
+          <details><summary>独立转存记录（最近 50 条）</summary><div id="cloud115TransferRecords"></div></details>
+        </div>
         <div class="panel" id="settingsUpstream" data-sg="conn">
           <h3 data-icon="link">TgtoDrive 上游接入</h3>
           <p class="hint">连接生成 STRM 的上游服务，在影视探索和片库映射中搜索资源、手动转存及查看整理来源。转存目录与 STRM 生成沿用上游配置。</p>
@@ -878,8 +914,10 @@ window.addEventListener('unhandledrejection', function(e){
 <script defer src="/static/js/mapping.js?v=b607da481ed7"></script>
 <script defer src="/static/js/subscriptions.js?v=e9d56e664f7f"></script>
 <script defer src="/static/js/records.js?v=823e156e2088"></script>
-<script defer src="/static/js/settings.js?v=6c1c1d7aa26c"></script>
+<script defer src="/static/js/settings.js?v=541008a85ce3"></script>
 <script defer src="/static/js/upstream.js?v=5717a3b51eeb"></script>
+<script defer src="/static/js/cloud115.js?v=2a0a02aeb78e"></script>
+<script defer src="/static/js/cloud115-transfer.js?v=bfe5fe0c4568"></script>
 <script defer src="/static/js/plans.js?v=02b979a10f92"></script>
 <script defer src="/static/js/directory-cleanup.js?v=7bd34b96ca79"></script>
 <script defer src="/static/js/bootstrap.js?v=dff82f7d3da8"></script>
