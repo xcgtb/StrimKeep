@@ -66,6 +66,30 @@ def clean(value):
     return value
 
 
+def filename(value):
+    """Use dots for generated filename whitespace, retaining decimals and suffixes."""
+    value = re.sub(r"\s+", ".", clean(value))
+    return clean(re.sub(r"\.{2,}", ".", value))
+
+
+def standard_filename(values, *, compact=False):
+    parts = [values["title"], values["year"]]
+    if values["kind"] == "tv":
+        parts.append(f"S{int(values['season']):02d}E{int(values['episode']):02d}")
+    if not compact:
+        parts.append("[tmdb-" + str(values["tmdb_id"]) + "]")
+    for key in ("resolution", "source", "dynamic_range", "codec", "fps", "bitdepth", "audio_codec", "audio_layout"):
+        value = values.get(key)
+        if value:
+            if key == "source":
+                value = {"ultra hd blu-ray": "UHD.BluRay", "blu-ray": "BluRay"}.get(str(value).casefold(), value)
+            parts.append(str(value))
+    stem = ".".join(parts)
+    if values.get("release_group"):
+        stem += "-" + str(values["release_group"])
+    return filename(stem + values["ext"])
+
+
 def render(template, values):
     fields(template)
     output = []
@@ -96,7 +120,7 @@ def paths(config, values):
     if kind == "tv":
         directory += "/" + render(config["season_directory_template"], values)
     if config["rename_enabled"] and config["naming_style"] == "template":
-        name = render(config[prefix+"_file_template"], values)
+        name = filename(render(config[prefix+"_file_template"], values))
         if PurePosixPath(name).suffix.lower() != values["ext"].lower():
             raise CloudError("模板不能改变视频的真实扩展名")
     else:

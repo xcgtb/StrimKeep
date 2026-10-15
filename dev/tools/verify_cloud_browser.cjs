@@ -74,6 +74,13 @@ fs.mkdirSync(out,{recursive:true});
  }
  assert(writes.filter(w=>w.path.endsWith('/settings')).length===5,'output save and four organizer saves succeeded');
  assert(!(await page.locator('#cw-message').textContent()).includes('null'));
+ await page.evaluate(()=>{openDrivePage('playback');cloudPanels.open('playback','notifications');});
+ await page.locator('#cw-notify').waitFor({state:'visible'});
+ assert(await page.locator('#cw-svc-notifications #cw-notify').count()===1,'notification master belongs beside its module switches');
+ await page.locator('#cw-notify').check();await page.locator('#cw-svc-notify-strm').check();
+ await page.locator('[data-svc="saveNotifications"]').click();
+ await page.waitForFunction(()=>document.getElementById('cw-svc-notification-status').textContent.includes('总开关已开启'));
+ assert(config.notify_enabled===true&&config.notify_strm===true,'one notifications save persists master and STRM switch');
  await page.evaluate(()=>openDrivePage('strm'));
  const contrast=await page.locator('#cw-strm .cw-config-save').evaluateAll(ns=>ns.filter(n=>n.getClientRects().length).map(n=>{const s=getComputedStyle(n);return {text:n.textContent,fill:s.webkitTextFillColor,bg:s.backgroundColor,size:parseFloat(s.fontSize)};}));
  assert(contrast.every(c=>c.text.trim()&&c.fill!==c.bg&&c.size>=12),'save buttons need visible text contrasting with the background');

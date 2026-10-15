@@ -70,6 +70,7 @@ window.cloudPanels=(function(){
     if(strm){var schedule=top(byId('cw-sync-rule-name'),strm);wrap(schedule,schedule,'strm-schedule','STRM 定时扫描','配置时间表达式、时区和同步任务。',false);}
     if(playback){var last=byId('cw-svc-notifications');wrap(top(byId('cw-public'),playback),last?last.previousSibling:playback.lastChild,'playback','STRM 来源与播放地址','个人与分享输出目录、元数据、反代端口及播放配置。',false);}
     existing('cw-svc-notifications','notifications','通知与入库联动','分别配置转存、整理、STRM、频道与日常维护通知。');
+    var notificationMaster=byId('cw-notify'),notificationPanel=byId('cw-svc-notifications');if(notificationMaster&&notificationPanel){notificationPanel.insertBefore(notificationMaster.closest('label'),notificationPanel.children[1]);notificationMaster.parentElement.lastChild.textContent='开启网盘任务 Telegram 通知（总开关）';}
     existing('cw-link-emby','emby','Emby 连接与入库确认','管理独立连接和路径映射，查看实际入库核验结果。');
     existing('cw-link-reader','telegram-reader','Telegram 用户会话','登录用户会话，读取频道历史并持续增量监控。');
     if(channels){var main=top(byId('cw-svc-channel-name'),channels),heading=Array.from(channels.children).find(function(n){return n.tagName==='H4'&&n.textContent.includes('TMDB');});if(main&&heading)wrap(main,heading.previousSibling,'channel','频道与保存目录','选择读取方式、历史条数、保存目录与关键词规则。',true);var clear=channels.querySelector('[data-svc="clearTmdb"]');if(heading&&clear)wrap(heading,clear,'channel-tmdb','TMDB可视化筛选','选择类型、地区和具体作品，保存频道规则后生效。',false);}

@@ -161,3 +161,20 @@ def test_strm_details_are_batched_without_truncating_files(receiving,monkeypatch
     jobs.notify(jid,'sync','success','完成')
     assert len(sent)==4 and 'STRM 更新：45 个' in sent[0]
     assert all(sum(p['path'].replace('<','&lt;').replace('>','&gt;') in v for v in sent[1:])==1 for p in paths)
+
+
+@pytest.mark.parametrize('master,module,connection_notify,reason',[
+    (False,True,True,'notify_enabled'),
+    (True,False,True,'notify_strm'),
+    (True,True,False,'Emby 连接'),
+])
+def test_disabled_arrival_notification_records_which_switch_blocked_it(receiving,monkeypatch,master,module,connection_notify,reason):
+    settings.save({'notify_enabled':master,'notify_strm':module})
+    logs=[]
+    monkeypatch.setattr(events,'emit',lambda *args,**kw:logs.append(args))
+    sent=Mock();monkeypatch.setattr(tg,'notify_telegram_card',sent)
+    group='disabled-fixture'
+    notifications.send_confirmed(group,{'notify':connection_notify})
+    notifications.send_confirmed(group,{'notify':connection_notify})
+    assert len(logs)==1 and reason in logs[0][1]
+    sent.assert_not_called()

@@ -165,27 +165,6 @@ def recognize(name, override=None, naming_config=None, probe=None):
             parsed[target] = probe_fields[source]
     base = f"{title} ({year}) [tmdb-{tmdb_id}]"
     ext = PurePosixPath(name).suffix.lower()
-    tags = []
-    for field in ("screen_size", "video_codec", "source", "audio_codec"):
-        value = parsed.get(field)
-        if value and not isinstance(value, list):
-            tags.append(safe_name(str(value)))
-    for field in ("dynamic_range", "fps", "bitdepth"):
-        if probe_fields.get(field):
-            tags.append(safe_name(probe_fields[field]))
-    quality = " - " + " ".join(tags) if tags else ""
-    stem = base + (f" - S{season:02d}E{episode:02d}" if kind == "tv" else "") + quality
-    if naming["naming_style"] == "compact":
-        stem = (
-            f"{title} ({year})"
-            + (f" - S{season:02d}E{episode:02d}" if kind == "tv" else "")
-            + quality
-        )
-    filename = (
-        safe_name(name)
-        if naming["naming_style"] == "original"
-        else safe_name(stem + ext)
-    )
     classification = categories.decide(naming, detail, kind, override)
     values = {
         "kind": kind, "title": title, "original_title": detail.get("original_title") or detail.get("original_name") or title,
@@ -209,6 +188,10 @@ def recognize(name, override=None, naming_config=None, probe=None):
         custom = templates.paths(naming, values)
         relative = categories.prefix(naming, values) + "/" + custom["directory"]
         filename = custom["name"]
+    elif naming["naming_style"] == "original":
+        filename = safe_name(name)
+    else:
+        filename = templates.standard_filename(values, compact=naming["naming_style"] == "compact")
     if not naming["rename_enabled"]:
         filename = str(name)
     return {

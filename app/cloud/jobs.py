@@ -213,7 +213,8 @@ def notify(job_id, kind, state, message):
     cfg = settings.get()
     category = {"intake":"transfer", "transfer":"transfer", "organize":"organize", "workflow":"organize", "categories":"organize", "sync":"strm", "publish":"strm", "share_strm":"strm", "channel":"channel", "maintenance":"maintenance"}.get(kind, "organize")
     if not cfg["notify_enabled"] or not cfg["notify_"+category]:
-        events.emit('notify','此类任务通知已关闭，本次不发送',job_id)
+        reason = '网盘任务通知总开关 notify_enabled 已关闭' if not cfg['notify_enabled'] else '分模块通知 notify_'+category+' 已关闭'
+        events.emit('notify','此类任务通知已关闭，本次不发送：'+reason,job_id)
         return
     from app.tg import notify_telegram
     import html

@@ -39,8 +39,11 @@ def caption(assets, connection):
 
 def send_confirmed(group, connection):
     if not group:return
-    if not connection['notify'] or not settings.get()['notify_enabled'] or not settings.get()['notify_strm']:
-        with store.db() as con:con.execute("INSERT OR IGNORE INTO cloud_ingestion_notifications VALUES(?,'disabled',?)",(group,time.time()))
+    cfg = settings.get()
+    if not connection['notify'] or not cfg['notify_enabled'] or not cfg['notify_strm']:
+        reason = 'Emby 连接的入库海报通知已关闭' if not connection['notify'] else '网盘任务通知总开关 notify_enabled 已关闭' if not cfg['notify_enabled'] else 'STRM 通知 notify_strm 已关闭'
+        with store.db() as con:changed=con.execute("INSERT OR IGNORE INTO cloud_ingestion_notifications VALUES(?,'disabled',?)",(group,time.time())).rowcount
+        if changed:events.emit('notify','Emby 入库通知未发送：'+reason)
         return
     with store.db() as con:
         rows=con.execute("SELECT id,asset_id,state,payload FROM cloud_ingestion WHERE connection_id=? AND json_extract(payload,'$.notification_group')=?",(connection['id'],group)).fetchall()
