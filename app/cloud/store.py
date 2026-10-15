@@ -72,6 +72,11 @@ CREATE TABLE IF NOT EXISTS cloud_ingestion (
  revision INTEGER NOT NULL, payload TEXT NOT NULL, state TEXT NOT NULL,
  next_check REAL NOT NULL, attempts INTEGER NOT NULL, result TEXT NOT NULL,
  updated REAL NOT NULL, UNIQUE(asset_id,connection_id,revision,payload));
+CREATE TABLE IF NOT EXISTS cloud_ingestion_notifications (
+ id TEXT PRIMARY KEY, state TEXT NOT NULL, updated REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS cloud_transfer_requests (
+ account_id TEXT NOT NULL, request_id TEXT NOT NULL, sealed TEXT NOT NULL,
+ job_id TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY(account_id,request_id));
 CREATE TABLE IF NOT EXISTS cloud_progress (
  job_id TEXT PRIMARY KEY, total INTEGER, processed INTEGER NOT NULL,
  phase TEXT NOT NULL, current TEXT NOT NULL, updated REAL NOT NULL);

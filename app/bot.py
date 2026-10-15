@@ -316,6 +316,7 @@ def _dismiss(token, chat_id, message_id):
 MY_COMMANDS = [
     {'command': 'receive', 'description': '📥 按Web目录接收115分享/磁力/ed2k'},
     {'command': 'strm', 'description': '🎬 115分享免转存生成STRM'},
+    {'command': 'create_115share_strm', 'description': '🎬 分享免转存（兼容指令）'},
     {'command': 'menu',    'description': '🎛️ 显示菜单'},
     {'command': 'check',   'description': '⚖️ 扫描双库'},
     {'command': 'clean',   'description': '🗑️ 执行清理'},
@@ -828,7 +829,7 @@ def _handle_command(token, msg):
     elif cmd == '/sub':              _dispatch('sub', token, chat_id, user_msg_id=msg_id, arg=arg)
     elif cmd == '/morning':          _dispatch('morning', token, chat_id, user_msg_id=msg_id)
     elif cmd == '/logs':             _dispatch('logs', token, chat_id, user_msg_id=msg_id)
-    elif cmd in ('/receive', '/strm', '/sharestrm'):
+    elif cmd in ('/receive', '/strm', '/sharestrm', '/create_115share_strm'):
         if _capture_resources(token, msg):
             _send(token, chat_id, '📥 资源已登记，结果见我的网盘接收历史。', delete_user_msg=msg_id)
         else:
@@ -924,7 +925,7 @@ def _capture_resources(token, msg, channel=False):
     else:
         authorized = _is_allowed((msg.get('from') or {}).get('id'), (msg.get('chat') or {}).get('id'))
         text = (msg.get('text') or '').strip()
-        if text.startswith('/') and not text.split()[0].split('@')[0].lower() in ('/receive', '/strm', '/sharestrm'):
+        if text.startswith('/') and not text.split()[0].split('@')[0].lower() in ('/receive', '/strm', '/sharestrm', '/create_115share_strm'):
             return []
     import hashlib
     return receiving.capture(msg, hashlib.sha256(token.encode()).hexdigest(), channel=channel, authorized=authorized)

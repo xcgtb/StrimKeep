@@ -146,7 +146,7 @@ def test_refresh_accepted_is_not_actual_ingestion_and_resume(receiving,monkeypat
     emby.poll_one()
     receipt=emby.records(receiving.id)[0]
     assert receipt['state']=='pending' and not card.called
-    assert calls[0][0]=='/Library/Refresh' and calls[1][1]['params']['Path'].startswith('/strm/')
+    assert calls[0][0]=='/Library/Media/Updated' and calls[1][1]['params']['Path'].startswith('/strm/')
     emby.watch(published)
     assert len(emby.records(receiving.id))==1
 

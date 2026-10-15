@@ -734,6 +734,11 @@ function renderMenu(){
   nav.innerHTML = groups.map(function(g){
     var links = g.items.map(function(item){
       var id=item[0], label=item[1], ico=item[2], kind=item[3];
+      if(id==='cloud'){
+        var pages=[['accounts','115网盘配置'],['files','文件管理'],['transfer','链接转存与机器人'],['share-library','分享STRM'],['channels','115频道监控'],['organize','影视整理'],['strm','STRM生成'],['playback','Emby与播放'],['inbox','监控与接收历史'],['jobs','整理历史与任务']];
+        var expanded=current==='cloud';
+        return '<div class="nav-drive"><button class="nav-drive-toggle" type="button" aria-expanded="'+expanded+'" onclick="toggleDriveMenu(this)"><span class="icon">'+icon(ico)+'</span><span class="nav-label">我的网盘</span><span aria-hidden="true">⌄</span></button><div class="nav-drive-children"'+(expanded?'':' hidden')+'>'+pages.map(function(p){return '<a data-tab="cloud" data-drive-page="'+p[0]+'" onclick="openDrivePage(\''+p[0]+'\')"><span class="nav-label">'+p[1]+'</span></a>';}).join('')+'</div></div>';
+      }
       var target = id;
       var active = current === id || (id === 'daily' && current === 'morning');
       return '<a class="'+(kind==='sub'?'sub ':'')+(active?'active':'')+'" data-tab="'+target+'" onclick="switchTab(\''+target+'\')">' +
@@ -744,6 +749,12 @@ function renderMenu(){
   updateSideTheme();
 }
 
+function toggleDriveMenu(button){var menu=button.nextElementSibling;menu.hidden=!menu.hidden;button.setAttribute('aria-expanded',String(!menu.hidden));}
+function openDrivePage(page){
+  try{sessionStorage.setItem('sk-drive-page',page);}catch(_){}
+  if(window.__activeTab!=='cloud')switchTab('cloud');else if(window.cloudWorkbenchV2)window.cloudWorkbenchV2.openPage(page);
+  toggleSidebar(false);
+}
 function switchTab(id){
   if (window.__activeTab === 'settings' && id !== 'settings' && typeof coverIsDirty === 'function' && coverIsDirty()) {
     if (!confirm('「画质对比规则」有未保存的改动，离开将丢弃。\n\n确定离开？')) return;
@@ -755,7 +766,7 @@ function switchTab(id){
   document.querySelectorAll('.sidebar nav a').forEach(function(a){
     var target = a.dataset.tab;
     var isSub = a.classList.contains('sub');
-    var active = target === id || (target === 'daily' && id === 'morning');
+    var active = !a.dataset.drivePage && target === id || (target === 'daily' && id === 'morning');
     a.classList.toggle('active', active);
   });
   document.querySelectorAll('.mobile-dock button[data-dock-tab]').forEach(function(b){ b.classList.toggle('active', b.dataset.dockTab === groupOf(id)); });

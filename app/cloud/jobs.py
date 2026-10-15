@@ -5,7 +5,7 @@ import logging
 import threading
 import time
 from app import tasks
-from app.cloud import store
+from app.cloud import store, events
 from app.cloud.errors import CloudError
 
 log = logging.getLogger("strimkeep")
@@ -54,6 +54,7 @@ def request_stop(job_id):
             con.execute("UPDATE cloud_jobs SET state='stopped',message='执行前停止',updated=? WHERE id=? AND state='queued'", (time.time(), job_id))
             if payload.get("plan_id"):
                 con.execute("UPDATE cloud_plans SET state='stopped' WHERE id=? AND state='queued'", (payload["plan_id"],))
+    events.emit('queue','停止请求已保存，等待当前操作核实后停止',job_id)
     return {"stop_requested": True, "rule_paused": bool(rule_id), "message": "停止请求已保存；当前视频及关联文件完成后停止，已发出的转存请求先核实结果"}
 
 
@@ -68,6 +69,7 @@ def enqueue(kind, payload, con=None):
             "INSERT INTO cloud_jobs(id,kind,state,payload,created,updated) VALUES(?,?,?,?,?,?)",
             (job_id, kind, "queued", store.encode(payload), now, now),
         )
+        events.emit('queue', '任务已排队：'+kind, job_id, con=db)
 
     if con is None:
         with store.db() as db:
@@ -92,12 +94,23 @@ def step(job_id, key, payload, fn):
             "INSERT INTO cloud_steps VALUES(?,?,?,?,?,?)",
             (job_id, key, "dispatched", store.encode(payload), "{}", time.time()),
         )
-    result = fn()
+    stage = 'naming' if key.startswith('rename:') else 'organize' if key.startswith(('move:','mkdir:')) else 'transfer' if key=='receive' else None
+    label = '重命名' if key.startswith('rename:') else '移动归档' if key.startswith('move:') else '创建目录' if key.startswith('mkdir:') else '转存请求'
+    if stage:
+        events.emit(stage,label+'开始'+('：'+str(payload.get('name')) if payload.get('name') else ''),job_id)
+    try:
+        result = fn()
+    except CloudError as error:
+        if stage:
+            events.emit(stage,label+('结果待核实：' if error.uncertain else '未完成：')+str(error),job_id,level='WARNING')
+        raise
     with store.db() as con:
         con.execute(
             "UPDATE cloud_steps SET state=?,result=?,updated=? WHERE job_id=? AND step_key=?",
             ("verified", store.encode(result), time.time(), job_id, key),
         )
+    if stage:
+        events.emit(stage,label+'结果已核实'+('：'+str(payload.get('name')) if payload.get('name') else ''),job_id)
     return result
 
 
@@ -105,6 +118,7 @@ def progress(job_id, total, processed, phase, current=""):
     if processed < 0 or (total is not None and not processed <= total <= 100000):
         raise CloudError("任务进度无效")
     with store.db() as con:
+        previous = con.execute("SELECT total,processed,phase,current FROM cloud_progress WHERE job_id=?",(job_id,)).fetchone()
         con.execute(
             "INSERT INTO cloud_progress VALUES(?,?,?,?,?,?) ON CONFLICT(job_id) DO UPDATE SET "
             "total=excluded.total,processed=excluded.processed,phase=excluded.phase,current=excluded.current,updated=excluded.updated",
@@ -117,9 +131,21 @@ def progress(job_id, total, processed, phase, current=""):
                 time.time(),
             ),
         )
+        now = (total,processed,str(phase)[:80],str(current)[:512])
+        if previous != now:
+            stage = 'transfer' if '转存' in phase or '资源' in phase else 'recognize' if '识别' in phase else 'strm' if 'STRM' in phase else 'organize'
+            events.emit(stage,str(phase)+' · '+str(processed)+'/'+str(total if total is not None else '?')+(' · '+str(current) if current else ''),job_id,con=con)
 
 
 def execute(job_id):
+    token=events._JOB.set(job_id)
+    try:
+        return _execute(job_id)
+    finally:
+        events._JOB.reset(token)
+
+
+def _execute(job_id):
     from app.cloud import workflow
 
     with store.db() as con:
@@ -133,6 +159,7 @@ def execute(job_id):
         row = con.execute(
             "SELECT kind,payload FROM cloud_jobs WHERE id=?", (job_id,)
         ).fetchone()
+    events.emit('queue','开始执行：'+row[0],job_id)
     try:
         progress(job_id, None, 0, "准备")
         checkpoint(job_id)
@@ -168,6 +195,7 @@ def execute(job_id):
             "UPDATE cloud_jobs SET state=?,result=?,message=?,updated=? WHERE id=?",
             (state, store.encode(result), message, time.time(), job_id),
         )
+    events.emit('queue',message+' · '+state,job_id,level='ERROR' if state=='failed' else 'WARNING' if state in ('uncertain','needs_review') else 'INFO')
     try:
         notify(job_id, row[0], state, message)
     except Exception:
@@ -185,6 +213,7 @@ def notify(job_id, kind, state, message):
     cfg = settings.get()
     category = {"intake":"transfer", "transfer":"transfer", "organize":"organize", "workflow":"organize", "categories":"organize", "sync":"strm", "publish":"strm", "share_strm":"strm", "channel":"channel", "maintenance":"maintenance"}.get(kind, "organize")
     if not cfg["notify_enabled"] or not cfg["notify_"+category]:
+        events.emit('notify','此类任务通知已关闭，本次不发送',job_id)
         return
     from app.tg import notify_telegram
     import html
@@ -202,15 +231,31 @@ def notify(job_id, kind, state, message):
         job = store.job(job_id)
         text = "115 " + names.get(kind, kind) + "：" + html.escape(message)
         result = (job or {}).get("result", {})
-        if cfg["notify_strm_details"]:
-            generated = (result.get("organization") or result).get("generated", [])
-            for item in generated[:20]:
-                text += "\n" + html.escape(str(item.get("path", "") if isinstance(item, dict) else item))
-            if len(generated) > 20:
-                text += "\n其余 " + str(len(generated)-20) + " 项见任务历史"
-        sent = bool(notify_telegram(text))
+        operation=result.get('organization') or result
+        generated=operation.get('generated',[])
+        errors=operation.get('errors',[])
+        if kind in ('workflow','organize','sync','publish','share_strm'):
+            text+='\nSTRM 更新：'+str(len(generated))+' 个\n异常：'+str(len(errors))+' 个'
+            if operation.get('deferred'):text+='\n等待联动生成：'+str(len(operation['deferred']))+' 项'
+            if generated:text+='\n生成完成；Emby 实际入库以确认通知为准。'
+        sent=bool(notify_telegram(text))
+        if cfg['notify_strm_details'] and generated:
+            paths=[]
+            for item in generated:
+                path=item.get('path','') if isinstance(item,dict) else item
+                if path:paths.append(('🔗',str(path)))
+                asset=store.asset(item.get('asset_id','')) if isinstance(item,dict) and item.get('asset_id') else None
+                if asset:
+                    paths.extend(('⬇️',str(v['path'])) for v in asset['payload'].get('owned',[]) if v.get('path'))
+            paths=list(dict.fromkeys(paths))
+            batches=[paths[i:i+20] for i in range(0,len(paths),20)]
+            for index,chunk in enumerate(batches,1):
+                detail='📄 STRM 文件明细 '+str(index)+'/'+str(len(batches))+'\n'
+                detail+='\n'.join(mark+' '+html.escape(path) for mark,path in chunk)
+                if not notify_telegram(detail):sent=False;break
     except Exception:
         sent = False
+    events.emit('notify','任务通知已发送' if sent else '任务通知发送失败或结果未知，请核对机器人配置',job_id,level='INFO' if sent else 'WARNING')
     with store.db() as con:
         con.execute(
             "INSERT OR REPLACE INTO cloud_steps VALUES(?,?,?,?,?,?)",

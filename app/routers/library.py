@@ -136,8 +136,8 @@ def api_record_detail(rid: int):
 
 
 @router.get('/api/logs', dependencies=[Depends(auth)])
-def api_logs(n: int = 200, after: int = 0):
-    return {'status': 'success', **runtime_logs.read(after=after, limit=n)}
+def api_logs(n: int = 200, after: int = 0, source: str = '', query: str = ''):
+    return {'status': 'success', **runtime_logs.read(after=after, limit=n, source=source[:80], query=query[:200])}
 
 
 @router.get('/api/logs/download', dependencies=[Depends(auth)])

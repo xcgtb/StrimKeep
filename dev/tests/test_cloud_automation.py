@@ -267,7 +267,7 @@ def test_delayed_cancel_preserves_source_and_explicit_no_generate_creates_no_lin
     assert not store.job(jid)['result'].get('deferred')
 
 
-@pytest.mark.parametrize('patch', [{'strm_delay_seconds': True}, {'strm_delay_seconds': -1}, {'strm_delay_seconds': 86401}, {'strm_delay_seconds': 1.5}, {'cleanup_empty_directories': 1}])
+@pytest.mark.parametrize('patch', [{'strm_delay_seconds': True}, {'strm_delay_seconds': -1}, {'strm_delay_seconds': 86401}, {'strm_delay_seconds': float('nan')}, {'cleanup_empty_directories': 1}])
 def test_invalid_automation_settings_rejected(cloud, patch):
     with pytest.raises(CloudError):
         settings.save(patch)

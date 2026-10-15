@@ -21,7 +21,8 @@ def sdk():
 
 def checked(response):
     if not isinstance(response, dict) or response.get("state") not in (True, 1):
-        raise CloudError("115 拒绝请求，请检查账号状态与操作条件", 502)
+        code = next((str(response[k]) for k in ('errno','errcode','code') if isinstance(response,dict) and k in response and re.fullmatch(r'-?[0-9]{1,12}',str(response[k]))), '')
+        raise CloudError("115 拒绝请求，请检查账号状态与操作条件"+("（错误码 "+code+"）" if code else ""), 502)
     return response
 
 
@@ -103,6 +104,18 @@ def normalize(row, parent="0"):
 
 def parse_share(link, password=""):
     text = str(link).strip()
+    # Mobile clients copy a message around the URL, often followed by a separate code.
+    if len(text) > 4096:
+        raise CloudError("分享内容过长，请只保留一个分享链接")
+    urls = re.findall(r"https?://[^\s<>\"'，。；）】]+",text)
+    if urls:
+        if len(urls) != 1:
+            raise CloudError("请一次填写一个115分享链接；多链接请使用资源接收")
+        if not password:
+            code_match = re.search(r"(?:提取码|访问码|密码)\s*[:：=]?\s*([A-Za-z0-9]{1,12})",text)
+            if code_match:
+                password=code_match[1]
+        text=urls[0].rstrip(')];')
     if "://" in text:
         parsed = urlsplit(text)
         if (

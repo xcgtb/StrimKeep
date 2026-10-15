@@ -148,10 +148,10 @@ def channels(account_id):
 
 
 def save_channel(account_id, value):
-    allowed = {"id", "revision", "name", "address", "target_cid", "enabled", "include", "exclude", "regex", "tmdb_ids", "kinds", "countries", "genres", "organize", "mode", "history_limit", "poll_seconds"}
+    allowed = {"id", "revision", "name", "address", "target_cid", "enabled", "include", "exclude", "regex", "tmdb_ids", "kinds", "countries", "genres", "organize", "mode", "history_limit", "poll_seconds", "rule_cards"}
     if not isinstance(value, dict) or set(value)-allowed:
         raise CloudError("频道配置字段无效")
-    data = {"name":"", "mode":"bot", "history_limit":0, "poll_seconds":60, "enabled":False, "include":[], "exclude":[], "regex":[], "tmdb_ids":[], "kinds":[], "countries":[], "genres":[], "organize":False, **value}
+    data = {"name":"", "mode":"bot", "history_limit":20 if value.get("mode")=="user" else 0, "poll_seconds":300, "enabled":False, "include":[], "exclude":[], "regex":[], "tmdb_ids":[], "kinds":[], "countries":[], "genres":[], "organize":False, "rule_cards":[], **value}
     cid = data.pop("id", None) or store.ident();expected = data.pop("revision", 0)
     data["address"] = channel_address(data.get("address", ""));data["target_cid"] = numeric(data.get("target_cid", ""))
     if type(expected) is not int or not re.fullmatch(r"[a-f0-9]{32}",cid) or not isinstance(data["name"], str) or not 1 <= len(data["name"]) <= 80 or any(type(data[k]) is not bool for k in ("enabled", "organize")):
@@ -165,6 +165,20 @@ def save_channel(account_id, value):
         for pattern in data["regex"]:re.compile(pattern)
     except re.error:
         raise CloudError("频道正则语法错误") from None
+    cards=data['rule_cards']
+    if not isinstance(cards,list) or len(cards)>100:
+        raise CloudError('影视规则卡片无效')
+    for card in cards:
+        if not isinstance(card,dict) or set(card)-{'id','label','year','poster_path','resolution','dynamic_range','keywords'}:
+            raise CloudError('影视规则卡片字段无效')
+        if card.get('id') not in data['tmdb_ids'] or any(not isinstance(v,str) or len(v)>300 for v in card.values()):
+            raise CloudError('影视规则卡片作品或字段无效')
+        if card.get('year','') and not re.fullmatch(r'[12][0-9]{3}',card['year']):
+            raise CloudError('规则年份需为四位年份')
+        if card.get('resolution','') not in ('','2160p','1080p','720p') or card.get('dynamic_range','') not in ('','DV','HDR','SDR'):
+            raise CloudError('规则分辨率或效果无效')
+        if card.get('poster_path','') and not re.fullmatch(r'/[A-Za-z0-9_.-]+',card['poster_path']):
+            raise CloudError('规则海报路径无效')
     account = store.account(account_id)
     if not account:raise CloudError("当前账号不存在",404)
     provider = workflow.verify_account({"account_id": account_id, "account_revision": account["revision"]})
@@ -229,6 +243,8 @@ def allowed_message(text, rule):
             kind, mid = media["kind"], media["tmdb_id"]
         if rule["kinds"] and kind not in rule["kinds"]:return False,"作品类型未匹配"
         if rule["tmdb_ids"] and kind+":"+mid not in rule["tmdb_ids"]:return False,"TMDB 作品未匹配"
+        cards=[c for c in rule.get('rule_cards',[]) if c['id']==kind+':'+mid]
+        if cards and not any(card_matches(c,text) for c in cards):return False,'影视卡片年份、分辨率、效果或关键词未匹配'
         if rule["countries"] or rule["genres"]:
             try:
                 detail = recognition.tmdb().get("/"+kind+"/"+mid)
@@ -239,6 +255,16 @@ def allowed_message(text, rule):
             if rule["countries"] and not countries.intersection(rule["countries"]):return False,"地区未匹配"
             if rule["genres"] and not genres.intersection(rule["genres"]):return False,"影视类型未匹配"
     return True, "已匹配"
+
+
+def card_matches(card,text):
+    folded=text.casefold()
+    if card.get('year') and not re.search(r'(?<![0-9])'+card['year']+r'(?![0-9])',text):return False
+    resolutions={'2160p':r'2160p|(?<![a-z0-9])4k(?![a-z0-9])','1080p':r'1080[pi]','720p':r'720p'}
+    if card.get('resolution') and not re.search(resolutions[card['resolution']],folded):return False
+    effects={'DV':r'(?<![a-z0-9])(?:dv|dovi)(?![a-z0-9])|dolby[ ._-]*vision|杜比视界','HDR':r'hdr|hlg|杜比视界|dolby[ ._-]*vision|(?<![a-z0-9])(?:dv|dovi)(?![a-z0-9])','SDR':r'(?<![a-z0-9])sdr(?![a-z0-9])'}
+    if card.get('dynamic_range') and not re.search(effects[card['dynamic_range']],folded):return False
+    return all(v.casefold() in folded for v in card.get('keywords','').split())
 
 
 def capture(msg, token_scope="", channel=False, authorized=False):
@@ -261,7 +287,7 @@ def capture(msg, token_scope="", channel=False, authorized=False):
             rows=con.execute("SELECT account_id,account_revision,revision,payload FROM cloud_service_settings WHERE kind='receiving' AND json_extract(payload,'$.tg_enabled')=1").fetchall()
             for aid,arev,rev,raw in rows:
                 if msg.get("date",0)>=json.loads(raw).get("start_after",0):targets.append((aid,arev,{"receiving_revision":rev},"private"))
-    sealed=credentials.seal({"text":text,"entities":entities,"share_direct":(text.strip().split() or [""])[0].split("@")[0].lower() in ("/strm", "/sharestrm")}) if targets else ""
+    sealed=credentials.seal({"text":text,"entities":entities,"share_direct":(text.strip().split() or [""])[0].split("@")[0].lower() in ("/strm", "/sharestrm", "/create_115share_strm")}) if targets else ""
     ids=[]
     with store.db() as con:
         for aid,arev,extra,scope in targets:
@@ -316,11 +342,11 @@ def run(job_id,payload):
                 if not allowed:
                     result["filtered"]=[{"name":cfg["name"],"reason":reason}]
                     return result
-                source,target,organize="channel",cfg["target_cid"],cfg["organize"]
+                source,target,organize="channel",cfg["target_cid"],False
             else:
                 cfg=get(payload["account_id"])
                 if cfg["revision"]!=payload["receiving_revision"] or not cfg["config"]["tg_enabled"]:raise CloudError("TG 接收已关闭或配置变化",409)
-                source,target,organize="telegram",None,cfg["config"]["organize_after_transfer"]
+                source,target,organize="telegram",None,False
             items=extract(message["text"],message["entities"])
             if not items:raise CloudError("消息中没有支持的资源链接")
             if message.get("share_direct"):
@@ -381,3 +407,40 @@ def record_channel(con, rid, aid, arev, rev, rule, msg, token_scope):
     payload = {"account_id":aid,"account_revision":arev,"channel_id":rid,"channel_revision":rev,"rule":rule,
                "sealed_message":credentials.seal({"text":text,"entities":entities})}
     con.execute("INSERT OR IGNORE INTO cloud_inbox(id,event_key,account_id,source,payload,state,created) VALUES(?,?,?,?,?,'queued',?)", (store.ident(),key,aid,"channel",store.encode(payload),time.time()))
+
+
+def receive(account_id, text, expected_revision, request_id, confirmed=False):
+    """One explicit submit, idempotent across retries; share/ed2k/magnet route independently."""
+    if confirmed is not True:
+        raise CloudError('请确认接收资源')
+    if not re.fullmatch(r'[a-f0-9]{32}', request_id):
+        raise CloudError('提交标识无效')
+    intent = {'kind':'resources','text':text,'revision':expected_revision}
+    def prior(con):
+        row = con.execute('SELECT sealed,job_id FROM cloud_transfer_requests WHERE account_id=? AND request_id=?', (account_id, request_id)).fetchone()
+        if row:
+            if credentials.unseal(row[0]) != intent:
+                raise CloudError('此提交标识已用于其他资源',409)
+            return row[1]
+    with store.db() as con:
+        old = prior(con)
+    if old:
+        return old
+    items = extract(text)
+    if not items:
+        raise CloudError('没有找到支持的资源链接')
+    payload = make_payload(account_id,items)
+    if payload['directory_revision'] != expected_revision:
+        raise CloudError('保存目录已变化，请刷新后重新提交',409)
+    workflow.verify_account(payload)
+    with store.db() as con:
+        old = prior(con)
+        if old:
+            return old
+        directory = con.execute('SELECT revision FROM cloud_directory_settings WHERE account_id=?',(account_id,)).fetchone()
+        account = con.execute('SELECT revision FROM cloud_accounts WHERE id=?',(account_id,)).fetchone()
+        if not directory or directory[0] != expected_revision or not account or account[0] != payload['account_revision']:
+            raise CloudError('账号或目录配置在提交期间变化，请重新提交',409)
+        jid = jobs.enqueue('intake',payload,con)
+        con.execute('INSERT INTO cloud_transfer_requests VALUES(?,?,?,?,?)',(account_id,request_id,credentials.seal(intent),jid,time.time()))
+    return jid

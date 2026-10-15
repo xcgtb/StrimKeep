@@ -206,6 +206,8 @@ def fetch_artwork(poster_path):
 
 
 def generate(account_id, row, media, scope_cid=None, companions=None, provider=None, source_context=None):
+    from app.cloud import events
+    events.emit('strm','开始生成 STRM：'+row['name'])
     companions = companions or []
     if len({r["id"] for r in [row, *companions]}) != 1 + len(companions) or any(
         r["is_dir"] or r["parent_id"] != row["parent_id"] for r in companions
@@ -367,6 +369,7 @@ def generate(account_id, row, media, scope_cid=None, companions=None, provider=N
         published = store.asset(asset_id)
         from app.cloud import emby_library
         emby_library.watch(published)
+        events.emit('strm','STRM 已发布：'+published['local_path']+(' · 分享库' if share else ' · 115网盘'))
         return published
 
 

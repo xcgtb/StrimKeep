@@ -4,7 +4,7 @@ const {asset}=require('./frontend_source.cjs');
 const html=fs.readFileSync(path.join(__dirname,'../../static/index.html'),'utf8');
 const scripts=Array.from(html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g));
 const urls=scripts.map(m=>m[1].match(/src="([^"]+)"/)).filter(Boolean).map(m=>m[1]);
-assert.equal(urls.length,19);
+assert.equal(urls.length,20);
 assert(html.indexOf('/static/js/cloud-services.js') < html.indexOf('/static/js/cloud-workbench.js'));
 for(const url of urls.concat(Array.from(html.matchAll(/<link\b[^>]*href="([^"]+)"/g),m=>m[1]))){
   const file=path.join(__dirname,'../../',new URL(url,'http://fixture').pathname.slice(1));

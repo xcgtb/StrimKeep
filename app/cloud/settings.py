@@ -48,6 +48,8 @@ DEFAULTS = {
     "ffprobe_failure": "skip",
     "cleanup_empty_directories": False,
     "strm_delay_seconds": 0,
+    "operation_delay_seconds": 1.5,
+    "generate_strm_enabled": True,
     "video_extensions": sorted(VIDEO),
     "metadata_extensions": sorted(SIDECAR),
     "min_video_mb": 0,
@@ -154,7 +156,7 @@ def validate(result):
         "year_classification", "unknown_enabled",
         "animation_movie_folder", "ffprobe_enabled",
         "quality8_enabled", "quality8_coexist_dv",
-        "cleanup_empty_directories",
+        "cleanup_empty_directories", "generate_strm_enabled",
     ):
         if not isinstance(result[key], bool):
             raise CloudError("开关配置必须为布尔值")
@@ -164,8 +166,10 @@ def validate(result):
         raise CloudError("整理八维模式无效")
     if result["quality8_mode"] == "upgrade" and not result["quality8_enabled"]:
         raise CloudError("请先启用整理八维策略，再选择执行洗版")
-    if type(result["strm_delay_seconds"]) is not int or not 0 <= result["strm_delay_seconds"] <= 86400:
+    if type(result["strm_delay_seconds"]) not in (int, float) or not 0 <= result["strm_delay_seconds"] <= 86400:
         raise CloudError("STRM 联动延时应为 0 至 86400 秒")
+    if type(result["operation_delay_seconds"]) not in (int,float) or not 0 <= result["operation_delay_seconds"] <= 60:
+        raise CloudError("操作间隔应为 0 至 60 秒")
     from app.cloud import naming, categories
     naming.validate(result)
     categories.validate(result)

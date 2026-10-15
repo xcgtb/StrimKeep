@@ -224,6 +224,7 @@ def recognize(name, override=None, naming_config=None, probe=None):
         "directory": relative,
         "name": filename,
         "poster_path": detail.get("poster_path") or "",
+        "backdrop_path": detail.get("backdrop_path") or "",
         "plot": str(detail.get("overview") or "")[:10000],
         "episode_id": str(episode_detail.get("id") or ""),
         "episode_title": str(episode_detail.get("name") or ""),

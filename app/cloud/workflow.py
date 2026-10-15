@@ -104,7 +104,7 @@ def related_companions(rows, video, config=None):
     return result
 
 
-NAMING_KEYS = tuple(naming.DEFAULT_TEMPLATES) + file_filters.KEYS + ("naming_style", "rename_enabled", "movie_folder", "tv_folder", "classification_enabled", "enabled_categories", "custom_categories", "region_classification", "year_classification", "unknown_enabled", "region_mode", "region_groups", "animation_movie_folder", "ffprobe_enabled", "ffprobe_failure", "quality8_enabled", "quality8_rules", "quality8_coexist_dv", "quality8_mode", "cleanup_empty_directories", "strm_delay_seconds")
+NAMING_KEYS = tuple(naming.DEFAULT_TEMPLATES) + file_filters.KEYS + ("naming_style", "rename_enabled", "movie_folder", "tv_folder", "classification_enabled", "enabled_categories", "custom_categories", "region_classification", "year_classification", "unknown_enabled", "region_mode", "region_groups", "animation_movie_folder", "ffprobe_enabled", "ffprobe_failure", "quality8_enabled", "quality8_rules", "quality8_coexist_dv", "quality8_mode", "cleanup_empty_directories", "strm_delay_seconds", "operation_delay_seconds", "generate_strm_enabled")
 
 
 def naming_snapshot(config):
@@ -112,6 +112,8 @@ def naming_snapshot(config):
 
 
 def recognize_source(account_id, provider, row, overrides, config):
+    from app.cloud import events
+    events.emit('recognize','识别开始：'+row['name'])
     def probe():
         from app.cloud import media_probe
         try:
@@ -129,6 +131,8 @@ def recognize_source(account_id, provider, row, overrides, config):
         if all(payload["source"][k] == row[k] for k in ("size", "sha1")):
             previous = payload["media"]
             original = previous.get("quality_source_name") or previous.get("naming_fields", {}).get("original_name") or original
+    events.emit('recognize','识别完成：'+media['title']+' · TMDB '+str(media['tmdb_id']))
+    events.emit('naming','命名预览：'+row['name']+' → '+media['directory']+'/'+media['name'])
     media["quality_source_name"] = original
     from app.cloud import replacement
     return replacement.decorate(row, media, config, previous)
@@ -155,6 +159,8 @@ def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, j
             raise CloudError("未识别目录不能与归档目录相同", 409)
     else:
         unknown_cid = None
+    from app.cloud import events
+    events.emit('organize','开始扫描整理来源目录 ID '+str(source_cid),job_id)
     cleanup_candidates = []
     files = walk(provider, source_cid, exclude={str(target_cid), str(unknown_cid)} - {str(source_cid)}, job_id=job_id, directory_rows=cleanup_candidates if config["cleanup_empty_directories"] else None)
     videos, filtered = file_filters.select(files, config)
@@ -178,6 +184,7 @@ def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, j
             related = related_companions(files, row, config)
             items.append({"source": row, "media": media, "followers": related})
         except CloudError as error:
+            events.emit('recognize','跳过：'+row['name']+' · '+str(error),job_id,level='WARNING')
             entry = {"file_id": row["id"], "name": row["name"], "reason": str(error)}
             if isinstance(error, UnrecognizedMedia) and unknown_cid and str(unknown_cid) != str(source_cid):
                 with store.db() as con:
@@ -347,6 +354,13 @@ def ensure_directory(provider, job_id, parent, path):
     return parent
 
 
+def _operation_pause():
+    import time
+    seconds = settings.get()["operation_delay_seconds"]
+    if seconds:
+        time.sleep(seconds)
+
+
 def relocate(provider, job_id, source, target, name):
     current = provider.info(source["id"])
     if not _snapshot_equal(source, current):
@@ -364,6 +378,7 @@ def relocate(provider, job_id, source, target, name):
         error = None
         try:
             provider.rename(current["id"], name)
+            _operation_pause()
         except CloudError as exc:
             error = exc
         found = provider.info(current["id"])
@@ -389,6 +404,7 @@ def relocate(provider, job_id, source, target, name):
         error = None
         try:
             provider.move(current["id"], target)
+            _operation_pause()
         except CloudError as exc:
             error = exc
         found = provider.info(current["id"])
@@ -438,7 +454,7 @@ def organize(job_id, payload):
         jobs.progress(job_id, len(all_items), index, "整理", item["source"]["name"])
         try:
             if item.get('upgrades'):
-                if not payload.get('generate', True):
+                if not payload.get('generate', True) or not config['generate_strm_enabled']:
                     raise CloudError('洗版必须生成新 STRM，保留源文件', 409)
                 from app.cloud import replacement
                 replacement.validate_refs(item['upgrades'], provider)
@@ -468,7 +484,7 @@ def organize(job_id, payload):
                 companions.append(related)
             if item.get("unknown"):
                 result["skipped"] = [x for x in result["skipped"] if x["file_id"] != row["id"]]
-            elif payload.get("generate", True):
+            elif payload.get("generate", True) and config["generate_strm_enabled"]:
                 from app.cloud import strm
 
                 if config["strm_delay_seconds"]:
@@ -486,6 +502,8 @@ def organize(job_id, payload):
             if row["parent_id"] != item["source"]["parent_id"]:
                 moved_parents.add(item["source"]["parent_id"])
         except CloudError as error:
+            from app.cloud import events
+            events.emit('organize','整理未完成：'+item['source']['name']+' · '+str(error),job_id,level='WARNING')
             if hasattr(error, 'upgrades'):
                 result['upgrades'] = error.upgrades
             if error.uncertain:
@@ -548,7 +566,14 @@ def preview_share(account_id, link, password="", cid="0", offset=0):
         raise CloudError("请先扫码登录", 409)
     code, password = parse_share(link, password)
     provider = for_account(account_id)
-    page = provider.share_page(code, password, cid, offset)
+    from app.cloud import events
+    events.emit('transfer','正在读取分享目录 · 页起点 '+str(offset))
+    try:
+        page = provider.share_page(code, password, cid, offset)
+    except CloudError:
+        events.emit('transfer','分享目录读取失败，请核对链接、提取码、账号权限与网络',level='WARNING')
+        raise
+    events.emit('transfer','分享目录读取完成 · 当前页 '+str(len(page['items']))+' 项')
     pid = store.ident()
     data = {
         "account_id": account_id,
@@ -735,6 +760,8 @@ def sync(job_id, payload):
                 result["errors"].append({"file_id": row["id"], "reason": warning})
             store.save_file(payload["account_id"], row)
         except CloudError as error:
+            from app.cloud import events
+            events.emit('strm','生成跳过：'+row['name']+' · '+str(error),job_id,level='WARNING')
             result["skipped"].append(
                 {"file_id": row["id"], "name": row["name"], "reason": str(error)}
             )
@@ -760,13 +787,17 @@ def refresh_library(account_id):
 
 def refresh_emby():
     from app import engine
+    from app.cloud import events
 
     if not settings.get()["emby_refresh_enabled"]:
         return True
     try:
+        events.emit('emby','正在请求 Emby 扫描媒体库')
         engine.emby_request("/Library/Refresh", method="POST", timeout=10, retries=0)
+        events.emit('emby','Emby 已接受扫描请求；实际入库需查看确认记录')
         return True
     except Exception:
+        events.emit('emby','Emby 扫描请求失败，请检查连接配置',level='WARNING')
         return False
 
 
@@ -808,5 +839,47 @@ def run(job_id, kind, payload):
             con.execute(
                 "UPDATE cloud_plans SET state='queued' WHERE id=?", (planned["id"],)
             )
-        return organize(job_id, {"plan_id": planned["id"], "generate": True})
+        return organize(job_id, {"plan_id": planned["id"], "generate": settings.get()["generate_strm_enabled"]})
     raise CloudError("任务类型无效")
+
+
+def transfer_link(account_id, link, password, organize, expected_revision, request_id, confirmed=False):
+    """Explicit whole-link receive; retries of one intent return the original durable job."""
+    from app.cloud import credentials
+    if confirmed is not True:
+        raise CloudError("请确认转存当前分享")
+    intent = {"link":link,"password":password,"organize":organize,"revision":expected_revision}
+    def prior(con):
+        row=con.execute("SELECT sealed,job_id FROM cloud_transfer_requests WHERE account_id=? AND request_id=?",(account_id,request_id)).fetchone()
+        if row:
+            if credentials.unseal(row[0]) != intent:
+                raise CloudError("此提交标识已用于其他内容，请重新发起",409)
+            return row[1]
+    with store.db() as con:
+        existing=prior(con)
+    if existing:
+        return existing
+    cfg=directories.get(account_id)
+    if cfg["revision"] != expected_revision:
+        raise CloudError("转存目录配置已变化，请刷新目录后重试",409)
+    target=cfg["directories"]["transfer"]
+    archive=cfg["directories"]["target"] if organize else None
+    if not target or (organize and not archive):
+        raise CloudError("请先在当前页选择转存目录；自动整理还需要归档目录",409)
+    first=preview_share(account_id,link,password)
+    if first["has_more"] or not first["items"]:
+        raise CloudError("分享根目录为空或超过100项，请点击浏览分享分批选择",409)
+    with store.db() as con:
+        existing=prior(con)
+        if existing:
+            return existing
+        saved=con.execute("SELECT payload,state,expires FROM cloud_plans WHERE id=?",(first["preview_id"],)).fetchone()
+        data=json.loads(saved[0])
+        revision=con.execute("SELECT revision FROM cloud_directory_settings WHERE account_id=?",(account_id,)).fetchone()
+        account=con.execute("SELECT revision FROM cloud_accounts WHERE id=?",(account_id,)).fetchone()
+        if not revision or revision[0] != expected_revision or not account or account[0] != data["account_revision"]:
+            raise CloudError("账号或转存目录在读取期间变化，请重新发起",409)
+        con.execute("UPDATE cloud_plans SET state='share_queued' WHERE id=?",(first["preview_id"],))
+        jid=jobs.enqueue('transfer',{**data,"source_ids":[r["id"] for r in first["items"]],"target_cid":target["id"],"organize_target":archive["id"] if archive else None,"generate":True},con)
+        con.execute("INSERT INTO cloud_transfer_requests VALUES(?,?,?,?,?)",(account_id,request_id,credentials.seal(intent),jid,time.time()))
+    return jid

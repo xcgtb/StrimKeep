@@ -291,7 +291,7 @@ function toggleExecutionDetail(btn){
   btn.textContent = (open ? '▶ ' : '▼ ') + text;
 }
 
-var logCenter = { cursor: 0, timer: null, busy: false, paused: false, generation: 0, ids: new Set() };
+var logCenter = { cursor: 0, timer: null, busy: false, paused: false, generation: 0, ids: new Set(), source:'', query:'' };
 function stopLogCenter(){
   logCenter.generation++;
   clearTimeout(logCenter.timer);
@@ -313,7 +313,8 @@ async function pollLogCenter(force){
   logCenter.busy = true;
   var generation = logCenter.generation;
   try {
-    var r = await api('/api/logs?n=200&after=' + logCenter.cursor);
+    var suffix=(logCenter.source?'&source='+encodeURIComponent(logCenter.source):'')+(logCenter.query?'&query='+encodeURIComponent(logCenter.query):'');
+    var r = await api('/api/logs?n=200&after=' + logCenter.cursor+suffix);
     if (generation !== logCenter.generation || window.__activeTab !== 'history') return;
     var box = $('recordsList');
     var nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
@@ -325,7 +326,7 @@ async function pollLogCenter(force){
         var level = /^(ERROR|CRITICAL|WARNING|INFO|DEBUG)$/.test(row.level) ? row.level : 'INFO';
         box.insertAdjacentHTML('beforeend', '<div class="log-row" data-log-id="' + esc(String(row.id)) + '">'
           + '<div class="log-meta"><time>' + esc(String(row.ts || '').replace('T',' ')) + '</time>'
-          + '<span class="log-source">' + esc(row.source || '运行') + '</span>'
+          + '<span class="log-source">' + esc(({cloud_queue:'网盘任务',cloud_transfer:'分享转存',cloud_recognize:'影视识别',cloud_probe:'媒体信息',cloud_naming:'重命名',cloud_organize:'整理归档',cloud_strm:'STRM生成',cloud_emby:'Emby入库',cloud_notify:'通知发送',cloud_channel:'频道监控',cloud_maintenance:'115维护'})[row.source]||row.source||'运行') + '</span>'
           + '<span class="log-level log-' + level.toLowerCase() + '">' + esc(level) + '</span></div>'
           + '<pre>' + esc(row.message || '') + '</pre></div>');
       });
@@ -343,6 +344,12 @@ async function pollLogCenter(force){
     logCenter.busy = false;
     scheduleLogPoll();
   }
+}
+function filterRuntimeLogs(){
+  stopLogCenter();logCenter.cursor=0;logCenter.ids.clear();
+  logCenter.source=$('logSource').value;logCenter.query=$('logQuery').value.trim().slice(0,200);
+  $('recordsList').innerHTML='<div class="list-empty">正在读取所选模块日志…</div>';
+  pollLogCenter(true);
 }
 async function loadRecords(){
   await pollLogCenter(true);

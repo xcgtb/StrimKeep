@@ -140,6 +140,7 @@ class TMDB:
 
 @pytest.fixture
 def cloud(tmp_path, monkeypatch):
+    monkeypatch.setattr(workflow, "_operation_pause", lambda: None)
     state = tmp_path / "state"
     state.mkdir()
     output = tmp_path / "media"

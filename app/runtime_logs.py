@@ -76,21 +76,33 @@ def install():
     log.setLevel(logging.INFO)
 
 
-def read(after=0, limit=200):
+def read(after=0, limit=200, source="", query=""):
     limit, after = max(1, min(500, int(limit))), max(0, int(after))
     with _LOCK:
         try:
             with storage._transaction() as con:
+                clauses, params = [], []
+                if source == 'cloud':
+                    clauses.append("substr(source,1,6)='cloud_'")
+                elif source:
+                    clauses.append('source=?');params.append(source)
+                if query:
+                    clauses.append('instr(lower(message),lower(?))>0');params.append(str(query)[:200])
                 if after:
-                    rows = con.execute('SELECT id,ts,level,source,message FROM runtime_logs WHERE id>? ORDER BY id LIMIT ?', (after, limit)).fetchall()
-                else:
-                    rows = con.execute('SELECT id,ts,level,source,message FROM runtime_logs ORDER BY id DESC LIMIT ?', (limit,)).fetchall()[::-1]
+                    clauses.append('id>?');params.append(after)
+                where = ' WHERE '+' AND '.join(clauses) if clauses else ''
+                order = 'ASC' if after else 'DESC'
+                rows=con.execute('SELECT id,ts,level,source,message FROM runtime_logs'+where+' ORDER BY id '+order+' LIMIT ?',(*params,limit)).fetchall()
+                if not after: rows=rows[::-1]
+                cursor=max([after]+[r[0] for r in rows])
+                if len(rows)<limit:
+                    cursor=max(cursor,con.execute('SELECT COALESCE(MAX(id),0) FROM runtime_logs').fetchone()[0])
             storage._status.record_success(storage._state_dir(), 'runtime_logs_read')
             return {'logs': [dict(zip(('id','ts','level','source','message'), r)) for r in rows],
-                    'cursor': max([after] + [r[0] for r in rows]), 'degraded': False}
+                    'cursor': cursor, 'degraded': False}
         except Exception as error:
             storage._status.record_failure(storage._state_dir(), 'runtime_logs_read', error)
-            return {'logs': list(_PENDING), 'cursor': after, 'degraded': True}
+            return {'logs': [r for r in _PENDING if (not source or (source=='cloud' and r['source'].startswith('cloud_')) or r['source']==source) and (not query or str(query).casefold() in r['message'].casefold())], 'cursor': after, 'degraded': True}
 
 
 def text(limit=MAX_LOGS):

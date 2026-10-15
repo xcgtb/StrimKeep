@@ -6,7 +6,7 @@ function node(){return {textContent:'',innerHTML:'',children:[],scrollHeight:100
  insertAdjacentHTML(_,html){const id=html.match(/data-log-id="([^"]+)"/)[1],box=this;
   this.children.push({html,getAttribute(){return id;},remove(){box.children.shift();}});},
  get firstElementChild(){return this.children[0];}};}
-for(const name of ['recordsList','logsStatus','logPause','archiveList'])nodes[name]=node();
+for(const name of ['recordsList','logsStatus','logPause','archiveList','logSource','logQuery'])nodes[name]=node();
 const ctx=vm.createContext({console,Set,Date,Math,Number,String,Object,Array,Promise,JSON,
  $:id=>nodes[id],esc:s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),
  api:url=>new Promise(resolve=>requests.push({url,resolve})),
@@ -44,5 +44,14 @@ async function respond(task,rows,cursor){const req=requests.shift();req.resolve(
  const html=fs.readFileSync(path.join(__dirname,'../../static/index.html'),'utf8');
  assert(html.includes('id="archiveList"')&&html.includes('日志中心')&&html.includes('暂停自动刷新'));
  console.log('PASS structured cleanup cards remain in plan archives beside the live log center');
- console.log('PASS 6/6; shipped handlers with DOM substitutes only');
+ // A filter change invalidates an earlier in-flight response and restarts its cursor.
+ nodes.logSource.value='cloud_naming';nodes.logQuery.value='Movie';
+ task=ctx.pollLogCenter();pending=requests.shift();ctx.filterRuntimeLogs();
+ pending.resolve({logs:[row(900)],cursor:900});await task;
+ assert(ctx.logCenter.cursor===0);assert(!ctx.logCenter.ids.has('900'));
+ task=ctx.pollLogCenter();req=requests.shift();assert(req.url.includes('source=cloud_naming')&&req.url.includes('query=Movie')&&req.url.includes('after=0'));
+ req.resolve({logs:[{...row(901),source:'cloud_naming',message:'Movie.mkv'}],cursor:901});await task;
+ assert(nodes.recordsList.children.at(-1).html.includes('重命名'));
+ console.log('PASS module/keyword filters discard stale replies, reset cursor and label cloud stages');
+ console.log('PASS 7/7; shipped handlers with DOM substitutes only');
 })().catch(e=>{console.error(e);process.exitCode=1;});

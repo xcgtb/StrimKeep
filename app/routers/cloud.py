@@ -778,3 +778,43 @@ def organizer_sources_save(account_id: str, body: IntakeRulesInput):
     from app.cloud import intake_automation
     config=body.model_dump(exclude={"source_ids","expected_revision"})
     return {"status":"success", **call(intake_automation.save,account_id,config,body.source_ids,body.expected_revision)}
+
+
+class DirectShareInput(AccountInput):
+    link: str = Field(min_length=1,max_length=4096)
+    password: str = Field(default="",max_length=12)
+    organize: bool = False
+    expected_revision: int = Field(ge=0)
+    request_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    confirmed: bool = False
+
+
+@router.post("/shares/receive",status_code=202)
+def receive_share_link(body: DirectShareInput):
+    jid=call(workflow.transfer_link,body.account_id,body.link,body.password,body.organize,body.expected_revision,body.request_id,body.confirmed)
+    return {"status":"success","job_id":jid}
+
+
+class DirectResourceInput(AccountInput):
+    text: str = Field(min_length=1,max_length=16000)
+    expected_revision: int = Field(ge=0)
+    request_id: str = Field(pattern=r'^[a-f0-9]{32}$')
+    confirmed: bool = False
+
+
+@router.post('/resources/receive',status_code=202)
+def receive_resources(body: DirectResourceInput):
+    from app.cloud import receiving
+    return {'status':'success','job_id':call(receiving.receive,body.account_id,body.text,body.expected_revision,body.request_id,body.confirmed)}
+
+
+@router.post('/accounts/{account_id}/organizer/run',status_code=202)
+def organizer_run(account_id: str, body: dict):
+    from app.cloud import intake_automation
+    return {'status':'success','job_id':call(intake_automation.run_now,account_id,body.get('expected_revision'))}
+
+
+@router.post('/accounts/{account_id}/organizer/stop')
+def organizer_stop(account_id: str):
+    from app.cloud import intake_automation
+    return {'status':'success',**call(intake_automation.stop_all,account_id)}

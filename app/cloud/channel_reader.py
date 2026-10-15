@@ -5,7 +5,7 @@ import json
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
-from app.cloud import credentials, services, store
+from app.cloud import credentials, services, store, events
 from app.cloud.errors import CloudError
 
 DEFAULT = {"sealed": "", "pending": "", "expires": 0}
@@ -119,7 +119,7 @@ async def _messages(secret, rule, cursor, initialized):
         if not getattr(entity, "broadcast", False):
             raise CloudError("目标不是可读频道", 409)
         # Initial zero means start at the current tip without importing old posts.
-        options = {"limit": max(1, rule.get("history_limit", 0))} if not initialized else {"min_id": cursor, "reverse": True, "limit": 100}
+        options = {"limit": max(1, rule.get("history_limit", 0))} if not initialized else {"min_id": cursor, "reverse": True, "limit": max(1, rule.get("history_limit", 20) or 20)}
         messages = [m async for m in client.iter_messages(entity, **options)]
         tip = max([cursor, *[m.id for m in messages]])
         if not initialized and not rule.get("history_limit", 0):
@@ -149,6 +149,7 @@ def poll_one():
         cfg = services.get(aid, "telegram_reader", DEFAULT)
         if not account or account["revision"] != arev or cfg["account_revision"] != arev or not cfg["config"]["sealed"]:
             raise CloudError("账号授权或 Telegram 会话变化，请重新登录并保存频道规则", 409)
+        events.emit('channel','正在读取频道：'+rule['name'])
         messages, tip = _run(_messages(credentials.unseal(cfg["config"]["sealed"]), rule, cursor or 0, bool(initialized)))
         token_scope = hashlib.sha256((config.load_config().get("telegram_bot_token") or "").encode()).hexdigest()
         with store.db() as con:
@@ -159,10 +160,13 @@ def poll_one():
                 return
             for msg in messages:
                 receiving.record_channel(con, rid, aid, arev, rev, rule, msg, token_scope)
-            con.execute("INSERT INTO cloud_channel_cursors VALUES(?,?,1,?, '') ON CONFLICT(id) DO UPDATE SET cursor=excluded.cursor,initialized=1,next_poll=excluded.next_poll,last_error=''", (rid, tip, now+rule.get("poll_seconds", 60)))
+            if messages:
+                events.emit('channel','频道读取完成：'+rule['name']+' · '+str(len(messages))+' 条消息已检查',con=con)
+            con.execute("INSERT INTO cloud_channel_cursors VALUES(?,?,1,?, '') ON CONFLICT(id) DO UPDATE SET cursor=excluded.cursor,initialized=1,next_poll=excluded.next_poll,last_error=''", (rid, tip, now+rule.get("poll_seconds", 300)))
         return
     except Exception as exc:
         error = str(exc) if isinstance(exc, CloudError) else "频道读取失败，请检查登录、权限和网络"
+        events.emit('channel',rule['name']+' · '+error,level='WARNING')
     with store.db() as con:
         con.execute("INSERT INTO cloud_channel_cursors VALUES(?,0,0,?,?) ON CONFLICT(id) DO UPDATE SET next_poll=excluded.next_poll,last_error=excluded.last_error", (rid, now+300, error))
 

@@ -2,22 +2,20 @@
 const fs=require('fs'),path=require('path'),vm=require('vm'),assert=require('assert');
 const nodes={},events={},requests=[],submissions=[],confirmations=[];let approve=false;
 function node(id){return nodes[id]||(nodes[id]={id:id,value:'',checked:false,textContent:'',innerHTML:'',children:[],dataset:{},hidden:false,className:'',classList:{toggle(){},add(){}},setAttribute(){},append(n){this.children.push(n);},replaceChildren(){this.children=[];this.innerHTML='';},addEventListener(name,fn){events[(this.id||id)+':'+name]=fn;},querySelectorAll(){return [];}});}
-const state={account:'A',epoch:1,dirRevision:1,magnet:{id:'3',name:'磁力'},ed2k:{id:'4',name:'ed2k'},instant:{id:'5',name:'秒传'},bot:{id:'6',name:'机器人'},channel:{id:'7',name:'频道'}};
+const state={directoryDrafts:{},account:'A',epoch:1,dirRevision:1,magnet:{id:'3',name:'磁力'},ed2k:{id:'4',name:'ed2k'},instant:{id:'5',name:'秒传'},bot:{id:'6',name:'机器人'},channel:{id:'7',name:'频道'}};
 const context={console,URLSearchParams,Promise,Object,Array,Number,String,JSON,Set,Date,document:{getElementById:node,createElement:()=>node('new-'+Math.random())},showModalConfirm:async text=>{confirmations.push(text);return approve;}};context.window=context;vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../../static/js/cloud-services.js'),'utf8'),context);
 const api=(url,body,method)=>new Promise((resolve,reject)=>requests.push({url,body,method,resolve,reject}));
 let error='';const guard=fn=>Promise.resolve().then(fn).catch(e=>{error=e.message;});
-context.cloudServices.mount({state,api,guard,submit:async r=>submissions.push(r)});
+context.cloudServices.mount({state,api,guard,saveDirectories:async()=>{},submit:async r=>submissions.push(r)});
 function take(url){let r=requests.shift();assert(r,'missing '+url);assert.strictEqual(r.url,url);return r;}
 async function flush(){for(let i=0;i<30;i++)await Promise.resolve();}
 function click(key,container='receiving'){events['cw-svc-'+container+':click']({target:{closest:s=>s==='[data-svc]'?{dataset:{svc:key}}:null}});}
 function channelClick(key){events['cw-channels:click']({target:{closest:s=>s==='[data-svc]'?{dataset:{svc:key}}:null}});}
 const catalog={genres:[{name:'动画',ids:['16']}],countries:[{name:'中国大陆',id:'CN'}]};
 async function run(){
- assert(node('cw-svc-magnet-directory').value.includes('ID 3'));
+ assert.strictEqual(node('cw-svc-magnet-directory').value,'3');assert.strictEqual(node('cw-svc-magnet-directory').readOnly,false);
  context.cloudServices.show('transfer');await flush();take('/accounts/A/receiving').resolve({revision:2,config:{tg_enabled:true,organize_after_transfer:false}});await flush();assert(node('cw-svc-tg-enabled').checked);
- node('cw-svc-resource').value='magnet:?link';click('resourcePreview');await flush();let r=take('/resources/preview');assert.strictEqual(r.body.account_id,'A');r.resolve({plan:{id:'p',items:[{kind:'magnet',name:'<Movie>',target_cid:'3'}]}});await flush();assert(node('cw-svc-resource-plan').innerHTML.includes('&lt;Movie&gt;'));
- click('resourceApply');await flush();assert(!requests.length);assert(confirmations.at(-1).includes('不代表')||confirmations.at(-1).includes('下载完成'));
- approve=true;click('resourceApply');click('resourceApply');await flush();r=take('/resources/apply');assert.deepStrictEqual(JSON.parse(JSON.stringify(r.body)),{plan_id:'p',confirmed:true});assert(!requests.length);r.resolve({job_id:'job'});await flush();assert.strictEqual(submissions[0].job_id,'job');
+ node('cw-svc-resource').value='magnet:?link';click('resourceDirect');click('resourceDirect');await flush();let r=take('/resources/receive');assert.strictEqual(r.body.account_id,'A');assert.strictEqual(r.body.expected_revision,1);assert.strictEqual(r.body.confirmed,true);assert(/^[a-f0-9]{32}$/.test(r.body.request_id));assert(!requests.length);const firstIntent=r.body.request_id;r.reject(Error('network'));await flush();click('resourceDirect');await flush();r=take('/resources/receive');assert.strictEqual(r.body.request_id,firstIntent);r.resolve({job_id:'job'});await flush();assert.strictEqual(submissions[0].job_id,'job');error='';
  context.cloudServices.show('accounts');await flush();take('/accounts/A/maintenance').resolve({revision:4,config:{signin_enabled:false,recycle_enabled:false,signin_cron:'0 8 * * *',recycle_cron:'0 4 * * *',timezone:'Asia/Shanghai',retention_days:7,password_saved:true,next_signin:1,next_recycle:2}});await flush();assert(node('cw-svc-password').value==='');assert(node('cw-svc-secret-status').textContent.includes('已保存'));
  node('cw-svc-recycle-enabled').checked=true;node('cw-svc-password').value='123456';approve=false;click('saveMaintenance','maintenance');await flush();assert(!requests.length);assert(confirmations.at(-1).includes('不能恢复'));
  approve=true;click('saveMaintenance','maintenance');await flush();r=take('/accounts/A/maintenance');assert.strictEqual(r.body.expected_revision,4);assert.strictEqual(r.body.confirmed,true);assert.strictEqual(r.body.config.password,'123456');r.resolve({});await flush();take('/accounts/A/maintenance').resolve({revision:5,config:{signin_enabled:false,recycle_enabled:true,signin_cron:'0 8 * * *',recycle_cron:'0 4 * * *',timezone:'Asia/Shanghai',retention_days:7,password_saved:true,next_signin:1,next_recycle:2}});await flush();assert(node('cw-svc-password').value==='');

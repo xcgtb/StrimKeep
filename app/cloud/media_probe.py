@@ -200,6 +200,8 @@ def probe_url(link, size):
 
 
 def extract(account_id, provider, row):
+    from app.cloud import events
+    events.emit('probe','ffprobe 媒体信息提取：'+row['name'])
     current = provider.info(row["id"])
     if current["is_dir"] or any(current[k] != row[k] for k in ("size", "sha1")):
         raise CloudError("源文件指纹变化，无法提取媒体信息", 409)
@@ -207,6 +209,7 @@ def extract(account_id, provider, row):
     with store.db() as con:
         cached = con.execute("SELECT payload FROM cloud_media_probes WHERE account_id=? AND file_id=? AND fingerprint=?", (account_id, row["id"], fingerprint)).fetchone()
     if cached and current["sha1"]:
+        events.emit('probe','复用 ffprobe 媒体信息缓存：'+row['name'])
         return {"status": "cached", "fields": json.loads(cached[0])}
     if not _GATE.acquire(timeout=1):
         raise CloudError("媒体信息提取繁忙，请稍后重新预览", 409)
@@ -223,4 +226,5 @@ def extract(account_id, provider, row):
         raise CloudError("提取过程中源文件指纹变化，请重新预览", 409)
     with store.db() as con:
         con.execute("INSERT OR REPLACE INTO cloud_media_probes VALUES(?,?,?,?,?)", (account_id, row["id"], fingerprint, store.encode(fields), time.time()))
+    events.emit('probe','ffprobe 提取完成：'+row['name'])
     return {"status": "success", "fields": fields}

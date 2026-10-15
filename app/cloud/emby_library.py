@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import PurePosixPath
 from urllib.parse import urlsplit
 import httpx
-from app.cloud import credentials, services, settings, store
+from app.cloud import credentials, services, settings, store, events
 from app.cloud.errors import CloudError
 
 DEFAULT = {"connections": []}
@@ -65,11 +65,11 @@ def save(account_id, body):
     return get(account_id)
 
 
-def request(connection, path, method="GET", params=None):
+def request(connection, path, method="GET", params=None, body=None):
     key = credentials.unseal(connection["sealed_key"])["key"]
     try:
         with httpx.Client(timeout=12, follow_redirects=False) as client:
-            response = client.request(method, connection["url"]+path, headers={"X-Emby-Token": key}, params=params)
+            response = client.request(method, connection["url"]+path, headers={"X-Emby-Token": key}, params=params, json=body)
             if response.status_code not in (200, 204):
                 raise ValueError()
             return response.json() if response.content else {}
@@ -113,10 +113,17 @@ def watch(asset):
         path = mapped_path(asset, c)
         if not path:
             continue
-        payload = {"account_id":asset["account_id"], "path":path, "digest":asset["payload"]["digest"], "local_path":asset["local_path"]}
+        from app.cloud import notifications
+        origin=events._JOB.get() or ""
+        with store.db() as con:
+            due=con.execute("SELECT origin_job FROM cloud_job_due WHERE job_id=?",(origin,)).fetchone()
+        if due:origin=due[0]
+        payload = {"account_id":asset["account_id"], "path":path, "digest":asset["payload"]["digest"], "local_path":asset["local_path"],"origin_job":origin,"notification_group":notifications.group_key(asset,c["id"],cfg["revision"],origin)}
         key = hashlib.sha256(store.encode([asset["id"],c["id"],cfg["revision"],payload]).encode()).hexdigest()
         with store.db() as con:
-            con.execute("INSERT OR IGNORE INTO cloud_ingestion VALUES(?,?,?,?,?,'pending',?,0,'{}',?)", (key,asset["id"],c["id"],cfg["revision"],store.encode(payload),time.time(),time.time()))
+            changed = con.execute("INSERT OR IGNORE INTO cloud_ingestion VALUES(?,?,?,?,?,'pending',?,0,'{}',?)", (key,asset["id"],c["id"],cfg["revision"],store.encode(payload),time.time(),time.time())).rowcount
+            if changed:
+                events.emit('emby','等待 Emby 入库确认：'+asset['payload']['media']['title']+' · '+c['name'],con=con)
 
 
 def confirmed_item(connection, asset, path):
@@ -166,7 +173,8 @@ def poll_one():
             state, result = "paused", {"message":"Emby 联动已关闭"}
         else:
             if attempts % 10 == 0:
-                request(connection, "/Library/Refresh", method="POST")
+                events.emit('emby','请求 Emby 扫描：'+connection['name'])
+                request(connection, "/Library/Media/Updated", method="POST", body={"Updates":[{"Path":payload["path"],"UpdateType":"Created"}]})
             item = confirmed_item(connection, asset, payload["path"])
             state = "confirmed" if item else "pending"
             result = {"message":"Emby 已确认入库" if item else "等待 Emby 扫描与刮削", "emby_item_id":item["Id"] if item else ""}
@@ -186,21 +194,11 @@ def poll_one():
         changed = con.execute("UPDATE cloud_ingestion SET state=?,next_check=?,attempts=?,result=?,updated=? WHERE id=? AND state='pending'", (state,now+60,attempts+1,store.encode(result),now,iid)).rowcount
     if not changed:
         return
-    if state == "confirmed" and item and connection["notify"] and settings.get()["notify_enabled"] and settings.get()["notify_strm"]:
-        from app.tg import notify_telegram_card
-        m = asset["payload"]["media"]
-        source = "分享库 · 免转存" if asset["payload"].get("source_kind") == "share" else "115网盘"
-        episode = f" · S{int(m['season']):02d}E{int(m['episode']):02d}" if m["kind"] == "tv" else ""
-        text = "✅ Emby 已确认入库\n"+html.escape(str(m.get("title", "")))+" ("+html.escape(str(m.get("year", "")))+")"+episode+"\n影号：TMDB "+html.escape(str(m["tmdb_id"]))+"\n来源："+source+"\n媒体库："+html.escape(connection["name"])
-        try:
-            sent = notify_telegram_card(text, "https://image.tmdb.org/t/p/w500"+m["poster_path"] if m.get("poster_path") else "")
-            result["notification"] = "已发送" if sent else "发送失败或结果未知，未自动重发"
-            with store.db() as con:
-                con.execute("UPDATE cloud_ingestion SET result=? WHERE id=?", (store.encode(result),iid))
-        except Exception:
-            with store.db() as con:
-                result["notification"] = "发送结果未知，未自动重发"
-                con.execute("UPDATE cloud_ingestion SET result=? WHERE id=?", (store.encode(result),iid))
+    if state != 'pending' or attempts in (0,9,29,59):
+        events.emit('emby',result.get('message','')+' · '+str(asset_id)[:12],level='WARNING' if state in ('timeout','stale') else 'INFO')
+    if state != 'pending' and connection:
+        from app.cloud import notifications
+        notifications.send_confirmed(payload.get('notification_group'),connection)
 
 
 def records(account_id):
@@ -222,10 +220,22 @@ def retry(account_id, iid):
         con.execute("UPDATE cloud_ingestion SET state='pending',attempts=0,next_check=? WHERE id=? AND state IN ('timeout','paused')", (time.time(),iid))
 
 
+def _flush_confirmed():
+    from app.cloud import notifications
+    with store.db() as con:
+        groups=con.execute("SELECT DISTINCT connection_id,revision,payload FROM cloud_ingestion i WHERE state='confirmed' AND json_extract(payload,'$.notification_group') NOT IN (SELECT id FROM cloud_ingestion_notifications) AND NOT EXISTS (SELECT 1 FROM cloud_ingestion p WHERE p.state='pending' AND json_extract(p.payload,'$.notification_group')=json_extract(i.payload,'$.notification_group')) LIMIT 20").fetchall()
+    for cid,revision,raw in groups:
+        p=json.loads(raw);cfg=services.get(p['account_id'],'emby_library',DEFAULT)
+        connection=next((c for c in cfg['config']['connections'] if c['id']==cid and c['enabled']),None)
+        if connection and cfg['revision']==revision:notifications.send_confirmed(p.get('notification_group'),connection)
+        elif p.get('notification_group'):
+            with store.db() as con:con.execute("INSERT OR IGNORE INTO cloud_ingestion_notifications VALUES(?,'stale',?)",(p['notification_group'],time.time()))
+    poll_one()
+
+
 def schedule():
     global _future
     if _future is None or _future.done():
         with store.db() as con:
-            exists = con.execute("SELECT 1 FROM cloud_ingestion WHERE state='pending' AND next_check<=? LIMIT 1", (time.time(),)).fetchone()
-        if exists:
-            _future = _POOL.submit(poll_one)
+            exists=con.execute("SELECT 1 FROM cloud_ingestion WHERE (state='pending' AND next_check<=?) OR (state='confirmed' AND json_extract(payload,'$.notification_group') NOT IN (SELECT id FROM cloud_ingestion_notifications)) LIMIT 1",(time.time(),)).fetchone()
+        if exists:_future=_POOL.submit(_flush_confirmed)

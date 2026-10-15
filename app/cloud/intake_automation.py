@@ -99,3 +99,46 @@ def ready(provider, source):
         elif len(response["items"]) < 30:
             return
     raise CloudError("115云下载任务过多，无法完整核实，暂停本轮整理",409)
+
+
+def run_now(account_id, expected_revision):
+    """Manual run uses saved directories; no need to build a preview in the browser."""
+    from app.cloud import jobs
+    cfg = directories.get(account_id)
+    if cfg['revision'] != expected_revision:
+        raise CloudError('目录配置变化，请刷新后重试',409)
+    roots = cfg['directories']
+    if not roots['source'] or not roots['target']:
+        raise CloudError('请先保存来源和归档目录',409)
+    account = store.account(account_id)
+    if not account:
+        raise CloudError('账号不存在',404)
+    payload = {'account_id':account_id,'account_revision':account['revision'],
+               'source_cid':roots['source']['id'],'target_cid':roots['target']['id'],
+               'unknown_cid':roots['unknown']['id'] if roots['unknown'] else None,'overrides':{}}
+    provider = workflow.verify_account(payload)
+    _outside(provider,payload['source_cid'],payload['target_cid'])
+    if payload['unknown_cid']:
+        _outside(provider,payload['source_cid'],payload['unknown_cid'])
+    with store.db() as con:
+        current = con.execute('SELECT revision FROM cloud_directory_settings WHERE account_id=?',(account_id,)).fetchone()
+        owner = con.execute('SELECT revision FROM cloud_accounts WHERE id=?',(account_id,)).fetchone()
+        if not current or current[0] != expected_revision or not owner or owner[0] != account['revision']:
+            raise CloudError('保存目录或账号变化，请重新提交',409)
+        existing = con.execute("SELECT id FROM cloud_jobs WHERE kind='workflow' AND state IN ('queued','running') AND json_extract(payload,'$.account_id')=? AND json_extract(payload,'$.source_cid')=? ORDER BY created LIMIT 1",(account_id,payload['source_cid'])).fetchone()
+        return existing[0] if existing else jobs.enqueue('workflow',payload,con)
+
+
+def stop_all(account_id):
+    from app.cloud import jobs
+    if not store.account(account_id):
+        raise CloudError('账号不存在',404)
+    with store.db() as con:
+        con.execute("UPDATE cloud_rules SET enabled=0,updated=? WHERE json_extract(payload,'$.account_id')=? AND json_extract(payload,'$.kind')='workflow'",(time.time(),account_id))
+        running = con.execute("SELECT id FROM cloud_jobs WHERE kind IN ('organize','workflow') AND state IN ('queued','running') AND json_extract(payload,'$.account_id')=?",(account_id,)).fetchall()
+        # Manual plan jobs carry the account on their plan rather than in the job payload.
+        running += con.execute("SELECT j.id FROM cloud_jobs j JOIN cloud_plans p ON p.id=json_extract(j.payload,'$.plan_id') WHERE j.kind='organize' AND j.state IN ('queued','running') AND p.account_id=?",(account_id,)).fetchall()
+    ids = list(dict.fromkeys(r[0] for r in running))
+    for jid in ids:
+        jobs.request_stop(jid)
+    return {'stopped':ids,'message':'定时整理已暂停；'+str(len(ids))+' 个任务将在当前文件核实后停止。'}

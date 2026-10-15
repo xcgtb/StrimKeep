@@ -53,3 +53,25 @@
 .cw-intake-source{padding:10px 0;border-bottom:1px solid var(--border)}
 #cw-link-emby input,#cw-link-reader input{max-width:100%}
 #cw-organize .cw-settings-group{scroll-margin-top:100px}
+
+/* Configuration cards follow the shared palette and remain keyboard accessible. */
+#tab-cloud .cw-config-card{margin:16px 0;border:1px solid var(--border);border-radius:16px;background:var(--surface);overflow:hidden;scroll-margin-top:145px}
+#tab-cloud .cw-config-summary{display:flex;align-items:center;gap:14px;padding:20px;cursor:pointer;list-style:none;min-height:70px}
+.cw-config-summary::-webkit-details-marker{display:none}
+.cw-config-summary .cw-config-copy{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px}
+.cw-config-copy strong{font-size:15px;color:var(--text)}
+.cw-config-symbol{display:flex;align-items:center;justify-content:center;width:36px;height:36px;flex:0 0 auto;border:1px solid var(--border);border-radius:10px;color:var(--brand)}
+.cw-config-toggle{padding:8px 12px;border:1px solid var(--border);border-radius:10px;color:var(--text-mid);font-size:12px;white-space:nowrap}
+.cw-config-toggle::after{content:'展开 ›'}
+.cw-config-card[open]>.cw-config-summary .cw-config-toggle::after{content:'收起 ⌄'}
+#tab-cloud .cw-config-body{padding:2px 20px 20px;border-top:1px solid var(--border)}
+.cw-config-body>.cw-settings-group{border:0;margin:0;padding-top:10px}
+.cw-config-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;position:sticky;top:78px;z-index:3;background:var(--surface);padding:10px;border:1px solid var(--border);border-radius:12px}
+.cw-config-toolbar label{flex:1;min-width:160px}
+#tab-cloud .cw-config-toolbar input{box-sizing:border-box;width:100%;margin:0;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font:inherit}
+#tab-cloud .cw-config-save{font-weight:600;color:var(--brand);border-color:var(--brand)}
+#cw-transfer-status{position:sticky;top:150px;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text-mid);z-index:2;overflow-wrap:anywhere}
+.log-controls select,.log-controls input{max-width:100%;padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font:inherit}
+@media(max-width:760px){#tab-cloud .cw-config-summary{padding:15px;gap:10px;align-items:flex-start}.cw-config-symbol{display:none}#tab-cloud .cw-config-body{padding:2px 15px 15px}.cw-config-toolbar{top:76px}.cw-config-toolbar .btn{font-size:12px;margin:2px}.log-controls{flex-wrap:wrap}}
+
+.cw-config-toolbar .cw-organize-toolbar{display:contents;padding:0}
