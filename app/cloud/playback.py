@@ -52,23 +52,29 @@ def resolve(asset_id, sig, ua):
     if len(ua) > 512 or any(ord(c) < 32 or ord(c) > 126 for c in ua):
         raise CloudError("播放器 UA 无效")
     ua = ua or "StrimKeep-Player"
-    cache_key = (account["id"], account["revision"], asset["file_id"], ua)
+    is_share = asset["payload"].get("source_kind") == "share"
+    cache_key = (account["id"], account["revision"], asset_id if is_share else asset["file_id"], ua)
     gate = _GATES[hash(cache_key) % len(_GATES)]
     with gate:
         with _LOCK:
             found = _CACHE.get(cache_key)
-            if found and found["expires"] > time.time():
+            if not is_share and found and found["expires"] > time.time():
                 return found
         provider = for_account(account["id"])
-        current = provider.info(asset["file_id"])
-        source = asset["payload"]["source"]
-        if (
-            current["is_dir"]
-            or current["size"] != source["size"]
-            or current["sha1"] != source["sha1"]
-        ):
-            raise CloudError("源文件身份变化，请同步工作台后再播放", 409)
-        link = provider.download(current["id"], current["pickcode"], ua)
+        if is_share:
+            from app.cloud import share_library
+            # Always recheck the share: cached URLs must not hide cancellation.
+            link = share_library.playback(asset, account, provider, ua)
+        else:
+            current = provider.info(asset["file_id"])
+            source = asset["payload"]["source"]
+            if (
+                current["is_dir"]
+                or current["size"] != source["size"]
+                or current["sha1"] != source["sha1"]
+            ):
+                raise CloudError("源文件身份变化，请同步工作台后再播放", 409)
+            link = provider.download(current["id"], current["pickcode"], ua)
         link["url"] = safe_url(link["url"])
         link["headers"] = {str(k): str(v) for k, v in link["headers"].items()}
         params = parse_qs(urlsplit(link["url"]).query)

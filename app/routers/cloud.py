@@ -64,7 +64,7 @@ class AccountInput(BaseModel):
 
 
 class DirectoryInput(BaseModel):
-    directories: dict[str, str | None] = Field(max_length=5)
+    directories: dict[str, str | None] = Field(max_length=10)
     expected_revision: int = Field(ge=0)
 
 
@@ -108,6 +108,12 @@ class ApplyInput(BaseModel):
     plan_id: str = Field(pattern=r"^[a-f0-9]{32}$")
     confirmed: bool = False
     generate: bool = True
+
+
+class ShareStrmInput(BaseModel):
+    preview_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    file_ids: list[str] = Field(min_length=1, max_length=100)
+    overrides: dict[str, MediaChoice] = Field(default_factory=dict, max_length=2000)
 
 
 class SyncInput(AccountInput):
@@ -271,6 +277,119 @@ def transfer(body: TransferInput):
     return {"status": "success", "job_id": job_id}
 
 
+@router.post("/shares/strm/preview")
+def preview_share_strm(body: ShareStrmInput):
+    from app.cloud import share_library
+    plan = call(share_library.preview, body.preview_id, body.file_ids,
+                {k: v.model_dump(exclude_none=True) for k, v in body.overrides.items()})
+    return {"status": "success", "plan": plan}
+
+
+@router.get("/accounts/{account_id}/receiving")
+def receiving_config(account_id: str):
+    from app.cloud import receiving
+    return {"status":"success",**call(receiving.get,account_id)}
+
+
+@router.post("/accounts/{account_id}/receiving")
+def receiving_save(account_id: str,body:dict):
+    from app.cloud import receiving
+    if set(body)!={"config","expected_revision"} or not isinstance(body["config"],dict) or type(body["expected_revision"]) is not int:raise HTTPException(400,"接收配置格式无效")
+    return {"status":"success",**call(receiving.save,account_id,body["config"],body["expected_revision"])}
+
+
+@router.post("/resources/preview")
+def resource_preview(body:dict):
+    from app.cloud import receiving
+    if set(body)!={"account_id","text"} or not isinstance(body["text"],str) or len(body["text"])>16000:raise HTTPException(400,"资源预览格式无效")
+    return {"status":"success","plan":call(receiving.preview,body["account_id"],body["text"])}
+
+
+@router.post("/resources/apply",status_code=202)
+def resource_apply(body:ApplyInput):
+    from app.cloud import receiving
+    return {"status":"success","job_id":call(receiving.apply,body.plan_id,body.confirmed)}
+
+
+@router.get("/resources/offline")
+def offline_resources(account_id:str,page:int=Query(1,ge=1,le=1000)):
+    provider=call(for_account,account_id)
+    call(provider.profile)
+    return {"status":"success",**call(provider.offline_tasks,page)}
+
+
+@router.get("/resources/catalog")
+def receiving_catalog():
+    from app import engine
+    return {"status":"success","genres":[{"name":name,"ids":list(dict.fromkeys(str(v) for v in ids.values() if v))} for name,ids in engine.GENRE_MAP.items()],"countries":[{"name":name,"id":cid} for name,cid in (("中国大陆","CN"),("中国香港","HK"),("中国台湾","TW"),("韩国","KR"),("日本","JP"),("美国","US"),("英国","GB"),("法国","FR"),("德国","DE"),("加拿大","CA"),("澳大利亚","AU"),("印度","IN"))]}
+
+
+@router.get("/accounts/{account_id}/channels")
+def channel_list(account_id:str):
+    from app.cloud import receiving
+    return {"status":"success","items":call(receiving.channels,account_id)}
+
+
+@router.post("/accounts/{account_id}/channels")
+def channel_save(account_id:str,body:dict):
+    from app.cloud import receiving
+    return {"status":"success","channel":call(receiving.save_channel,account_id,body)}
+
+
+@router.delete("/accounts/{account_id}/channels/{channel_id}")
+def channel_delete(account_id:str,channel_id:str):
+    with store.db() as con:con.execute("DELETE FROM cloud_channels WHERE id=? AND account_id=?",(channel_id,account_id))
+    return {"status":"success"}
+
+
+@router.post("/accounts/{account_id}/channels/{channel_id}/test")
+def channel_filter_test(account_id:str,channel_id:str,body:dict):
+    from app.cloud import receiving
+    if set(body)!={"text"} or not isinstance(body["text"],str) or len(body["text"])>8000:raise HTTPException(400,"请填写不超过8000字的测试消息")
+    rule=next((r for r in call(receiving.channels,account_id) if r["id"]==channel_id),None)
+    if not rule:raise HTTPException(404,"频道规则不存在")
+    matched,reason=call(receiving.allowed_message,body["text"],rule)
+    return {"status":"success","matched":matched,"reason":reason}
+
+
+@router.get("/accounts/{account_id}/inbox")
+def inbox_history(account_id:str,offset:int=Query(0,ge=0,le=100000)):
+    from app.cloud import receiving
+    return {"status":"success","items":call(receiving.inbox,account_id,offset)}
+
+
+@router.get("/accounts/{account_id}/maintenance")
+def maintenance_config(account_id:str):
+    from app.cloud import maintenance
+    return {"status":"success",**call(maintenance.get,account_id)}
+
+
+@router.post("/accounts/{account_id}/maintenance")
+def maintenance_save(account_id:str,body:dict):
+    from app.cloud import maintenance
+    if set(body)-{"config","expected_revision","confirmed"} or not isinstance(body.get("config"),dict) or type(body.get("expected_revision")) is not int:raise HTTPException(400,"维护配置格式无效")
+    return {"status":"success",**call(maintenance.save,account_id,body["config"],body["expected_revision"],body.get("confirmed",False))}
+
+
+@router.post("/accounts/{account_id}/maintenance/run",status_code=202)
+def maintenance_run(account_id:str,body:dict):
+    from app.cloud import maintenance
+    if set(body)!={"action","confirmed"}:raise HTTPException(400,"维护操作格式无效")
+    return {"status":"success","job_id":call(maintenance.enqueue,account_id,body["action"],body["confirmed"])}
+
+
+@router.post("/jobs/{job_id}/maintenance/verify")
+def maintenance_verify(job_id:str):
+    from app.cloud import maintenance
+    return {"status":"success",**call(maintenance.verify,job_id)}
+
+
+@router.post("/shares/strm/apply", status_code=202)
+def apply_share_strm(body: ApplyInput):
+    from app.cloud import share_library
+    return {"status": "success", "job_id": call(share_library.apply, body.plan_id, body.confirmed)}
+
+
 @router.get("/tmdb")
 def search(
     query: str = Query(min_length=2, max_length=120),
@@ -333,6 +452,14 @@ def asset_source(asset_id: str):
     asset = call(store.asset, asset_id)
     if not asset:
         raise HTTPException(404, "播放引用不存在")
+    if asset["payload"].get("source_kind") == "share":
+        media, source = asset["payload"]["media"], asset["payload"]["source"]
+        return {"status": "success", "source": {
+            "source_kind": "share", "uid": asset["payload"]["uid"], "file_id": source["id"],
+            "effect": "分享免转存：仅清理 NAS 分享库引用，保留分享和 115 源文件",
+            "enabled": True, "media_identity": {"tmdb_id": media["tmdb_id"]},
+            "source_fingerprints": [{k: source[k] for k in ("id", "name", "size", "sha1")}],
+        }, "deletions": []}
     sources = asset["payload"].get("companions", [])
     return {
         "status": "success",
@@ -354,6 +481,9 @@ def asset_source(asset_id: str):
 def receipt_operation(fn, asset_id):
     from app import engine
 
+    asset = call(store.asset, asset_id)
+    if asset and asset["payload"].get("source_kind") == "share":
+        raise HTTPException(409, "分享免转存来源仅清理 NAS 引用，没有源删除回执")
     try:
         with engine.mutation_lock():
             return call(fn, asset_id)
@@ -489,6 +619,25 @@ def rules():
     }
 
 
+@router.post('/jobs/{job_id}/upgrades/continue')
+def continue_upgrades(job_id: str, body: dict):
+    from app.cloud import replacement
+    if body != {'confirmed': True} or body.get('confirmed') is not True:
+        raise HTTPException(400, '请确认核实并继续洗版')
+    job = call(store.job, job_id)
+    if not job or job['state'] in ('queued', 'running') or not replacement.summary(job_id):
+        raise HTTPException(409, '请等待原任务结束并核对洗版记录')
+    result = call(replacement.complete, job_id)
+    refresh_pending = not workflow.refresh_emby()
+    with store.db() as con:
+        current = con.execute('SELECT result FROM cloud_jobs WHERE id=?', (job_id,)).fetchone()
+        payload = json.loads(current[0])
+        payload['upgrades'] = result
+        payload['refresh_pending'] = refresh_pending
+        con.execute('UPDATE cloud_jobs SET result=?,updated=? WHERE id=?', (store.encode(payload), time.time(), job_id))
+    return {'status': 'success', 'upgrades': result, 'refresh_pending': refresh_pending}
+
+
 @router.post("/rules")
 def save_rule(body: RuleInput):
     call(schedules.zone, body.timezone)
@@ -567,3 +716,65 @@ async def play(
         return await playback.serve(request, asset_id, sig)
     except CloudError as error:
         raise HTTPException(error.status, str(error)) from None
+
+
+@router.get("/accounts/{account_id}/telegram-reader")
+def telegram_reader_get(account_id: str):
+    from app.cloud import channel_reader
+    return {"status":"success", **call(channel_reader.get, account_id)}
+
+
+@router.post("/accounts/{account_id}/telegram-reader")
+def telegram_reader_login(account_id: str, body: dict):
+    from app.cloud import channel_reader
+    return {"status":"success", **call(channel_reader.login, account_id, body)}
+
+
+@router.get("/accounts/{account_id}/emby-connections")
+def emby_connections(account_id: str):
+    from app.cloud import emby_library
+    return {"status":"success", **call(emby_library.get,account_id)}
+
+
+@router.post("/accounts/{account_id}/emby-connections")
+def save_emby_connection(account_id: str, body: dict):
+    from app.cloud import emby_library
+    return {"status":"success", **call(emby_library.save,account_id,body)}
+
+
+@router.post("/accounts/{account_id}/emby-connections/{connection_id}/test")
+def test_emby_connection(account_id: str, connection_id: str):
+    from app.cloud import emby_library
+    return {"status":"success", **call(emby_library.test,account_id,connection_id)}
+
+
+@router.get("/accounts/{account_id}/ingestion")
+def ingestion_records(account_id: str):
+    from app.cloud import emby_library
+    call(store.account,account_id)
+    return {"status":"success","items":call(emby_library.records,account_id)}
+
+
+@router.post("/accounts/{account_id}/ingestion/{record_id}/retry")
+def retry_ingestion(account_id: str, record_id: str):
+    from app.cloud import emby_library
+    call(emby_library.retry,account_id,record_id)
+    return {"status":"success"}
+
+
+@router.get("/accounts/{account_id}/organizer-sources")
+def organizer_sources(account_id: str):
+    from app.cloud import intake_automation
+    return {"status":"success", **call(intake_automation.sources,account_id)}
+
+
+class IntakeRulesInput(ScheduleInput):
+    source_ids: list[str] = Field(min_length=1,max_length=20)
+    expected_revision: int = Field(ge=0)
+
+
+@router.post("/accounts/{account_id}/organizer-sources")
+def organizer_sources_save(account_id: str, body: IntakeRulesInput):
+    from app.cloud import intake_automation
+    config=body.model_dump(exclude={"source_ids","expected_revision"})
+    return {"status":"success", **call(intake_automation.save,account_id,config,body.source_ids,body.expected_revision)}

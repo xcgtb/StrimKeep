@@ -42,6 +42,8 @@ def lookup(path, root):
     if asset["state"] not in ("active", "revoked"):
         raise CloudError("来源身份尚未确认或已断开，保留 STRM", 409)
     payload = asset["payload"]
+    if payload.get("source_kind") == "share":
+        raise CloudError("分享免转存来源只允许在分享库清理 NAS 引用，不能删除 115 源文件", 409)
     base = Path(payload["output_root"])
     if strm.digest(content) != payload["digest"] or not hmac.compare_digest(
         (parse_qs(url.query).get("sig") or [""])[0],

@@ -2,6 +2,8 @@
 
 **StrimKeep｜面向 302 STRM + Emby 的影视库管理与智能治理工具**
 
+我的网盘累计增强与1.3.6操作说明：[频道历史 → 接收目录定时整理 → STRM → Emby实际入库确认](docs/MY_DRIVE_V136_ACCEPTANCE.md)。机器人直接发分享/磁力/ed2k按Web目录接收，`/strm 分享链接`免转存生成分享库STRM。
+
 [![License](https://img.shields.io/badge/LICENSE-MIT-blueviolet?style=for-the-badge)](LICENSE)
 [![Python](https://img.shields.io/badge/PYTHON-3.12-3776AB?style=for-the-badge)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FASTAPI-READY-009688?style=for-the-badge)](https://fastapi.tiangolo.com/)
@@ -21,6 +23,12 @@ StrimKeep 是一款面向 **飞牛 OS / Linux NAS + 302 STRM + Emby** 的影视�
 **阅读导航：** [快速部署](#docker-compose-部署) · [302 STRM 工作原理](#302-strm-与双库治理) · [核心功能](#核心功能) · [七维治理规则](#七维画质与治理策略) · [首次使用](#首次使用) · [Web 页面](#web-功能说明) · [安全机制](#文件删除与安全边界) · [更新与备份](#更新备份与排错)
 
 ---
+
+资源接收新增磁力/ed2k云下载、受校验限制的115://秒传、白名单TG链接接收和Bot可访问频道的新消息监控；可点选TMDB筛选并配置关键词/正则，提供独立接收历史。115账号页可配置签到及回收站保留期Cron清理，播放页可细分通知和Emby生成联动开关；均沿用原主题，自动接收/维护默认关闭，见[资源接收与维护说明](docs/MY_DRIVE_RECEIVING_ACCEPTANCE.md)。
+
+分享支持直接免转存生成分享库 STRM：在资源接收页选中分享视频或目录，识别预览、修正 TMDB 后确认生成，复用命名分类与可选 ffprobe；默认输出 `/media/share`，播放从分享解析，取消或失效后停止解析。全程不转存、不改动 115；来源身份与自己网盘隔离，分享治理只清理 NAS，见[分享免转存说明](docs/MY_DRIVE_SHARE_STRM_ACCEPTANCE.md)。
+
+整理八维默认仅预览，可明确开启执行洗版与杜比/非杜比目录共存；新版本 STRM 发布核实后按登记身份清理旧源与引用，异常支持核实继续，见[八维执行说明](docs/MY_DRIVE_QUALITY_EXECUTION_ACCEPTANCE.md)。
 
 整理与 STRM 定时任务支持 Cron 和时区；可选来源空目录清理、持久化延时 STRM 联动及独立 STRM 来源目录，见[整理自动化说明](docs/MY_DRIVE_AUTOMATION_ACCEPTANCE.md)。
 

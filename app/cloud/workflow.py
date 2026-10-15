@@ -104,7 +104,7 @@ def related_companions(rows, video, config=None):
     return result
 
 
-NAMING_KEYS = tuple(naming.DEFAULT_TEMPLATES) + file_filters.KEYS + ("naming_style", "rename_enabled", "movie_folder", "tv_folder", "classification_enabled", "enabled_categories", "custom_categories", "region_classification", "year_classification", "unknown_enabled", "region_mode", "region_groups", "animation_movie_folder", "ffprobe_enabled", "ffprobe_failure", "quality8_enabled", "quality8_rules", "quality8_coexist_dv", "cleanup_empty_directories", "strm_delay_seconds")
+NAMING_KEYS = tuple(naming.DEFAULT_TEMPLATES) + file_filters.KEYS + ("naming_style", "rename_enabled", "movie_folder", "tv_folder", "classification_enabled", "enabled_categories", "custom_categories", "region_classification", "year_classification", "unknown_enabled", "region_mode", "region_groups", "animation_movie_folder", "ffprobe_enabled", "ffprobe_failure", "quality8_enabled", "quality8_rules", "quality8_coexist_dv", "quality8_mode", "cleanup_empty_directories", "strm_delay_seconds")
 
 
 def naming_snapshot(config):
@@ -123,14 +123,15 @@ def recognize_source(account_id, provider, row, overrides, config):
     media = recognition.recognize(row["name"], media_choice(account_id, row, overrides), config, probe if config["ffprobe_enabled"] else None)
     with store.db() as con:
         prior = con.execute("SELECT payload FROM cloud_assets WHERE account_id=? AND file_id=? ORDER BY updated DESC LIMIT 1", (account_id, row["id"])).fetchone()
-    original = row["name"]
+    original, previous = row["name"], {}
     if prior:
         payload = json.loads(prior[0])
         if all(payload["source"][k] == row[k] for k in ("size", "sha1")):
             previous = payload["media"]
             original = previous.get("quality_source_name") or previous.get("naming_fields", {}).get("original_name") or original
     media["quality_source_name"] = original
-    return media
+    from app.cloud import replacement
+    return replacement.decorate(row, media, config, previous)
 
 
 def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, job_id=None):
@@ -162,6 +163,7 @@ def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, j
     unknown_items = []
     paths = set()
     quality_candidates = []
+    from app.cloud import replacement
     for index, row in enumerate(videos):
         jobs.checkpoint(job_id)
         if job_id:
@@ -170,7 +172,7 @@ def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, j
             media = recognize_source(account_id, provider, row, overrides, config)
             quality_candidates.append({"source": row, "media": media})
             path = (media["directory"] + "/" + media["name"]).casefold()
-            if path in paths:
+            if path in paths and not replacement.enabled(config):
                 raise CloudError("两个文件将生成相同名称，请选择版本或修正作品", 409)
             paths.add(path)
             related = related_companions(files, row, config)
@@ -186,7 +188,12 @@ def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, j
                     unknown_items.append({"source": row, "followers": related, "unknown": True, "directory": folder, "reason": str(error)})
                     entry.update({"action": "unknown", "target": folder+"/"+row["name"]})
             skipped.append(entry)
+    quality_held = []
+    if replacement.enabled(config):
+        items, quality_held = replacement.select(provider, account, str(target_cid), items, config, job_id)
     comparisons = quality_preview(provider, account, str(target_cid), quality_candidates, config, job_id) if config["quality8_enabled"] else {"comparisons": [], "preview_only": True}
+    if replacement.enabled(config):
+        comparisons.update(preview_only=False, notice='执行模式：新版本归档并发布后核实删除已登记旧源；平局和较差来片保留原位')
     jobs.checkpoint(job_id)
     pid = store.ident()
     payload = {
@@ -202,6 +209,7 @@ def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, j
         "filtered": filtered,
         "quality8": comparisons,
         "cleanup_candidates": cleanup_candidates,
+        "quality_held": quality_held,
     }
     with store.db() as con:
         con.execute(
@@ -215,13 +223,13 @@ def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, j
                 time.time() + 900,
             ),
         )
-    return {"id": pid, "items": items, "skipped": skipped, "unknown_items": unknown_items, "unknown_cid": unknown_cid, "filtered": filtered, "quality8": comparisons, "cleanup_candidates": cleanup_candidates, "expires_in": 900}
+    return {"id": pid, "items": items, "skipped": skipped, "unknown_items": unknown_items, "unknown_cid": unknown_cid, "filtered": filtered, "quality8": comparisons, "cleanup_candidates": cleanup_candidates, "quality_held": quality_held, "expires_in": 900}
 
 
 def quality_preview(provider, account, target_cid, candidates, config, job_id=None):
     identities = {quality8.identity(c["media"]) for c in candidates}
     with store.db() as con:
-        assets = con.execute("SELECT payload FROM cloud_assets WHERE account_id=? AND state='active' AND json_extract(payload,'$.scope_cid')=?", (account["id"], target_cid)).fetchall()
+        assets = con.execute("SELECT payload FROM cloud_assets WHERE account_id=? AND state='active' AND coalesce(json_extract(payload,'$.source_kind'),'personal')='personal' AND json_extract(payload,'$.scope_cid')=?", (account["id"], target_cid)).fetchall()
     existing, seen, parents = [], set(), {}
     for raw in assets:
         data = json.loads(raw[0])
@@ -278,6 +286,8 @@ def apply(plan_id, confirmed=False, generate=True):
                 raise CloudError("命名或分类配置已变化，请重新预览", 409)
         if not data["items"] and not data.get("unknown_items"):
             raise CloudError("计划没有可执行项目", 409)
+        if not generate and any(i.get('upgrades') for i in data['items']):
+            raise CloudError('执行洗版必须先生成并核实新 STRM，不能关闭生成', 409)
         con.execute(
             "UPDATE cloud_plans SET state='queued' WHERE id=? AND state='pending'",
             (plan_id,),
@@ -415,6 +425,8 @@ def organize(job_id, payload):
     if hasattr(provider, "require"):
         provider.require("organize")
     result = {"files": [], "skipped": list(data["skipped"]), "errors": [], "generated": [], "unknown": [], "warnings": [], "media_info": [], "filtered": data.get("filtered", []), "quality8": data.get("quality8", {})}
+    result['quality_held'] = data.get('quality_held', [])
+    result['skipped'].extend(i for i in result['quality_held'] if i.get('blocked'))
     config = settings.get()
     moved_parents = set()
     all_items = [*data["items"], *data.get("unknown_items", [])]
@@ -425,6 +437,11 @@ def organize(job_id, payload):
             break
         jobs.progress(job_id, len(all_items), index, "整理", item["source"]["name"])
         try:
+            if item.get('upgrades'):
+                if not payload.get('generate', True):
+                    raise CloudError('洗版必须生成新 STRM，保留源文件', 409)
+                from app.cloud import replacement
+                replacement.validate_refs(item['upgrades'], provider)
             for source in [item["source"], *item["followers"]]:
                 if not _snapshot_equal(source, provider.info(source["id"])):
                     raise CloudError("源文件在预览后变化，请重新预览", 409)
@@ -456,16 +473,21 @@ def organize(job_id, payload):
 
                 if config["strm_delay_seconds"]:
                     from app.cloud import automation
-                    deferred = automation.defer(job_id, data["account_id"], data["account_revision"], data["target_cid"], row, item["media"], companions, config["strm_delay_seconds"])
+                    deferred = automation.defer(job_id, data["account_id"], data["account_revision"], data["target_cid"], row, item["media"], companions, config["strm_delay_seconds"], item.get('upgrades'))
                     result.setdefault("deferred", []).append(deferred)
                 else:
                     asset = strm.generate(data["account_id"], row, item["media"], data["target_cid"], companions, provider)
                     result["generated"].append({"asset_id": asset["id"], "path": asset["local_path"]})
                     for warning in asset["payload"].get("warnings", []):
                         result["errors"].append({"file_id": row["id"], "reason": warning})
+                    if item.get('upgrades'):
+                        from app.cloud import replacement
+                        result['upgrades'] = replacement.complete(job_id, asset, item['upgrades'])
             if row["parent_id"] != item["source"]["parent_id"]:
                 moved_parents.add(item["source"]["parent_id"])
         except CloudError as error:
+            if hasattr(error, 'upgrades'):
+                result['upgrades'] = error.upgrades
             if error.uncertain:
                 error.partial_result = result
                 raise
@@ -495,7 +517,7 @@ def organize(job_id, payload):
         result.setdefault("remaining", [])
         jobs.progress(job_id, len(all_items), len(all_items)-len(result["remaining"]), "已安全停止")
     if result["generated"]:
-        result["refresh_pending"] = not refresh_emby()
+        result["refresh_pending"] = not refresh_library(data["account_id"])
     return result
 
 
@@ -511,7 +533,16 @@ def create_categories(job_id, payload):
     return result
 
 
+def share_access(payload):
+    from app.cloud import credentials
+    if payload.get("sealed_share"):
+        return credentials.unseal(payload["sealed_share"])
+    # Existing queued transfer jobs keep their original shape until completion.
+    return {"code": payload["code"], "password": payload["password"]}
+
+
 def preview_share(account_id, link, password="", cid="0", offset=0):
+    from app.cloud import credentials
     account = store.account(account_id)
     if not account:
         raise CloudError("请先扫码登录", 409)
@@ -522,8 +553,7 @@ def preview_share(account_id, link, password="", cid="0", offset=0):
     data = {
         "account_id": account_id,
         "account_revision": account["revision"],
-        "code": code,
-        "password": password,
+        "sealed_share": credentials.seal({"code": code, "password": password}),
         "share_parent": cid,
         "items": page["items"],
     }
@@ -592,9 +622,8 @@ def transfer(job_id, payload):
         jobs.progress(
             job_id, len(payload["source_ids"]), 0, "转存中；结果确认前不会重复提交"
         )
-        provider.receive(
-            payload["code"], payload["password"], payload["source_ids"], stage
-        )
+        access = share_access(payload)
+        provider.receive(access["code"], access["password"], payload["source_ids"], stage)
         rows = provider.list(stage)
         if not rows:
             raise CloudError(
@@ -717,13 +746,23 @@ def sync(job_id, payload):
             payload["account_id"], payload["source_cid"], {r["id"] for r in rows}
         )
     if result["generated"]:
-        result["refresh_pending"] = not refresh_emby()
+        result["refresh_pending"] = not refresh_library(payload["account_id"])
     return result
+
+
+def refresh_library(account_id):
+    from app.cloud import emby_library, services
+    cfg = services.get(account_id,"emby_library",emby_library.DEFAULT)
+    if any(c["enabled"] for c in cfg["config"]["connections"]):
+        return True  # Durable watchers request scans; this is not ingestion confirmation.
+    return refresh_emby()
 
 
 def refresh_emby():
     from app import engine
 
+    if not settings.get()["emby_refresh_enabled"]:
+        return True
     try:
         engine.emby_request("/Library/Refresh", method="POST", timeout=10, retries=0)
         return True
@@ -732,6 +771,14 @@ def refresh_emby():
 
 
 def run(job_id, kind, payload):
+    if kind in ("intake", "channel", "maintenance"):
+        from app.cloud import receiving, maintenance
+        if kind == "maintenance":
+            return maintenance.run(job_id, payload)
+        return receiving.run(job_id, payload)
+    if kind == "share_strm":
+        from app.cloud import share_library
+        return share_library.run(job_id, payload)
     if kind == "publish":
         from app.cloud import automation
         return automation.publish(job_id, payload)
@@ -744,6 +791,9 @@ def run(job_id, kind, payload):
     if kind == "sync":
         return sync(job_id, payload)
     if kind == "workflow":
+        if payload.get("intake_rule"):
+            from app.cloud import intake_automation
+            intake_automation.ready(verify_account(payload),payload["source_cid"])
         provider = verify_account(payload)
         _directory(provider, payload["source_cid"])
         planned = plan(

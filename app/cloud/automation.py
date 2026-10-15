@@ -12,7 +12,7 @@ def output_snapshot():
     return {k: config[k] for k in OUTPUT_KEYS}
 
 
-def defer(job_id, account_id, revision, scope, row, media, companions, seconds):
+def defer(job_id, account_id, revision, scope, row, media, companions, seconds, upgrades=None):
     """Queue + due marker are committed together, once per completed source item."""
     with store.db() as con:
         existing = con.execute('SELECT job_id,due FROM cloud_job_due WHERE origin_job=? AND file_id=?', (job_id, row['id'])).fetchone()
@@ -20,7 +20,7 @@ def defer(job_id, account_id, revision, scope, row, media, companions, seconds):
             return {'job_id': existing[0], 'due': existing[1], 'file_id': row['id']}
         due = time.time()+seconds
         payload = {'account_id': account_id, 'account_revision': revision, 'scope_cid': scope,
-                   'source': row, 'media': media, 'companions': companions, 'output_snapshot': output_snapshot()}
+                   'source': row, 'media': media, 'companions': companions, 'output_snapshot': output_snapshot(), 'upgrades': upgrades or []}
         jid = jobs.enqueue('publish', payload, con)
         con.execute('INSERT INTO cloud_job_due VALUES(?,?,?,?,?)', (jid, due, job_id, row['id'], time.time()))
     return {'job_id': jid, 'due': due, 'file_id': row['id']}
@@ -47,9 +47,18 @@ def publish(job_id, payload):
     jobs.progress(job_id, 1, 0, '延时生成 STRM', row['name'])
     asset = strm.generate(payload['account_id'], row, payload['media'], payload['scope_cid'], payload['companions'], provider)
     jobs.progress(job_id, 1, 1, 'STRM 已生成', row['name'])
-    return {'generated': [{'asset_id': asset['id'], 'path': asset['local_path']}],
+    result = {'generated': [{'asset_id': asset['id'], 'path': asset['local_path']}],
             'errors': [{'file_id': row['id'], 'reason': v} for v in asset['payload'].get('warnings', [])],
-            'refresh_pending': not workflow.refresh_emby()}
+            'refresh_pending': not workflow.refresh_library(payload["account_id"])}
+    if payload.get('upgrades'):
+        from app.cloud import replacement
+        try:
+            result['upgrades'] = replacement.complete(job_id, asset, payload['upgrades'])
+        except CloudError as error:
+            result['upgrades'] = getattr(error, 'upgrades', [])
+            error.partial_result = result
+            raise
+    return result
 
 
 def cleanup(provider, job_id, plan, moved_parents):

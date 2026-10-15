@@ -47,6 +47,12 @@ async function run(){
  // Late browse and save responses cannot populate another account's fields.
  pick('source');await flush();stale=take();node('cw-account').value='B';node('cw-account').onchange();await flush();assert(!node('cw-directory-dialog').open);respond(stale,page([{id:'stale',name:'旧账号',is_dir:true}]));await flush();assert(node('cw-source-cid').value.includes('B来源'));
  pick('target');await flush();r=take();assert(r.url.includes('account_id=B'));respond(r,page([]));await flush();action('directoryConfirm');await flush();stale=take();assert.strictEqual(stale.url,'/api/cloud/accounts/B/directories');node('cw-account').value='A';node('cw-account').onchange();await flush();const before=node('cw-target-cid').value;respond(stale,{directories:{source:{id:'B1',name:'B'},target:{id:'0',name:'B根目录'}},revision:99});await flush();assert.strictEqual(node('cw-target-cid').value,before);assert(!node('cw-directory-dialog').open);assert.strictEqual(requests.length,0);
+ // A post-save rendering exception must never trap the native dialog in saving state.
+ pick('source');await flush();r=take();respond(r,page([]));await flush();action('directoryConfirm');await flush();r=take();
+ const originalRender=node('cw-quality8-preview').replaceChildren;node('cw-quality8-preview').replaceChildren=function(){throw Error('render failed');};
+ respond(r,{directories:{...directories('A').directories,source:{id:'0',name:'根目录'}},revision:9});await flush();
+ assert(!node('cw-directory-dialog').open);assert(node('cw-message').textContent.includes('目录已保存'));node('cw-quality8-preview').replaceChildren=originalRender;
+ pick('target');await flush();r=take();respond(r,page([]));await flush();assert(!button('Confirm').disabled);action('directoryCancel');
  console.log('PASS visible mobile navigation; inline directory pagination, string IDs, save/cancel/retry/conflict and account isolation');
 }
 run().catch(error=>{console.error(error);process.exitCode=1;});

@@ -65,16 +65,18 @@ def seal(value):
     )
 
 
-def load(account_id):
+def unseal(value):
     import json
 
+    try:
+        data = Fernet(key(".cloud_credentials_key", required=True)).decrypt(value.encode())
+        return json.loads(data)
+    except (InvalidToken, ValueError, TypeError):
+        raise CloudError("凭据无法解密，请恢复完整数据目录", 503) from None
+
+
+def load(account_id):
     row = store.account(account_id)
     if not row:
         raise CloudError("网盘账号不存在", 404)
-    try:
-        data = Fernet(key(".cloud_credentials_key", required=True)).decrypt(
-            row["sealed"].encode()
-        )
-        return row, json.loads(data)
-    except (InvalidToken, ValueError):
-        raise CloudError("账号凭据无法解密，请恢复账号密钥", 503) from None
+    return row, unseal(row["sealed"])

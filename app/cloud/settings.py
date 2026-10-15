@@ -15,11 +15,20 @@ DEFAULTS = {
     "public_url": "",
     "output_root": "/media/local",
     "emby_output_root": "",
+    "share_output_root": "/media/share",
+    "share_emby_output_root": "",
     "proxy_enabled": False,
     "proxy_port": 8322,
     "nfo_enabled": True,
     "artwork_enabled": False,
     "notify_enabled": False,
+    "notify_transfer": True,
+    "notify_organize": True,
+    "notify_strm": True,
+    "notify_strm_details": False,
+    "notify_channel": True,
+    "notify_maintenance": True,
+    "emby_refresh_enabled": True,
     "open_app_id": "",
     "naming_style": "standard",
     "movie_folder": "电影",
@@ -45,6 +54,7 @@ DEFAULTS = {
     "ignore_keywords": [],
     "ignore_regex": [],
     "quality8_enabled": False,
+    "quality8_mode": "preview",
     "quality8_rules": QUALITY8_DEFAULT,
     "quality8_coexist_dv": True,
     **DEFAULT_TEMPLATES,
@@ -110,7 +120,7 @@ def validate(result):
         or parsed.fragment
     ):
         raise CloudError("播放地址应为 http(s)://主机:端口，可带部署子路径")
-    for key in ("output_root", "emby_output_root"):
+    for key in ("output_root", "emby_output_root", "share_output_root", "share_emby_output_root"):
         raw = str(result[key])
         if raw and (
             not raw.startswith("/") or "\x00" in raw or ".." in Path(raw).parts
@@ -118,6 +128,13 @@ def validate(result):
             raise CloudError("请填写有效的绝对目录路径")
     if result["output_root"] in ("", "/", "/data", "/media"):
         raise CloudError("请选择用于存放 STRM 的独立目录")
+    if result["share_output_root"] in ("", "/", "/data", "/media"):
+        raise CloudError("请选择用于存放分享 STRM 的独立目录")
+    for left, right in (("output_root", "share_output_root"), ("emby_output_root", "share_emby_output_root")):
+        if result[left] and result[right]:
+            a, b = Path(result[left]), Path(result[right])
+            if a.is_relative_to(b) or b.is_relative_to(a):
+                raise CloudError("本地库与分享库输出目录不能相同或相互包含")
     try:
         port = int(result["proxy_port"])
     except (ValueError, TypeError):
@@ -130,6 +147,8 @@ def validate(result):
         "nfo_enabled",
         "artwork_enabled",
         "notify_enabled",
+        "notify_transfer", "notify_organize", "notify_strm", "notify_strm_details",
+        "notify_channel", "notify_maintenance", "emby_refresh_enabled",
         "official_delete_enabled",
         "rename_enabled", "classification_enabled", "region_classification",
         "year_classification", "unknown_enabled",
@@ -141,6 +160,10 @@ def validate(result):
             raise CloudError("开关配置必须为布尔值")
     if result["ffprobe_failure"] not in ("skip", "filename"):
         raise CloudError("媒体信息提取失败策略无效")
+    if result["quality8_mode"] not in ("preview", "upgrade"):
+        raise CloudError("整理八维模式无效")
+    if result["quality8_mode"] == "upgrade" and not result["quality8_enabled"]:
+        raise CloudError("请先启用整理八维策略，再选择执行洗版")
     if type(result["strm_delay_seconds"]) is not int or not 0 <= result["strm_delay_seconds"] <= 86400:
         raise CloudError("STRM 联动延时应为 0 至 86400 秒")
     from app.cloud import naming, categories

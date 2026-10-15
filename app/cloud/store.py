@@ -34,6 +34,10 @@ CREATE TABLE IF NOT EXISTS cloud_job_controls (
 CREATE TABLE IF NOT EXISTS cloud_job_due (
  job_id TEXT PRIMARY KEY, due REAL NOT NULL, origin_job TEXT NOT NULL,
  file_id TEXT NOT NULL, created REAL NOT NULL, UNIQUE(origin_job,file_id));
+CREATE TABLE IF NOT EXISTS cloud_upgrades (
+ id TEXT PRIMARY KEY, job_id TEXT NOT NULL, new_asset TEXT NOT NULL,
+ old_asset TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL,
+ result TEXT NOT NULL, updated REAL NOT NULL, UNIQUE(job_id,old_asset));
 CREATE TABLE IF NOT EXISTS cloud_plans (
  id TEXT PRIMARY KEY, account_id TEXT NOT NULL, revision INTEGER NOT NULL,
  state TEXT NOT NULL, payload TEXT NOT NULL, expires REAL NOT NULL);
@@ -42,9 +46,32 @@ CREATE TABLE IF NOT EXISTS cloud_assets (
  local_path TEXT NOT NULL UNIQUE, payload TEXT NOT NULL, nonce TEXT NOT NULL,
  state TEXT NOT NULL, updated REAL NOT NULL, UNIQUE(account_id,file_id,local_path));
 CREATE INDEX IF NOT EXISTS cloud_assets_source ON cloud_assets(account_id,file_id);
+CREATE TABLE IF NOT EXISTS cloud_share_sources (
+ id TEXT PRIMARY KEY, account_id TEXT NOT NULL, code_hash TEXT NOT NULL,
+ sealed TEXT NOT NULL, revision INTEGER NOT NULL, updated REAL NOT NULL,
+ UNIQUE(account_id,code_hash));
 CREATE TABLE IF NOT EXISTS cloud_rules (
  id TEXT PRIMARY KEY, payload TEXT NOT NULL, enabled INTEGER NOT NULL,
  next_run REAL NOT NULL, updated REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS cloud_service_settings (
+ account_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL,
+ revision INTEGER NOT NULL, account_revision INTEGER NOT NULL, updated REAL NOT NULL,
+ PRIMARY KEY(account_id,kind));
+CREATE TABLE IF NOT EXISTS cloud_channels (
+ id TEXT PRIMARY KEY, account_id TEXT NOT NULL, account_revision INTEGER NOT NULL,
+ revision INTEGER NOT NULL, payload TEXT NOT NULL, updated REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS cloud_inbox (
+ id TEXT PRIMARY KEY, event_key TEXT NOT NULL UNIQUE, account_id TEXT NOT NULL,
+ source TEXT NOT NULL, payload TEXT NOT NULL, state TEXT NOT NULL,
+ job_id TEXT NOT NULL DEFAULT '', result TEXT NOT NULL DEFAULT '{}', created REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS cloud_channel_cursors (
+ id TEXT PRIMARY KEY, cursor INTEGER NOT NULL, initialized INTEGER NOT NULL,
+ next_poll REAL NOT NULL, last_error TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS cloud_ingestion (
+ id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, connection_id TEXT NOT NULL,
+ revision INTEGER NOT NULL, payload TEXT NOT NULL, state TEXT NOT NULL,
+ next_check REAL NOT NULL, attempts INTEGER NOT NULL, result TEXT NOT NULL,
+ updated REAL NOT NULL, UNIQUE(asset_id,connection_id,revision,payload));
 CREATE TABLE IF NOT EXISTS cloud_progress (
  job_id TEXT PRIMARY KEY, total INTEGER, processed INTEGER NOT NULL,
  phase TEXT NOT NULL, current TEXT NOT NULL, updated REAL NOT NULL);

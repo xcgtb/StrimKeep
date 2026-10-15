@@ -323,6 +323,20 @@ class Provider115:
             write=True,
         )
 
+    def share_download(self, code, password, file_id, ua):
+        """Pinned SDK's share URL API; never call personal download/receive."""
+        code, password = parse_share(code, password)
+        url = self.call("share_download_url", {
+            "share_code": code, "receive_code": password, "file_id": numeric(file_id),
+        }, headers={"User-Agent": ua})
+        try:
+            if str(url.get("id")) != str(file_id) or url.get("is_dir"):
+                raise CloudError("分享下载地址与文件身份不符", 409)
+            return {"url": str(url), "headers": {"User-Agent": ua, **dict(url.get("headers") or {})},
+                    "size": int(url.get("size") or 0), "sha1": str(url.get("sha1") or "").upper()}
+        except (AttributeError, TypeError, ValueError):
+            raise CloudError("分享下载地址响应不完整", 502) from None
+
     def download(self, file_id, pickcode, ua):
         url = self.call("download_url", pickcode, user_agent=ua)
         if str(url.get("id")) != str(file_id):
@@ -335,6 +349,72 @@ class Provider115:
 
     def delete(self, file_id):
         return self.call("fs_delete", {"fid": numeric(file_id)}, write=True)
+
+    def offline_add(self, url, target):
+        result = self.call("clouddownload_task_add_url", {"url": url, "wp_path_id": numeric(target)}, write=True)
+        data = result.get("data") if isinstance(result.get("data"), dict) else result
+        return {"accepted": True, "info_hash": str(data.get("info_hash") or ""), "target_cid": str(target), "completed": False}
+
+    def offline_tasks(self, page=1):
+        result = self.call("clouddownload_task_list", {"page": page})
+        rows = result.get("tasks")
+        if not isinstance(rows, list):
+            raise CloudError("115 云下载列表响应不完整", 502)
+        return {"items": [{k: r.get(k) for k in ("name", "info_hash", "status", "percentDone", "file_id", "wp_path_id")} for r in rows], "page": page, "page_count": result.get("page_count")}
+
+    def instant_receive(self, item, target):
+        def challenge(value):
+            if value == "0-131071" and item.get("preid"):
+                return item["preid"]
+            raise CloudError("115 要求其他分段校验，秒传链接缺少对应数据；未上传文件", 409)
+        result = self.call("upload_file_init", filename=item["name"], filesha1=item["sha1"], filesize=item["size"], pid=numeric(target), read_range_bytes_or_hash=challenge, write=True)
+        if result.get("reuse") is not True or result.get("status") != 2:
+            raise CloudError("115 未命中秒传，未执行普通上传", 409)
+        matches = [r for r in self.list(target) if not r["is_dir"] and r["name"] == item["name"] and r["size"] == item["size"] and r["sha1"] == item["sha1"]]
+        if len(matches) != 1:
+            raise CloudError("秒传结果待核实，不重复提交", 409, uncertain=True)
+        return {"file_id": matches[0]["id"], "name": matches[0]["name"], "completed": True}
+
+    def sign_in(self):
+        self.call("user_points_sign_post", write=True)
+        return {"accepted": True}
+
+    def recycle_items(self):
+        rows, seen, total, offset = [], set(), None, 0
+        while True:
+            result = self.call("recyclebin_list", {"offset": offset, "limit": 100})
+            envelope=result["data"] if isinstance(result.get("data"),dict) else result
+            data = envelope.get("list",envelope.get("data"))
+            if not isinstance(data, list):
+                raise CloudError("回收站响应不完整，未清理", 502)
+            try:
+                count = int(envelope.get("count",result.get("count")))
+            except (ValueError, TypeError, KeyError):
+                raise CloudError("回收站总数缺失，未清理", 502) from None
+            if count > 5000 or count < 0 or (total is not None and total != count):
+                raise CloudError("回收站内容过多或读取中变化，未清理", 409)
+            total = count
+            for r in data:
+                rid = numeric(r.get("rid") or r.get("id") or "")
+                if rid in seen:
+                    raise CloudError("回收站返回重复记录，未清理", 502)
+                seen.add(rid)
+                try:
+                    deleted = float(r.get("dtime") or r.get("delete_time") or 0)
+                except (TypeError, ValueError):
+                    deleted = 0
+                rows.append({"id": rid, "name": str(r.get("file_name") or r.get("name") or ""), "deleted_at": deleted})
+            offset += len(data)
+            if offset == count:
+                return rows
+            if not data or offset > count:
+                raise CloudError("回收站分页被截断，未清理", 502)
+
+    def recycle_delete(self, ids, password=""):
+        if not ids or len(ids) > 100:
+            raise CloudError("请选择明确的回收站条目")
+        self.call("recyclebin_clean", {"tid": ",".join(numeric(x) for x in ids)}, password=password, write=True)
+        return {"accepted": True}
 
     def remove_empty_directory(self, snapshot):
         fid = numeric(snapshot["id"])

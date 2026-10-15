@@ -314,6 +314,8 @@ def _dismiss(token, chat_id, message_id):
 
 # ═══════════════════ 命令注册 ═══════════════════
 MY_COMMANDS = [
+    {'command': 'receive', 'description': '📥 按Web目录接收115分享/磁力/ed2k'},
+    {'command': 'strm', 'description': '🎬 115分享免转存生成STRM'},
     {'command': 'menu',    'description': '🎛️ 显示菜单'},
     {'command': 'check',   'description': '⚖️ 扫描双库'},
     {'command': 'clean',   'description': '🗑️ 执行清理'},
@@ -343,6 +345,8 @@ def _init_bot(token):
 
 
 HELP_TEXT = (
+    '📥 直接发115分享、磁力、ed2k：保存到Web对应目录。\n'
+    '🎬 /strm 分享链接：不转存，生成分享库STRM。\n\n'
     '🎬 <b>StrimKeep</b>\n'
     '<i>点输入框左侧 ☰ 选功能，或直接输命令</i>\n'
     '\n'
@@ -784,7 +788,7 @@ def _notify_result(token, chat_id, kind, res, message_id=None, user_msg_id=None)
 def _handle_command(token, msg):
     chat_id = msg['chat']['id']
     user_id = msg['from']['id']
-    text = (msg.get('text') or '').strip()
+    text = (msg.get('text') or msg.get('caption') or '').strip()
     msg_id = msg.get('message_id')
 
     # 所有用户消息统一 10 秒后删除。以前只有 /menu、/search 空参数等少数分支
@@ -798,6 +802,9 @@ def _handle_command(token, msg):
         return
 
     if not text.startswith('/'):
+        if _capture_resources(token, msg):
+            _send(token, chat_id, '📥 资源已登记到我的网盘接收队列，结果请查看资源接收历史。', delete_user_msg=msg_id)
+            return
         _send(token, chat_id,
               '请输入命令，或点输入框左侧 ☰ 图标。\n发 /help 查看帮助。',
               delete_user_msg=msg_id)
@@ -821,6 +828,11 @@ def _handle_command(token, msg):
     elif cmd == '/sub':              _dispatch('sub', token, chat_id, user_msg_id=msg_id, arg=arg)
     elif cmd == '/morning':          _dispatch('morning', token, chat_id, user_msg_id=msg_id)
     elif cmd == '/logs':             _dispatch('logs', token, chat_id, user_msg_id=msg_id)
+    elif cmd in ('/receive', '/strm', '/sharestrm'):
+        if _capture_resources(token, msg):
+            _send(token, chat_id, '📥 资源已登记，结果见我的网盘接收历史。', delete_user_msg=msg_id)
+        else:
+            _send(token, chat_id, '请在我的网盘开启 TG 接收。直接发115分享/磁力/ed2k按Web目录接收；/strm 分享链接 免转存生成STRM。')
     elif cmd == '/search':
         if not arg:
             _send(token, chat_id, '用法: <code>/search 关键词</code>',
@@ -905,9 +917,23 @@ def _note_poll_failure(e):
     log.warning('getUpdates 失败(连续 %d 次): %s', _state['fail_count'], e)
 
 
+def _capture_resources(token, msg, channel=False):
+    from app.cloud import receiving
+    if channel:
+        authorized = False
+    else:
+        authorized = _is_allowed((msg.get('from') or {}).get('id'), (msg.get('chat') or {}).get('id'))
+        text = (msg.get('text') or '').strip()
+        if text.startswith('/') and not text.split()[0].split('@')[0].lower() in ('/receive', '/strm', '/sharestrm'):
+            return []
+    import hashlib
+    return receiving.capture(msg, hashlib.sha256(token.encode()).hexdigest(), channel=channel, authorized=authorized)
+
+
 def _handle_update(token, upd):
     try:
         if 'message' in upd: _handle_command(token, upd['message'])
+        elif 'channel_post' in upd: _capture_resources(token, upd['channel_post'], channel=True)
         elif 'callback_query' in upd: _handle_callback(token, upd['callback_query'])
     except Exception as e:
         log.warning('处理 update 失败: %s', e)
@@ -936,7 +962,7 @@ def _poll_loop(gen):
             try:
                 resp = _api(token, 'getUpdates', {
                     'offset': _state['offset'], 'timeout': 25,
-                    'allowed_updates': json.dumps(['message', 'callback_query']),
+                    'allowed_updates': json.dumps(['message', 'callback_query', 'channel_post']),
                 }, timeout=35)
             except Exception as e:
                 _note_poll_failure(e)
@@ -960,6 +986,12 @@ def _poll_loop(gen):
             for upd in resp.get('result', []):
                 if not _alive(gen):
                     break  # 处理到一半被换代：剩下的留给新线程（offset 未推进），不重复执行
+                # Resource intake must persist before acknowledging Telegram's offset.
+                # Re-delivery uses the inbox event key and cannot enqueue a second write.
+                if 'message' in upd:
+                    _capture_resources(token, upd['message'])
+                elif 'channel_post' in upd:
+                    _capture_resources(token, upd['channel_post'], channel=True)
                 _state['offset'] = upd['update_id'] + 1
                 try:
                     engine.db_kv_set('tg_update_offset', str(_state['offset']))

@@ -6,7 +6,7 @@ from app.cloud import store
 from app.cloud.provider115 import for_account, numeric
 from app.cloud.errors import CloudError
 
-ROLES = ("source", "target", "transfer", "unknown", "strm")
+ROLES = ("source", "target", "transfer", "unknown", "strm", "magnet", "ed2k", "instant", "bot", "channel")
 
 
 def get(account_id):

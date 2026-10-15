@@ -105,10 +105,12 @@ def asset_for_path(path):
             return None
     else:
         mapped = None
-        base = cfg["emby_output_root"].rstrip("/")
-        if base and (path == base or path.startswith(base + "/")):
-            mapped = str(Path(cfg["output_root"]) / Path(path).relative_to(base))
-        else:
+        for source, destination in (("emby_output_root", "output_root"), ("share_emby_output_root", "share_output_root")):
+            base = cfg[source].rstrip("/")
+            if base and (path == base or path.startswith(base + "/")):
+                mapped = str(Path(cfg[destination]) / Path(path).relative_to(base))
+                break
+        if mapped is None:
             from app import engine
 
             converted = engine.emby_path_to_container(path)

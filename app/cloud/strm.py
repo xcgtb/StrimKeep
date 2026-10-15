@@ -41,8 +41,8 @@ def link(asset_id, nonce):
     )
 
 
-def root():
-    path = Path(settings.get()["output_root"])
+def root(kind="personal"):
+    path = Path(settings.get()["share_output_root" if kind == "share" else "output_root"])
     if not path.is_absolute() or not path.is_dir() or path.is_symlink():
         raise CloudError("STRM 输出目录不可见，请检查路径挂载", 409)
     for parent in (path, *path.parents):
@@ -70,7 +70,7 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def publish(path, data, previous=None):
+def publish(path, data, previous=None, *, base=None):
     """No overwrite unless the persisted previous digest proves file ownership."""
     if path.exists():
         if path.is_symlink() or not path.is_file():
@@ -81,7 +81,7 @@ def publish(path, data, previous=None):
         if previous is None or digest(old) != previous:
             raise CloudError("目标文件已有其他内容，已保留原文件", 409)
     path.parent.mkdir(parents=True, exist_ok=True)
-    base = root()
+    base = base if base is not None else root()
     target(base, str(path.relative_to(base)))
     temp = path.parent / (".strimkeep-" + secrets.token_hex(12))
     fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
@@ -205,13 +205,21 @@ def fetch_artwork(poster_path):
         raise CloudError("海报下载失败，可稍后重新同步", 502) from None
 
 
-def generate(account_id, row, media, scope_cid=None, companions=None, provider=None):
+def generate(account_id, row, media, scope_cid=None, companions=None, provider=None, source_context=None):
     companions = companions or []
     if len({r["id"] for r in [row, *companions]}) != 1 + len(companions) or any(
         r["is_dir"] or r["parent_id"] != row["parent_id"] for r in companions
     ):
         raise CloudError("关联文件必须为同目录内不重复的普通文件", 409)
-    base = root()
+    share = source_context is not None
+    if share and (source_context.get("source_kind") != "share" or not source_context.get("share_id")):
+        raise CloudError("分享来源身份无效", 409)
+    base = root("share") if share else root()
+    file_key = "share:" + source_context["share_id"] + ":" + row["id"] if share else row["id"]
+    def output(path, data, previous=None):
+        if share:
+            return publish(path, data, previous, base=base)
+        return publish(path, data, previous)
     cfg = settings.get()
     relative = (
         media["directory"]
@@ -226,7 +234,7 @@ def generate(account_id, row, media, scope_cid=None, companions=None, provider=N
         with store.db() as con:
             found = con.execute(
                 "SELECT id FROM cloud_assets WHERE account_id=? AND file_id=? AND json_extract(payload,'$.output_root')=?",
-                (account_id, row["id"], str(base)),
+                (account_id, file_key, str(base)),
             ).fetchall()
         if len(found) > 1:
             raise CloudError("同一源文件存在多个未明确的本地引用", 409)
@@ -269,6 +277,7 @@ def generate(account_id, row, media, scope_cid=None, companions=None, provider=N
             "owned": [],
             "warnings": [],
             "companions": companions or [],
+            **(source_context or {}),
         }
         with store.db() as con:
             con.execute(
@@ -277,7 +286,7 @@ def generate(account_id, row, media, scope_cid=None, companions=None, provider=N
                 (
                     asset_id,
                     account_id,
-                    row["id"],
+                    file_key,
                     str(path),
                     store.encode(payload),
                     nonce,
@@ -285,7 +294,7 @@ def generate(account_id, row, media, scope_cid=None, companions=None, provider=N
                     time.time(),
                 ),
             )
-        publish(path, content, previous)
+        output(path, content, previous)
         if cfg["nfo_enabled"]:
             np = path.with_suffix(".nfo")
             data = nfo(media)
@@ -294,7 +303,7 @@ def generate(account_id, row, media, scope_cid=None, companions=None, provider=N
                 for x in (asset or {}).get("payload", {}).get("owned", [])
             }
             try:
-                publish(np, data, old_owned.get(str(np)))
+                output(np, data, old_owned.get(str(np)))
                 payload["owned"].append({"path": str(np), "digest": digest(data)})
             except CloudError:
                 payload["metadata_pending"] = True
@@ -314,7 +323,7 @@ def generate(account_id, row, media, scope_cid=None, companions=None, provider=N
                 if provider is None:
                     raise CloudError("字幕来源连接不可用", 409)
                 data = fetch_sidecar(provider, follower)
-                publish(sidecar, data, old_owned.get(str(sidecar)))
+                output(sidecar, data, old_owned.get(str(sidecar)))
                 payload["owned"].append(
                     {
                         "path": str(sidecar),
@@ -328,7 +337,7 @@ def generate(account_id, row, media, scope_cid=None, companions=None, provider=N
             poster = path.with_name(path.stem + "-poster.jpg")
             try:
                 data = fetch_artwork(media["poster_path"])
-                publish(poster, data, old_owned.get(str(poster)))
+                output(poster, data, old_owned.get(str(poster)))
                 payload["owned"].append({"path": str(poster), "digest": digest(data)})
             except CloudError as error:
                 payload["warnings"].append(str(error))
@@ -355,7 +364,10 @@ def generate(account_id, row, media, scope_cid=None, companions=None, provider=N
                 "UPDATE cloud_assets SET state='active',payload=?,updated=? WHERE id=?",
                 (store.encode(payload), time.time(), asset_id),
             )
-        return store.asset(asset_id)
+        published = store.asset(asset_id)
+        from app.cloud import emby_library
+        emby_library.watch(published)
+        return published
 
 
 def recover():
@@ -369,10 +381,12 @@ def recover():
         value = store.asset(asset_id)
         path = Path(value["local_path"])
         try:
-            base = root()
+            base = root("share") if value["payload"].get("source_kind") == "share" else root()
             target(base, str(path.relative_to(base)))
             good = (
                 path.is_file()
+                and value["payload"]["output_root"] == str(base)
+                and value["payload"]["root_identity"] == [base.stat().st_dev, base.stat().st_ino]
                 and digest(path.read_bytes()) == value["payload"]["digest"]
             )
         except (OSError, ValueError, CloudError):
@@ -416,7 +430,7 @@ def reconcile(account_id, scope_cid, seen):
         ids = [
             r[0]
             for r in con.execute(
-                "SELECT id FROM cloud_assets WHERE account_id=? AND state='active' AND json_extract(payload,'$.scope_cid')=? AND json_extract(payload,'$.output_root')=?",
+                "SELECT id FROM cloud_assets WHERE account_id=? AND state='active' AND coalesce(json_extract(payload,'$.source_kind'),'personal')='personal' AND json_extract(payload,'$.scope_cid')=? AND json_extract(payload,'$.output_root')=?",
                 (account_id, str(scope_cid), str(base)),
             )
         ]

@@ -39,7 +39,7 @@ def request_stop(job_id):
         row = con.execute("SELECT kind,state,payload FROM cloud_jobs WHERE id=?", (job_id,)).fetchone()
         if not row:
             raise CloudError("任务不存在", 404)
-        if row[0] not in ("organize", "workflow", "transfer", "sync"):
+        if row[0] not in ("organize", "workflow", "transfer", "sync", "share_strm"):
             raise CloudError("此任务不支持停止整理", 409)
         if row[1] not in ("queued", "running", "stopped"):
             raise CloudError("任务已结束，请查看结果", 409)
@@ -58,7 +58,7 @@ def request_stop(job_id):
 
 
 def enqueue(kind, payload, con=None):
-    if kind not in ("transfer", "organize", "sync", "workflow", "categories", "publish"):
+    if kind not in ("transfer", "organize", "sync", "workflow", "categories", "publish", "share_strm", "intake", "channel", "maintenance"):
         raise CloudError("任务类型不受支持")
     job_id = store.ident()
     now = time.time()
@@ -149,6 +149,8 @@ def execute(job_id):
         if result.get("stopped"):
             state = "stopped"
         message = "已在安全边界停止" if state == "stopped" else "部分项目需要处理" if state == "needs_review" else "任务完成"
+        if state == "success" and row[0] in ("intake", "channel"):
+            message = "接收请求已提交，等待转存任务或115云下载完成" if result.get("accepted") else "规则未匹配，未接收资源"
     except JobStopped as error:
         result, state, message = error.result, "stopped", str(error)
     except CloudError as error:
@@ -180,7 +182,9 @@ def execute(job_id):
 def notify(job_id, kind, state, message):
     from app.cloud import settings
 
-    if not settings.get()["notify_enabled"]:
+    cfg = settings.get()
+    category = {"intake":"transfer", "transfer":"transfer", "organize":"organize", "workflow":"organize", "categories":"organize", "sync":"strm", "publish":"strm", "share_strm":"strm", "channel":"channel", "maintenance":"maintenance"}.get(kind, "organize")
+    if not cfg["notify_enabled"] or not cfg["notify_"+category]:
         return
     from app.tg import notify_telegram
     import html
@@ -192,9 +196,19 @@ def notify(job_id, kind, state, message):
         "workflow": "自动整理",
         "categories": "创建分类",
         "publish": "延时 STRM",
+        "share_strm": "分享免转存 STRM", "intake": "资源接收", "channel": "频道接收", "maintenance": "日常维护",
     }
     try:
-        sent = bool(notify_telegram("115 " + names[kind] + "：" + html.escape(message)))
+        job = store.job(job_id)
+        text = "115 " + names.get(kind, kind) + "：" + html.escape(message)
+        result = (job or {}).get("result", {})
+        if cfg["notify_strm_details"]:
+            generated = (result.get("organization") or result).get("generated", [])
+            for item in generated[:20]:
+                text += "\n" + html.escape(str(item.get("path", "") if isinstance(item, dict) else item))
+            if len(generated) > 20:
+                text += "\n其余 " + str(len(generated)-20) + " 项见任务历史"
+        sent = bool(notify_telegram(text))
     except Exception:
         sent = False
     with store.db() as con:
@@ -223,6 +237,8 @@ def details(job_id):
     result["steps"] = [
         {"step": r[0], "state": r[1], "result": json.loads(r[2])} for r in rows
     ]
+    from app.cloud import replacement
+    result['upgrades'] = replacement.summary(job_id)
     return result
 
 
@@ -354,6 +370,12 @@ def verify_transfer(job_id):
 
 def schedule():
     from app.cloud import schedules
+    from app.cloud import maintenance, receiving
+    maintenance.schedule()
+    receiving.schedule()
+    from app.cloud import channel_reader, emby_library
+    channel_reader.schedule()
+    emby_library.schedule()
     now = time.time()
     with store.db() as con:
         rows = con.execute(

@@ -44,3 +44,12 @@
 .cw-directory-footer{margin-top:16px;padding-top:12px;border-top:1px solid var(--border)}
 #tab-cloud .cw-directory-dialog button:disabled{opacity:.5;cursor:default}
 @media(max-width:700px){.cw-directory-dialog-body{padding:16px}.cw-directory-entry{font-size:13px}}
+
+/* Reference grouping, shared theme tokens. */
+#cw-organize .cw-settings-group,#cw-link-emby,#cw-link-reader,#cw-link-intake{padding:18px;margin:16px 0;border:1px solid var(--border);border-radius:12px;background:var(--surface)}
+#cw-organize summary{font-weight:600;font-size:15px}
+.cw-organize-toolbar{display:flex;gap:12px;align-items:end;flex-wrap:wrap;padding:12px 0}
+.cw-organize-toolbar label{flex:1;min-width:220px}
+.cw-intake-source{padding:10px 0;border-bottom:1px solid var(--border)}
+#cw-link-emby input,#cw-link-reader input{max-width:100%}
+#cw-organize .cw-settings-group{scroll-margin-top:100px}
