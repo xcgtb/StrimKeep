@@ -24,7 +24,7 @@ StrimKeep 是一款面向 **飞牛 OS / Linux NAS + 302 STRM + Emby** 的影视�
 
 资源接收新增磁力/ed2k云下载、受校验限制的115://秒传、白名单TG链接接收和Bot可访问频道的新消息监控；可点选TMDB筛选并配置关键词/正则，提供独立接收历史。115账号页可配置签到及回收站保留期Cron清理，播放页可细分通知和Emby生成联动开关；均沿用原主题，自动接收/维护默认关闭，见[资源接收与维护说明](docs/MY_DRIVE_RECEIVING_ACCEPTANCE.md)。
 
-分享支持直接免转存生成分享库 STRM：在资源接收页选中分享视频或目录，识别预览、修正 TMDB 后确认生成，复用命名分类与可选 ffprobe；默认输出 `/media/share`，播放从分享解析，取消或失效后停止解析。全程不转存、不改动 115；来源身份与自己网盘隔离，分享治理只清理 NAS，见[分享免转存说明](docs/MY_DRIVE_SHARE_STRM_ACCEPTANCE.md)。
+分享支持直接免转存生成分享库 STRM：在资源接收页选中分享视频或目录，识别预览、修正 TMDB 后确认生成，复用命名分类与可选 ffprobe；默认输出 `/strm/share`，播放从分享解析，取消或失效后停止解析。全程不转存、不改动 115；来源身份与自己网盘隔离，分享治理只清理 NAS，见[分享免转存说明](docs/MY_DRIVE_SHARE_STRM_ACCEPTANCE.md)。
 
 整理八维默认仅预览，可明确开启执行洗版与杜比/非杜比目录共存；新版本 STRM 发布核实后按登记身份清理旧源与引用，异常支持核实继续，见[八维执行说明](docs/MY_DRIVE_QUALITY_EXECUTION_ACCEPTANCE.md)。
 
@@ -246,6 +246,10 @@ services:
       # 只替换冒号左侧，右侧容器路径及 :rslave 保持不变
       - /你的网盘源视频目录:/media/cloud:rslave
 
+      # 本项目生成的 STRM 独立保存，不混入上游治理目录
+      # 启动前创建 ./strm/local 和 ./strm/share
+      - ./strm:/strm:rw
+
     logging:
       driver: json-file
       options:
@@ -262,7 +266,7 @@ services:
 
 `version: "3.8"` 用于兼容仍支持该格式的旧版 Compose；新版 Compose 可能提示该字段已过时，不影响正常解析。**这并不意味着所有旧版 Docker 都能运行最新镜像。**
 
-**部署时必须修改：** `WEB_PASSWORD` 和三处以 `/你的…目录` 开头的占位路径，填写 NAS 上**已经存在的真实绝对路径**。三个挂载点分别是：本地 STRM、分享 STRM、实际视频源文件；**只改冒号左侧**，容器内 `/media/local`、`/media/share`、`/media/cloud` 保持不变。无论使用 115、123 或光鸭，均按实际挂载目录填写。登录后再通过 Web 设置 Emby、TMDB 等服务参数。
+**部署时必须修改：** `WEB_PASSWORD` 和三处以 `/你的…目录` 开头的占位路径，填写 NAS 上**已经存在的真实绝对路径**。三个既有挂载点分别是：上游本地 STRM、上游分享 STRM、实际视频源文件；**只改冒号左侧**，容器内 `/media/local`、`/media/share`、`/media/cloud` 保持不变。无论使用 115、123 或光鸭，均按实际挂载目录填写。登录后再通过 Web 设置 Emby、TMDB 等服务参数。本项目生成输出使用新增的 `./strm:/strm:rw`，Web 默认个人输出 `/strm/local`、分享输出 `/strm/share`；启动前先创建 `strm/local`、`strm/share`。Emby 需另行挂载该新目录，具体见[生成输出路径说明](docs/DEPLOYMENT.md#本项目生成的-strm-放哪里)。
 
 > **目录与权限检查**：请在飞牛文件管理中确认上述目录已经存在、确实能看到需要的文件，并验证权限。源目录如只读、挂载断开或不支持删除，本地库源文件联动清理就无法完成。首次使用建议在独立测试目录验证；不要把尚未挂载的路径误当作空目录。
 >

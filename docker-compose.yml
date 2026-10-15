@@ -20,10 +20,12 @@ services:
       - ./data:/data
 
       # ① 本地 STRM 库：存放本地库的 .strm 文件
+      # 沿用你现有的上游 STRM 目录，供治理扫描使用
       # 清理本地 STRM 时，只有精确匹配到源视频且删除成功，才继续清理 STRM
       - /你的本地STRM库目录:/media/local:rw
 
       # ② 分享 STRM 库：存放分享库的 .strm 文件
+      # 沿用你现有的上游分享 STRM 目录，供治理扫描使用
       # 清理分享库只删除 NAS 上的 STRM 和附属文件，不触碰网盘源视频
       - /你的分享STRM库目录:/media/share:rw
 
@@ -31,6 +33,11 @@ services:
       # 必须与①本地 STRM 库保持对应的相对目录结构；需验证可写、可删除
       # 只替换冒号左侧，右侧容器路径及 :rslave 保持不变
       - /你的网盘源视频目录:/media/cloud:rslave
+
+      # ④ StrimKeep 自己生成的 STRM，独立于上面的上游治理目录
+      # 启动前创建 ./strm/local 和 ./strm/share
+      # Web 个人输出填 /strm/local，分享输出填 /strm/share
+      - ./strm:/strm:rw
 
     logging:
       driver: json-file

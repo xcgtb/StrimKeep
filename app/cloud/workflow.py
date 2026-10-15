@@ -281,6 +281,8 @@ def quality_preview(provider, account, target_cid, candidates, config, job_id=No
 def apply(plan_id, confirmed=False, generate=True):
     if confirmed is not True:
         raise CloudError("请确认整理计划")
+    from app.cloud import pipeline
+    pipeline.prepare(generate)
     with store.db() as con:
         row = con.execute(
             "SELECT payload,expires,state FROM cloud_plans WHERE id=?", (plan_id,)
@@ -437,6 +439,8 @@ def organize(job_id, payload):
     data = json.loads(row[0])
     if "naming_snapshot" in data and data["naming_snapshot"] != naming_snapshot(settings.get()):
         raise CloudError("命名或分类配置已变化，请重新预览", 409)
+    from app.cloud import pipeline
+    pipeline.prepare(payload.get("generate", True))
     provider = verify_account(data)
     if hasattr(provider, "require"):
         provider.require("organize")
@@ -605,6 +609,9 @@ def transfer_submit(
     if not ids or len(set(ids)) != len(ids) or len(ids) > 100:
         raise CloudError("选择的文件无效")
     target_cid = numeric(target_cid)
+    if organize_target:
+        from app.cloud import pipeline
+        pipeline.prepare(generate)
     with store.db() as con:
         row = con.execute(
             "SELECT payload,state,expires FROM cloud_plans WHERE id=?", (preview_id,)
@@ -633,6 +640,9 @@ def transfer_submit(
 
 def transfer(job_id, payload):
     provider = verify_account(payload)
+    if payload.get("organize_target"):
+        from app.cloud import pipeline
+        pipeline.prepare(payload.get("generate", True))
     jobs.checkpoint(job_id)
     if hasattr(provider, "require"):
         provider.require("transfer")
@@ -728,6 +738,8 @@ def receipt_mapping(payload, received):
 
 
 def sync(job_id, payload):
+    from app.cloud import pipeline
+    pipeline.output_ready()
     provider = verify_account(payload)
     _directory(provider, payload["source_cid"])
     rows = walk(provider, payload["source_cid"], job_id=job_id)
@@ -822,6 +834,8 @@ def run(job_id, kind, payload):
     if kind == "sync":
         return sync(job_id, payload)
     if kind == "workflow":
+        from app.cloud import pipeline
+        pipeline.prepare()
         if payload.get("intake_rule"):
             from app.cloud import intake_automation
             intake_automation.ready(verify_account(payload),payload["source_cid"])
@@ -866,6 +880,9 @@ def transfer_link(account_id, link, password, organize, expected_revision, reque
     archive=cfg["directories"]["target"] if organize else None
     if not target or (organize and not archive):
         raise CloudError("请先在当前页选择转存目录；自动整理还需要归档目录",409)
+    if organize:
+        from app.cloud import pipeline
+        pipeline.prepare()
     first=preview_share(account_id,link,password)
     if first["has_more"] or not first["items"]:
         raise CloudError("分享根目录为空或超过100项，请点击浏览分享分批选择",409)

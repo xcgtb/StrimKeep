@@ -13,9 +13,9 @@ from app.cloud.quality8 import DEFAULT as QUALITY8_DEFAULT
 
 DEFAULTS = {
     "public_url": "",
-    "output_root": "/media/local",
+    "output_root": "/strm/local",
     "emby_output_root": "",
-    "share_output_root": "/media/share",
+    "share_output_root": "/strm/share",
     "share_emby_output_root": "",
     "proxy_enabled": False,
     "proxy_port": 8322,

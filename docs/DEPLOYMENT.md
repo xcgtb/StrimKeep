@@ -11,11 +11,39 @@
 | 用途 | 容器内固定路径 | 宿主机路径示例 | 说明 |
 |---|---|---|---|
 | 应用持久化 | `/data` | `./data` | SQLite、配置、缓存、日志、订阅、治理计划等 |
+| 本项目生成 STRM | `/strm` | `./strm` | 个人输出 `/strm/local`，分享输出 `/strm/share`，独立于上游治理目录 |
 | 本地 STRM 库 | `/media/local` | `/vol1/1000/TgtoDrive/strm/115网盘/影视媒体库` | **STRM 文件目录**，不是视频源目录 |
 | 分享 STRM 库 | `/media/share` | `/vol1/1000/TgtoDrive/strm/115网盘/分享影视库` | 分享库的 **STRM 文件目录** |
 | CloudDrive2 源目录 | `/media/cloud` | `/vol1/1000/docker/clouddrive2/CloudDrive/影视媒体库` | 对应本地 STRM 的 **115 真实源文件目录** |
 
 **路径规则**：以上仅为飞牛 OS 示例，部署时需按你的实际目录修改宿主机路径。冒号右侧的 `/media/local`、`/media/share`、`/media/cloud` 及各自挂载选项应保持不变。
+
+### 本项目生成的 STRM 放哪里？
+
+原有 `/media/local`、`/media/share` 可以继续挂载上游生成的 STRM，供治理扫描使用。StrimKeep 自己生成的文件使用新的独立输出挂载：
+
+```yaml
+# 加在 StrimKeep 服务的 volumes 下，原有挂载保留
+- ./strm:/strm:rw
+```
+
+启动前在部署目录创建子目录：
+
+```bash
+mkdir -p /vol1/1000/docker/StrimKeep/strm/local \
+         /vol1/1000/docker/StrimKeep/strm/share
+```
+
+| 用途 | Web「STRM 生成 → 输出与播放地址」 | NAS 示例路径 |
+| --- | --- | --- |
+| 本项目个人网盘 STRM | `/strm/local` | `/vol1/1000/docker/StrimKeep/strm/local` |
+| 本项目分享 STRM | `/strm/share` | `/vol1/1000/docker/StrimKeep/strm/share` |
+
+新增挂载后，在部署目录执行 `docker compose up -d --force-recreate strimkeep` 应用挂载。影片与季目录按命名、分类规则按需创建；输出根目录必须存在且可写。升级保留已经保存的输出设置；若原来保存的是上游路径，需要在 Web 改成上述独立路径并保存。
+
+Emby 要读取这些新文件，还需在 Emby 容器新增宿主机挂载，例如 `/vol1/1000/docker/StrimKeep/strm:/strimkeep-strm:ro`，然后添加 `/strimkeep-strm/local`、`/strimkeep-strm/share` 为相应媒体库目录。StrimKeep 中对应的 Emby 根目录也填这两个 Emby 可见路径。原有上游 Emby 挂载继续保留。
+
+独立生成目录不会自动成为现有双库治理扫描根目录；治理仍按原来的路径扫描。需要治理新生成的目录时，再明确调整治理映射，不能假定两套路径相同。
 
 ### 为什么要区分本地 STRM 与 CD2 源目录？
 

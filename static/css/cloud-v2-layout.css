@@ -1,4 +1,40 @@
 /* Follow the existing palette. Navigation lives in the application sidebar. */
+#tab-cloud .cw-config-body>label{display:block;padding:14px;margin:12px 0;border:1px solid var(--border);border-radius:12px;background:var(--panel);font-size:14px;line-height:1.7}
+#tab-cloud .cw-config-body>.cw-form-grid{margin:14px 0}
+#tab-cloud .cw-config-body>.cw-form-grid>label{padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--panel)}
+#tab-cloud .cw-config-body .hint{line-height:1.75}
+#tab-cloud .cw-token-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:8px;margin:10px 0}
+#tab-cloud .cw-token{display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--border);border-radius:10px;background:var(--surface);min-width:0}
+#tab-cloud .cw-token>span{flex:1;min-width:0;overflow-wrap:anywhere;font-size:14px}
+#tab-cloud .cw-token>button{border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--text);width:30px;min-height:30px;cursor:pointer;font:inherit}
+#tab-cloud .cw-token-entry{display:flex;gap:8px;align-items:center}
+#tab-cloud .cw-token-entry>input{flex:1;min-width:0;border:1px solid var(--border);border-radius:9px;padding:10px;background:var(--surface);color:var(--text);font:inherit}
+#tab-cloud .cw-token-entry>.btn{flex:0 0 auto}
+#tab-cloud .cw-module-nav{display:flex;gap:6px;flex-wrap:wrap;padding:6px;border:1px solid var(--border);border-radius:12px;background:var(--surface);margin:16px 0}
+#tab-cloud .cw-module-nav button{flex:1 0 auto;border:0;border-radius:8px;background:transparent;color:var(--text);padding:11px 16px;font:inherit;font-size:13px;cursor:pointer;min-height:42px}
+#tab-cloud .cw-module-nav button.on{background:var(--brand);color:#fff;-webkit-text-fill-color:#fff;font-weight:650}
+#tab-cloud .cw-modular [data-cw-module][hidden]{display:none!important}
+#tab-cloud .cw-modular>.cw-config-card{margin:14px 0}
+#tab-cloud .cw-modular>.cw-config-card>.cw-config-summary{padding:18px 20px}
+#tab-cloud .cw-modular .cw-config-body{padding:18px 20px}
+#tab-cloud .cw-modular .cw-config-copy strong{font-size:15px}
+#tab-cloud .cw-modular .hint{font-size:13px;line-height:1.7}
+#tab-cloud .cw-modular label{font-size:14px;line-height:1.65}
+#tab-cloud .cw-modular input:not([type=checkbox]),#tab-cloud .cw-modular select,#tab-cloud .cw-modular textarea{min-height:42px;font-size:14px}
+#tab-cloud .cw-pipeline{border:1px solid var(--border);border-radius:16px;padding:20px;margin:16px 0;background:var(--surface)}
+#tab-cloud .cw-pipeline h3{margin:0 0 8px;font-size:17px}
+#tab-cloud .cw-pipeline-checks{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:10px;margin:16px 0}
+#tab-cloud .cw-pipeline-check{display:flex;flex-direction:column;align-items:flex-start;gap:9px;min-width:0;text-align:left;padding:14px;background:var(--panel);border:1px solid var(--border);border-radius:12px;color:var(--text);cursor:pointer;font:inherit}
+#tab-cloud .cw-pipeline-check>span{font-size:11px;padding:3px 7px;border-radius:5px;background:var(--surface);color:var(--text-dim)}
+#tab-cloud .cw-pipeline-check.is-missing{border-color:var(--brand)}
+#tab-cloud .cw-pipeline-check.is-missing>span{color:var(--brand)}
+#tab-cloud .cw-pipeline-check strong{font-size:14px}
+#tab-cloud .cw-pipeline-check small{font-size:12px;line-height:1.65;overflow-wrap:anywhere;color:var(--text-dim)}
+#tab-cloud .cw-pipeline-note{grid-column:1 / -1;font-size:12px;color:var(--text-dim);line-height:1.7;margin:3px 0}
+#tab-cloud .cw-pipeline-actions{display:flex;flex-wrap:wrap;gap:7px}
+#tab-cloud .cw-modular #cw-categories{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:12px 0}
+#tab-cloud .cw-modular #cw-categories>label{border:1px solid var(--border);border-radius:9px;padding:9px 12px;margin:0}
+@media(max-width:610px){#tab-cloud .cw-module-nav{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}#tab-cloud .cw-module-nav button{padding:10px 4px;font-size:12px}#tab-cloud .cw-pipeline{padding:14px}#tab-cloud .cw-pipeline-checks{grid-template-columns:repeat(2,minmax(0,1fr))}#tab-cloud .cw-modular .cw-config-body{padding:14px}#tab-cloud .cw-pipeline-actions>.btn{flex:1 1 135px;margin:0}}
 .cw-v2-active .cw-layout{display:block}
 .cw-v2-active .cw-sidebar{display:none}
 .cw-v2-active .cw-content{min-width:0}
@@ -18,6 +54,7 @@
 .cw-directory-field [data-directory-label]{flex-basis:100%;margin:0;font-size:.85rem;color:var(--muted);overflow-wrap:anywhere}
 .cw-v2-active .cw-config-toolbar{position:sticky;top:0;z-index:3;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:12px}
 .cw-v2-active .cw-config-save{background:var(--brand);color:var(--brand-contrast,#fff)}
+#tab-cloud.cw-v2-active .cw-config-save{background:var(--brand);border-color:var(--brand);color:#fff;-webkit-text-fill-color:#fff}
 /* Mobile blank-button fix: beat #tab-cloud .cw-config-save specificity. */
 #tab-cloud.cw-v2-active .cw-config-toolbar .cw-config-save,
 #tab-cloud.cw-v2-active .cw-directory-field button[data-save-directories]{
@@ -89,3 +126,6 @@
 .cw-config-toolbar>[role=status]{flex-basis:100%;order:4}
 .cw-config-toolbar>[role=status]:empty{display:none}
 @media(max-width:610px){.cw-quality-controls{display:grid;grid-template-columns:29px 29px;gap:5px}.cw-quality-controls label{grid-column:1 / -1;justify-content:center}.cw-quality-head{gap:7px}.cw-quality-rule{padding:10px}.cw-config-toolbar .cw-config-search{min-width:120px;flex:1}.cw-toolbar-more>div{position:fixed;right:20px;top:auto;max-width:240px}}
+
+@media(max-width:760px){#tab-cloud .cw-config-body>label{padding:12px}#tab-cloud .cw-token-list{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:610px){#tab-cloud.cw-v2-active .cw-config-toolbar>.cw-config-search{min-width:0;flex:1 1 100px}#tab-cloud.cw-v2-active .cw-config-toolbar>button:not(.cw-config-save),#tab-cloud.cw-v2-active .cw-config-toolbar>.cw-toolbar-more{display:none}#tab-cloud.cw-v2-active .cw-config-toolbar .cw-config-save{min-width:92px;padding:10px}#tab-cloud .cw-pipeline-check{padding:11px;gap:6px}}

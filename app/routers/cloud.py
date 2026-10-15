@@ -429,6 +429,8 @@ def sync(body: SyncInput):
     account = call(store.account, body.account_id)
     if not account:
         raise HTTPException(404, "账号不存在")
+    from app.cloud import pipeline
+    call(pipeline.output_ready)
     payload = body.model_dump()
     payload["account_revision"] = account["revision"]
     return {"status": "success", "job_id": call(jobs.enqueue, "sync", payload)}
@@ -559,6 +561,13 @@ def stop_organizing(job_id: str, body: dict):
 def get_settings():
     from app.cloud import media_probe
     return {"status": "success", "settings": call(settings.get), "capabilities": {"ffprobe_available": media_probe.available()}}
+
+
+@router.get("/accounts/{account_id}/pipeline")
+def pipeline_status(account_id: str, response: Response):
+    from app.cloud import pipeline
+    response.headers["Cache-Control"] = "no-store"
+    return {"status": "success", **call(pipeline.status, account_id)}
 
 
 @router.post("/settings")

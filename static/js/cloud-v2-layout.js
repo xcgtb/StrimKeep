@@ -23,7 +23,7 @@
       var section=bar.closest('section'),save=document.createElement('button');save.type='button';save.className='btn cw-config-save';save.textContent='保存修改';
       var commands={channels:'saveChannel',transfer:'saveReceiving'};
       if(section.id==='cw-organize'){
-        var original=bar.querySelector('[data-link-action="saveOrganize"]');if(original)original.textContent='保存修改';
+        var original=bar.querySelector('[data-link-action="saveOrganize"]');if(original){original.textContent='保存修改';original.classList.add('cw-config-save');}
       }else if(commands[section.id.replace('cw-','')]){
         var command=commands[section.id.replace('cw-','')];
         save.onclick=function(){var selector='[data-svc="'+command+'"]',target=Array.from(section.querySelectorAll(selector)).find(function(n){return n!==save;});if(target)target.click();};bar.append(save);

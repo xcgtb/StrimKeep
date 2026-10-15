@@ -338,6 +338,7 @@ html[data-theme="dark"] .card::before{opacity:.15}
 }
 .btn:hover{transform:translateY(-1px);box-shadow:0 6px 16px rgba(0,122,255,.32);background-position:100% 0}
 .btn:active{transform:translateY(0)}
+.btn{-webkit-text-fill-color:currentColor}
 .btn:disabled{background:var(--surface-active);color:var(--text-dim);cursor:not-allowed;transform:none;box-shadow:none}
 .btn.gray{
   background:var(--surface-hover);color:var(--text-mid);

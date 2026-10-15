@@ -105,6 +105,9 @@ def make_payload(account_id, items, source="web", target=None, organize=False):
         selected[item["kind"]] = directory["id"]
     if organize and not roots["target"]:
         raise CloudError("请先选择整理归档目录", 409)
+    if organize:
+        from app.cloud import pipeline
+        pipeline.prepare()
     return {"account_id": account_id, "account_revision": account["revision"], "directory_revision": cfg["revision"], "sealed": credentials.seal(items), "targets": selected, "organize_target": roots["target"]["id"] if organize else None, "origin": source}
 
 

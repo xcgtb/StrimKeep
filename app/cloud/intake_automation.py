@@ -120,6 +120,8 @@ def run_now(account_id, expected_revision, source_cid=None):
     account = store.account(account_id)
     if not account:
         raise CloudError('账号不存在',404)
+    from app.cloud import pipeline
+    pipeline.prepare()
     payload = {'account_id':account_id,'account_revision':account['revision'],
                'source_cid':source,'target_cid':roots['target']['id'],
                'unknown_cid':roots['unknown']['id'] if roots['unknown'] else None,'overrides':{}}

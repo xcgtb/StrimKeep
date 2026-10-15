@@ -9,7 +9,8 @@ w.fetch=async(url,opt)=>{const query=new URLSearchParams(url.split('?')[1]||'');
  if(url.endsWith('/status'))body={proxy:{running:false},accounts:[{id:'A',name:'Fixture',uid:'123',authorization:{cookie:true}}]};
  else if(url.endsWith('/directories'))body={directories:{source:{id:'1',name:'来源'},target:{id:'2',name:'归档'},transfer:{id:'3',name:'转存'}},revision:1};
  else if(url.endsWith('/files')){body={items:[],has_more:false,total:0};if(fileFixture){if(query.get('cid')==='0')body={items:[{id:'90071992547409931',name:'影视目录',is_dir:true},{id:'90071992547409932',name:'根目录视频.mkv',size:1024,is_dir:false}],has_more:false,total:2};else{childReads++;body={items:[{id:'90071992547409933',name:'第1集.mkv',size:1073741824,is_dir:false},{id:'90071992547409934',name:'字幕.srt',size:512,is_dir:false},{id:'90071992547409935',name:'Season 02',is_dir:true}],has_more:false,total:3};}}}
- else if(url.endsWith('/settings'))body={settings:{},proxy:{running:false,reason:'fixture'}};
+ else if(url.endsWith('/settings'))body={settings:{public_url:'http://nas.example:8321',output_root:'/media/local',emby_output_root:'/strm',share_output_root:'/media/share',proxy_port:8322,video_extensions:['.mkv','.mp4'],metadata_extensions:['.srt']},proxy:{running:false,reason:'fixture'}};
+ else if(url.endsWith('/pipeline'))body={generate:true,checks:[{key:'source',ready:true,label:'待整理来源',detail:'来源',page:'organize',module:'organize-directories'},{key:'output',ready:false,label:'NAS STRM 输出',detail:'请设置输出目录',page:'strm',module:'strm-output'}]};
  else if(url.endsWith('/receiving'))body={revision:0,config:{tg_enabled:false}};
  else if(url.endsWith('/maintenance'))body={revision:0,config:{signin_enabled:false,recycle_enabled:false,signin_cron:'0 8 * * *',recycle_cron:'0 4 * * *',timezone:'Asia/Shanghai'}};
  else if(url.endsWith('/organizer-sources'))body={items:[{id:'3',name:'转存',roles:['分享']}],revision:1,target:{id:'2',name:'归档'}};
@@ -29,6 +30,19 @@ async function flush(){for(let i=0;i<50;i++)await Promise.resolve();}
  const tabs=['accounts','organize','transfer','strm','playback','channels'];
  for(const tab of tabs){w.openDrivePage(tab);await flush();assert(!doc.getElementById('cw-'+tab).hidden);assert(!doc.getElementById('cw-message').textContent.match(/undefined|null|不是函数|not a function/),doc.getElementById('cw-message').textContent);}
  w.openDrivePage('organize');await flush();
+ assert(!doc.querySelector('.cw-pipeline').hidden,'organizer starts on the workflow dashboard');
+ assert(doc.querySelector('[data-config-key="organize-1"]').hidden,'naming controls are absent from the run module');
+ assert.strictEqual(doc.querySelectorAll('#cw-pipeline-checks .cw-pipeline-check').length,2);
+ doc.querySelector('#cw-pipeline-checks .is-missing').click();await flush();assert(!doc.getElementById('cw-strm').hidden);assert(doc.querySelector('[data-config-key="strm-output"]').contains(doc.getElementById('cw-output')));
+ assert(!doc.querySelector('[data-config-key="strm-output"]').hidden);assert(doc.querySelector('[data-config-key="strm-scan"]').hidden);
+ w.openDrivePage('organize');await flush();
+ doc.querySelector('#cw-organize [data-module-target="naming"]').click();
+ const extensionInput=doc.getElementById('cw-video-extensions'),tokenEditor=extensionInput.nextElementSibling;
+ assert(extensionInput.hidden&&tokenEditor.querySelectorAll('.cw-token').length===2,'extensions are separate removable tokens');
+ tokenEditor.querySelector('input').value='avi';tokenEditor.querySelector('.cw-token-entry button').click();assert.strictEqual(extensionInput.value,'.mkv,.mp4,.avi');
+ w.openDrivePage('files');await flush();w.openDrivePage('organize');await flush();assert.strictEqual(extensionInput.value,'.mkv,.mp4,.avi','navigation preserves unsaved naming drafts');
+ doc.querySelector('#cw-organize [data-module-target="classification"]').click();assert(doc.querySelector('[data-config-key="organize-1"]').hidden);assert(!doc.querySelector('[data-config-key="organize-2"]').hidden);
+
  const rules=doc.getElementById('cw-quality8-rules');assert.strictEqual(rules.querySelectorAll('.cw-quality-rule').length,8);assert(!rules.querySelector('textarea'));assert([...rules.querySelectorAll('.cw-quality-editor')].every(n=>n.hidden));
  const firstRule=rules.querySelector('.cw-quality-rule');firstRule.querySelector('[data-quality-open]').click();await flush();assert(!rules.querySelector('.cw-quality-editor').hidden);
  assert.strictEqual(doc.getElementById('cw-rule-name').type,'hidden');assert.strictEqual(doc.getElementById('cw-sync-rule-name').type,'hidden');assert.strictEqual(doc.getElementById('cw-svc-channel-name').type,'hidden');assert.strictEqual(doc.getElementById('cw-link-emby-name').type,'hidden');

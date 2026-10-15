@@ -69,7 +69,7 @@
 .cw-config-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;position:sticky;top:78px;z-index:3;background:var(--surface);padding:10px;border:1px solid var(--border);border-radius:12px}
 .cw-config-toolbar label{flex:1;min-width:160px}
 #tab-cloud .cw-config-toolbar input{box-sizing:border-box;width:100%;margin:0;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font:inherit}
-#tab-cloud .cw-config-save{font-weight:600;color:var(--brand);border-color:var(--brand)}
+#tab-cloud .cw-config-save{font-weight:600;background:var(--brand);color:#fff;-webkit-text-fill-color:#fff;border-color:var(--brand)}
 #cw-transfer-status{position:sticky;top:150px;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text-mid);z-index:2;overflow-wrap:anywhere}
 .log-controls select,.log-controls input{max-width:100%;padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font:inherit}
 @media(max-width:760px){#tab-cloud .cw-config-summary{padding:15px;gap:10px;align-items:flex-start}.cw-config-symbol{display:none}#tab-cloud .cw-config-body{padding:2px 15px 15px}.cw-config-toolbar{top:76px}.cw-config-toolbar .btn{font-size:12px;margin:2px}.log-controls{flex-wrap:wrap}}

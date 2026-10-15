@@ -31,7 +31,7 @@ def signature(asset_id, nonce):
 def link(asset_id, nonce):
     base = settings.get()["public_url"].rstrip("/")
     if not base:
-        raise CloudError("请在播放设置中保存客户端可访问的服务地址", 409)
+        raise CloudError("请在「STRM 生成 → 输出与播放地址」保存客户端可访问的服务地址", 409)
     return (
         base
         + "/api/cloud/play/"
@@ -44,7 +44,7 @@ def link(asset_id, nonce):
 def root(kind="personal"):
     path = Path(settings.get()["share_output_root" if kind == "share" else "output_root"])
     if not path.is_absolute() or not path.is_dir() or path.is_symlink():
-        raise CloudError("STRM 输出目录不可见，请检查路径挂载", 409)
+        raise CloudError("STRM 输出目录不可见："+str(path)+"，请检查「STRM 生成 → 输出与播放地址」和路径挂载", 409)
     for parent in (path, *path.parents):
         if parent.is_symlink():
             raise CloudError("输出目录不能经过符号链接", 409)
