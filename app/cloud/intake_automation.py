@@ -30,7 +30,7 @@ def _outside(provider, source, target):
         cursor, seen = start, set()
         while True:
             if cursor == forbidden:
-                raise CloudError("归档、来源和接收目录不得相同或相互包含",409)
+                raise CloudError("归档不能位于来源内部，来源也不能位于归档内部（禁止相互包含）",409)
             if cursor == "0":
                 break
             if cursor in seen or len(seen) >= 64:
