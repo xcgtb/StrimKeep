@@ -67,25 +67,42 @@ def clean(value):
 
 
 def filename(value):
-    """Use dots for generated filename whitespace, retaining decimals and suffixes."""
-    value = re.sub(r"\s+", ".", clean(value))
-    return clean(re.sub(r"\.{2,}", ".", value))
+    """Preserve readable titles and caller-authored template separators."""
+    return clean(re.sub(r"\.{2,}", ".", clean(value)))
+
+
+def normalize_fields(values):
+    result = dict(values)
+    source = str(result.get("source") or "")
+    source = {"ultra hd blu-ray": "BluRay", "blu-ray": "BluRay"}.get(source.casefold(), source)
+    if source == "BluRay" and re.search(r"(?i)(?:^|[. _-])remux(?:$|[. _-])", str(result.get("original_name") or "")):
+        source += " REMUX"
+    result["source"] = source
+    result["codec"] = {"h265": "H.265", "h264": "H.264", "hevc": "H.265", "avc": "H.264"}.get(str(result.get("codec") or "").casefold(), result.get("codec") or "")
+    depth = str(result.get("bitdepth") or "")
+    result["bitdepth"] = re.sub(r"(?i)^(\d+)[ -]?bit$", r"\1-bit", depth)
+    dynamic = str(result.get("dynamic_range_label") or result.get("dynamic_range") or "")
+    if dynamic.casefold() == "dv" or dynamic.casefold().startswith("dolby vision"):
+        profile = re.search(r"(?i)profile\s+([1-9]\d?)\b", dynamic) or re.search(r"(?i)(?:dovi|dv|dolby[. _-]*vision)[. _-]*p([1-9]\d?)(?:$|[. _-])", str(result.get("original_name") or ""))
+        dynamic = "DoVi" + (" P" + profile[1] if profile else "")
+    elif dynamic == "HDR / HLG":
+        dynamic = "HLG" if re.search(r"(?i)\bHLG\b", str(result.get("original_name") or "")) else "HDR"
+    result["dynamic_range"] = dynamic
+    result["audio_codec"] = str(result.get("audio_codec_label") or result.get("audio_codec") or "")
+    return result
 
 
 def standard_filename(values, *, compact=False):
-    parts = [values["title"], values["year"]]
+    values = normalize_fields(values)
+    title = values["title"] + " (" + values["year"] + ")"
     if values["kind"] == "tv":
-        parts.append(f"S{int(values['season']):02d}E{int(values['episode']):02d}")
-    if not compact:
-        parts.append("[tmdb-" + str(values["tmdb_id"]) + "]")
-    for key in ("resolution", "source", "dynamic_range", "codec", "fps", "bitdepth", "audio_codec", "audio_layout"):
-        value = values.get(key)
-        if value:
-            if key == "source":
-                value = {"ultra hd blu-ray": "UHD.BluRay", "blu-ray": "BluRay"}.get(str(value).casefold(), value)
-            parts.append(str(value))
-    stem = ".".join(parts)
-    if values.get("release_group"):
+        title += f" - S{int(values['season']):02d}E{int(values['episode']):02d}"
+    keys = ("resolution", "codec") if compact else ("resolution", "source", "dynamic_range", "codec", "bitdepth", "fps")
+    parts = [str(values[k]) for k in keys if values.get(k)]
+    if not compact and values.get("audio_codec"):
+        parts.append(str(values["audio_codec"]) + (" " + str(values["audio_layout"]) if values.get("audio_layout") else ""))
+    stem = title + (" - " + ".".join(parts) if parts else "")
+    if not compact and values.get("release_group"):
         stem += "-" + str(values["release_group"])
     return filename(stem + values["ext"])
 

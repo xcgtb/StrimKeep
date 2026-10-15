@@ -163,7 +163,7 @@ def recognize(name, override=None, naming_config=None, probe=None):
     for target, source in (("screen_size", "resolution"), ("video_codec", "video_codec"), ("audio_codec", "audio_codec")):
         if probe_fields.get(source):
             parsed[target] = probe_fields[source]
-    base = f"{title} ({year}) [tmdb-{tmdb_id}]"
+    base = f"{title} ({year}) {{tmdb-{tmdb_id}}}"
     ext = PurePosixPath(name).suffix.lower()
     classification = categories.decide(naming, detail, kind, override)
     values = {
@@ -181,6 +181,7 @@ def recognize(name, override=None, naming_config=None, probe=None):
         value = dimensions[source]
         values[target] = "" if value == "其他 / 未识别" else value
     values.update({k: v for k, v in probe_fields.items() if k in templates.FIELDS and v})
+    values.update({k: v for k, v in probe_fields.items() if k in ("dynamic_range_label", "audio_codec_label") and v})
     relative = f'{categories.prefix(naming, values)}/{base}'
     if kind == "tv":
         relative += f"/Season {season:02d}"

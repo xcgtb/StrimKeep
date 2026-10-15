@@ -258,7 +258,7 @@ def test_naming_presets_keep_type_identity_and_original_extension(cloud):
     result = recognition.recognize(row["name"])
     assert (
         result["directory"].startswith("我的电影/")
-        and "[tmdb-44]" in result["directory"]
+        and "{tmdb-44}" in result["directory"]
     )
     assert "[tmdb-" not in result["name"] and result["name"].endswith(".mkv")
     settings.save({"naming_style": "original"})

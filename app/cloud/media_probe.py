@@ -48,6 +48,9 @@ def summarize(data):
     scan = "i" if video.get("field_order") in ("tt", "bb", "tb", "bt") else "p"
     codec = {"hevc": "H265", "h264": "H264", "av1": "AV1", "vp9": "VP9", "mpeg2video": "MPEG2"}.get(video.get("codec_name"), str(video.get("codec_name") or "").upper())
     audio_codec = {"eac3": "DDP", "ac3": "DD", "truehd": "TrueHD", "dts": "DTS", "aac": "AAC", "flac": "FLAC", "opus": "Opus"}.get(audio.get("codec_name"), str(audio.get("codec_name") or "").upper())
+    audio_label = audio_codec
+    if audio.get("codec_name") == "dts":
+        audio_label = {"DTS-HD MA": "DTS-HD MA", "DTS-HD HRA": "DTS-HD HRA", "DTS Express": "DTS Express"}.get(audio.get("profile"), audio_codec)
     fps = ""
     for field in ("avg_frame_rate", "r_frame_rate"):
         try:
@@ -63,8 +66,11 @@ def summarize(data):
         depth = match[1] if match else ("8" if video.get("pix_fmt") in ("yuv420p", "yuv422p", "yuv444p", "nv12", "rgb24", "bgr24") else "")
     dynamic_range = ""
     side = video.get("side_data_list") or []
+    dynamic_label = ""
     if any(isinstance(s, dict) and ("dovi" in str(s.get("side_data_type", "")).lower() or "dolby vision" in str(s.get("side_data_type", "")).lower()) for s in side):
         dynamic_range = "DV"
+        profile = next((s.get("dv_profile") for s in side if isinstance(s, dict) and ("dovi" in str(s.get("side_data_type", "")).lower() or "dolby vision" in str(s.get("side_data_type", "")).lower()) and type(s.get("dv_profile")) is int and 1 <= s["dv_profile"] <= 20), None)
+        dynamic_label = "DoVi" + (" P" + str(profile) if profile else "")
     elif any(isinstance(s, dict) and "2094-40" in str(s.get("side_data_type", "")) for s in side):
         dynamic_range = "HDR10+"
     elif video.get("color_transfer") == "smpte2084":
@@ -83,7 +89,7 @@ def summarize(data):
     layout = {"mono": "1.0", "stereo": "2.0", "5.1(side)": "5.1", "7.1(wide)": "7.1", "7.1(wide-side)": "7.1"}.get(layout, layout)
     if not re.fullmatch(r"\d{1,2}\.\d{1,2}", layout):
         layout = ""
-    return {"resolution": f"{tier}{scan}", "width": str(width), "height": str(height), "codec": codec, "video_codec": codec, "audio_codec": audio_codec, "audio_channels": channels, "audio_layout": layout, "dynamic_range": dynamic_range, "fps": fps, "bitdepth": depth+"bit" if depth in ("8", "9", "10", "12", "14", "16") else "", "duration": duration}
+    return {"resolution": f"{tier}{scan}", "width": str(width), "height": str(height), "codec": codec, "video_codec": codec, "audio_codec": audio_codec, "audio_codec_label": audio_label, "audio_channels": channels, "audio_layout": layout, "dynamic_range": dynamic_range, "dynamic_range_label": dynamic_label or dynamic_range, "fps": fps, "bitdepth": depth+"bit" if depth in ("8", "9", "10", "12", "14", "16") else "", "duration": duration}
 
 
 def probe_url(link, size):
@@ -179,7 +185,7 @@ def probe_url(link, size):
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    entries = "stream=codec_type,codec_name,width,height,pix_fmt,bits_per_raw_sample,avg_frame_rate,r_frame_rate,color_transfer,channels,channel_layout,field_order:stream_disposition=default,attached_pic:stream_side_data:format=duration"
+    entries = "stream=codec_type,codec_name,profile,width,height,pix_fmt,bits_per_raw_sample,avg_frame_rate,r_frame_rate,color_transfer,channels,channel_layout,field_order:stream_disposition=default,attached_pic:stream_side_data:format=duration"
     command = [executable, "-v", "error", "-protocol_whitelist", "http,tcp", "-format_whitelist", "mov,matroska,webm,avi,mpegts,flv,asf,mpeg,ogg", "-rw_timeout", "10000000", "-probesize", "8000000", "-analyzeduration", "5000000", "-show_entries", entries, "-of", "json", f"http://127.0.0.1:{server.server_port}{token}"]
     try:
         with tempfile.TemporaryFile() as output:
@@ -205,7 +211,7 @@ def extract(account_id, provider, row):
     current = provider.info(row["id"])
     if current["is_dir"] or any(current[k] != row[k] for k in ("size", "sha1")):
         raise CloudError("源文件指纹变化，无法提取媒体信息", 409)
-    fingerprint = hashlib.sha256(store.encode([current["size"], current["sha1"], 1]).encode()).hexdigest()
+    fingerprint = hashlib.sha256(store.encode([current["size"], current["sha1"], 2]).encode()).hexdigest()
     with store.db() as con:
         cached = con.execute("SELECT payload FROM cloud_media_probes WHERE account_id=? AND file_id=? AND fingerprint=?", (account_id, row["id"], fingerprint)).fetchone()
     if cached and current["sha1"]:

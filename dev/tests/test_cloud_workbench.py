@@ -224,7 +224,7 @@ def test_end_to_end_real_sqlite_remote_rename_move_strm_and_play(cloud):
     result = store.job(jid)
     assert result["state"] == "success", result
     assert cloud.remote.info("4")["parent_id"] != "1"
-    assert cloud.remote.info("4")["name"].startswith("Movie.2024.")
+    assert cloud.remote.info("4")["name"].startswith("Movie (2024)")
     assert cloud.remote.info("5")["parent_id"] == cloud.remote.info("4")["parent_id"]
     assets = strm.list_assets()
     assert len(assets) == 1
@@ -948,7 +948,7 @@ def test_manual_season_episode_override_names_tv_files(cloud, monkeypatch):
     media = recognition.recognize(
         "episode07.mkv", {"kind": "tv", "tmdb_id": "55", "season": 0, "episode": 7}
     )
-    assert media["name"] == "剧集.2024.S00E07.[tmdb-55].mkv"
+    assert media["name"] == "剧集 (2024) - S00E07.mkv"
     assert media["directory"].endswith("Season 00")
     from xml.etree import ElementTree as ET
 
