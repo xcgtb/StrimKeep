@@ -14,7 +14,7 @@
   }
   function enhance(){
     if(mounted)return;var root=id('tab-cloud');if(!root||!id('cw-tabs'))return;mounted=true;
-    root.classList.add('cw-v2-active');
+    root.classList.add('cw-v2-active');root.querySelectorAll('.cw-content > section > h3').forEach(function(n){n.hidden=true;});
     // The application sidebar owns navigation; keep only existing event hooks in hidden DOM.
     var localNav=id('cw-tabs').closest('aside');if(localNav)localNav.hidden=true;
     var intro=root.querySelector('.page-intro');if(intro)intro.remove();

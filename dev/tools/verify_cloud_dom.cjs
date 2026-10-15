@@ -4,11 +4,11 @@ const root=require('path').resolve(__dirname,'../..')+'/';
 const dom=new JSDOM('<!doctype html><aside class="sidebar"><nav id="menu"></nav></aside><span id="tabTitle"></span><section id="tab-cloud"></section>',{runScripts:'outside-only',url:'http://localhost/'}),w=dom.window;
 let logNavigation='';w.__activeTab='cloud';w.icon=()=>'';w.updateSideTheme=()=>{};w.toggleSidebar=()=>{};w.$=id=>w.document.getElementById(id);w.switchTab=id=>logNavigation=id;
 w.esc=v=>String(v).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');w.showModalConfirm=async()=>false;w.HTMLElement.prototype.scrollIntoView=function(){};
-const writes=[];
-w.fetch=async(url,opt)=>{url=url.split('?')[0];if(opt.method)writes.push(url);let body={};
+const writes=[];let fileFixture=false,childReads=0;
+w.fetch=async(url,opt)=>{const query=new URLSearchParams(url.split('?')[1]||'');url=url.split('?')[0];if(opt.method)writes.push(url);let body={};
  if(url.endsWith('/status'))body={proxy:{running:false},accounts:[{id:'A',name:'Fixture',uid:'123',authorization:{cookie:true}}]};
  else if(url.endsWith('/directories'))body={directories:{source:{id:'1',name:'来源'},target:{id:'2',name:'归档'},transfer:{id:'3',name:'转存'}},revision:1};
- else if(url.endsWith('/files'))body={items:[],has_more:false,total:0};
+ else if(url.endsWith('/files')){body={items:[],has_more:false,total:0};if(fileFixture){if(query.get('cid')==='0')body={items:[{id:'90071992547409931',name:'影视目录',is_dir:true},{id:'90071992547409932',name:'根目录视频.mkv',size:1024,is_dir:false}],has_more:false,total:2};else{childReads++;body={items:[{id:'90071992547409933',name:'第1集.mkv',size:1073741824,is_dir:false},{id:'90071992547409934',name:'字幕.srt',size:512,is_dir:false},{id:'90071992547409935',name:'Season 02',is_dir:true}],has_more:false,total:3};}}}
  else if(url.endsWith('/settings'))body={settings:{},proxy:{running:false,reason:'fixture'}};
  else if(url.endsWith('/receiving'))body={revision:0,config:{tg_enabled:false}};
  else if(url.endsWith('/maintenance'))body={revision:0,config:{signin_enabled:false,recycle_enabled:false,signin_cron:'0 8 * * *',recycle_cron:'0 4 * * *',timezone:'Asia/Shanghai'}};
@@ -28,6 +28,11 @@ async function flush(){for(let i=0;i<50;i++)await Promise.resolve();}
  for(const c of doc.querySelectorAll('.cw-config-card'))assert(c.querySelector(':scope > summary')&&c.querySelector(':scope > .cw-config-body'));
  const tabs=['accounts','organize','transfer','strm','playback','channels'];
  for(const tab of tabs){w.openDrivePage(tab);await flush();assert(!doc.getElementById('cw-'+tab).hidden);assert(!doc.getElementById('cw-message').textContent.match(/undefined|null|不是函数|not a function/),doc.getElementById('cw-message').textContent);}
+ w.openDrivePage('organize');await flush();
+ const rules=doc.getElementById('cw-quality8-rules');assert.strictEqual(rules.querySelectorAll('.cw-quality-rule').length,8);assert(!rules.querySelector('textarea'));assert([...rules.querySelectorAll('.cw-quality-editor')].every(n=>n.hidden));
+ const firstRule=rules.querySelector('.cw-quality-rule');firstRule.querySelector('[data-quality-open]').click();await flush();assert(!rules.querySelector('.cw-quality-editor').hidden);
+ assert.strictEqual(doc.getElementById('cw-rule-name').type,'hidden');assert.strictEqual(doc.getElementById('cw-sync-rule-name').type,'hidden');assert.strictEqual(doc.getElementById('cw-svc-channel-name').type,'hidden');assert.strictEqual(doc.getElementById('cw-link-emby-name').type,'hidden');
+ assert(doc.querySelector('#cw-organize [data-cwa="saveNaming"]').hidden);assert(doc.querySelector('.cw-toolbar-more'));
  const section=doc.getElementById('cw-organize'),bar=section.querySelector('.cw-config-toolbar');
  [...bar.querySelectorAll('button')].find(b=>b.textContent==='收起全部').click();assert([...section.querySelectorAll('.cw-config-card')].every(d=>!d.open));
  bar.querySelector('input').value='ffprobe';[...bar.querySelectorAll('button')].find(b=>b.textContent==='定位').click();assert(doc.getElementById('cw-ffprobe-enabled').closest('details').open);
@@ -37,6 +42,9 @@ async function flush(){for(let i=0;i<50;i++)await Promise.resolve();}
  [...bar.querySelectorAll('button')].find(b=>b.textContent==='查看实时日志').click();assert.strictEqual(logNavigation,'history');
  assert(!writes.length,'layout never submits settings or transfer by itself');
  assert(!doc.querySelector('#cw-files [data-directory-role]'),'file tree has no role mutation controls');
+ fileFixture=true;w.openDrivePage('files');await flush();assert(doc.getElementById('cw-file-list').textContent.includes('根目录视频.mkv'));assert.strictEqual(childReads,0,'child folders load only on expansion');
+ const branch=doc.querySelector('[data-tree-cid="90071992547409931"]');branch.open=true;branch.dispatchEvent(new w.Event('toggle'));await flush();assert.strictEqual(childReads,1);assert(branch.textContent.includes('第1集.mkv')&&branch.textContent.includes('字幕.srt')&&branch.textContent.includes('Season 02'));assert(branch.textContent.includes('1.0 GB'));assert(doc.querySelector('[data-file-id="90071992547409933"]'));
+ branch.open=false;branch.dispatchEvent(new w.Event('toggle'));branch.open=true;branch.dispatchEvent(new w.Event('toggle'));await flush();assert.strictEqual(childReads,1,'reopening keeps the loaded contents');
  assert(!doc.getElementById('cw-auto-organize'),'direct transfer has no per-request STRM checkbox');
  assert(doc.getElementById('cw-share-library').contains(doc.getElementById('cw-share-list')),'share browser is independent');
  w.openDrivePage('transfer');await flush();assert(!doc.getElementById('cw-transfer').hidden);

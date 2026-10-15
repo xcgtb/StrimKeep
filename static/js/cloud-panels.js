@@ -40,7 +40,7 @@ window.cloudPanels=(function(){
     search.onclick=find;input.onkeydown=function(event){if(event.key==='Enter'){event.preventDefault();find();}};
     expand.onclick=function(){section.querySelectorAll('.cw-config-card').forEach(function(c){c.open=true;});};collapse.onclick=function(){section.querySelectorAll('.cw-config-card').forEach(function(c){c.open=false;});};
     logs.onclick=openLogs;
-    bar.append(label,search,expand,collapse,logs);
+    var more=el('details','cw-toolbar-more'),moreTitle=el('summary','','更多'),menu=el('div');menu.append(expand,collapse,logs);more.append(moreTitle,menu);bar.append(label,search,more);
     var original=section.querySelector('.cw-organize-toolbar');
     if(original){original.querySelectorAll('label').forEach(function(n){n.hidden=true;});bar.append(original);}
     bar.append(status);section.insertBefore(bar,section.children[1]||null);
