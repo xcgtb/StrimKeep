@@ -301,8 +301,8 @@ def receiving_save(account_id: str,body:dict):
 @router.post("/resources/preview")
 def resource_preview(body:dict):
     from app.cloud import receiving
-    if set(body)!={"account_id","text"} or not isinstance(body["text"],str) or len(body["text"])>16000:raise HTTPException(400,"资源预览格式无效")
-    return {"status":"success","plan":call(receiving.preview,body["account_id"],body["text"])}
+    if not isinstance(body,dict) or set(body)-{"account_id","text","organize"} or not {"account_id","text"}.issubset(body) or not isinstance(body["text"],str) or len(body["text"])>16000 or type(body.get("organize",False)) is not bool:raise HTTPException(400,"资源预览格式无效")
+    return {"status":"success","plan":call(receiving.preview,body["account_id"],body["text"],body.get("organize",False))}
 
 
 @router.post("/resources/apply",status_code=202)
@@ -799,19 +799,20 @@ class DirectResourceInput(AccountInput):
     text: str = Field(min_length=1,max_length=16000)
     expected_revision: int = Field(ge=0)
     request_id: str = Field(pattern=r'^[a-f0-9]{32}$')
+    organize: bool = False
     confirmed: bool = False
 
 
 @router.post('/resources/receive',status_code=202)
 def receive_resources(body: DirectResourceInput):
     from app.cloud import receiving
-    return {'status':'success','job_id':call(receiving.receive,body.account_id,body.text,body.expected_revision,body.request_id,body.confirmed)}
+    return {'status':'success','job_id':call(receiving.receive,body.account_id,body.text,body.expected_revision,body.request_id,body.confirmed,body.organize)}
 
 
 @router.post('/accounts/{account_id}/organizer/run',status_code=202)
 def organizer_run(account_id: str, body: dict):
     from app.cloud import intake_automation
-    return {'status':'success','job_id':call(intake_automation.run_now,account_id,body.get('expected_revision'))}
+    return {'status':'success','job_id':call(intake_automation.run_now,account_id,body.get('expected_revision'),body.get('source_cid'))}
 
 
 @router.post('/accounts/{account_id}/organizer/stop')

@@ -18,6 +18,33 @@
 .cw-directory-field [data-directory-label]{flex-basis:100%;margin:0;font-size:.85rem;color:var(--muted);overflow-wrap:anywhere}
 .cw-v2-active .cw-config-toolbar{position:sticky;top:0;z-index:3;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:12px}
 .cw-v2-active .cw-config-save{background:var(--brand);color:var(--brand-contrast,#fff)}
+/* Mobile blank-button fix: beat #tab-cloud .cw-config-save specificity. */
+#tab-cloud.cw-v2-active .cw-config-toolbar .cw-config-save,
+#tab-cloud.cw-v2-active .cw-directory-field button[data-save-directories]{
+  background:var(--brand);
+  border-color:var(--brand);
+  color:#fff;
+  -webkit-text-fill-color:#fff;
+  text-shadow:0 1px 1px rgba(0,0,0,.25);
+  font-weight:600;
+  text-align:center;
+  min-width:108px;
+  min-height:40px;
+  white-space:normal;
+  overflow:visible;
+}
+#tab-cloud.cw-v2-active .cw-config-toolbar .cw-config-save:disabled,
+#tab-cloud.cw-v2-active .cw-directory-field button[data-save-directories]:disabled{opacity:.66}
+@media(max-width:610px){
+  #tab-cloud.cw-v2-active .cw-config-toolbar .cw-config-save,
+  #tab-cloud.cw-v2-active .cw-directory-field button[data-save-directories]{
+    flex:0 1 auto;
+    font-size:13px;
+    line-height:1.4;
+    padding:10px 12px;
+    max-width:100%;
+  }
+}
 @media(max-width:610px){.cw-file-row{gap:6px}.cw-file-row code{font-size:.7rem}.cw-v2-active .cw-config-toolbar{position:static}.cw-directory-field label{min-width:100%}}
 
 .cw-rule-card{display:flex;gap:14px;border:1px solid var(--border);border-radius:16px;padding:16px;margin:12px 0;background:var(--panel)}

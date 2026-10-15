@@ -71,6 +71,8 @@ def save(account_id, patch, expected):
     def validate(config, old):
         if any(type(config[k]) is not bool for k in ("tg_enabled", "organize_after_transfer")):
             raise CloudError("接收开关必须为布尔值")
+        if config["organize_after_transfer"] and not directories.get(account_id)["directories"]["target"]:
+            raise CloudError("请先保存归档目录，再开启转存后自动整理", 409)
         if config["tg_enabled"]:
             from app import config as main_config
             global_cfg = main_config.load_config()
@@ -106,16 +108,16 @@ def make_payload(account_id, items, source="web", target=None, organize=False):
     return {"account_id": account_id, "account_revision": account["revision"], "directory_revision": cfg["revision"], "sealed": credentials.seal(items), "targets": selected, "organize_target": roots["target"]["id"] if organize else None, "origin": source}
 
 
-def preview(account_id, text):
+def preview(account_id, text, organize=False):
     items = extract(text)
     if not items:
         raise CloudError("没有找到支持的资源链接")
-    payload = make_payload(account_id, items)
+    payload = make_payload(account_id, items, organize=organize)
     workflow.verify_account(payload)
     pid = store.ident()
     with store.db() as con:
         con.execute("INSERT INTO cloud_plans VALUES(?,?,?,?,?,?)", (pid, account_id, payload["account_revision"], "intake_pending", store.encode(payload), time.time()+600))
-    return {"id": pid, "items": [{"kind": i["kind"], "name": i["name"], "target_cid": payload["targets"][i["kind"]]} for i in items]}
+    return {"id": pid, "organize_after_transfer": bool(organize), "items": [{"kind": i["kind"], "name": i["name"], "target_cid": payload["targets"][i["kind"]]} for i in items]}
 
 
 def apply(plan_id, confirmed):
@@ -346,7 +348,7 @@ def run(job_id,payload):
             else:
                 cfg=get(payload["account_id"])
                 if cfg["revision"]!=payload["receiving_revision"] or not cfg["config"]["tg_enabled"]:raise CloudError("TG 接收已关闭或配置变化",409)
-                source,target,organize="telegram",None,False
+                source,target,organize="telegram",None,bool(cfg["config"].get("organize_after_transfer", False))
             items=extract(message["text"],message["entities"])
             if not items:raise CloudError("消息中没有支持的资源链接")
             if message.get("share_direct"):
@@ -409,13 +411,17 @@ def record_channel(con, rid, aid, arev, rev, rule, msg, token_scope):
     con.execute("INSERT OR IGNORE INTO cloud_inbox(id,event_key,account_id,source,payload,state,created) VALUES(?,?,?,?,?,'queued',?)", (store.ident(),key,aid,"channel",store.encode(payload),time.time()))
 
 
-def receive(account_id, text, expected_revision, request_id, confirmed=False):
+def receive(account_id, text, expected_revision, request_id, confirmed=False, organize=False):
     """One explicit submit, idempotent across retries; share/ed2k/magnet route independently."""
     if confirmed is not True:
         raise CloudError('请确认接收资源')
     if not re.fullmatch(r'[a-f0-9]{32}', request_id):
         raise CloudError('提交标识无效')
+    if type(organize) is not bool:
+        raise CloudError('自动整理开关无效')
     intent = {'kind':'resources','text':text,'revision':expected_revision}
+    if organize:
+        intent['organize'] = True
     def prior(con):
         row = con.execute('SELECT sealed,job_id FROM cloud_transfer_requests WHERE account_id=? AND request_id=?', (account_id, request_id)).fetchone()
         if row:
@@ -429,7 +435,7 @@ def receive(account_id, text, expected_revision, request_id, confirmed=False):
     items = extract(text)
     if not items:
         raise CloudError('没有找到支持的资源链接')
-    payload = make_payload(account_id,items)
+    payload = make_payload(account_id,items,organize=organize)
     if payload['directory_revision'] != expected_revision:
         raise CloudError('保存目录已变化，请刷新后重新提交',409)
     workflow.verify_account(payload)

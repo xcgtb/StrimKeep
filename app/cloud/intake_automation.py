@@ -4,6 +4,7 @@ import json
 import time
 from app.cloud import directories, receiving, schedules, store, workflow
 from app.cloud.errors import CloudError
+from app.cloud.provider115 import numeric
 
 
 def sources(account_id):
@@ -23,19 +24,22 @@ def sources(account_id):
 
 
 def _outside(provider, source, target):
-    cursor, seen = target, set()
-    while True:
-        if cursor == source:
-            raise CloudError("归档或未识别目录不能与扫描来源相同，也不能位于来源内部",409)
-        if cursor == "0":
-            return
-        if cursor in seen or len(seen) >= 64:
-            raise CloudError("目录层级异常，请重新选择",409)
-        seen.add(cursor)
-        row = provider.info(cursor)
-        if not row["is_dir"]:
-            raise CloudError("配置路径不是目录",409)
-        cursor = row["parent_id"]
+    # Avoid either nesting direction. An archive containing an intake root would
+    # make repeated scans pick up already archived material.
+    for start, forbidden in ((target, source), (source, target)):
+        cursor, seen = start, set()
+        while True:
+            if cursor == forbidden:
+                raise CloudError("归档、来源和接收目录不得相同或相互包含",409)
+            if cursor == "0":
+                break
+            if cursor in seen or len(seen) >= 64:
+                raise CloudError("目录层级异常，请重新选择",409)
+            seen.add(cursor)
+            row = provider.info(cursor)
+            if not row["is_dir"]:
+                raise CloudError("配置路径不是目录",409)
+            cursor = row["parent_id"]
 
 
 def save(account_id, config, selected, expected):
@@ -101,20 +105,23 @@ def ready(provider, source):
     raise CloudError("115云下载任务过多，无法完整核实，暂停本轮整理",409)
 
 
-def run_now(account_id, expected_revision):
+def run_now(account_id, expected_revision, source_cid=None):
     """Manual run uses saved directories; no need to build a preview in the browser."""
     from app.cloud import jobs
     cfg = directories.get(account_id)
     if cfg['revision'] != expected_revision:
         raise CloudError('目录配置变化，请刷新后重试',409)
     roots = cfg['directories']
-    if not roots['source'] or not roots['target']:
-        raise CloudError('请先保存来源和归档目录',409)
+    if not roots['target'] or (source_cid is None and not roots['source']):
+        raise CloudError('请先保存扫描来源（或指定已保存的接收目录）和归档目录',409)
+    source = roots['source']['id'] if source_cid is None else numeric(source_cid)
+    if source_cid is not None and source not in {row['id'] for row in sources(account_id)['items']}:
+        raise CloudError('只能选择当前账号已保存的资源接收目录',409)
     account = store.account(account_id)
     if not account:
         raise CloudError('账号不存在',404)
     payload = {'account_id':account_id,'account_revision':account['revision'],
-               'source_cid':roots['source']['id'],'target_cid':roots['target']['id'],
+               'source_cid':source,'target_cid':roots['target']['id'],
                'unknown_cid':roots['unknown']['id'] if roots['unknown'] else None,'overrides':{}}
     provider = workflow.verify_account(payload)
     _outside(provider,payload['source_cid'],payload['target_cid'])
