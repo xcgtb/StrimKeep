@@ -18,6 +18,7 @@ fs.mkdirSync(out,{recursive:true});
    else if(p.endsWith('/receiving'))body={revision:0,config:{tg_enabled:false}};
    else if(p.endsWith('/maintenance'))body={revision:0,config:{signin_enabled:false,recycle_enabled:false,signin_cron:'0 8 * * *',recycle_cron:'0 4 * * *',timezone:'Asia/Shanghai'}};
    else if(p.endsWith('/organizer-sources'))body={revision:1,items:[],target:{id:'2',name:'影视归档'}};
+   else if(p.endsWith('/plans'))body={plan:{id:'preview-fixture',items:[],skipped:[],quality8:{notice:'八维预览测试',comparisons:[{new_name:'<New>.mkv',existing_name:'Old.mkv',suggestion:'新版本更优',dimensions:[{label:'分辨率',new:'2160p',existing:'1080p',reason:'新版本优先',verdict:'new'}]}]}}};
    else if(p.endsWith('/telegram-reader'))body={revision:0,connected:false};
    else if(p.endsWith('/resources/catalog'))body={genres:[],countries:[]};
    else if(p.endsWith('/files'))body={items:[],has_more:false,total:0};
@@ -53,6 +54,27 @@ fs.mkdirSync(out,{recursive:true});
  await page.locator('#cw-strm [data-module-target="strm-output"]').click();await page.locator('#cw-output').fill('/strm/local-new');await page.locator('#cw-strm .cw-config-toolbar [data-cwa="saveSettings"]').click();
  await page.waitForFunction(()=>document.getElementById('cw-message').textContent.includes('已保存'));
  assert(writes.length===1&&writes[0].data.output_root==='/strm/local-new');
+ // Use real DOM controls: the old node() test stubs invented missing preview elements.
+ for(const width of [1440,390]){
+  await page.setViewportSize({width,height:900});
+  await page.evaluate(()=>{openDrivePage('organize');cloudPanels.open('organize','organize-directories');});
+  await page.locator('#cw-organize .cw-config-toolbar [data-link-action="saveOrganize"]').click();
+  await page.waitForFunction(()=>document.getElementById('cw-message').textContent.includes('整理配置已保存'));
+  assert(await page.locator('#cw-quality8-preview').count()===1,'one real quality preview container must exist');
+  await page.evaluate(()=>cloudPanels.open('organize','run'));
+  await page.locator('[data-cwa="plan"]').click();
+  await page.waitForFunction(()=>document.getElementById('cw-quality8-preview')?.textContent.includes('2160p'));
+  assert((await page.locator('#cw-quality8-preview').textContent()).includes('<New>.mkv'));
+  assert(await page.locator('#cw-quality8-preview New').count()===0,'comparison names are escaped');
+  assert(await page.locator('#cw-quality8-preview').isVisible(),'preview stays in the workbench module');
+  await page.evaluate(()=>cloudPanels.open('organize','classification'));
+  await page.locator('#cw-organize .cw-config-toolbar [data-link-action="saveOrganize"]').click();
+  await page.waitForFunction(()=>document.getElementById('cw-message').textContent.includes('整理配置已保存'));
+  assert(await page.locator('#cw-quality8-preview').textContent()==='','saving clears obsolete comparison results');
+ }
+ assert(writes.filter(w=>w.path.endsWith('/settings')).length===5,'output save and four organizer saves succeeded');
+ assert(!(await page.locator('#cw-message').textContent()).includes('null'));
+ await page.evaluate(()=>openDrivePage('strm'));
  const contrast=await page.locator('#cw-strm .cw-config-save').evaluateAll(ns=>ns.filter(n=>n.getClientRects().length).map(n=>{const s=getComputedStyle(n);return {text:n.textContent,fill:s.webkitTextFillColor,bg:s.backgroundColor,size:parseFloat(s.fontSize)};}));
  assert(contrast.every(c=>c.text.trim()&&c.fill!==c.bg&&c.size>=12),'save buttons need visible text contrasting with the background');
  await page.screenshot({path:path.join(out,'drive-strm.png'),fullPage:true});
