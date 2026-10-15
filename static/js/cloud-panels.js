@@ -8,7 +8,7 @@ window.cloudPanels=(function(){
   function summary(title,description){var s=el('summary','cw-config-summary'),copy=el('span','cw-config-copy');copy.append(el('strong','',title),el('span','hint',description));s.append(el('span','cw-config-symbol','▦'),copy,el('span','cw-config-toggle'));return s;}
   function enhance(detail,key,title,description,open){
     if(detail.dataset.configKey)return detail;
-    var old=detail.querySelector('summary'),body=el('div','cw-config-body');
+    var old=Array.from(detail.children).find(function(n){return n.tagName==='SUMMARY';}),body=el('div','cw-config-body');
     Array.from(detail.childNodes).forEach(function(n){if(n!==old)body.append(n);});if(old)old.remove();
     detail.classList.add('cw-config-card');detail.classList.remove('cw-settings-group');detail.dataset.configKey=key;
     detail.append(summary(title,description),body);detail.open=restored(key,!!open);
@@ -24,7 +24,7 @@ window.cloudPanels=(function(){
   }
   function top(node,parent){if(!node)return null;while(node.parentNode&&node.parentNode!==parent)node=node.parentNode;return node.parentNode===parent?node:null;}
   function byId(id){return document.getElementById(id);}
-  function existing(id,key,title,description){var n=byId(id);if(n)wrap(n,n,key,title,description,false);}
+  function existing(id,key,title,description){var n=byId(id);if(n){var heading=n.querySelector('h4');if(heading)heading.hidden=true;wrap(n,n,key,title,description,false);}}
   function reveal(node){var card=node.closest('[data-cw-module]');if(card)select(card.closest('section'),card.dataset.cwModule);for(var p=node;p;p=p.parentElement)if(p.tagName==='DETAILS')p.open=true;node.scrollIntoView({behavior:'smooth',block:'center'});if(node.focus)node.focus({preventScroll:true});}
   function openLogs(){
     if(typeof switchTab==='function')switchTab('history');
@@ -54,7 +54,7 @@ window.cloudPanels=(function(){
     if(accounts){var end=byId('cw-svc-maintenance');wrap(accounts.children[1],end?end.previousSibling:accounts.lastChild,'login','115 登录凭证','选择客户端，扫码或填写 Cookie；在本卡片内管理当前账号授权。',false);}
     existing('cw-svc-maintenance','maintenance','115 日常维护','配置签到、回收站保留天数与执行时间。');
     if(transfer)wrap(transfer.children[1],byId('cw-transfer-status'),'receive','115链接转存','保存转存目录后直接提交链接，后续由定时整理扫描。',true);
-    var share=byId('cw-share-library');if(share)wrap(share.children[1],share.lastChild,'share-library','分享免转存','读取分享目录，选中资源后生成分享STRM。',true);
+    var share=byId('cw-share-library');if(share)wrap(share.children[1],share.lastChild,'share-library','分享直出 STRM','按三步操作：读取、选择、核对生成。不会转存或修改网盘。',true);
     existing('cw-svc-receiving','intake','磁力、ed2k 与机器人接收','分别选择保存目录，配置机器人接收与查询云下载状态。');
     if(organize){var grid=top(byId('cw-source-cid'),organize),first=organize.querySelector('details');if(grid&&first)wrap(grid,first.previousSibling,'organize-directories','扫描来源与归档目录','直接读取115目录并保存；后续整理复用相同目录。',true);
       Array.from(organize.querySelectorAll('details.cw-settings-group')).forEach(function(d,i){var title=d.querySelector('summary').textContent;enhance(d,'organize-'+i,title,{'文件过滤':'按类型、大小、关键词与正则排除文件。','识别与自定义命名':'TMDB 识别、ffprobe 媒体信息和目录/文件命名模板。','分类策略':'类型、地区与年份分类，按需创建并复用目录。','整理八维洗版策略':'配置比较优先级、预览或执行模式和杜比分组共存。'}[title]||'展开配置具体规则。',false);});}
@@ -68,7 +68,7 @@ window.cloudPanels=(function(){
     }
     existing('cw-link-intake','intake-schedule','接收目录定时整理','勾选频道与接收目录，统一定时归档并联动 STRM。');
     if(strm){var schedule=top(byId('cw-sync-rule-name'),strm);wrap(schedule,schedule,'strm-schedule','STRM 定时扫描','配置时间表达式、时区和同步任务。',false);}
-    if(playback){var last=byId('cw-svc-notifications');wrap(top(byId('cw-public'),playback),last?last.previousSibling:playback.lastChild,'playback','STRM 来源与播放地址','个人与分享输出目录、元数据、反代端口及播放配置。',false);}
+    if(playback){var last=byId('cw-svc-notifications');wrap(top(byId('cw-public'),playback),last?last.previousSibling:playback.lastChild,'playback','可选 Emby 播放反代','独立监听端口，将播放器请求转给真实 Emby。',false);}
     existing('cw-svc-notifications','notifications','通知与入库联动','分别配置转存、整理、STRM、频道与日常维护通知。');
     var notificationMaster=byId('cw-notify'),notificationPanel=byId('cw-svc-notifications');if(notificationMaster&&notificationPanel){notificationPanel.insertBefore(notificationMaster.closest('label'),notificationPanel.children[1]);notificationMaster.parentElement.lastChild.textContent='开启网盘任务 Telegram 通知（总开关）';}
     existing('cw-link-emby','emby','Emby 连接与入库确认','管理独立连接和路径映射，查看实际入库核验结果。');
@@ -81,18 +81,26 @@ window.cloudPanels=(function(){
     moduleLayout(strm,[['strm-output','输出与播放地址',['strm-output']],['strm-scan','扫描与生成',['strm-scan']],['strm-schedule','定时同步',['strm-schedule']]],'strm-output');
     moduleLayout(transfer,[['receive','分享链接转存',['receive']],['intake','磁力与机器人',['intake']]],'receive');
     moduleLayout(accounts,[['login','账号登录',['login']],['maintenance','日常维护',['maintenance']]],'login');
-    moduleLayout(playback,[['emby','Emby 入库连接',['emby']],['playback','反代服务',['playback']],['notifications','任务通知',['notifications']]],'emby');
+    moduleLayout(playback,[['emby','入库连接与结果',['emby']],['playback','播放与反代',['playback']],['notifications','机器人通知',['notifications']]],'emby');
     moduleLayout(channels,[['channel','频道与目录',['channel','channel-rules']],['channel-tmdb','作品筛选',['channel-tmdb']],['telegram-reader','用户会话',['telegram-reader']]],'channel');
     if(organize)Array.from(organize.children).forEach(function(n){if(n.tagName==='P'&&n.textContent.startsWith('①'))n.hidden=true;});
     [['video-extensions',false],['metadata-extensions',false],['custom-categories',true],['ignore-keywords',true]].forEach(function(row){tokens(row[0],row[1]);});
-    var outputBar=strm&&strm.querySelector('.cw-config-toolbar');if(outputBar){var outputSave=el('button','btn cw-config-save','保存输出配置');outputSave.type='button';outputSave.dataset.cwa='saveSettings';outputBar.append(outputSave);}
+    var outputBar=strm&&strm.querySelector('.cw-config-toolbar');if(outputBar){var outputSave=el('button','btn cw-config-save','保存输出配置');outputSave.type='button';outputSave.dataset.cwa='saveSettings';outputSave.dataset.moduleSave='strm-output';outputBar.append(outputSave);}
+    var proxyBody=playback&&playback.querySelector('[data-config-key="playback"] .cw-config-body');
+    if(proxyBody){
+      var explanation=el('div','cw-playback-guide');explanation.append(el('strong','','先确认播放器连接哪个服务'),el('p','hint','STRM 内的播放地址由本项目服务端口提供，可直接返回 302；不依赖这里的独立 Emby 反代。若播放器仍连接上游的 8097，就仍经过上游反代。只有改用本项目反代时，才启用下方端口，并把播放器或公网转发指向它。'));
+      proxyBody.prepend(explanation);
+      var mappings=el('details','cw-advanced'),title=el('summary','','反代路径映射（仅启用本项目反代时填写）');mappings.append(title);
+      ['emby-output','share-emby-output'].forEach(function(key){var n=byId('cw-'+key);if(n)mappings.append(n.closest('label'));});proxyBody.insertBefore(mappings,proxyBody.querySelector('[data-cwa="saveProxySettings"]'));
+    }
     dashboard(organize);
   }
   function select(section,key){
     if(!section||!sections[section.id])return;
-    sections[section.id].active=key;
+    sections[section.id].active=key;section.querySelectorAll('[data-module-save]').forEach(function(n){n.hidden=n.dataset.moduleSave!==key;});
     section.querySelectorAll('[data-cw-module]').forEach(function(n){n.hidden=n.dataset.cwModule!==key;if(!n.hidden&&n.tagName==='DETAILS'&&!['correction','organize-0'].includes(n.dataset.configKey))n.open=true;});
     section.querySelectorAll('[data-module-target]').forEach(function(b){var on=b.dataset.moduleTarget===key;b.classList.toggle('on',on);b.setAttribute('aria-selected',String(on));b.tabIndex=on?0:-1;});
+    var active=section.querySelector('[data-module-target="'+key+'"]');if(active){var nav=active.parentElement,box=active.getBoundingClientRect(),frame=nav.getBoundingClientRect();if(box.left<frame.left)nav.scrollLeft-=frame.left-box.left+4;else if(box.right>frame.right)nav.scrollLeft+=box.right-frame.right+4;}
   }
   function moduleLayout(section,definitions,initial){
     if(!section)return;
@@ -105,10 +113,10 @@ window.cloudPanels=(function(){
   }
   function moveOutput(strm){
     if(!strm)return;var box=el('details');box.dataset.configKey='';var body=el('div');
-    ['public','output','emby-output','share-output','share-emby-output','nfo','artwork'].forEach(function(key){var n=byId('cw-'+key);if(n)body.append(n.closest('label'));});
+    ['public','output','share-output','nfo','artwork'].forEach(function(key){var n=byId('cw-'+key);if(n)body.append(n.closest('label'));});
     var note=el('p','hint');note.id='cw-output-note';body.prepend(note);
     body.prepend(el('p','hint','本项目生成的 STRM 默认独立保存到 /strm/local 和 /strm/share，对应部署目录下 strm/local、strm/share。原 /media/local、/media/share 继续用于治理已有上游 STRM。先挂载 ./strm:/strm:rw，再填写这里的容器内路径。服务地址必须能被播放器访问。'));
-    var save=el('button','btn gray','保存输出配置');save.type='button';save.dataset.cwa='saveSettings';body.append(save);Array.from(body.childNodes).forEach(function(n){box.append(n);});strm.insertBefore(box,strm.children[1]);enhance(box,'strm-output','STRM 输出与播放地址','设置 NAS 输出目录、稳定播放入口与元数据。',true);
+    Array.from(body.childNodes).forEach(function(n){box.append(n);});strm.insertBefore(box,strm.children[1]);enhance(box,'strm-output','STRM 输出与播放地址','设置 NAS 输出目录、稳定播放入口与元数据。',true);
     var source=top(byId('cw-strm-source'),strm),schedule=top(byId('cw-sync-rule-name'),strm);
     if(source&&schedule){wrap(source,schedule.previousSibling,'strm-scan','扫描与生成','独立扫描网盘文件；不改名、不移动视频。',true);}
     // History belongs to the scan module, rather than leaking into every settings tab.
@@ -116,7 +124,7 @@ window.cloudPanels=(function(){
   }
   function dashboard(section){
     if(!section)return;var panel=el('div','cw-pipeline');panel.dataset.cwModule='run';
-    panel.append(el('h3','','资源处理链路'),el('p','hint','转存到暂存目录 → TMDB 识别与命名 → 移动到网盘归档 → 写入 NAS STRM。每一步的配置与执行结果在下方查看。'));
+    panel.append(el('h3','','资源处理链路'),el('p','hint','接收到所选目录 → 识别与命名 → 网盘归档 → NAS STRM → Emby 入库确认。点击状态项进入对应配置。'));
     var status=el('div','cw-pipeline-checks');status.id='cw-pipeline-checks';status.setAttribute('aria-live','polite');panel.append(status);
     var actions=el('div','cw-pipeline-actions');[['transfer','receive','链接转存'],['organize','organize-directories','配置网盘目录'],['strm','strm-output','配置 STRM 输出'],['jobs','','任务与结果']].forEach(function(row){var b=el('button','btn gray',row[2]);b.type='button';b.onclick=function(){open(row[0],row[1]);};actions.append(b);});
     var refreshButton=el('button','btn gray','重新检查配置');refreshButton.type='button';refreshButton.onclick=function(){context.guard(refresh);};actions.append(refreshButton);panel.append(actions);section.insertBefore(panel,section.querySelector('.cw-config-card'));refresh();
@@ -131,7 +139,7 @@ window.cloudPanels=(function(){
       node.append(el('p','cw-pipeline-note',result.generate?'整理后自动生成 STRM；这里检查本机配置，远端连接与播放结果以任务记录为准。':'当前仅整理网盘文件，已关闭整理后生成 STRM。'));
     }catch(error){if(token===request)node.textContent=error.message;}
   }
-  function pageChanged(page){if(['organize','transfer','strm'].includes(page))refresh();}
+  function pageChanged(page){var section=byId('cw-'+page);if(section&&sections[section.id])select(section,sections[section.id].active);if(['organize','transfer','strm'].includes(page))refresh();}
   function tokens(key,multiline){
     var source=byId('cw-'+key);if(!source)return;var box=el('div','cw-token-editor'),list=el('div','cw-token-list'),entry=el('div','cw-token-entry'),input=el('input'),add=el('button','btn gray','添加');
     var label=source.closest('label');label.childNodes[0].textContent={'video-extensions':'视频文件类型','metadata-extensions':'附属文件类型','custom-categories':'自定义分类','ignore-keywords':'忽略关键词'}[key];

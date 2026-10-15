@@ -325,10 +325,15 @@ async def websocket_proxy(socket: WebSocket, path: str):
 
 
 def status():
+    try:
+        target = upstream()
+    except HTTPException:
+        target = ""
     return {
         "running": bool(_SERVER and _SERVER.started and _THREAD and _THREAD.is_alive()),
         "port": settings.get()["proxy_port"],
         "error": _ERROR,
+        "upstream": target,
     }
 
 

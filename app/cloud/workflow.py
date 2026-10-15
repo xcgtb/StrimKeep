@@ -1,6 +1,7 @@
 """Transfer, remote organization and STRM share one durable file identity."""
 
 import json
+import re
 import time
 from pathlib import PurePosixPath
 from app.cloud import store, jobs, recognition, settings, directories, categories, naming, file_filters, quality8
@@ -17,7 +18,7 @@ def verify_account(payload):
     return provider
 
 
-def walk(provider, cid, limit=20000, exclude=None, job_id=None, directory_rows=None):
+def walk(provider, cid, limit=20000, exclude=None, job_id=None, directory_rows=None, source_ids=None):
     queue = [numeric(cid)]
     seen = set()
     result = []
@@ -30,6 +31,11 @@ def walk(provider, cid, limit=20000, exclude=None, job_id=None, directory_rows=N
         if len(seen) > 20000:
             raise CloudError("目录过大，请选择更具体的目录", 413)
         rows = provider.list(parent)
+        if parent == str(cid) and source_ids is not None:
+            selected = set(source_ids)
+            rows = [r for r in rows if r["id"] in selected]
+            if {r["id"] for r in rows} != selected:
+                raise CloudError("本次转存内容已移动或缺失，请重新预览", 409)
         for row in rows:
             if row["is_dir"]:
                 if row["id"] not in (exclude or set()):
@@ -111,7 +117,39 @@ def naming_snapshot(config):
     return {k: config[k] for k in NAMING_KEYS}
 
 
-def recognize_source(account_id, provider, row, overrides, config):
+def parent_context(provider, row, cache):
+    """Read the nearest explicit work ID and season from real parent directories."""
+    parent, visited, context = row["parent_id"], set(), {"parents": []}
+    while parent != "0":
+        if parent in visited or len(visited) >= 64:
+            raise CloudError("父目录存在循环或层级过深，请重新选择来源", 409)
+        visited.add(parent)
+        if parent not in cache:
+            cache[parent] = provider.info(parent)
+        folder = cache[parent]
+        if not folder["is_dir"]:
+            raise CloudError("来源父目录身份异常", 409)
+        context["parents"].append({k: folder[k] for k in ("id", "parent_id", "name", "is_dir")})
+        name = folder["name"]
+        season = re.fullmatch(r"(?i)(?:Season\s*|S)(\d{1,2})", name) or re.fullmatch(r"第\s*(\d{1,2})\s*季", name)
+        if season and "season" not in context:
+            context["season"] = int(season[1])
+        identities = set(re.findall(r"(?i)[\[{]tmdb-(\d+)[\]}]", name))
+        if len(identities) > 1:
+            raise UnrecognizedMedia("父目录包含多个 TMDB 身份，请人工核对")
+        if identities and "tmdb_id" not in context:
+            context.update(tmdb_id=next(iter(identities)), directory=name)
+        # Classification is only a type hint; the explicit nearest ID stays authoritative.
+        if "kind" not in context:
+            if name == "电影" or name.endswith("电影"):
+                context["kind"] = "movie"
+            elif name in ("动漫", "剧集", "综艺", "儿童节目") or name.endswith(("动漫", "剧集", "综艺")):
+                context["kind"] = "tv"
+        parent = folder["parent_id"]
+    return context
+
+
+def recognize_source(account_id, provider, row, overrides, config, directory_cache=None):
     from app.cloud import events
     events.emit('recognize','识别开始：'+row['name'])
     def probe():
@@ -122,7 +160,12 @@ def recognize_source(account_id, provider, row, overrides, config):
             if config["ffprobe_failure"] == "skip" or error.status == 409:
                 raise
             return {"status": "fallback", "fields": {}, "warning": str(error).replace("，保留源文件", "")+"；已按设置回退文件名解析"}
-    media = recognition.recognize(row["name"], media_choice(account_id, row, overrides), config, probe if config["ffprobe_enabled"] else None)
+    choice = media_choice(account_id, row, overrides)
+    context = {} if choice else parent_context(provider, row, directory_cache if directory_cache is not None else {})
+    media = recognition.recognize(row["name"], choice, config, probe if config["ffprobe_enabled"] else None, context=context)
+    if context.get("tmdb_id") and not re.search(r"(?i)[\[{]tmdb-\d+[\]}]", row["name"]):
+        media["recognition_context"] = context
+        events.emit('recognize','父目录作品身份：'+context['directory']+' · TMDB '+context['tmdb_id'])
     with store.db() as con:
         prior = con.execute("SELECT payload FROM cloud_assets WHERE account_id=? AND file_id=? ORDER BY updated DESC LIMIT 1", (account_id, row["id"])).fetchone()
     original, previous = row["name"], {}
@@ -131,14 +174,16 @@ def recognize_source(account_id, provider, row, overrides, config):
         if all(payload["source"][k] == row[k] for k in ("size", "sha1")):
             previous = payload["media"]
             original = previous.get("quality_source_name") or previous.get("naming_fields", {}).get("original_name") or original
-    events.emit('recognize','识别完成：'+media['title']+' · TMDB '+str(media['tmdb_id']))
-    events.emit('naming','命名预览：'+row['name']+' → '+media['directory']+'/'+media['name'])
+    diagnostic = {'file_id':row['id'],'source_name':row['name'],'sha1':row['sha1'],'size':row['size'],
+                  'kind':media['kind'],'tmdb_id':media['tmdb_id'],'season':media.get('season'),'episode':media.get('episode')}
+    events.emit('recognize','识别完成：'+media['title']+' · TMDB '+str(media['tmdb_id']),details={**diagnostic,'status':'verified'})
+    events.emit('naming','命名预览：'+row['name']+' → '+media['directory']+'/'+media['name'],details={**diagnostic,'status':'preview','target_name':media['name'],'path':media['directory']})
     media["quality_source_name"] = original
     from app.cloud import replacement
     return replacement.decorate(row, media, config, previous)
 
 
-def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, job_id=None):
+def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, job_id=None, source_ids=None):
     account = store.account(account_id)
     if not account:
         raise CloudError("请先扫码登录", 409)
@@ -162,20 +207,21 @@ def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, j
     from app.cloud import events
     events.emit('organize','开始扫描整理来源目录 ID '+str(source_cid),job_id)
     cleanup_candidates = []
-    files = walk(provider, source_cid, exclude={str(target_cid), str(unknown_cid)} - {str(source_cid)}, job_id=job_id, directory_rows=cleanup_candidates if config["cleanup_empty_directories"] else None)
+    files = walk(provider, source_cid, exclude={str(target_cid), str(unknown_cid)} - {str(source_cid)}, job_id=job_id, directory_rows=cleanup_candidates if config["cleanup_empty_directories"] else None, source_ids=source_ids)
     videos, filtered = file_filters.select(files, config)
     items = []
     skipped = []
     unknown_items = []
     paths = set()
     quality_candidates = []
+    directory_cache = {}
     from app.cloud import replacement
     for index, row in enumerate(videos):
         jobs.checkpoint(job_id)
         if job_id:
             jobs.progress(job_id, len(videos), index, "识别预览", row["name"])
         try:
-            media = recognize_source(account_id, provider, row, overrides, config)
+            media = recognize_source(account_id, provider, row, overrides, config, directory_cache)
             quality_candidates.append({"source": row, "media": media})
             path = (media["directory"] + "/" + media["name"]).casefold()
             if path in paths and not replacement.enabled(config):
@@ -392,7 +438,7 @@ def relocate(provider, job_id, source, target, name):
         current = jobs.step(
             job_id,
             "rename:" + source["id"],
-            {"file_id": source["id"], "name": name},
+            {"file_id": source["id"], "name": name, "source_name":current['name'], "parent":current['parent_id'], "sha1":source['sha1'], "size":source['size']},
             rename,
         )
 
@@ -423,7 +469,7 @@ def relocate(provider, job_id, source, target, name):
         current = jobs.step(
             job_id,
             "move:" + source["id"],
-            {"file_id": source["id"], "target": target},
+            {"file_id": source["id"], "target": target, "source_name":current['name'], "parent":current['parent_id'], "sha1":source['sha1'], "size":source['size']},
             move,
         )
     return current
@@ -449,6 +495,7 @@ def organize(job_id, payload):
     result['skipped'].extend(i for i in result['quality_held'] if i.get('blocked'))
     config = settings.get()
     moved_parents = set()
+    validated_context = set()
     all_items = [*data["items"], *data.get("unknown_items", [])]
     jobs.progress(job_id, len(all_items), 0, "整理")
     for index, item in enumerate(all_items):
@@ -457,6 +504,13 @@ def organize(job_id, payload):
             break
         jobs.progress(job_id, len(all_items), index, "整理", item["source"]["name"])
         try:
+            for parent in item.get("media", {}).get("recognition_context", {}).get("parents", []):
+                if parent["id"] in validated_context:
+                    continue
+                current_parent = provider.info(parent["id"])
+                if any(current_parent[k] != parent[k] for k in ("id", "parent_id", "name", "is_dir")):
+                    raise CloudError("作品来源父目录在预览后变化，请重新预览", 409)
+                validated_context.add(parent["id"])
             if item.get('upgrades'):
                 if not payload.get('generate', True) or not config['generate_strm_enabled']:
                     raise CloudError('洗版必须生成新 STRM，保留源文件', 409)
@@ -646,41 +700,35 @@ def transfer(job_id, payload):
     jobs.checkpoint(job_id)
     if hasattr(provider, "require"):
         provider.require("transfer")
-    jobs.progress(job_id, len(payload["source_ids"]), 0, "准备转存目录")
+    jobs.progress(job_id, len(payload["source_ids"]), 0, "核对转存目标")
     target = _directory(provider, payload["target_cid"])
-    stage = ensure_directory(provider, job_id, target, "转存待整理-" + job_id[:12])
-    if provider.list(stage):
-        raise CloudError("转存目录已存在内容，禁止重复接收", 409, uncertain=True)
-    jobs.checkpoint(job_id, {"stage_id": stage, "files": []})
+    before = provider.list(target)
+    expected = [r for r in payload["items"] if r["id"] in payload["source_ids"]]
+    if any(r["name"] == item["name"] for r in before for item in expected):
+        raise CloudError("转存目标已有同名文件或目录，请更换目录或核对已有内容", 409)
+    intent = {
+        "source_ids": payload["source_ids"], "stage_id": target,
+        "receipt_mode": "direct", "before_ids": [r["id"] for r in before],
+        "target_snapshot": transfer_target(provider, target),
+    }
+    jobs.checkpoint(job_id, {"stage_id": target, "files": []})
 
     def receive():
         jobs.progress(
             job_id, len(payload["source_ids"]), 0, "转存中；结果确认前不会重复提交"
         )
         access = share_access(payload)
-        provider.receive(access["code"], access["password"], payload["source_ids"], stage)
-        rows = provider.list(stage)
-        if not rows:
-            raise CloudError(
-                "115 已接受请求，目标内容尚未可见，等待核实", 409, uncertain=True
-            )
-        mapping = receipt_mapping(payload, rows)
-        files = walk(provider, stage)
-        if not files:
-            raise CloudError("目标没有可核实文件，请检查任务目录", 409, uncertain=True)
-        for file in files:
-            store.save_file(payload["account_id"], file)
-        return {
-            "stage_id": stage,
-            "files": files,
-            "source_ids": payload["source_ids"],
-            "mapping": mapping,
-        }
+        provider.receive(access["code"], access["password"], payload["source_ids"], target)
+        try:
+            return transfer_receipt(provider, payload, intent, job_id)
+        except CloudError as error:
+            # Receive has already returned; a read failure cannot prove no write.
+            raise CloudError(str(error), error.status, uncertain=True) from None
 
     result = jobs.step(
         job_id,
         "receive",
-        {"source_ids": payload["source_ids"], "stage_id": stage},
+        intent,
         receive,
     )
     jobs.progress(
@@ -689,7 +737,7 @@ def transfer(job_id, payload):
     if payload.get("organize_target"):
         jobs.checkpoint(job_id, result)
         try:
-            planned = plan(payload["account_id"], stage, payload["organize_target"], job_id=job_id)
+            planned = plan(payload["account_id"], target, payload["organize_target"], job_id=job_id, source_ids=[r["target_id"] for r in result["mapping"]])
         except jobs.JobStopped:
             raise jobs.JobStopped(result)
         with store.db() as con:
@@ -704,6 +752,44 @@ def transfer(job_id, payload):
         result["skipped"] = result["organization"]["skipped"]
         result["refresh_pending"] = result["organization"].get("refresh_pending", False)
     return result
+
+
+def transfer_target(provider, target):
+    # 115's virtual root is listable but has no fs_info file identity.
+    if target == "0":
+        return {"id": "0", "parent_id": "0", "name": "根目录", "is_dir": True}
+    return provider.info(target)
+
+
+def transfer_container(provider, payload, receipt, job_id):
+    """Read both direct receipts and legacy per-job directory receipts."""
+    current = transfer_target(provider, receipt["stage_id"])
+    if receipt.get("receipt_mode") == "direct":
+        expected = receipt["target_snapshot"]
+        valid = current["id"] == payload["target_cid"] and all(
+            current[k] == expected[k] for k in ("id", "parent_id", "name", "is_dir")
+        )
+    else:
+        valid = current["parent_id"] == payload["target_cid"] and current["name"] == "转存待整理-" + job_id[:12]
+    if not current["is_dir"] or not valid:
+        raise CloudError("转存目标身份已变化，请重新选择来源预览", 409)
+    return current
+
+
+def transfer_receipt(provider, payload, intent, job_id):
+    container = transfer_container(provider, payload, intent, job_id)
+    rows = provider.list(container["id"])
+    if intent.get("receipt_mode") == "direct":
+        before = set(intent["before_ids"])
+        names = {r["name"] for r in payload["items"] if r["id"] in payload["source_ids"]}
+        rows = [r for r in rows if r["id"] not in before and r["name"] in names]
+    mapping = receipt_mapping(payload, rows)
+    files = walk(provider, container["id"], source_ids=[r["id"] for r in rows])
+    if not files:
+        raise CloudError("目标没有可核实文件，请检查转存内容", 409, uncertain=True)
+    for file in files:
+        store.save_file(payload["account_id"], file)
+    return {**intent, "files": files, "mapping": mapping}
 
 
 def receipt_mapping(payload, received):
@@ -746,6 +832,7 @@ def sync(job_id, payload):
     result = {"generated": [], "skipped": [], "errors": [], "warnings": []}
     config = settings.get()
     videos, result["filtered"] = file_filters.select(rows, config)
+    directory_cache = {}
     jobs.progress(job_id, len(videos), 0, "生成 STRM")
     for index, row in enumerate(videos):
         if jobs.stopping(job_id):
@@ -753,7 +840,7 @@ def sync(job_id, payload):
             break
         jobs.progress(job_id, len(videos), index, "生成 STRM", row["name"])
         try:
-            media = recognize_source(payload["account_id"], provider, row, payload.get("overrides"), config)
+            media = recognize_source(payload["account_id"], provider, row, payload.get("overrides"), config, directory_cache)
             if media.get("media_info", {}).get("warning"):
                 result["warnings"].append({"name": row["name"], "reason": media["media_info"]["warning"]})
             from app.cloud import strm

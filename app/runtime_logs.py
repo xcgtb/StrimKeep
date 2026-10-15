@@ -1,5 +1,6 @@
 """Bounded SQLite log stream; a small RAM queue remains readable during DB faults."""
 import logging
+import json
 import re
 import threading
 from collections import deque
@@ -22,8 +23,8 @@ def redact(message):
 
 
 def _insert(con, row):
-    return con.execute('INSERT INTO runtime_logs(ts,level,source,message) VALUES(?,?,?,?)',
-                       (row['ts'], row['level'], row['source'], row['message'])).lastrowid
+    return con.execute('INSERT INTO runtime_logs(ts,level,source,message,details) VALUES(?,?,?,?,?)',
+                       (row['ts'], row['level'], row['source'], row['message'], json.dumps(row.get('details', {}), ensure_ascii=False))).lastrowid
 
 
 class RuntimeHandler(logging.Handler):
@@ -76,7 +77,7 @@ def install():
     log.setLevel(logging.INFO)
 
 
-def read(after=0, limit=200, source="", query=""):
+def read(after=0, limit=200, source="", query="", level="", task=""):
     limit, after = max(1, min(500, int(limit))), max(0, int(after))
     with _LOCK:
         try:
@@ -87,25 +88,30 @@ def read(after=0, limit=200, source="", query=""):
                 elif source:
                     clauses.append('source=?');params.append(source)
                 if query:
-                    clauses.append('instr(lower(message),lower(?))>0');params.append(str(query)[:200])
+                    clauses.append('(instr(lower(message),lower(?))>0 OR instr(lower(details),lower(?))>0)');params.extend([str(query)[:200]] * 2)
+                if level:
+                    clauses.append('level=?');params.append(level)
+                if task:
+                    clauses.append("(substr(json_extract(details,'$.job_id'),1,?)=? OR instr(message,?)>0)")
+                    params.extend([len(task),task,'[任务 '+task])
                 if after:
                     clauses.append('id>?');params.append(after)
                 where = ' WHERE '+' AND '.join(clauses) if clauses else ''
                 order = 'ASC' if after else 'DESC'
-                rows=con.execute('SELECT id,ts,level,source,message FROM runtime_logs'+where+' ORDER BY id '+order+' LIMIT ?',(*params,limit)).fetchall()
+                rows=con.execute('SELECT id,ts,level,source,message,details FROM runtime_logs'+where+' ORDER BY id '+order+' LIMIT ?',(*params,limit)).fetchall()
                 if not after: rows=rows[::-1]
                 cursor=max([after]+[r[0] for r in rows])
                 if len(rows)<limit:
                     cursor=max(cursor,con.execute('SELECT COALESCE(MAX(id),0) FROM runtime_logs').fetchone()[0])
             storage._status.record_success(storage._state_dir(), 'runtime_logs_read')
-            return {'logs': [dict(zip(('id','ts','level','source','message'), r)) for r in rows],
+            return {'logs': [{**dict(zip(('id','ts','level','source','message'), r[:5])), 'details':json.loads(r[5])} for r in rows],
                     'cursor': cursor, 'degraded': False}
         except Exception as error:
             storage._status.record_failure(storage._state_dir(), 'runtime_logs_read', error)
-            return {'logs': [r for r in _PENDING if (not source or (source=='cloud' and r['source'].startswith('cloud_')) or r['source']==source) and (not query or str(query).casefold() in r['message'].casefold())], 'cursor': after, 'degraded': True}
+            return {'logs': [r for r in _PENDING if (not source or (source=='cloud' and r['source'].startswith('cloud_')) or r['source']==source) and (not query or str(query).casefold() in r['message'].casefold()) and (not level or r['level']==level) and (not task or str(r.get('details',{}).get('job_id','')).startswith(task))], 'cursor': after, 'degraded': True}
 
 
 def text(limit=MAX_LOGS):
     with storage._transaction() as con:
-        rows = con.execute('SELECT ts,level,source,message FROM runtime_logs ORDER BY id DESC LIMIT ?', (max(1, min(MAX_LOGS, int(limit))),)).fetchall()[::-1]
-    return '\n'.join('[%s] [%s] [%s] %s' % r for r in rows)
+        rows = con.execute('SELECT ts,level,source,message,details FROM runtime_logs ORDER BY id DESC LIMIT ?', (max(1, min(MAX_LOGS, int(limit))),)).fetchall()[::-1]
+    return '\n'.join('[%s] [%s] [%s] %s' % r[:4] + ('\n  '+r[4] if r[4] != '{}' else '') for r in rows)

@@ -592,6 +592,17 @@ def naming_preview(body: dict):
     return {"status": "success", "items": [call(naming.preview, {**config, "naming_style": "template"}, kind) for kind in ("movie", "tv")], "fields": sorted(naming.FIELDS)}
 
 
+@router.post('/naming/details')
+def naming_details(body: dict):
+    if set(body) - {'settings'} or not isinstance(body.get('settings', {}), dict):
+        raise HTTPException(400, '模板详情配置格式无效')
+    patch = body.get('settings', {})
+    if set(patch) - set(workflow.NAMING_KEYS):
+        raise HTTPException(400, '模板详情字段无效')
+    config = call(settings.validate, {**settings.get(), **patch})
+    return {'status':'success', 'template':call(naming.describe, config)}
+
+
 @router.post("/categories/create", status_code=202)
 def create_categories(body: CategoryInput):
     if not body.confirmed:

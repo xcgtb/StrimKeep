@@ -177,13 +177,14 @@ CREATE TABLE IF NOT EXISTS runtime_logs (
     ts TEXT NOT NULL,
     level TEXT NOT NULL,
     source TEXT NOT NULL,
-    message TEXT NOT NULL
+    message TEXT NOT NULL,
+    details TEXT NOT NULL DEFAULT '{}'
 );
 """
 
 # schema 版本（PRAGMA user_version）：新增表/列且向后兼容时递增。
 # v1 = 原 6 张表；v2 = 增加 docs。老库打开时 CREATE IF NOT EXISTS 会自动补表，无需数据迁移。
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def _state_dir() -> Path:
@@ -214,6 +215,7 @@ def _conn():
                 con.executescript(_SCHEMA)
                 _ensure_audit_extra(con)
                 _ensure_docs_version(con)
+                _ensure_log_details(con)
                 try:
                     cur_v = con.execute('PRAGMA user_version').fetchone()[0]
                     if cur_v < SCHEMA_VERSION:   # 只升不降：被新版本打开过的库，回退旧版本也不会改写
@@ -243,6 +245,14 @@ def _ensure_docs_version(con):
     columns = {r[1] for r in con.execute('PRAGMA table_info(docs)')}
     if 'version' not in columns:
         con.execute('ALTER TABLE docs ADD COLUMN version INTEGER NOT NULL DEFAULT 1')
+        con.commit()
+
+
+def _ensure_log_details(con):
+    """Append-only diagnostics upgrade; historical messages remain unchanged."""
+    columns = {r[1] for r in con.execute('PRAGMA table_info(runtime_logs)')}
+    if 'details' not in columns:
+        con.execute("ALTER TABLE runtime_logs ADD COLUMN details TEXT NOT NULL DEFAULT '{}'")
         con.commit()
 
 

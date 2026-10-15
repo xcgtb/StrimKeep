@@ -1721,6 +1721,6 @@ async function pollLibraryLiveChanges(){
 function cloudSourceSummary(sources){
   if (!sources || !sources.length) return '';
   return '\n\n已登记的 115 来源：'+sources.length+' 个引用\n'+sources.slice(0,10).map(function(v){
-    return '账号 '+v.uid+' · 文件 ID '+v.file_id+' · '+v.effect;
+    return (v.blocked||('账号 '+v.uid+' · 文件 ID '+v.file_id+' · '+v.effect))+(v.identity_basis?'\n绑定：'+v.identity_basis:'');
   }).join('\n')+(sources.length>10?'\n其余来源可在工作台记录查看':'');
 }

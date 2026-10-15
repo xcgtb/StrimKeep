@@ -53,5 +53,10 @@ async function respond(task,rows,cursor){const req=requests.shift();req.resolve(
  req.resolve({logs:[{...row(901),source:'cloud_naming',message:'Movie.mkv'}],cursor:901});await task;
  assert(nodes.recordsList.children.at(-1).html.includes('重命名'));
  console.log('PASS module/keyword filters discard stale replies, reset cursor and label cloud stages');
- console.log('PASS 7/7; shipped handlers with DOM substitutes only');
+ const evidence=ctx.runtimeLogDetails({details:{job_id:'a'.repeat(32),status:'dispatched',file_id:'4',sha1:'B'.repeat(40),elapsed_ms:1234,source_name:'<script>secret</script>',cookie:'must-not-display'}});
+ assert(evidence.includes('已发送，待核实')&&evidence.includes('1.23 秒')&&evidence.includes('115 文件 ID'));
+ assert(evidence.includes('&lt;script&gt;')&&!evidence.includes('<script>')&&!evidence.includes('must-not-display'));
+ assert(evidence.includes('focusRuntimeTask'));
+ console.log('PASS structured evidence escapes values, distinguishes dispatch from verified results, and links tasks');
+ console.log('PASS 8/8; shipped handlers with DOM substitutes only');
 })().catch(e=>{console.error(e);process.exitCode=1;});

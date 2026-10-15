@@ -96,12 +96,16 @@ def standard_filename(values, *, compact=False):
     values = normalize_fields(values)
     title = values["title"] + " (" + values["year"] + ")"
     if values["kind"] == "tv":
-        title += f" - S{int(values['season']):02d}E{int(values['episode']):02d}"
+        title = re.sub(r"\s+", ".", values["title"]) + "." + values["year"]
+        title += f".S{int(values['season']):02d}E{int(values['episode']):02d}"
+        if not compact and values.get("episode_title"):
+            title += "." + re.sub(r"\s+", ".", str(values["episode_title"]))
     keys = ("resolution", "codec") if compact else ("resolution", "source", "dynamic_range", "codec", "bitdepth", "fps")
     parts = [str(values[k]) for k in keys if values.get(k)]
     if not compact and values.get("audio_codec"):
         parts.append(str(values["audio_codec"]) + (" " + str(values["audio_layout"]) if values.get("audio_layout") else ""))
-    stem = title + (" - " + ".".join(parts) if parts else "")
+    separator = "." if values["kind"] == "tv" else " - "
+    stem = title + (separator + ".".join(parts) if parts else "")
     if not compact and values.get("release_group"):
         stem += "-" + str(values["release_group"])
     return filename(stem + values["ext"])
@@ -163,3 +167,30 @@ def preview(config, kind="tv"):
     values.update(classification)
     result = paths(config, values)
     return {"kind": kind, "values": values, "directory": categories.prefix(config, values)+"/"+result["directory"], "name": result["name"], "sample": True}
+
+
+def describe(config):
+    """Read-only examples of the current draft, without TMDB or remote writes."""
+    from app.cloud import categories
+    style = config['naming_style']
+    examples = []
+    for kind in ('movie','tv'):
+        item = preview(config, kind)
+        values = item['values']
+        if style != 'template':
+            item['directory'] = categories.prefix(config, values)+'/'+f"{values['title']} ({values['year']}) {{tmdb-{values['tmdb_id']}}}"
+            if kind == 'tv':
+                item['directory'] += f"/Season {values['season']:02d}"
+            item['name'] = values['original_name'] if style == 'original' or not config['rename_enabled'] else standard_filename(values, compact=style == 'compact')
+        examples.append(item)
+    metadata = '分辨率.来源.动态范围.编码.位深.帧率.音频编码 声道-发布组'
+    return {'style':style,'rename_enabled':config['rename_enabled'], 'items':examples,
+            'directory':config['movie_directory_template'] if style == 'template' else '片名 (年份) {tmdb-ID}',
+            'tv_directory':config['tv_directory_template'] if style == 'template' else '剧名 (年份) {tmdb-ID}',
+            'season_directory':config['season_directory_template'] if style == 'template' else 'Season 01',
+            'movie_file':config['movie_file_template'] if style == 'template' else '原文件名' if style == 'original' or not config['rename_enabled'] else '片名 (年份) - '+('分辨率.编码' if style == 'compact' else metadata)+'.扩展名',
+            'tv_file':config['tv_file_template'] if style == 'template' else '原文件名' if style == 'original' or not config['rename_enabled'] else '剧名.年份.S01E01.'+('分辨率.编码' if style == 'compact' else '集名.'+metadata)+'.扩展名',
+            'notes':['缺失的媒体参数不补造；文件扩展名保持真实类型。',
+                     '完整与简洁模式：电影标题保留空格，剧集标题和集名中的空白转为点；媒体参数用点连接，BluRay REMUX、DoVi P7、TrueHD 7.1 内部空格保留。',
+                     '目录示例由当前分类、地区和年份开关生成；示例不是实际识别结果。',
+                     '查看详情不会修改配置、移动网盘文件或重命名现有 STRM。']}

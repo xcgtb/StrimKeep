@@ -36,7 +36,7 @@ async function run(){
   const count=timers.length;click('qr');await flush();assert(requests[0].url==='/api/cloud/qr');
   respond(requests.shift(),{flow_id:'flow-2'});await flush();assert(timers.length===count+1);
   click('cancelQR');await flush();respond(requests.shift(),{});await flush();
-  node('cw-official-delete').checked=true;click('saveAuthorization');await flush();var config=requests.shift();assert.deepStrictEqual(JSON.parse(config.opt.body),{official_delete_enabled:true});respond(config,{});await flush();
+  node('cw-official-delete').checked=true;click('saveAuthorization');await flush();var config=requests.shift();assert.deepStrictEqual(JSON.parse(config.opt.body),{official_delete_enabled:true,governance_generated_enabled:false});respond(config,{});await flush();
   tab('jobs');await flush();respond(requests.shift(),{items:[{id:'job',kind:'transfer',state:'success',message:'已核实',progress:{total:3,processed:3,phase:'核实'}}]});await flush();assert(node('cw-job-list').innerHTML.includes('3 / 3'));
   node('cw-job-list').onclick({target:{closest:q=>q==='[data-job]'?{dataset:{job:'job'}}:null}});await flush();respond(requests.shift(),{job:{state:'success',message:'已核实',steps:[],result:{continuation_required:true}}});await flush();var continueButton=node('cw-job-summary').children.find(i=>i.textContent==='继续整理已核实的转存文件');assert(continueButton);continueButton.onclick();await flush();var continuation=requests.shift();assert(continuation.url==='/api/cloud/jobs/job/continue'&&JSON.parse(continuation.opt.body).confirmed===true);
   console.log('PASS my drive theme navigation, account switching, stale responses, Cookie-only QR and deletion configuration');

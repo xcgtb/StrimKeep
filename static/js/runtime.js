@@ -735,7 +735,7 @@ function renderMenu(){
     var links = g.items.map(function(item){
       var id=item[0], label=item[1], ico=item[2], kind=item[3];
       if(id==='cloud'){
-        var pages=[['accounts','115网盘配置'],['files','文件管理'],['transfer','链接转存与机器人'],['share-library','分享STRM'],['channels','115频道监控'],['organize','影视整理'],['strm','STRM生成'],['playback','Emby与播放'],['inbox','监控与接收历史'],['jobs','整理历史与任务']];
+        var pages=[['workspace','网盘工作台'],['transfer','资源接收'],['files','网盘文件'],['strm','STRM 媒体库'],['jobs','任务中心'],['configuration','网盘设置']];
         var expanded=current==='cloud';
         return '<div class="nav-drive"><button class="nav-drive-toggle" type="button" aria-expanded="'+expanded+'" onclick="toggleDriveMenu(this)"><span class="icon">'+icon(ico)+'</span><span class="nav-label">我的网盘</span><span aria-hidden="true">⌄</span></button><div class="nav-drive-children"'+(expanded?'':' hidden')+'>'+pages.map(function(p){return '<a data-tab="cloud" data-drive-page="'+p[0]+'" onclick="openDrivePage(\''+p[0]+'\')"><span class="nav-label">'+p[1]+'</span></a>';}).join('')+'</div></div>';
       }

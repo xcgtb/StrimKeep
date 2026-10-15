@@ -17,6 +17,11 @@ async function run(){
  assert(node('cw-ffprobe-enabled').checked);assert(node('cw-animation-movie-folder').checked);assert.strictEqual(node('cw-region-mode').value,'grouped');assert(node('cw-ffprobe-status').textContent.includes('已就绪'));assert(node('cw-region-groups').innerHTML.includes('韩国'));
  node('cw-region-groups').onchange({target:{dataset:{regionIndex:'1',regionKey:'countries'},value:'KR,JP'}});
  click('fullMediaTemplate');assert(node('cw-tv_file_template').value.includes('{fps}.{bitdepth}'));
+ const originalDraft=node('cw-tv_file_template').value;
+ click('templateDetails');await flush();let detail=requests.shift();assert.strictEqual(detail.url,'/api/cloud/naming/details');
+ respond(detail,{template:{directory:'{title}',tv_directory:'{title}',season_directory:'Season 01',movie_file:'{title}{ext}',tv_file:originalDraft,items:[{kind:'tv',directory:'剧集/演示',name:'<episode>.mkv'}],notes:['只读示例']}});await flush();
+ assert(node('cw-template-details').innerHTML.includes('&lt;episode>')&&node('cw-tv_file_template').value===originalDraft);
+ assert(requests.length===0,'viewing details cannot submit settings or mutate files');
 
  node('cw-custom-categories').value='短剧\n演示分类';node('cw-custom-categories').oninput();
  assert(node('cw-category-choice').children.some(n=>n.value==='演示分类'));

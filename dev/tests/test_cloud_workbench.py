@@ -948,7 +948,7 @@ def test_manual_season_episode_override_names_tv_files(cloud, monkeypatch):
     media = recognition.recognize(
         "episode07.mkv", {"kind": "tv", "tmdb_id": "55", "season": 0, "episode": 7}
     )
-    assert media["name"] == "剧集 (2024) - S00E07.mkv"
+    assert media["name"] == "剧集.2024.S00E07.第七集.mkv"
     assert media["directory"].endswith("Season 00")
     from xml.etree import ElementTree as ET
 

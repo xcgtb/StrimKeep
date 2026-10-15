@@ -79,15 +79,18 @@ def search(query, kind="movie", year=None):
         raise CloudError("TMDB 查询失败，请检查网络和密钥", 502) from None
 
 
-def recognize(name, override=None, naming_config=None, probe=None):
+def recognize(name, override=None, naming_config=None, probe=None, context=None):
     from guessit import guessit
 
     from app.cloud import settings, naming as templates, categories
     naming = naming_config or settings.get()
+    context = context or {}
     parsed = guessit(name)
     cn = re.search(r"第\s*(\d{1,2})\s*季.{0,20}?第\s*(\d{1,3})\s*[集话]", name)
     season = parsed.get("season")
     episode = parsed.get("episode")
+    if season is None:
+        season = context.get("season")
     if cn:
         season, episode = int(cn[1]), int(cn[2])
     if override:
@@ -97,16 +100,20 @@ def recognize(name, override=None, naming_config=None, probe=None):
             episode = override["episode"]
     if isinstance(season, list) or isinstance(episode, list):
         raise UnrecognizedMedia("多季或跨集视频需要人工处理")
-    kind = (override or {}).get("kind") or ("tv" if episode is not None else "movie")
+    kind = (override or {}).get("kind") or ("tv" if episode is not None else context.get("kind") or "movie")
     if kind not in ("movie", "tv"):
         raise CloudError("作品类别无效")
     if kind == "tv" and (not isinstance(season, int) or not isinstance(episode, int)):
         raise UnrecognizedMedia("季集号无法确定，请在修正作品处填写季集号后重新预览")
     if kind == "tv" and (not 0 <= season <= 99 or not 1 <= episode <= 999):
         raise CloudError("季集号超出支持范围")
-    if override and override.get("tmdb_id"):
+    explicit_ids = set(re.findall(r"(?i)[\[{]tmdb-(\d+)[\]}]", name))
+    if len(explicit_ids) > 1:
+        raise UnrecognizedMedia("文件名包含多个 TMDB 身份，请人工核对")
+    selected_id = (override or {}).get("tmdb_id") or next(iter(explicit_ids), None) or context.get("tmdb_id")
+    if selected_id:
         try:
-            detail = tmdb().get("/" + kind + "/" + str(int(override["tmdb_id"])))
+            detail = tmdb().get("/" + kind + "/" + str(int(selected_id)))
         except Exception:
             raise CloudError("所选 TMDB 作品查询失败", 502) from None
     else:
@@ -133,7 +140,7 @@ def recognize(name, override=None, naming_config=None, probe=None):
         if len(exact) != 1:
             raise UnrecognizedMedia("作品识别不唯一，请从 TMDB 候选中选择")
         detail = exact[0]
-    if naming["classification_enabled"] and not (override and override.get("tmdb_id")):
+    if naming["classification_enabled"] and not selected_id:
         try:
             complete = tmdb().get("/"+kind+"/"+str(detail["id"]))
             if str(complete.get("id")) != str(detail["id"]):
@@ -141,7 +148,7 @@ def recognize(name, override=None, naming_config=None, probe=None):
             detail = complete
         except Exception:
             raise CloudError("TMDB 分类详情查询失败，保留源文件", 502) from None
-    if override and override.get("tmdb_id") and str(detail.get("id")) != str(override["tmdb_id"]):
+    if selected_id and str(detail.get("id")) != str(selected_id):
         raise CloudError("TMDB 返回作品身份与所选条目不同", 502)
     title = safe_name(detail.get("title") or detail.get("name") or "")
     year = str(detail.get("release_date") or detail.get("first_air_date") or "")[:4]

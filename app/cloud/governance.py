@@ -8,7 +8,7 @@ import re
 import time
 from urllib.parse import urlsplit, parse_qs
 from app import plan_guard
-from app.cloud import store, settings, strm, credentials, provider115
+from app.cloud import store, settings, strm, credentials, provider115, events
 from app.cloud.errors import CloudError
 
 
@@ -64,6 +64,14 @@ def lookup(path, root):
     if not account or account["provider"] != "115" or account["uid"] != payload["uid"]:
         raise CloudError("115 来源账号身份不一致，删除已停止", 409)
     sources = [payload["source"], *payload.get("companions", [])]
+    if asset['file_id'] != str(sources[0].get('id')) or any(
+        not isinstance(x, dict) or not re.fullmatch(r'[1-9][0-9]*', str(x.get('id','')))
+        or not re.fullmatch(r'[0-9]+', str(x.get('parent_id','')))
+        or type(x.get('size')) is not int or x['size'] < 0
+        or x.get('is_dir') is not False
+        for x in sources
+    ):
+        raise CloudError('登记来源的文件 ID 或指纹结构不一致，禁止删除', 409)
     if len({x["id"] for x in sources}) != len(sources):
         raise CloudError("来源包含重复文件身份，删除已停止", 409)
     return {
@@ -112,6 +120,8 @@ def preview(path, root, local=True):
     configured = bool(settings.get()["official_delete_enabled"])
     return {
         "mode": "115_file_id",
+        "binding_version": 1,
+        "identity_basis": "账号 UID + 文件 ID；SHA1 / 大小 / 父目录 / 文件名复核，不按 SHA1 搜索删除",
         "asset_id": bound["asset_id"],
         "account_id": bound["account_id"],
         "uid": bound["uid"],
@@ -187,7 +197,27 @@ def _proof(provider, source, previous):
     return proof
 
 
+def _diagnostic(bound, source=None, **extra):
+    source = source or bound['sources'][0]
+    return {'asset_id':bound['asset_id'],'account_id':bound['account_id'],
+            'file_id':source['id'],'parent_id':source['parent_id'],'source_name':source['name'],
+            'sha1':source['sha1'],'size':source['size'],'path':bound['path'],
+            'binding_version':1,**extra}
+
+
 def delete_sources(bound, root, selected, dry_run=False):
+    # Publication and deletion share a process gate. Persistent dispatch receipts
+    # remain the authority across processes/restarts; no uncertain request replays.
+    try:
+        with strm._LOCK:
+            return _delete_sources(bound, root, selected, dry_run)
+    except CloudError as error:
+        events.emit('governance','115 源删除停止，NAS 引用保留：'+str(error),level='WARNING',
+                    details=_diagnostic(bound,status='uncertain' if error.uncertain else 'blocked',reason=str(error)))
+        raise
+
+
+def _delete_sources(bound, root, selected, dry_run=False):
     if not settings.get()["official_delete_enabled"]:
         raise CloudError(
             "此来源已绑定 115；请在我的网盘启用 Cookie 源文件删除", 409
@@ -198,16 +228,20 @@ def delete_sources(bound, root, selected, dry_run=False):
     with store.db() as con:
         for source in bound["sources"]:
             refs = con.execute(
-                "SELECT local_path FROM cloud_assets WHERE account_id=? AND file_id=? AND id!=? AND state IN ('active','publishing','needs_review')",
-                (bound["account_id"], source["id"], bound["asset_id"]),
+                "SELECT local_path,payload FROM cloud_assets WHERE account_id=? AND id!=? "
+                "AND state IN ('active','publishing','needs_review') AND "
+                "(file_id=? OR EXISTS (SELECT 1 FROM json_each(cloud_assets.payload,'$.companions') c "
+                "WHERE CAST(json_extract(c.value,'$.id') AS TEXT)=?))",
+                (bound['account_id'],bound['asset_id'],source['id'],source['id']),
             ).fetchall()
-            if any(r[0] not in selected for r in refs):
+            if any(r[0] not in selected or json.loads(r[1]).get('source_kind') == 'share' for r in refs):
                 raise CloudError(
                     "同一 115 源文件仍有未选中的播放引用，保留来源与 STRM", 409
                 )
     provider = provider115.for_account(bound["account_id"])
     provider.require("official_delete")
     provider.profile()
+    events.emit('governance','七维治理来源核验：'+bound['sources'][0]['name'],details=_diagnostic(bound,status='preflight',source_count=len(bound['sources'])))
     prepared = []
     # Verify the whole explicitly recorded group before deleting any source member.
     for source in bound["sources"]:
@@ -233,12 +267,14 @@ def delete_sources(bound, root, selected, dry_run=False):
             if not dry_run:
                 _state(bound, source, "verified", proof)
             prepared.append((source, proof))
+            events.emit('governance','复用已核实删除回执，不重发请求：'+source['name'],details=_diagnostic(bound,source,status='verified',result='复用回执'))
             continue
         current = provider.info(source["id"])
         if not _same(current, source):
             raise CloudError("115 源文件在预览后变化，请重新同步身份", 409)
         prepared.append((source, None))
     if dry_run:
+        events.emit('governance','来源预检完成，仅预览，未发送删除',details=_diagnostic(bound,status='preview',source_count=len(prepared)))
         return {
             "removed": len(prepared),
             "new_ids": [x["id"] for x, _ in prepared],
@@ -270,6 +306,7 @@ def delete_sources(bound, root, selected, dry_run=False):
             if not _same(provider.info(source["id"]), source):
                 _state(bound, source, "rejected", {"acknowledged": False})
                 raise CloudError("源文件在执行前变化，删除已停止", 409)
+            events.emit('governance','按登记文件 ID 发送 115 删除：'+source['name'],details=_diagnostic(bound,source,status='dispatched'))
             provider.delete(source["id"])
             new_ids.append(source["id"])
         except CloudError as error:
@@ -295,6 +332,7 @@ def delete_sources(bound, root, selected, dry_run=False):
                     "115 已接受删除但来源状态尚未确认，STRM 保留", 409, uncertain=True
                 )
         _state(bound, source, "verified", proof)
+        events.emit('governance','115 源文件删除已核实：'+source['name'],details=_diagnostic(bound,source,status='verified',result='精确不存在回执 + 完整父目录检查'))
     return {
         "removed": len(new_ids),
         "new_ids": new_ids,
@@ -308,6 +346,7 @@ def local_removed(bound):
             "UPDATE cloud_assets SET state='revoked',updated=? WHERE id=?",
             (time.time(), bound["asset_id"]),
         )
+    events.emit('governance','NAS STRM 已清理，播放引用已撤销',details={'asset_id':bound['asset_id'],'status':'revoked','path':bound.get('path','')})
 
 
 def verify(asset_id):

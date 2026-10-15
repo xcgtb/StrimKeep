@@ -129,3 +129,45 @@
 
 @media(max-width:760px){#tab-cloud .cw-config-body>label{padding:12px}#tab-cloud .cw-token-list{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:610px){#tab-cloud.cw-v2-active .cw-config-toolbar>.cw-config-search{min-width:0;flex:1 1 100px}#tab-cloud.cw-v2-active .cw-config-toolbar>button:not(.cw-config-save),#tab-cloud.cw-v2-active .cw-config-toolbar>.cw-toolbar-more{display:none}#tab-cloud.cw-v2-active .cw-config-toolbar .cw-config-save{min-width:92px;padding:10px}#tab-cloud .cw-pipeline-check{padding:11px;gap:6px}}
+
+/* A module is the card; its fields use a shared form rhythm, without nested cards. */
+#tab-cloud.cw-v2-active .cw-content>section.panel{padding:0;border:0;background:transparent;box-shadow:none}
+#tab-cloud .cw-config-body>label,#tab-cloud .cw-config-body>.cw-form-grid>label{padding:0;margin:14px 0;border:0;border-radius:0;background:transparent}
+#tab-cloud .cw-config-body>.cw-form-grid{gap:4px 20px;margin:0}
+#tab-cloud .cw-config-body>.cw-form-grid>label{margin:10px 0}
+#tab-cloud .cw-config-body .cw-settings-group{padding:14px 0;margin:10px 0;border:0;border-top:1px solid var(--border);border-radius:0;background:transparent}
+#tab-cloud .cw-config-body>.cw-settings-group:first-child{padding:0;margin:0;border:0}
+#tab-cloud .cw-config-body>label:has(>input[type=checkbox]){display:flex;align-items:flex-start;gap:8px;padding:10px 0;margin:0}
+#tab-cloud .cw-config-body>label>input[type=checkbox]{flex-shrink:0;margin:4px 0 0}
+#tab-cloud .cw-config-card>.cw-config-summary{background:transparent}
+#tab-cloud .cw-config-card .cw-config-copy{gap:4px}
+#tab-cloud .cw-config-toolbar{gap:8px;padding:8px 10px!important;border-radius:10px!important}
+#tab-cloud .cw-config-toolbar:has(.cw-config-save[hidden]):not(:has(.cw-organize-toolbar)){border-color:transparent;background:transparent}
+#tab-cloud .cw-module-nav{flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;padding:4px;margin:10px 0 16px}
+#tab-cloud .cw-module-nav button{flex:1 0 auto;white-space:nowrap;padding:10px 14px}
+#tab-cloud .cw-connection-row,#tab-cloud .cw-ingestion-row{padding:14px 0;border-top:1px solid var(--border);overflow-wrap:anywhere}
+#tab-cloud .cw-connection-row{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}
+#tab-cloud .cw-connection-row p,#tab-cloud .cw-ingestion-row p{margin:6px 0}
+#tab-cloud .cw-connection-row small,#tab-cloud .cw-ingestion-row small{display:block;color:var(--text-dim);font-size:12px;line-height:1.6}
+#tab-cloud .cw-row-actions{display:flex;gap:5px;flex-shrink:0}
+#tab-cloud .cw-row-actions .btn{margin:0;padding:7px 10px;font-size:12px}
+#tab-cloud .cw-state-badge{display:inline-block;margin:0 0 0 10px;padding:3px 7px;border-radius:6px;background:var(--surface-active);color:var(--text-mid);font-size:12px}
+#tab-cloud .cw-playback-guide{padding:12px 14px;border-left:3px solid var(--brand);background:var(--surface);border-radius:0 8px 8px 0;margin:0 0 18px}
+#tab-cloud .cw-playback-guide p{margin-bottom:0}
+#tab-cloud .cw-advanced{margin:16px 0;padding:12px 0;border-top:1px solid var(--border)}
+#tab-cloud .cw-advanced summary{cursor:pointer;font-size:13px;color:var(--text-mid)}
+#tab-cloud .cw-advanced>label{display:block;margin:14px 0;font-size:13px}
+#tab-cloud .cw-config-save[hidden]{display:none!important}
+@media(max-width:610px){
+  #tab-cloud .cw-module-nav{display:flex;gap:4px}
+  #tab-cloud .cw-module-nav button{font-size:13px;min-height:40px;padding:9px 12px}
+  #tab-cloud .cw-accountbar>label{gap:8px;font-size:12px}
+  #tab-cloud .cw-modular>.cw-config-card>.cw-config-summary{padding:15px}
+  #tab-cloud .cw-modular .cw-config-body{padding:14px 15px}
+  #tab-cloud .cw-config-body>.cw-form-grid{gap:0}
+  #tab-cloud .cw-connection-row{display:block}
+  #tab-cloud .cw-row-actions{margin-top:10px}
+  #tab-cloud .cw-state-badge{margin:6px 0;display:table}
+  #tab-cloud .cw-pipeline-checks{gap:8px}
+  #tab-cloud .cw-pipeline-actions>.btn{flex:1 1 130px}
+}

@@ -396,7 +396,7 @@ def safe_delete_files(files, base_root, cloud_root=None, dry_run=False, progress
                 try:
                     if cloud_root is None:
                         asset = service.share_identity(f)
-                        bound = {'asset_id':asset['id']} if asset else None
+                        bound = {'asset_id':asset['id'],'path':str(f)} if asset else None
                     else:
                         bound = service.lookup(f, base_root)
                         result = service.delete_sources(bound, base_root, selected, dry_run)

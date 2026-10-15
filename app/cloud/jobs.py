@@ -96,13 +96,18 @@ def step(job_id, key, payload, fn):
         )
     stage = 'naming' if key.startswith('rename:') else 'organize' if key.startswith(('move:','mkdir:')) else 'transfer' if key=='receive' else None
     label = '重命名' if key.startswith('rename:') else '移动归档' if key.startswith('move:') else '创建目录' if key.startswith('mkdir:') else '转存请求'
+    started = time.monotonic()
+    diagnostic = {'event':key.split(':')[0], 'file_id':payload.get('file_id'),
+                  'source_name':payload.get('source_name'), 'target_name':payload.get('name'),
+                  'parent_id':payload.get('parent'), 'target_id':payload.get('target'),
+                  'sha1':payload.get('sha1'), 'size':payload.get('size')}
     if stage:
-        events.emit(stage,label+'开始'+('：'+str(payload.get('name')) if payload.get('name') else ''),job_id)
+        events.emit(stage,label+'开始'+('：'+str(payload.get('name')) if payload.get('name') else ''),job_id,details={**diagnostic,'status':'started'})
     try:
         result = fn()
     except CloudError as error:
         if stage:
-            events.emit(stage,label+('结果待核实：' if error.uncertain else '未完成：')+str(error),job_id,level='WARNING')
+            events.emit(stage,label+('结果待核实：' if error.uncertain else '未完成：')+str(error),job_id,level='WARNING',details={**diagnostic,'status':'uncertain' if error.uncertain else 'failed','elapsed_ms':int((time.monotonic()-started)*1000),'reason':str(error)})
         raise
     with store.db() as con:
         con.execute(
@@ -110,7 +115,7 @@ def step(job_id, key, payload, fn):
             ("verified", store.encode(result), time.time(), job_id, key),
         )
     if stage:
-        events.emit(stage,label+'结果已核实'+('：'+str(payload.get('name')) if payload.get('name') else ''),job_id)
+        events.emit(stage,label+'结果已核实'+('：'+str(payload.get('name')) if payload.get('name') else ''),job_id,details={**diagnostic,'status':'verified','elapsed_ms':int((time.monotonic()-started)*1000)})
     return result
 
 
@@ -159,7 +164,8 @@ def _execute(job_id):
         row = con.execute(
             "SELECT kind,payload FROM cloud_jobs WHERE id=?", (job_id,)
         ).fetchone()
-    events.emit('queue','开始执行：'+row[0],job_id)
+    started = time.monotonic()
+    events.emit('queue','开始执行：'+row[0],job_id,details={'event':row[0],'status':'started'})
     try:
         progress(job_id, None, 0, "准备")
         checkpoint(job_id)
@@ -195,7 +201,7 @@ def _execute(job_id):
             "UPDATE cloud_jobs SET state=?,result=?,message=?,updated=? WHERE id=?",
             (state, store.encode(result), message, time.time(), job_id),
         )
-    events.emit('queue',message+' · '+state,job_id,level='ERROR' if state=='failed' else 'WARNING' if state in ('uncertain','needs_review') else 'INFO')
+    events.emit('queue',message+' · '+state,job_id,level='ERROR' if state=='failed' else 'WARNING' if state in ('uncertain','needs_review') else 'INFO',details={'event':row[0],'status':state,'elapsed_ms':int((time.monotonic()-started)*1000),'result':message})
     try:
         notify(job_id, row[0], state, message)
     except Exception:
@@ -313,20 +319,15 @@ def continue_transfer(job_id, confirmed=False):
         raise CloudError("此任务没有待继续的整理", 409)
     provider = for_account(data["account_id"])
     provider.profile()
-    stage = provider.info(receipt["stage_id"])
-    if (
-        not stage["is_dir"]
-        or stage["parent_id"] != data["target_cid"]
-        or stage["name"] != "转存待整理-" + job_id[:12]
-    ):
-        raise CloudError("任务目录身份已变化，请重新选择来源预览", 409)
-    files = workflow.walk(provider, stage["id"])
+    stage = workflow.transfer_container(provider, data, receipt, job_id)
+    source_ids = [r["target_id"] for r in receipt["mapping"]] if receipt.get("receipt_mode") == "direct" else None
+    files = workflow.walk(provider, stage["id"], source_ids=source_ids)
     old = {x["id"]: x for x in receipt["files"]}
     if {x["id"] for x in files} != set(old) or any(
         not workflow._snapshot_equal(old[x["id"]], x) for x in files
     ):
         raise CloudError("转存内容在核实后变化，请重新预览", 409)
-    planned = workflow.plan(data["account_id"], stage["id"], data["organize_target"])
+    planned = workflow.plan(data["account_id"], stage["id"], data["organize_target"], source_ids=source_ids)
     if not planned["items"]:
         raise CloudError("没有可以继续整理的项目，请在整理页修正作品", 409)
     with store.db() as con:
@@ -377,22 +378,8 @@ def verify_transfer(job_id):
     intent = json.loads(step_row[0])
     provider = for_account(payload["account_id"])
     provider.profile()
-    stage = provider.info(intent["stage_id"])
-    if (
-        not stage["is_dir"]
-        or stage["parent_id"] != payload["target_cid"]
-        or stage["name"] != "转存待整理-" + job_id[:12]
-    ):
-        raise CloudError("转存目录身份已变化，保留待核实状态", 409)
-    received = provider.list(stage["id"])
-    mapping = workflow.receipt_mapping(payload, received)
-    files = workflow.walk(provider, stage["id"])
-    for file in files:
-        store.save_file(payload["account_id"], file)
     result = {
-        "stage_id": stage["id"],
-        "files": files,
-        "mapping": mapping,
+        **workflow.transfer_receipt(provider, payload, intent, job_id),
         "continuation_required": bool(payload.get("organize_target")),
         "message": (
             "转存已核实，未重新发送请求；可继续整理已核实的文件，或在文件页手动预览"

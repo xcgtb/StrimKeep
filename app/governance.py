@@ -28,11 +28,13 @@ try:
     from .domain import governance as _dom
     from . import plan_guard as _plan_guard
     from . import tasks as _tasks
+    from . import cloud_bridge as _cloud_bridge
     from .lib import LibraryScanError
 except ImportError:
     from domain import governance as _dom
     import plan_guard as _plan_guard
     import tasks as _tasks
+    import cloud_bridge as _cloud_bridge
     from lib import LibraryScanError
 
 
@@ -466,8 +468,8 @@ def _build_plan_with_libs():
     # 两个库互不相干，并行遍历：磁盘/网络挂载慢时能把等待时间叠在一起
     with ThreadPoolExecutor(max_workers=2) as _ex:
         task = _tasks.current_task()
-        _fs = _ex.submit(_tasks.run_in_task, task, _eng()._get_lib, _eng().S_ROOT)
-        _fl = _ex.submit(_tasks.run_in_task, task, _eng()._get_lib, _eng().L_ROOT)
+        _fs = _ex.submit(_tasks.run_in_task, task, _cloud_bridge.governance_library, _eng().S_ROOT)
+        _fl = _ex.submit(_tasks.run_in_task, task, _cloud_bridge.governance_library, _eng().L_ROOT)
         S, L = _fs.result(), _fl.result()
     log.info('双库遍历完成：分享 %d / 本地 %d 个 STRM，耗时 %.1fs',
              S.strm_count, L.strm_count, time.time() - t_start)
@@ -1122,6 +1124,9 @@ def _current_rule_snapshot():
                  'ingest_interval_min','ingest_enabled')
     rules = {k: cfg.get(k, '') for k in rule_keys}
     rules['strategy'] = strategy
+    from app.cloud import settings as cloud_settings
+    cloud_cfg = cloud_settings.get()
+    rules['generated_strm'] = {k:cloud_cfg[k] for k in ('governance_generated_enabled','output_root','share_output_root')}
     # 七维画质规则同样决定删除方向。指纹必须覆盖顺序、开关、档位和发布组，
     # 否则修改画质设置后，旧计划仍会通过执行前的规则校验。
     # 只取规范化后的业务字段，排除文案以及 JSON 缩进等非业务变化。
@@ -1137,7 +1142,7 @@ def _execution_snapshots(todo):
     """Capture only plan-related STRMs once, sharing fingerprints across actions."""
     deleting = {str(f) for a in todo for f in a.files}
     snapshots, guards = {}, []
-    roots = (_eng().L_ROOT, _eng().S_ROOT)
+    roots = _cloud_bridge.governance_roots()
     for a in todo:
         _tasks.checkpoint()
         targets = sorted({str(f) for f in a.files})
@@ -1150,8 +1155,10 @@ def _execution_snapshots(todo):
             from . import cloud_bridge
         else:
             import cloud_bridge
-        source_root = _eng().L_ROOT if a.kind == 'loc' else _eng().S_ROOT
-        sources = cloud_bridge.snapshots(targets, source_root, a.kind == 'loc')
+        sources = {}
+        for path in targets:
+            source_root = _cloud_bridge.governance_root(path, a.kind == 'loc')
+            sources.update(cloud_bridge.snapshots([path], source_root, a.kind == 'loc'))
         guard = {'version': _plan_guard.VERSION, 'targets': targets, 'retained': retained, 'cloud_sources': sources}
         if sources:
             a.meta['cloud_sources'] = list(sources.values())
@@ -1377,12 +1384,11 @@ def _plan_action_to_act(old_act):
     if kind not in ('loc', 'shr'):
         return None
     files = []
-    root = _eng().L_ROOT if kind == 'loc' else _eng().S_ROOT
     for raw in old_act.get('files') or []:
         try:
             p = Path(str(raw))
             # 计划文件可能来自历史运行环境；只允许删除仍位于对应库根下的路径。
-            p.relative_to(root)
+            _cloud_bridge.governance_root(p, kind == 'loc')
         except (TypeError, ValueError, OSError):
             continue
         # 文件在扫描后消失：跳过即可；绝不为了确认它而重新扫描整个库。
@@ -1476,7 +1482,7 @@ def _run_inter_clean(args):
                        for act in plan.get('actions', []) if act.get('action_id')}
         todo = []
         for aid, old_act in old_actions.items():
-            reason = _plan_guard.validate(old_act, plan['file_snapshots'], (_eng().L_ROOT, _eng().S_ROOT))
+            reason = _plan_guard.validate(old_act, plan['file_snapshots'], _cloud_bridge.governance_roots())
             if reason:
                 skipped_details.append('%s → %s' % (old_act.get('text', '?'), reason))
                 continue
@@ -1502,13 +1508,18 @@ def _run_inter_clean(args):
     for a in todo:
         # 逐动作进入删除链前再核对，捕获前面动作/外部入库期间发生的变化。
         reason = _plan_guard.validate(validated_actions[a.action_id], plan['file_snapshots'],
-                                      (_eng().L_ROOT, _eng().S_ROOT))
+                                      _cloud_bridge.governance_roots())
         if reason:
             skipped += 1
             skipped_details.append('%s → %s' % (a.text, reason))
             continue
         is_loc = a.kind == 'loc'
-        r = _eng().safe_delete_files(a.files, _eng().L_ROOT if is_loc else _eng().S_ROOT, _eng().CLOUD_L_ROOT if is_loc else None, args.dry_run)
+        try:
+            r = _cloud_bridge.governance_delete(a.files, is_loc, args.dry_run)
+        except ValueError as error:
+            skipped += 1
+            skipped_details.append('%s → %s' % (a.text, str(error)))
+            continue
         line = ('[DRY-RUN] ' if args.dry_run else '') + a.detail
         if r['errors']:
             warns.append(f'{a.text}: ' + '; '.join(r['errors'][:2])); line += ' ⚠️ 部分失败'

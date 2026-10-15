@@ -21,7 +21,7 @@
     var heading=document.createElement('h2');heading.id='cw-page-title';root.prepend(heading);
     root.querySelectorAll('.cw-config-toolbar').forEach(function(bar){
       var section=bar.closest('section'),save=document.createElement('button');save.type='button';save.className='btn cw-config-save';save.textContent='保存修改';
-      var commands={channels:'saveChannel',transfer:'saveReceiving'};
+      var commands={channels:'saveChannel'};
       if(section.id==='cw-organize'){
         var original=bar.querySelector('[data-link-action="saveOrganize"]');if(original){original.textContent='保存修改';original.classList.add('cw-config-save');}
       }else if(commands[section.id.replace('cw-','')]){

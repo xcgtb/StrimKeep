@@ -1951,13 +1951,35 @@ tbody tr:hover{background:var(--fill-soft)}
 /* Incremental log stream, fixed viewport and bounded DOM. */
 .log-toolbar{flex-wrap:wrap;align-items:flex-start;gap:12px}
 .log-controls{display:flex;flex-wrap:wrap;gap:8px}
+.log-panel .log-controls{display:grid;grid-template-columns:minmax(130px,.8fr) minmax(180px,1.2fr) minmax(100px,.6fr) minmax(150px,1fr);width:100%;gap:8px}
+.log-panel .log-controls input,.log-panel .log-controls select{width:100%;min-width:0}
+@media(max-width:700px){.log-panel .log-controls{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .log-status{font-size:12px;color:var(--text-mid);margin-top:6px}
 .runtime-logs{height:min(65vh,720px);min-height:280px;overflow:auto;margin-top:16px;border:1px solid var(--border);border-radius:12px;background:var(--surface-hover);overflow-anchor:none}
 .log-row{padding:12px 14px;border-bottom:1px solid var(--border)}
-.log-meta{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font:12px ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--text-mid)}
+.log-meta{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font:12px ui-monospace,SFMono-Regular,Consolas,"PingFang SC","Microsoft YaHei",monospace;color:var(--text-mid)}
 .log-source{padding:3px 8px;border-radius:6px;background:rgba(37,99,235,.12);color:var(--accent,#2563eb);font-weight:600}
 .log-level{font-weight:700}.log-warning{color:#d97706}.log-error,.log-critical{color:#dc2626}.log-info{color:var(--text-mid)}
-.log-row pre{margin:8px 0 0;font:13px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text);background:none}
+.log-row pre{margin:8px 0 0;font:13px/1.7 ui-monospace,SFMono-Regular,Consolas,"PingFang SC","Microsoft YaHei",monospace;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text);background:none}
+.log-evidence{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px;font-size:12px}
+.log-task{border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--accent);padding:5px 8px;cursor:pointer;font:inherit}
+.log-duration,.log-result{color:var(--text-mid)}
+.log-detail{flex-basis:100%;min-width:0}.log-detail summary{cursor:pointer;color:var(--accent);padding:4px 0}
+.log-detail dl,.cw-template-description dl{display:grid;grid-template-columns:minmax(100px,150px) minmax(0,1fr);gap:8px 14px;margin:10px 0;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:10px}
+.log-detail dt,.cw-template-description dt{color:var(--text-mid)}
+.log-detail dd,.cw-template-description dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.cw-template-description{padding:14px;border:1px solid var(--border);border-radius:12px;margin:12px 0;background:var(--surface)}
+.cw-template-description code{white-space:pre-wrap;overflow-wrap:anywhere}.cw-template-description li{margin:8px 0;line-height:1.6}
+.cw-share-guide,.cw-share-step{padding:18px;border:1px solid var(--border);border-radius:14px;background:var(--surface);margin:12px 0}
+.cw-share-guide p{line-height:1.7;color:var(--text-mid);margin:8px 0}.cw-share-step h4{display:flex;align-items:center;gap:9px;margin:0 0 14px!important}
+.cw-share-step h4 span{display:grid;place-items:center;width:26px;height:26px;background:var(--accent-soft);color:var(--accent);border-radius:8px}
+#cw-share-library .cw-share-primary{background:var(--accent)!important;color:white!important;-webkit-text-fill-color:white!important}
+#cw-share-library button:disabled{opacity:.5;cursor:not-allowed}#cw-share-list p{padding:10px 0;border-bottom:1px solid var(--border)}
+#cw-share-list label{display:flex!important;align-items:flex-start;gap:10px;line-height:1.65!important;overflow-wrap:anywhere}
+#cw-share-list input[type=checkbox]{flex:none;margin-top:6px}#cw-share-repair{margin-top:16px;border-top:1px solid var(--border);padding-top:14px}
+#cw-share-repair summary{cursor:pointer;color:var(--accent);font-weight:600}#cw-share-matches{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+#cw-share-matches .btn{white-space:normal;text-align:left;margin:0;line-height:1.5}#cw-share-repair-status,#cw-share-result-status,#cw-share-read-status{font-size:13px;line-height:1.6;color:var(--text-mid)}
+@media(max-width:600px){.cw-share-step,.cw-share-guide{padding:14px}#cw-share-matches{grid-template-columns:1fr}.cw-share-step>.btn{width:100%;margin:6px 0}}
 @media(max-width:600px){.log-controls{width:100%}.log-controls .btn{flex:1;white-space:nowrap;padding:9px 8px}.log-row{padding:10px}.log-row pre{font-size:12px}}
 
 /* StrimKeep: clear hierarchy, compact navigation and visible runtime status. */

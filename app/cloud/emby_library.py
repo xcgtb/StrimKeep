@@ -154,6 +154,37 @@ def confirmed_item(connection, asset, path):
     return None
 
 
+def refresh_pending(connection, account_id, revision, now):
+    """Submit up to 100 valid due paths together, retaining each ingestion receipt."""
+    with store.db() as con:
+        rows = con.execute(
+            "SELECT id,asset_id,payload,attempts FROM cloud_ingestion WHERE connection_id=? AND revision=? AND state='pending' AND next_check<=? AND attempts%10=0 ORDER BY next_check LIMIT 100",
+            (connection["id"], revision, now),
+        ).fetchall()
+    selected, paths = [], []
+    for iid, asset_id, raw, attempts in rows:
+        data = json.loads(raw)
+        if data.get("account_id") != account_id or data.get("refresh_attempt") == attempts:
+            continue
+        asset = store.asset(asset_id)
+        if not asset or asset["state"] != "active" or asset["local_path"] != data["local_path"] or asset["payload"]["digest"] != data["digest"] or mapped_path(asset, connection) != data["path"]:
+            continue
+        selected.append((iid, data, attempts))
+        if data["path"] not in paths:
+            paths.append(data["path"])
+    if not paths:
+        return
+    cfg = services.get(account_id, "emby_library", DEFAULT)
+    if cfg["revision"] != revision or not settings.get()["emby_refresh_enabled"]:
+        return
+    request(connection, "/Library/Media/Updated", method="POST", body={"Updates": [{"Path": path, "UpdateType": "Created"} for path in paths]})
+    with store.db() as con:
+        for iid, data, attempts in selected:
+            data["refresh_attempt"] = attempts
+            con.execute("UPDATE cloud_ingestion SET payload=? WHERE id=? AND state='pending' AND attempts=?", (store.encode(data), iid, attempts))
+    events.emit('emby', '已提交 Emby 路径刷新：'+connection['name']+' · '+str(len(paths))+' 个 STRM；等待实际入库确认')
+
+
 def poll_one():
     now = time.time()
     with store.db() as con:
@@ -162,7 +193,7 @@ def poll_one():
         return
     iid, asset_id, cid, revision, raw, attempts = row
     payload = json.loads(raw)
-    state, result, item = "pending", {}, None
+    state, result, item, connection = "pending", {}, None, None
     asset = store.asset(asset_id)
     try:
         cfg = services.get(payload["account_id"], "emby_library", DEFAULT)
@@ -173,8 +204,7 @@ def poll_one():
             state, result = "paused", {"message":"Emby 联动已关闭"}
         else:
             if attempts % 10 == 0:
-                events.emit('emby','请求 Emby 扫描：'+connection['name'])
-                request(connection, "/Library/Media/Updated", method="POST", body={"Updates":[{"Path":payload["path"],"UpdateType":"Created"}]})
+                refresh_pending(connection, payload["account_id"], revision, now)
             item = confirmed_item(connection, asset, payload["path"])
             state = "confirmed" if item else "pending"
             result = {"message":"Emby 已确认入库" if item else "等待 Emby 扫描与刮削", "emby_item_id":item["Id"] if item else ""}
@@ -203,8 +233,8 @@ def poll_one():
 
 def records(account_id):
     with store.db() as con:
-        rows = con.execute("SELECT id,asset_id,connection_id,state,result,attempts,updated FROM cloud_ingestion WHERE json_extract(payload,'$.account_id')=? ORDER BY updated DESC LIMIT 100", (account_id,)).fetchall()
-    return [{"id":r[0],"asset_id":r[1],"connection_id":r[2],"state":r[3],"result":json.loads(r[4]),"attempts":r[5],"updated":r[6]} for r in rows]
+        rows = con.execute("SELECT i.id,i.asset_id,i.connection_id,i.state,i.result,i.attempts,i.updated,json_extract(i.payload,'$.path'),json_extract(a.payload,'$.media.title') FROM cloud_ingestion i LEFT JOIN cloud_assets a ON a.id=i.asset_id WHERE json_extract(i.payload,'$.account_id')=? ORDER BY i.updated DESC LIMIT 100", (account_id,)).fetchall()
+    return [{"id":r[0],"asset_id":r[1],"connection_id":r[2],"state":r[3],"result":json.loads(r[4]),"attempts":r[5],"updated":r[6],"path":r[7] or "","title":r[8] or ""} for r in rows]
 
 
 def retry(account_id, iid):
@@ -217,7 +247,7 @@ def retry(account_id, iid):
         raise CloudError("STRM 资产不可用",409)
     watch(asset)
     with store.db() as con:
-        con.execute("UPDATE cloud_ingestion SET state='pending',attempts=0,next_check=? WHERE id=? AND state IN ('timeout','paused')", (time.time(),iid))
+        con.execute("UPDATE cloud_ingestion SET state='pending',attempts=0,next_check=?,payload=json_remove(payload,'$.refresh_attempt') WHERE id=? AND state IN ('timeout','paused')", (time.time(),iid))
 
 
 def _flush_confirmed():

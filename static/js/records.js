@@ -291,7 +291,21 @@ function toggleExecutionDetail(btn){
   btn.textContent = (open ? '▶ ' : '▼ ') + text;
 }
 
-var logCenter = { cursor: 0, timer: null, busy: false, paused: false, generation: 0, ids: new Set(), source:'', query:'' };
+var logCenter = { cursor: 0, timer: null, busy: false, paused: false, generation: 0, ids: new Set(), source:'', query:'', level:'', task:'' };
+function runtimeLogDetails(row){
+  var d=row.details||{},html='',labels={event:'动作',status:'结果',file_id:'115 文件 ID',parent_id:'原父目录 ID',target_id:'目标目录 ID',source_name:'原文件名',target_name:'目标名称',path:'NAS 路径 / 归档目录',sha1:'源文件 SHA1',size:'源文件字节数',asset_id:'播放引用 ID',tmdb_id:'TMDB ID',kind:'媒体类型',season:'季',episode:'集',cache_hit:'媒体缓存命中',source_count:'绑定源文件数',result:'结果说明',connection:'Emby 连接',count:'处理数量',reason:'原因',account_id:'账号记录 ID',binding_version:'绑定格式版本'};
+  var states={started:'开始',preflight:'核验中',preview:'仅预览',dispatched:'已发送，待核实',published:'已落盘',verified:'已核实',acknowledged:'已接受，待核实',uncertain:'结果未知',blocked:'已阻止',revoked:'已撤销',success:'任务完成',needs_review:'需要处理',failed:'未完成',stopped:'已停止'};
+  if(/^[a-f0-9]{32}$/.test(d.job_id||''))html+='<button class="log-task" type="button" title="只看此任务日志" onclick="focusRuntimeTask(\''+d.job_id+'\')">任务 '+esc(d.job_id.slice(0,12))+'</button>';
+  if(states[d.status])html+='<span class="log-result">'+esc(states[d.status])+'</span>';
+  if(Number.isFinite(d.elapsed_ms))html+='<span class="log-duration">耗时 '+esc((Math.max(0,d.elapsed_ms)/1000).toFixed(2))+' 秒</span>';
+  var fields=Object.keys(labels).filter(function(k){return d[k]!==undefined&&d[k]!==null;});
+  if(fields.length)html+='<details class="log-detail"><summary>文件身份与执行明细</summary><dl>'+fields.map(function(k){return '<dt>'+labels[k]+'</dt><dd>'+esc(k==='status'?(states[d[k]]||String(d[k])):typeof d[k]==='boolean'?(d[k]?'是':'否'):String(d[k]))+'</dd>';}).join('')+'</dl></details>';
+  return html;
+}
+function focusRuntimeTask(id){
+  if(!/^[a-f0-9]{32}$/.test(id))return;
+  $('logTask').value=id;filterRuntimeLogs();
+}
 function stopLogCenter(){
   logCenter.generation++;
   clearTimeout(logCenter.timer);
@@ -313,7 +327,7 @@ async function pollLogCenter(force){
   logCenter.busy = true;
   var generation = logCenter.generation;
   try {
-    var suffix=(logCenter.source?'&source='+encodeURIComponent(logCenter.source):'')+(logCenter.query?'&query='+encodeURIComponent(logCenter.query):'');
+    var suffix=(logCenter.source?'&source='+encodeURIComponent(logCenter.source):'')+(logCenter.query?'&query='+encodeURIComponent(logCenter.query):'')+(logCenter.level?'&level='+encodeURIComponent(logCenter.level):'')+(logCenter.task?'&task='+encodeURIComponent(logCenter.task):'');
     var r = await api('/api/logs?n=200&after=' + logCenter.cursor+suffix);
     if (generation !== logCenter.generation || window.__activeTab !== 'history') return;
     var box = $('recordsList');
@@ -326,9 +340,9 @@ async function pollLogCenter(force){
         var level = /^(ERROR|CRITICAL|WARNING|INFO|DEBUG)$/.test(row.level) ? row.level : 'INFO';
         box.insertAdjacentHTML('beforeend', '<div class="log-row" data-log-id="' + esc(String(row.id)) + '">'
           + '<div class="log-meta"><time>' + esc(String(row.ts || '').replace('T',' ')) + '</time>'
-          + '<span class="log-source">' + esc(({cloud_queue:'网盘任务',cloud_transfer:'分享转存',cloud_recognize:'影视识别',cloud_probe:'媒体信息',cloud_naming:'重命名',cloud_organize:'整理归档',cloud_strm:'STRM生成',cloud_emby:'Emby入库',cloud_notify:'通知发送',cloud_channel:'频道监控',cloud_maintenance:'115维护'})[row.source]||row.source||'运行') + '</span>'
+          + '<span class="log-source">' + esc(({cloud_queue:'网盘任务',cloud_transfer:'分享转存',cloud_recognize:'影视识别',cloud_probe:'媒体信息',cloud_naming:'重命名',cloud_organize:'整理归档',cloud_strm:'STRM生成',cloud_emby:'Emby入库',cloud_notify:'通知发送',cloud_channel:'频道监控',cloud_maintenance:'115维护',cloud_governance:'七维源删除'})[row.source]||row.source||'运行') + '</span>'
           + '<span class="log-level log-' + level.toLowerCase() + '">' + esc(level) + '</span></div>'
-          + '<pre>' + esc(row.message || '') + '</pre></div>');
+          + '<pre>' + esc(row.message || '') + '</pre><div class="log-evidence">'+runtimeLogDetails(row)+'</div></div>');
       });
       while (box.children.length > 500) {
         logCenter.ids.delete(box.firstElementChild.getAttribute('data-log-id'));
@@ -348,6 +362,7 @@ async function pollLogCenter(force){
 function filterRuntimeLogs(){
   stopLogCenter();logCenter.cursor=0;logCenter.ids.clear();
   logCenter.source=$('logSource').value;logCenter.query=$('logQuery').value.trim().slice(0,200);
+  logCenter.level=($('logLevel')||{}).value||'';logCenter.task=(($('logTask')||{}).value||'').trim().slice(0,32);
   $('recordsList').innerHTML='<div class="list-empty">正在读取所选模块日志…</div>';
   pollLogCenter(true);
 }

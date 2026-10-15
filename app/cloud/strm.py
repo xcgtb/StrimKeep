@@ -369,7 +369,7 @@ def generate(account_id, row, media, scope_cid=None, companions=None, provider=N
         published = store.asset(asset_id)
         from app.cloud import emby_library
         emby_library.watch(published)
-        events.emit('strm','STRM 已发布：'+published['local_path']+(' · 分享库' if share else ' · 115网盘'))
+        events.emit('strm','STRM 已发布：'+published['local_path']+(' · 分享库' if share else ' · 115网盘'),details={'status':'published','asset_id':asset_id,'account_id':account_id,'file_id':row['id'],'sha1':row['sha1'],'size':row['size'],'path':published['local_path'],'tmdb_id':media['tmdb_id'],'source_count':1+len(companions),'result':'已写入并登记；实际 Emby 入库另行确认'})
         return published
 
 

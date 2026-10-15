@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """片库：入库 / 统计 / Emby / 搜索 / 日志 / 删除 / 探索"""
-import time, json, threading, sqlite3, urllib.parse, urllib.request, asyncio, secrets
+import time, json, threading, sqlite3, urllib.parse, urllib.request, asyncio, secrets, re
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from app import runtime_logs
@@ -136,8 +136,12 @@ def api_record_detail(rid: int):
 
 
 @router.get('/api/logs', dependencies=[Depends(auth)])
-def api_logs(n: int = 200, after: int = 0, source: str = '', query: str = ''):
-    return {'status': 'success', **runtime_logs.read(after=after, limit=n, source=source[:80], query=query[:200])}
+def api_logs(n: int = 200, after: int = 0, source: str = '', query: str = '', level: str = '', task: str = ''):
+    if level and level not in ('DEBUG','INFO','WARNING','ERROR','CRITICAL'):
+        raise HTTPException(400, '日志级别无效')
+    if task and not re.fullmatch(r'[a-f0-9]{1,32}', task):
+        raise HTTPException(400, '任务编号格式无效')
+    return {'status': 'success', **runtime_logs.read(after=after, limit=n, source=source[:80], query=query[:200], level=level, task=task)}
 
 
 @router.get('/api/logs/download', dependencies=[Depends(auth)])

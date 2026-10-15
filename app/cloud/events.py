@@ -9,7 +9,18 @@ _JOB = contextvars.ContextVar('cloud_log_job', default='')
 SOURCES = {'queue':'cloud_queue','transfer':'cloud_transfer','organize':'cloud_organize',
            'recognize':'cloud_recognize','probe':'cloud_probe','naming':'cloud_naming',
            'strm':'cloud_strm','emby':'cloud_emby','notify':'cloud_notify',
-           'channel':'cloud_channel','maintenance':'cloud_maintenance'}
+           'channel':'cloud_channel','maintenance':'cloud_maintenance','governance':'cloud_governance'}
+
+DETAIL_FIELDS = frozenset(('job_id','event','status','file_id','parent_id','target_id',
+    'source_name','target_name','path','sha1','size','asset_id','tmdb_id','kind',
+    'season','episode','elapsed_ms','cache_hit','source_count','result','connection',
+    'count','reason','account_id','binding_version'))
+
+
+def safe_details(value):
+    """Only explicit diagnostic fields; never serialize provider replies/credentials."""
+    return {k: (v if type(v) in (bool,int) else clean(v)[:1000])
+            for k,v in (value or {}).items() if k in DETAIL_FIELDS and type(v) in (str,bool,int)}
 
 
 def clean(value):
@@ -20,13 +31,14 @@ def clean(value):
     return runtime_logs.redact(text)[:2000]
 
 
-def emit(stage, message, job_id=None, level='INFO', con=None):
+def emit(stage, message, job_id=None, level='INFO', con=None, details=None):
     if stage not in SOURCES or level not in ('INFO','WARNING','ERROR'):
         raise ValueError('invalid cloud event')
     identifier = job_id or _JOB.get()
     prefix = '[任务 '+str(identifier)[:12]+'] ' if identifier else ''
-    row = {'ts':datetime.now().isoformat(timespec='seconds'),'level':level,
-           'source':SOURCES[stage],'message':prefix+clean(message)}
+    row = {'ts':datetime.now().isoformat(timespec='milliseconds'),'level':level,
+           'source':SOURCES[stage],'message':prefix+clean(message),
+           'details':safe_details({**(details or {}),**({'job_id':identifier} if identifier else {})})}
     def insert(db):
         rid = runtime_logs._insert(db,row)
         if rid % 100 == 0:
