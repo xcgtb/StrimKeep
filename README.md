@@ -2,10 +2,6 @@
 
 **StrimKeep｜面向 302 STRM + Emby 的影视库管理与智能治理工具**
 
-我的网盘累计增强与1.3.6操作说明：[频道历史 → 接收目录定时整理 → STRM → Emby实际入库确认](docs/MY_DRIVE_V136_ACCEPTANCE.md)。机器人直接发分享/磁力/ed2k按Web目录接收，`/strm 分享链接`免转存生成分享库STRM。
-
-1.3.6后续累计改进：[实时日志、分享链接接收与折叠配置卡片](docs/MY_DRIVE_LIVE_LOGS_TRANSFER_UI_ACCEPTANCE.md)。
-
 [![License](https://img.shields.io/badge/LICENSE-MIT-blueviolet?style=for-the-badge)](LICENSE)
 [![Python](https://img.shields.io/badge/PYTHON-3.12-3776AB?style=for-the-badge)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FASTAPI-READY-009688?style=for-the-badge)](https://fastapi.tiangolo.com/)
