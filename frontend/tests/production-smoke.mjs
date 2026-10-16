@@ -66,7 +66,13 @@ try {
         `${name} ${route} overflow`,
       );
       if (
-        ['dashboard', 'resources', 'organize/workspace', 'settings/cloud'].includes(route) &&
+        [
+          'dashboard',
+          'resources',
+          'organize/workspace',
+          'settings/cloud',
+          'resources/share',
+        ].includes(route) &&
         process.env.STRIMKEEP_SCREENSHOT_DIR
       ) {
         await mkdir(process.env.STRIMKEEP_SCREENSHOT_DIR, { recursive: true });
@@ -75,7 +81,7 @@ try {
             process.env.STRIMKEEP_SCREENSHOT_DIR,
             `vue3-${name}-${route.replaceAll('/', '-')}.png`,
           ),
-          fullPage: true,
+          fullPage: name === 'desktop',
         });
       }
     }

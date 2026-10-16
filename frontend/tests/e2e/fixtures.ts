@@ -88,7 +88,7 @@ export async function fixtures(page: Page, initialAuth = true) {
       if (path === '/api/runtime/status')
         return fulfill(route, {
           status: 'success',
-          version: '1.4.7',
+          version: '1.4.8',
           readiness: { ready: true },
           memory: { rss_mib: 162 },
         });

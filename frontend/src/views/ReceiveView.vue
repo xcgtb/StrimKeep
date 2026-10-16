@@ -219,10 +219,18 @@ function switchTab(value: string) {
     :title="shareOnly ? '分享免转存' : '资源接收'"
     :subtitle="
       shareOnly
-        ? '只读浏览分享，识别并生成分享库 STRM，保留分享源文件。'
+        ? '浏览分享，直接生成到分类目录，保留分享源文件。'
         : '接收 115 分享、磁力、ed2k 与秒传资源，核对目标后提交。'
     "
   /><AccountPicker />
+  <div v-if="shareOnly" class="share-path-banner">
+    <span class="path-banner-icon">↳</span>
+    <div>
+      <strong>直接归档到分享库</strong>
+      <p>使用已保存的分类与命名规则，不再创建“分享-ID”外层目录。</p>
+    </div>
+    <code>share / 电影 / 作品 / 影片.strm</code>
+  </div>
   <nav v-if="!shareOnly" class="browse-tabs">
     <button
       v-for="(label, key) in {

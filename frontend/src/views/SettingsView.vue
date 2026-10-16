@@ -255,6 +255,7 @@ onMounted(load);
   </p>
   <div v-if="request.data.value" class="settings-layout">
     <aside class="settings-index">
+      <p class="settings-nav-caption">连接与偏好</p>
       <button v-for="group in groups" :key="group.key" @click="scrollTo(group.key)">
         {{ group.title }}</button
       ><button @click="scrollTo('ingest')">入库监控与回调</button>

@@ -185,3 +185,51 @@ test('API failures show a retry action rather than fabricated data', async ({ pa
   await expect(page.getByRole('button', { name: '重新加载' })).toBeVisible();
   await expect(page.locator('.poster-card')).toHaveCount(0);
 });
+
+test('resource search opens the matching workspace without any write', async ({ page }) => {
+  const state = await fixtures(page);
+  await page.goto('/#/resources');
+  await page.getByRole('textbox', { name: '筛选功能卡片' }).fill('免转存');
+  await expect(page.locator('.tool-card')).toHaveCount(1);
+  await page.locator('.tool-card').click();
+  await expect(page.getByRole('heading', { name: '分享免转存', exact: true })).toBeVisible();
+  await expect(page.locator('.share-path-banner')).toContainText('share');
+  expect(state.writes).toHaveLength(0);
+});
+
+test('settings deep link opens the requested naming section', async ({ page }) => {
+  const state = await fixtures(page);
+  await page.goto('/#/settings/cloud?section=naming');
+  await expect(page.getByRole('heading', { name: '识别与命名', exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '识别与命名', exact: true })).toBeVisible();
+  expect(state.writes).toHaveLength(0);
+});
+
+test('mobile shortcut dock opens resources and the full navigation', async ({ page, isMobile }) => {
+  test.skip(!isMobile, 'Mobile shortcut navigation');
+  await fixtures(page);
+  await page.goto('/#/dashboard');
+  const dock = page.getByRole('navigation', { name: '快捷导航' });
+  await dock.getByRole('link', { name: '资源', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '资源与工具', exact: true })).toBeVisible();
+  await dock.getByRole('button', { name: '打开全部功能' }).click();
+  await page
+    .getByRole('navigation', { name: '主导航' })
+    .getByRole('link', { name: '分享免转存', exact: true })
+    .click();
+  await expect(page.getByRole('heading', { name: '分享免转存', exact: true })).toBeVisible();
+});
+
+test('compact tablet navigation stays above its backdrop', async ({ page }) => {
+  await page.setViewportSize({ width: 680, height: 900 });
+  await fixtures(page);
+  await page.goto('/#/resources');
+  await page.getByRole('button', { name: '展开导航' }).click();
+  await page
+    .getByRole('navigation', { name: '主导航' })
+    .getByRole('link', { name: '媒体整理', exact: true })
+    .click();
+  await expect(page.getByRole('heading', { name: '媒体整理', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});

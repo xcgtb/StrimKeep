@@ -122,56 +122,97 @@ watch(
     :uncertain="op.uncertain.value"
     :receipt="op.receipt.value"
   />
-  <section v-if="cloud.id" class="panel">
-    <div class="workflow-steps">
-      <span>1 选择来源</span><span>2 识别预览</span><span>3 手动纠正</span><span>4 确认归档</span>
-    </div>
-    <div class="form-grid">
-      <DirectoryPicker
-        v-model="source"
-        :name="sourceName"
-        :account-id="cloud.id"
-        label="待整理目录"
-        @selected="(v) => (sourceName = v.name)"
-      /><DirectoryPicker
-        v-model="target"
-        :name="targetName"
-        :account-id="cloud.id"
-        label="整理归档目录"
-        @selected="(v) => (targetName = v.name)"
-      /><DirectoryPicker
-        v-model="unknown"
-        :account-id="cloud.id"
-        label="未识别目录（可选）"
-      /><label class="checkbox-label"
-        ><input v-model="generate" type="checkbox" />整理后生成 STRM</label
-      >
-    </div>
-    <p v-if="config.error.value" class="inline-error">{{ config.error.value }}</p>
-    <div class="action-row">
-      <button class="button" @click="defaults">读取已保存目录</button
-      ><button
-        class="button primary"
-        :disabled="
-          !source ||
-          !target ||
-          source === target ||
-          preview.loading.value ||
-          op.busy.value ||
-          op.uncertain.value
-        "
-        @click="load"
-      >
-        扫描并预览整理</button
-      ><button
-        class="button"
-        :disabled="!target || op.busy.value || op.uncertain.value"
-        @click="confirm = 'categories'"
-      >
-        按已保存分类创建目录
-      </button>
-    </div>
-  </section>
+  <div v-if="cloud.id" class="organize-layout">
+    <section class="panel organize-main">
+      <header class="section-heading">
+        <div>
+          <h2>开始一次整理</h2>
+          <p>选好来源和归档位置，先看预览再执行。</p>
+        </div>
+        <span class="module-tag">手动整理</span>
+      </header>
+      <ol class="workflow-steps">
+        <li
+          v-for="(step, i) in [
+            { name: '选择来源', note: '设置目录' },
+            { name: '识别预览', note: '核对命名' },
+            { name: '修正识别', note: '调整作品' },
+            { name: '确认归档', note: '提交任务' },
+          ]"
+          :key="step.name"
+          :class="{ active: i === (plan ? 1 : 0) }"
+        >
+          <span>{{ i + 1 }}</span>
+          <div>
+            <strong>{{ step.name }}</strong
+            ><small>{{ step.note }}</small>
+          </div>
+        </li>
+      </ol>
+      <div class="form-grid">
+        <DirectoryPicker
+          v-model="source"
+          :name="sourceName"
+          :account-id="cloud.id"
+          label="待整理目录"
+          @selected="(v) => (sourceName = v.name)"
+        /><DirectoryPicker
+          v-model="target"
+          :name="targetName"
+          :account-id="cloud.id"
+          label="整理归档目录"
+          @selected="(v) => (targetName = v.name)"
+        /><DirectoryPicker
+          v-model="unknown"
+          :account-id="cloud.id"
+          label="未识别目录（可选）"
+        /><label class="checkbox-label"
+          ><input v-model="generate" type="checkbox" />整理后生成 STRM</label
+        >
+      </div>
+      <p v-if="config.error.value" class="inline-error">{{ config.error.value }}</p>
+      <div class="action-row">
+        <button class="button" @click="defaults">读取已保存目录</button
+        ><button
+          class="button primary"
+          :disabled="
+            !source ||
+            !target ||
+            source === target ||
+            preview.loading.value ||
+            op.busy.value ||
+            op.uncertain.value
+          "
+          @click="load"
+        >
+          扫描并预览整理</button
+        ><button
+          class="button"
+          :disabled="!target || op.busy.value || op.uncertain.value"
+          @click="confirm = 'categories'"
+        >
+          按已保存分类创建目录
+        </button>
+      </div>
+    </section>
+    <aside class="organize-guide">
+      <div class="panel">
+        <span class="eyebrow">整理前核对</span>
+        <h2>让归档符合你的习惯</h2>
+        <p>命名、分类和输出位置统一配置，当前任务使用已保存的规则。</p>
+        <RouterLink :to="{ path: '/settings/cloud', query: { section: 'naming' } }"
+          ><span>命名模板<small>目录与文件如何命名</small></span
+          ><span>↗</span></RouterLink
+        ><RouterLink :to="{ path: '/settings/cloud', query: { section: 'classification' } }"
+          ><span>归档分类<small>类型、地区与年份</small></span
+          ><span>↗</span></RouterLink
+        ><RouterLink :to="{ path: '/settings/cloud', query: { section: 'output' } }"
+          ><span>STRM 输出<small>NAS 与 Emby 路径</small></span
+          ><span>↗</span></RouterLink
+        ><RouterLink to="/organize/automation" class="text-link">设置自动整理 →</RouterLink>
+      </div>
+    </aside>
+  </div>
   <section v-if="plan" class="panel preview-panel">
     <header class="section-heading">
       <div>

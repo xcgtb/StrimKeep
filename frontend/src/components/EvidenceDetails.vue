@@ -113,7 +113,7 @@ const asData = (value: unknown): Data => object(value);
       ><dt>{{ label(key) }}</dt>
       <dd v-if="simple(entry)">{{ shown(entry) }}</dd>
       <dd v-else>
-        <details :open="depth < 1">
+        <details>
           <summary>查看{{ label(key) }}</summary>
           <EvidenceDetails v-if="depth < 5" :value="entry" :depth="depth + 1" />
         </details></dd

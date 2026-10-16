@@ -52,8 +52,8 @@ def generated(cloud):
 
 def test_share_generates_signed_strm_nfo_without_any_personal_write_or_transfer(shared, client):
     original = copy.deepcopy(shared.remote.files)
-    plan = preview(shared)
-    assert plan["items"] and "分享-" in plan["items"][0]["media"]["directory"]
+    plan = preview(shared, password="fixturePass9")
+    assert plan["items"] and not plan["items"][0]["media"]["directory"].startswith("分享-")
     result = execute(plan)
     assert result["state"] == "success"
     asset = store.asset(result["result"]["generated"][0]["asset_id"])
@@ -62,11 +62,11 @@ def test_share_generates_signed_strm_nfo_without_any_personal_write_or_transfer(
     assert not list(shared.root.rglob("*.strm"))
     assert Path(asset["local_path"]).with_suffix(".nfo").exists()
     for exposed in (str(plan), str(result), Path(asset["local_path"]).read_text(), client.get('/api/cloud/assets/'+asset['id']+'/source').text):
-        assert "secretshare" not in exposed and "abcd" not in exposed
+        assert "secretshare" not in exposed and "fixturePass9" not in exposed
     with store.db() as con:
         row = con.execute("SELECT sealed FROM cloud_share_sources").fetchone()
         job = con.execute("SELECT payload FROM cloud_jobs WHERE id=?", (result["id"],)).fetchone()[0]
-    assert "secretshare" not in row[0]+job and "abcd" not in row[0]+job
+    assert "secretshare" not in row[0]+job and "fixturePass9" not in row[0]+job
     assert shared.remote.files == original and shared.remote.writes == []
     source = client.get('/api/cloud/assets/'+asset['id']+'/source').json()
     assert source['source']['source_kind'] == 'share' and source['deletions'] == []
@@ -99,9 +99,9 @@ def test_personal_and_share_with_identical_remote_id_remain_separate(shared):
     own = workflow.plan(shared.id, '1', '2')
     jid=workflow.apply(own['id'],True,True);jobs.execute(jid)
     aid=store.job(jid)['result']['generated'][0]['asset_id']
-    a=generated(shared);b=execute(preview(shared,code='anothercode'))
-    assert b['state']=='success'
-    assert len({aid,a['id'],b['result']['generated'][0]['asset_id']})==3
+    a=generated(shared);other=preview(shared,code='anothercode')
+    assert not other['items'] and '同名 STRM' in other['skipped'][0]['reason']
+    assert aid != a['id']
     assert strm.reconcile(shared.id,'0',set())=={'removed':[],'deferred':[]}
     assert store.asset(a['id'])['state']=='active'
 
@@ -151,7 +151,7 @@ def test_changed_password_requires_regeneration_before_playback(shared):
 def test_cancel_revoke_and_changed_generation_settings(shared):
     a=generated(shared);strm.revoke(a['id'])
     with pytest.raises(CloudError):playback.resolve(a['id'],strm.signature(a['id'],a['nonce']),'UA')
-    p=preview(shared,code='othercode');settings.save({'naming_style':'compact'})
+    p=preview(shared);settings.save({'naming_style':'compact'})
     assert execute(p)['state']=='failed'
 
 
@@ -168,6 +168,7 @@ def test_foreign_file_preserved_and_mount_swap_does_not_publish(shared):
     path=shared.share_root/i['media']['directory']/Path(i['media']['name']).with_suffix('.strm')
     path.parent.mkdir(parents=True);path.write_text('foreign')
     assert execute(p)['state']=='needs_review' and path.read_text()=='foreign'
+    shared.shared['4']['name']='Movie.2024.2160p.mkv'
     p=preview(shared,code='othercode');shared.share_root.rename(shared.share_root.with_name('old-share'));shared.share_root.mkdir()
     assert execute(p)['state']=='failed' and not list(shared.share_root.rglob('*.strm'))
 
@@ -224,7 +225,7 @@ def test_emby_share_path_mapping_and_stop_before_generation(shared):
     a=generated(shared)
     path='/share/'+str(Path(a['local_path']).relative_to(shared.share_root))
     assert emby_proxy.asset_for_path(path)['id']==a['id']
-    p=preview(shared,code='othercode');jid=shares.apply(p['id'],True);jobs.request_stop(jid);jobs.execute(jid)
+    p=preview(shared);jid=shares.apply(p['id'],True);jobs.request_stop(jid);jobs.execute(jid)
     assert store.job(jid)['state']=='stopped' and len(list(shared.share_root.rglob('*.strm')))==1
 
 
@@ -317,3 +318,53 @@ def test_same_share_scope_id_cannot_enter_personal_quality_preview_or_execution(
     p=workflow.plan(shared.id,'1','2')
     assert p['items'] and not p['items'][0]['upgrades'] and not p['quality_held']
     assert store.asset(aid)['state']=='active' and not shared.remote.writes
+
+
+def test_share_flat_output_keeps_movie_and_tv_classification(shared):
+    plan = preview(shared)
+    assert not any(part.startswith('分享-') for part in Path(plan['items'][0]['media']['directory']).parts)
+    asset = generated(shared)
+    assert not any(p.name.startswith('分享-') for p in shared.share_root.iterdir())
+    assert Path(asset['local_path']).exists()
+
+
+@pytest.mark.parametrize('keep_foreign',[False,True])
+def test_regenerating_legacy_share_migrates_bound_files_and_prunes_only_empty_wrapper(shared,keep_foreign):
+    plan=preview(shared)
+    with store.db() as con:
+        row=con.execute('SELECT payload FROM cloud_plans WHERE id=?',(plan['id'],)).fetchone()
+        payload=json.loads(row[0]);wrapper='分享-'+payload['share_id'][:12]
+        payload['items'][0]['media']['directory']=wrapper+'/'+payload['items'][0]['media']['directory']
+        con.execute('UPDATE cloud_plans SET payload=? WHERE id=?',(store.encode(payload),plan['id']))
+    legacy=execute(plan)
+    old=store.asset(legacy['result']['generated'][0]['asset_id'])
+    old_path=Path(old['local_path']);content=old_path.read_bytes()
+    if keep_foreign:
+        (old_path.parent/'my-note.txt').write_text('keep me')
+    fresh=generated(shared)
+    assert fresh['id']==old['id'] and fresh['nonce']==old['nonce']
+    assert Path(fresh['local_path']).read_bytes()==content and not old_path.exists()
+    assert not Path(fresh['local_path']).relative_to(shared.share_root).parts[0].startswith('分享-')
+    assert (shared.share_root/wrapper).exists()==keep_foreign
+    if keep_foreign: assert (old_path.parent/'my-note.txt').read_text()=='keep me'
+    assert shared.remote.writes==[]
+
+
+def test_flat_share_preview_preserves_foreign_target_and_reports_conflict(shared):
+    plan=preview(shared);item=plan['items'][0]
+    target=shared.share_root/item['media']['directory']/Path(item['media']['name']).with_suffix('.strm')
+    target.parent.mkdir(parents=True);target.write_text('foreign')
+    again=preview(shared)
+    assert not again['items'] and '同名 STRM' in again['skipped'][0]['reason']
+    assert target.read_text()=='foreign' and not shared.remote.writes
+
+
+def test_queued_legacy_layout_requires_new_preview(shared):
+    plan=preview(shared)
+    with store.db() as con:
+        payload=json.loads(con.execute('SELECT payload FROM cloud_plans WHERE id=?',(plan['id'],)).fetchone()[0])
+        payload['config'].pop('share_layout_version')
+        con.execute('UPDATE cloud_plans SET payload=? WHERE id=?',(store.encode(payload),plan['id']))
+    result=execute(plan)
+    assert result['state']=='failed' and '重新预览' in result['message']
+    assert not list(shared.share_root.rglob('*.strm')) and not shared.remote.writes

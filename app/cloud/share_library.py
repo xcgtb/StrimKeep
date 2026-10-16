@@ -1,4 +1,4 @@
-"""Read-only 115 shares -> isolated share-library references. No remote writes."""
+"""Read-only 115 shares -> classified share-library references. No remote writes."""
 
 import hashlib
 import json
@@ -92,7 +92,7 @@ def current(payload):
 
 
 def snapshot(config):
-    return {**workflow.naming_snapshot(config), **{k: config[k] for k in ("public_url", "share_output_root", "nfo_enabled", "artwork_enabled")}}
+    return {"share_layout_version": 2, **workflow.naming_snapshot(config), **{k: config[k] for k in ("public_url", "share_output_root", "nfo_enabled", "artwork_enabled")}}
 
 
 def preview(preview_id, ids, overrides=None):
@@ -147,9 +147,14 @@ def preview(preview_id, ids, overrides=None):
                         raise
                     return {"status": "fallback", "fields": {}, "warning": "分享媒体提取失败，已按设置回退文件名解析"}
             media = recognition.recognize(row["name"], (overrides or {}).get(row["id"]), cfg, probe if cfg["ffprobe_enabled"] else None)
-            media["directory"] = "分享-"+sid[:12]+"/"+media["directory"]
             relative = media["directory"]+"/"+str(PurePosixPath(media["name"]).with_suffix(".strm"))
-            strm.target(base, relative)
+            destination = strm.target(base, relative)
+            if destination.exists():
+                with store.db() as con:
+                    bound = con.execute("SELECT id FROM cloud_assets WHERE account_id=? AND file_id=? AND local_path=?", (data["account_id"], "share:"+sid+":"+row["id"], str(destination))).fetchone()
+                asset = store.asset(bound[0]) if bound else None
+                if not asset or not destination.is_file() or strm.digest(destination.read_bytes()) != asset["payload"].get("digest"):
+                    raise CloudError("同名 STRM 已存在，保留现有版本；请先在片库核对去留，不另建分享来源目录", 409)
             if relative in paths:
                 raise CloudError("本批命名输出相同，请修正模板或分次选择版本", 409)
             paths.add(relative)
@@ -180,6 +185,31 @@ def apply(plan_id, confirmed=False):
         return jobs.enqueue("share_strm", {**payload, "plan_id": plan_id}, con=con)
 
 
+def prune_legacy_directory(base, previous, share_id, identity):
+    """Only remove now-empty parents inside this source's old wrapper, after publish."""
+    if not previous:
+        return
+    from pathlib import Path
+    old = Path(previous)
+    if not old.is_relative_to(base):
+        return
+    parts = old.relative_to(base).parts
+    wrapper = "分享-"+share_id[:12]
+    if len(parts) < 2 or parts[0] != wrapper or old.exists():
+        return
+    directory = old.parent
+    while directory != base:
+        try:
+            current_root = strm.root("share")
+            if current_root != base or [base.stat().st_dev, base.stat().st_ino] != identity:
+                return
+            strm.target(base, str(directory.relative_to(base)))
+            directory.rmdir()
+        except (OSError, CloudError):
+            return
+        directory = directory.parent
+
+
 def run(job_id, payload):
     result = {"generated": [], "skipped": payload["skipped"], "filtered": payload["filtered"], "errors": [], "publication": {}}
     provider, access = current(payload)
@@ -206,7 +236,11 @@ def run(job_id, payload):
             base = strm.root("share")
             if [base.stat().st_dev, base.stat().st_ino] != payload["root_identity"]:
                 raise CloudError("分享库挂载变化，请重新预览", 409)
+            with store.db() as con:
+                previous = con.execute("SELECT local_path FROM cloud_assets WHERE account_id=? AND file_id=? AND json_extract(payload,'$.output_root')=?", (payload["account_id"], "share:"+payload["share_id"]+":"+item["source"]["id"], str(base))).fetchone()
             asset = strm.generate(payload["account_id"], item["source"], item["media"], companions=item["followers"], provider=view, source_context={"source_kind": "share", "share_id": payload["share_id"], "share_revision": payload["share_revision"]})
+            if previous and previous[0] != asset["local_path"]:
+                prune_legacy_directory(base, previous[0], payload["share_id"], payload["root_identity"])
             result["generated"].append({"asset_id": asset["id"], "path": asset["local_path"]})
             result.setdefault("warnings", []).extend({"name": item["source"]["name"], "reason": w} for w in asset["payload"].get("warnings", []))
             counts['published'] += 1

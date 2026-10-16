@@ -6,6 +6,7 @@ onMounted(() => cloud.load());
 </script>
 <template>
   <div class="account-picker">
+    <span class="account-badge" aria-hidden="true">115</span>
     <label
       >当前 115 账号<select v-model="cloud.id" :disabled="cloud.loading">
         <option v-for="a in cloud.accounts" :key="String(a.id)" :value="a.id">

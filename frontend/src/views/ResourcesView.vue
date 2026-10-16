@@ -1,25 +1,26 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
+import { ArrowUpRight, ArrowRight, Search } from '@lucide/vue';
 import { allNavigation } from '../config/navigation';
 import PageHeading from '../components/PageHeading.vue';
 const search = ref(''),
   group = ref('全部');
 const descriptions: Record<string, string> = {
-  '/resources/receive': '接收 115 分享、磁力、ed2k 和秒传，预览目标后提交。',
-  '/resources/share': '读取分享内容，生成独立分享库 STRM，保留源分享。',
-  '/resources/files': '浏览账号目录与真实文件，查看大小和路径。',
-  '/settings/accounts': '扫码授权、Cookie、目录映射、签到与回收站维护。',
-  '/organize/workspace': '识别影视、纠正 TMDB、命名归档、生成 STRM。',
-  '/organize/automation': '把接收目录变成有明确时间和来源的自动化规则。',
-  '/resources/channels': '配置 Telegram 频道过滤、历史读取与用户会话。',
-  '/media/strm': '核实播放引用、源关系与 NAS 输出，手动同步。',
-  '/tasks/ingestion': '逐作品核实 Emby 入库，独立管理入库连接。',
-  '/governance': '对照双库，生成七维治理计划并核对执行。',
-  '/governance/cleanup': '预览与清理空目录、附属文件和已确认残留。',
-  '/settings/external': '使用现有外部服务搜索、转存与资源获取订阅。',
-  '/media/explore': '搜索影视作品、查看入库状态和资源候选。',
-  '/media/subscriptions': '管理追更提醒与低频校准。',
-  '/tasks/reports': '查看入库、执行归档，预览并设置晨报。',
+  '/resources/receive': '把分享、磁力与秒传资源接收到指定位置。',
+  '/resources/share': '从分享直接生成 STRM，保留来源视频。',
+  '/resources/files': '按账号浏览网盘目录、文件和实际大小。',
+  '/settings/accounts': '连接账号，维护授权与接收归档目录。',
+  '/organize/workspace': '识别作品、修正信息，按规则命名归档。',
+  '/organize/automation': '让接收、整理与同步按计划自动运行。',
+  '/resources/channels': '订阅频道消息，筛选作品并自动接收。',
+  '/media/strm': '管理播放引用、同步任务和来源关系。',
+  '/tasks/ingestion': '查看 Emby 实际入库状态与失败原因。',
+  '/governance': '对照两个片库，核对质量与清理计划。',
+  '/governance/cleanup': '核对并清理空目录、附属文件和残留。',
+  '/settings/external': '搜索上游资源、转存与管理获取订阅。',
+  '/media/explore': '发现影视作品，查看详情和片库状态。',
+  '/media/subscriptions': '关注新集入库，管理更新提醒。',
+  '/tasks/reports': '查看入库、执行记录与每日晨报。',
 };
 const tools = computed(() =>
   allNavigation.filter(
@@ -33,35 +34,83 @@ const groups = [
   '全部',
   ...new Set(allNavigation.filter((n) => descriptions[n.to]).map((n) => n.group)),
 ];
+const sections = computed(() =>
+  groups
+    .slice(1)
+    .map((name) => ({ name, items: tools.value.filter((t) => t.group === name) }))
+    .filter((s) => s.items.length),
+);
+const featured = [
+  {
+    path: '/resources/receive',
+    step: '01',
+    name: '接收资源',
+    note: '从一个链接开始',
+    label: '分享 · 磁力 · 秒传',
+  },
+  {
+    path: '/organize/workspace',
+    step: '02',
+    name: '整理归档',
+    note: '把资源变成有序片库',
+    label: '识别 · 命名 · 分类',
+  },
+  {
+    path: '/governance',
+    step: '03',
+    name: '片库治理',
+    note: '让好版本留下来',
+    label: '对照 · 核实 · 清理',
+  },
+];
 </script>
 <template>
   <PageHeading
     title="资源与工具"
-    subtitle="按工作流组织已接通的功能，从资源接入到媒体治理。"
-    eyebrow="RESOURCE WORKSPACE"
+    subtitle="找到需要的工具，让每一步操作都有清晰入口。"
+    eyebrow="工作空间"
   />
-  <div class="search-toolbar">
-    <input v-model="search" aria-label="筛选功能卡片" placeholder="搜索功能名称或用途" /><span
-      class="muted-text"
-      >{{ tools.length }} 个功能入口</span
+  <div v-if="!search && group === '全部'" class="featured-workflows">
+    <RouterLink v-for="item in featured" :key="item.path" :to="item.path"
+      ><header>
+        <span>{{ item.step }}</span
+        ><ArrowUpRight :size="21" />
+      </header>
+      <h2>{{ item.name }}</h2>
+      <p>{{ item.note }}</p>
+      <small>{{ item.label }}</small></RouterLink
     >
   </div>
-  <nav class="browse-tabs">
+  <div class="tools-control">
+    <div class="tools-search">
+      <Search :size="18" /><input
+        v-model="search"
+        aria-label="筛选功能卡片"
+        placeholder="搜索功能或用途"
+      /><kbd>搜索</kbd>
+    </div>
+    <span class="muted-text">{{ tools.length }} 个工具</span>
+  </div>
+  <nav class="browse-tabs tool-tabs">
     <button v-for="g in groups" :key="g" :class="{ active: group === g }" @click="group = g">
       {{ g }}
     </button>
   </nav>
-  <div class="module-grid">
-    <article v-for="tool in tools" :key="tool.to" class="panel module-card">
-      <header>
-        <span class="module-icon"><component :is="tool.icon" :size="24" /></span>
+  <section v-for="section in sections" :key="section.name" class="tool-section">
+    <header>
+      <h2>{{ section.name }}</h2>
+      <span>{{ section.items.length }} 个工具</span>
+    </header>
+    <div class="tool-grid">
+      <RouterLink v-for="tool in section.items" :key="tool.to" :to="tool.to" class="tool-card"
+        ><span class="tool-icon"><component :is="tool.icon" :size="22" /></span>
         <div>
-          <h2>{{ tool.name }}</h2>
-          <span class="module-tag">{{ tool.group }}</span>
+          <h3>{{ tool.name }}</h3>
+          <p>{{ descriptions[tool.to] }}</p>
         </div>
-      </header>
-      <p>{{ descriptions[tool.to] }}</p>
-      <RouterLink :to="tool.to" class="button primary">进入工作区 →</RouterLink>
-    </article>
-  </div>
+        <ArrowRight :size="17" class="tool-arrow"
+      /></RouterLink>
+    </div>
+  </section>
+  <p v-if="!tools.length" class="muted-text">没有匹配的功能，换一个关键词试试。</p>
 </template>

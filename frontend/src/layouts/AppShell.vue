@@ -1,7 +1,21 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Activity, Sun, Moon, Menu, X, LogOut, ChevronRight, Search } from '@lucide/vue';
+import {
+  Activity,
+  Sun,
+  Moon,
+  Menu,
+  X,
+  LogOut,
+  ChevronRight,
+  Search,
+  LayoutDashboard,
+  Compass,
+  Layers,
+  ListTodo,
+  Settings2,
+} from '@lucide/vue';
 import { useSession } from '../stores/session';
 import { useUi } from '../stores/ui';
 import { navigation, allNavigation } from '../config/navigation';
@@ -14,6 +28,12 @@ const route = useRoute(),
   open = ref(false),
   searchOpen = ref(false),
   search = ref('');
+const dock = [
+  { to: '/dashboard', name: '总览', icon: LayoutDashboard },
+  { to: '/media/explore', name: '探索', icon: Compass },
+  { to: '/resources', name: '资源', icon: Layers },
+  { to: '/tasks', name: '任务', icon: ListTodo },
+];
 const version = computed(() => session.runtime.version?.match(/^\d+\.\d+\.\d+/)?.[0] || '本地开发');
 const searchResults = computed(() =>
   allNavigation.filter((item) => (item.group + item.name).includes(search.value.trim())),
@@ -91,6 +111,15 @@ onBeforeUnmount(() => document.removeEventListener('keydown', keys));
           ><ChevronRight :size="14" /><strong>{{ route.meta.title }}</strong>
         </div>
         <div class="topbar-actions">
+          <span
+            class="topbar-readiness"
+            :class="{ pending: session.runtime.readiness?.ready !== true }"
+            ><span
+              class="status-dot"
+              :class="{ muted: session.runtime.readiness?.ready !== true }"
+            ></span
+            >{{ session.runtime.readiness?.ready === true ? '服务就绪' : '等待服务就绪' }}</span
+          >
           <button class="global-search-button" aria-label="全局搜索功能" @click="searchOpen = true">
             <Search :size="15" /><span>搜索功能</span><kbd>⌘ / Ctrl K</kbd></button
           ><button
@@ -98,8 +127,10 @@ onBeforeUnmount(() => document.removeEventListener('keydown', keys));
             :aria-label="ui.theme === 'light' ? '切换深色主题' : '切换浅色主题'"
             @click="ui.toggleTheme"
           >
-            <Moon v-if="ui.theme === 'light'" :size="18" /><Sun v-else :size="18" />
-          </button>
+            <Moon v-if="ui.theme === 'light'" :size="18" /><Sun v-else :size="18" /></button
+          ><RouterLink to="/settings" class="icon-button topbar-settings" aria-label="打开系统设置"
+            ><Settings2 :size="18"
+          /></RouterLink>
         </div>
       </header>
       <main id="main-content" class="page">
@@ -110,6 +141,17 @@ onBeforeUnmount(() => document.removeEventListener('keydown', keys));
       <footer class="page-footer">StrimKeep <span>接收 · 整理 · 入库 · 治理</span></footer>
     </div>
   </div>
+  <nav class="mobile-dock" aria-label="快捷导航">
+    <RouterLink
+      v-for="item in dock"
+      :key="item.to"
+      :to="item.to"
+      :class="{ current: route.path === item.to }"
+      ><component :is="item.icon" :size="20" /><span>{{ item.name }}</span></RouterLink
+    ><button @click="open = true" aria-label="打开全部功能">
+      <Menu :size="20" /><span>全部</span>
+    </button>
+  </nav>
   <ModalDialog v-if="searchOpen" title="搜索功能" @close="searchOpen = false"
     ><input
       v-model="search"

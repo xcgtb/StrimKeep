@@ -4,7 +4,7 @@ defineProps<{ title: string; subtitle: string; eyebrow?: string }>();
 <template>
   <section class="page-heading panel-heading">
     <div>
-      <span class="eyebrow">{{ eyebrow || 'STRIMKEEP WORKSPACE' }}</span>
+      <span v-if="eyebrow" class="eyebrow">{{ eyebrow }}</span>
       <h1>{{ title }}</h1>
       <p>{{ subtitle }}</p>
     </div>

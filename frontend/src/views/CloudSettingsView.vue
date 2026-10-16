@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, computed, watch } from 'vue';
 import { readData, writeData, object, records, strings, type Data } from '../api/domain';
 import { useRequest } from '../composables/useRequest';
 import { useOperation } from '../composables/useOperation';
+import { useRoute } from 'vue-router';
 import { cloudSections, namingKeys } from '../config/cloudFields';
 import PageHeading from '../components/PageHeading.vue';
 import FormFields from '../components/FormFields.vue';
@@ -10,12 +11,20 @@ import QualityRules from '../components/QualityRules.vue';
 import ConfirmAction from '../components/ConfirmAction.vue';
 import EvidenceDetails from '../components/EvidenceDetails.vue';
 import OperationState from '../components/OperationState.vue';
+const route = useRoute();
 const request = useRequest<Data>(),
   op = useOperation(),
   draft = ref<Data>({}),
   tab = ref('output'),
   confirmation = ref(false),
   preview = ref<Data>();
+watch(
+  () => route.query.section,
+  (v) => {
+    if (cloudSections.some((s) => s.key === v)) tab.value = String(v);
+  },
+  { immediate: true },
+);
 const section = computed(() => cloudSections.find((s) => s.key === tab.value)!);
 const changed = computed(() =>
   Object.keys(draft.value).filter(
@@ -93,6 +102,7 @@ onMounted(load);
   />
   <div class="settings-layout">
     <nav class="settings-index">
+      <p class="settings-nav-caption">设置分区</p>
       <button
         v-for="s in cloudSections"
         :key="s.key"

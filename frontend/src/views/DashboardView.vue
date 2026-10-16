@@ -10,6 +10,11 @@ import {
   Bell,
   CheckCircle2,
   CircleAlert,
+  CloudDownload,
+  ArrowDownUp,
+  FileVideo,
+  ShieldCheck,
+  ArrowRight,
 } from '@lucide/vue';
 import { mediaApi } from '../api/media';
 import { useRequest } from '../composables/useRequest';
@@ -25,6 +30,12 @@ const overview = useRequest<Overview>(),
   ui = useUi(),
   refreshing = ref(false),
   recType = ref('movie');
+const workflows = [
+  { to: '/resources/receive', name: '接收资源', note: '分享 · 磁力 · 秒传', icon: CloudDownload },
+  { to: '/organize/workspace', name: '识别整理', note: '命名 · 分类 · 归档', icon: ArrowDownUp },
+  { to: '/media/strm', name: '生成与入库', note: 'STRM · 播放 · Emby', icon: FileVideo },
+  { to: '/governance', name: '片库治理', note: '质量 · 去重 · 清理', icon: ShieldCheck },
+];
 const dashboard = computed(() => overview.data.value?.dashboard || {});
 const stats = computed(() => [
   {
@@ -87,11 +98,11 @@ onMounted(() => {
 useVisiblePoll(load, 15000);
 </script>
 <template>
-  <section class="page-heading">
+  <section class="page-heading dashboard-heading">
     <div>
-      <span class="eyebrow">WORKSPACE OVERVIEW</span>
+      <span class="eyebrow">媒体工作台</span>
       <h1>运行总览</h1>
-      <p>从资源到片库，掌握每一环的运行状态。</p>
+      <p>资源有序流转，片库一目了然。</p>
     </div>
     <button
       class="button"
@@ -104,6 +115,16 @@ useVisiblePoll(load, 15000);
       />刷新总览
     </button>
   </section>
+  <nav class="workflow-launcher" aria-label="媒体处理工作流">
+    <RouterLink v-for="(flow, i) in workflows" :key="flow.to" :to="flow.to"
+      ><span class="workflow-launch-icon"><component :is="flow.icon" :size="20" /></span>
+      <div>
+        <strong>{{ flow.name }}</strong
+        ><small>{{ flow.note }}</small>
+      </div>
+      <ArrowRight v-if="i < workflows.length - 1" :size="15" class="workflow-arrow"
+    /></RouterLink>
+  </nav>
   <LoadState
     :loading="overview.loading.value && !overview.data.value"
     :error="overview.error.value"
@@ -145,7 +166,7 @@ useVisiblePoll(load, 15000);
       <section class="panel activity-panel">
         <header class="section-heading">
           <div>
-            <span class="eyebrow">RECENT ACTIVITY</span>
+            <span class="eyebrow">片库动态</span>
             <h2>近期入库</h2>
           </div>
           <RouterLink class="text-link" to="/media/library"
@@ -172,7 +193,7 @@ useVisiblePoll(load, 15000);
       <section class="panel service-panel">
         <header class="section-heading">
           <div>
-            <span class="eyebrow">CONNECTIONS</span>
+            <span class="eyebrow">运行状态</span>
             <h2>服务连接</h2>
           </div>
           <RouterLink to="/settings" class="text-link">管理<ArrowUpRight :size="15" /></RouterLink>
@@ -209,8 +230,9 @@ useVisiblePoll(load, 15000);
   <section class="panel recommendation-panel">
     <header class="section-heading">
       <div>
-        <span class="eyebrow">DISCOVER SOMETHING NEW</span>
+        <span class="eyebrow">发现灵感</span>
         <h2>值得发现</h2>
+        <p>为下一次观影，留一点期待。</p>
       </div>
       <div class="segmented">
         <button

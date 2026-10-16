@@ -1,5 +1,7 @@
 # Vue 3 完整迁移记录
 
+> 本文记录首次迁移。v1.4.8 发布后的 UI 优化与分享库目录修复见 [后续改进记录](ui-polish-share-flat.md)。
+
 本次已完成现有后端业务的 Vue 3 页面实现，并把正式 `/` 首页整体切换为 Vue。旧 `static/js`、`static/css` 与迁移期间的 `static/vue3` 已移除。`app/` 后端源码没有修改，不增加旧全局函数、旧 DOM 挂载层或双前端切换器。
 
 参考：https://madbrolab.github.io/dian115/demo/#/resources/plugins 。采用分组侧栏、顶部功能搜索、上下文页签、图标卡片和配置工作区；现有服务没有插件安装 API，因此资源页提供实际功能入口。
