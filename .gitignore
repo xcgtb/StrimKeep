@@ -30,3 +30,8 @@ htmlcov/
 *.tar.gz
 *.tgz
 *.zip
+
+# Vue frontend dependencies and test output
+frontend/node_modules/
+frontend/test-results/
+frontend/playwright-report/

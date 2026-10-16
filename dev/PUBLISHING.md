@@ -12,7 +12,13 @@
 python dev/tools/release_check.py
 python dev/tools/static_check.py
 pytest dev/tests/ -q
+npm ci --prefix frontend
+npm --prefix frontend run format:check
+npm --prefix frontend test
+npm --prefix frontend run build
 node dev/tools/verify_frontend.cjs
+npm --prefix frontend run test:e2e
+npm --prefix frontend run test:production
 git status --short
 ```
 

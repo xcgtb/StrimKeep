@@ -12,19 +12,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '20'
       - name: Install test dependencies
         run: pip install -r dev/requirements.txt
       - name: Static and release boundaries
         run: |
           python dev/tools/static_check.py
           python dev/tools/release_check.py
-      - name: Frontend syntax and regression
-        run: |
-          node dev/tools/update_frontend_asset_versions.cjs --check
-          node dev/tools/verify_frontend.cjs
+      - name: Vue frontend against isolated real backend
+        run: python frontend/tests/backend_smoke.py
       - name: Python regression
         run: pytest dev/tests/ -q
   production:
@@ -37,3 +32,28 @@ jobs:
         run: docker run --rm --network none -i --entrypoint python strimkeep:ci - < dev/checks/verify_docs_schema_compat.py
       - name: Live HTTP, SQLite writes and restart
         run: docker run --rm --network none -i --entrypoint python strimkeep:ci - < dev/checks/verify_release_startup.py
+
+  vue3:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install Vue frontend dependencies
+        run: npm ci --prefix frontend
+      - name: Typecheck, unit tests and production build
+        run: |
+          npm --prefix frontend run format:check
+          npm --prefix frontend test
+          npm --prefix frontend run build
+          node dev/tools/verify_frontend.cjs
+          git diff --exit-code -- static
+      - name: Install browser
+        run: cd frontend && npx playwright install --with-deps chromium --only-shell
+      - name: Desktop, mobile and built-path browser tests
+        run: |
+          npm --prefix frontend run test:e2e
+          npm --prefix frontend run test:production

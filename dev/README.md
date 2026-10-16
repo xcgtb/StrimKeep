@@ -4,15 +4,15 @@
 
 | 目录 | 内容 |
 | --- | --- |
-| `tests/` | Python 回归、前端交互回归、固定输入与预期结果 |
+| `tests/` | Python 后端回归、固定输入与预期结果；Vue 测试位于 frontend/tests |
 | `checks/` | 历史 SQLite、HTTP 启动、单写存储与探索后台的隔离检查 |
-| `tools/` | 静态检查、发布边界、前端检查、资源版本生成、只读存储审计 |
+| `tools/` | 静态检查、发布边界、Vue 入口检查、只读存储审计 |
 | `requirements.txt` | 开发依赖，包含生产依赖与 pytest/httpx |
 | `docker-compose.build.yml` | 仅供开发者本地构建镜像 |
 
 ## 本地回归
 
-从项目根目录执行，使用 Python 3.12 和 Node 20：
+从项目根目录执行，使用 Python 3.12 和 Node 24：
 
 ```bash
 python3 -m venv .venv
@@ -24,15 +24,20 @@ pytest dev/tests/ -q
 node dev/tools/verify_frontend.cjs
 ```
 
-修改 `static/` 下的 CSS、JavaScript 或图标后，使用工具按文件内容自动更新
-`static/index.html` 中的 SHA-256 缓存版本（文本资源按 LF 规范化，二进制资源按原始字节）；CI 可用 `--check` 只检查漂移：
+前端在 `frontend/src/` 修改，`frontend/public/` 保存原始图标和内置图片。不要直接修改编译后的 `static/assets/`。Vite 负责内容哈希，重建后把 `static/` 产物一并提交。
 
 ```bash
-node dev/tools/update_frontend_asset_versions.cjs
-node dev/tools/update_frontend_asset_versions.cjs --check
+npm ci --prefix frontend
+npm --prefix frontend run format:check
+npm --prefix frontend test
+npm --prefix frontend run build
+cd frontend
+npx playwright install --with-deps chromium --only-shell
+npm run test:e2e
+npm run test:production
 ```
 
-前端用例使用 DOM 替身，不能代替真实手机/电脑视觉验收。隔离测试使用临时状态和假服务，不操作真实媒体，也不发送通知。
+Vue 交互测试在 Chromium 中分别检查桌面与手机；正式构建另检查 24 个路由。隔离测试使用临时数据与受控接口，不代表真实账号或实际媒体验收。完整范围见 [Vue 迁移记录](../docs/frontend-vue3-progress.md)。
 
 ## 开发构建
 

@@ -71,7 +71,8 @@ def start_and_check(data, expected_interval, update=False):
             assert json.loads(request(port, '/api/config'))['config']['subscribe_interval_min'] == expected_interval
             assert json.loads(request(port, '/api/plans'))['status'] == 'success'
             html = request(port, '/', False)
-            assert '<title>StrimKeep</title>' in html
+            assert '<title>StrimKeep · 媒体工作台</title>' in html
+            assert 'type="module"' in html and '/static/js/' not in html
             assets = re.findall(r'(?:src|href)="(/static/[^\"]+)"', html)
             assert assets
             for url in assets:

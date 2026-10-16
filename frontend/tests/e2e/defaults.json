@@ -1,0 +1,384 @@
+{
+  "cover": {
+    "rules": [
+      {
+        "key": "release_group",
+        "label": "发布组优先级",
+        "desc": "按你维护的发布组列表比较；越靠前优先级越高，不在列表内的排最后。",
+        "enabled": false,
+        "tiers": [],
+        "groups": []
+      },
+      {
+        "key": "source",
+        "label": "资源类型优先级",
+        "desc": "识别 UHD/蓝光/WEB 等片源类型；其他或未识别格式默认排在最后。",
+        "enabled": false,
+        "tiers": [
+          "UHD Remux",
+          "Remux",
+          "UHD BluRay / BDMV",
+          "BluRay",
+          "WEB-DL",
+          "WEBRip",
+          "HDTV",
+          "DVD",
+          "其他 / 未识别"
+        ],
+        "groups": []
+      },
+      {
+        "key": "resolution",
+        "label": "分辨率优先级",
+        "desc": "按画面高度比较；2K/1440p 作为兼容档位保留，未识别分辨率排在最后。",
+        "enabled": true,
+        "tiers": [
+          "4320p / 8K",
+          "2160p / 4K",
+          "1440p / 2K",
+          "1080p",
+          "720p",
+          "SD（576p 及以下）",
+          "其他 / 未识别"
+        ],
+        "groups": []
+      },
+      {
+        "key": "dolby",
+        "label": "动态范围优先级",
+        "desc": "Dolby Vision 会细分 P7、P5、P8，并识别 HDR Vivid；未识别格式排在最后。",
+        "enabled": true,
+        "tiers": [
+          "Dolby Vision Profile 7",
+          "Dolby Vision Profile 5",
+          "Dolby Vision Profile 8",
+          "Dolby Vision（未识别 Profile）",
+          "HDR10+",
+          "HDR Vivid",
+          "HDR10",
+          "HDR / HLG",
+          "SDR",
+          "其他 / 未识别"
+        ],
+        "groups": []
+      },
+      {
+        "key": "fps",
+        "label": "帧率优先级",
+        "desc": "59.94 / 29.97 / 23.976 会分别归入 60 / 30 / 24 档，未识别帧率排在最后。",
+        "enabled": true,
+        "tiers": [
+          "60 / 59.94 fps",
+          "50 fps",
+          "30 / 29.97 fps",
+          "25 fps",
+          "24 / 23.976 fps",
+          "其他 / 未识别"
+        ],
+        "groups": []
+      },
+      {
+        "key": "bitdepth",
+        "label": "色深优先级",
+        "desc": "识别文件名中的 bit depth；未识别色深排在最后。",
+        "enabled": true,
+        "tiers": ["12bit", "10bit", "8bit", "其他 / 未识别"],
+        "groups": []
+      },
+      {
+        "key": "audio",
+        "label": "音频规格优先级",
+        "desc": "按文件名中识别到的最高音频规格比较；未识别格式排在最后。",
+        "enabled": true,
+        "tiers": [
+          "TrueHD Atmos / DTS:X",
+          "TrueHD / DTS-HD MA",
+          "LPCM / FLAC",
+          "Audio Vivid / AV3A",
+          "DD+ Atmos",
+          "DD+ / E-AC-3",
+          "DTS",
+          "AC3 / DD",
+          "AAC",
+          "其他 / 未识别"
+        ],
+        "groups": []
+      }
+    ]
+  },
+  "strategy": {
+    "decision": "quality_first",
+    "match_strategy": "title_year",
+    "multi_season_protect": "compare",
+    "tie_keep_local": false,
+    "season_replace_ratio": 0.9,
+    "exempt_keywords": [],
+    "special_action": "compare"
+  },
+  "cloud": {
+    "public_url": "",
+    "output_root": "/strm/local",
+    "emby_output_root": "",
+    "share_output_root": "/strm/share",
+    "share_emby_output_root": "",
+    "proxy_enabled": false,
+    "proxy_port": 8322,
+    "nfo_enabled": true,
+    "artwork_enabled": false,
+    "notify_enabled": false,
+    "notify_transfer": true,
+    "notify_organize": true,
+    "notify_strm": true,
+    "notify_strm_details": false,
+    "notify_channel": true,
+    "notify_maintenance": true,
+    "emby_refresh_enabled": true,
+    "open_app_id": "",
+    "naming_style": "standard",
+    "movie_folder": "电影",
+    "tv_folder": "电视剧",
+    "official_delete_enabled": false,
+    "governance_generated_enabled": false,
+    "rename_enabled": true,
+    "classification_enabled": false,
+    "enabled_categories": ["电影", "剧集", "动漫", "纪录片", "综艺"],
+    "custom_categories": [],
+    "region_classification": false,
+    "year_classification": false,
+    "unknown_enabled": false,
+    "region_mode": "country",
+    "region_groups": [
+      {
+        "name": "国产",
+        "countries": ["CN", "HK", "TW"]
+      },
+      {
+        "name": "欧美",
+        "countries": [
+          "US",
+          "CA",
+          "GB",
+          "FR",
+          "DE",
+          "IT",
+          "ES",
+          "PT",
+          "NL",
+          "BE",
+          "AT",
+          "CH",
+          "IE",
+          "SE",
+          "NO",
+          "DK",
+          "FI",
+          "IS",
+          "PL",
+          "CZ",
+          "SK",
+          "HU",
+          "RO",
+          "BG",
+          "GR",
+          "RU",
+          "UA",
+          "AU",
+          "NZ"
+        ]
+      },
+      {
+        "name": "日韩",
+        "countries": ["JP", "KR"]
+      }
+    ],
+    "animation_movie_folder": false,
+    "ffprobe_enabled": false,
+    "ffprobe_failure": "skip",
+    "cleanup_empty_directories": false,
+    "strm_delay_seconds": 0,
+    "operation_delay_seconds": 1.5,
+    "generate_strm_enabled": true,
+    "video_extensions": [
+      ".avi",
+      ".flv",
+      ".iso",
+      ".m2ts",
+      ".mkv",
+      ".mov",
+      ".mp4",
+      ".ts",
+      ".webm",
+      ".wmv"
+    ],
+    "metadata_extensions": [
+      ".ass",
+      ".idx",
+      ".jpg",
+      ".json",
+      ".nfo",
+      ".png",
+      ".srt",
+      ".ssa",
+      ".sub",
+      ".vtt"
+    ],
+    "min_video_mb": 0,
+    "ignore_keywords": [],
+    "ignore_regex": [],
+    "quality8_enabled": false,
+    "quality8_mode": "preview",
+    "quality8_rules": [
+      {
+        "key": "release_group",
+        "enabled": false,
+        "tiers": [],
+        "groups": []
+      },
+      {
+        "key": "source",
+        "enabled": false,
+        "tiers": [
+          "UHD Remux",
+          "Remux",
+          "UHD BluRay / BDMV",
+          "BluRay",
+          "WEB-DL",
+          "WEBRip",
+          "HDTV",
+          "DVD",
+          "其他 / 未识别"
+        ],
+        "groups": []
+      },
+      {
+        "key": "resolution",
+        "enabled": true,
+        "tiers": [
+          "4320p / 8K",
+          "2160p / 4K",
+          "1440p / 2K",
+          "1080p",
+          "720p",
+          "SD（576p 及以下）",
+          "其他 / 未识别"
+        ],
+        "groups": []
+      },
+      {
+        "key": "dynamic_range",
+        "enabled": true,
+        "tiers": [
+          "Dolby Vision Profile 7",
+          "Dolby Vision Profile 5",
+          "Dolby Vision Profile 8",
+          "Dolby Vision（未识别 Profile）",
+          "HDR10+",
+          "HDR Vivid",
+          "HDR10",
+          "HDR / HLG",
+          "SDR",
+          "其他 / 未识别"
+        ],
+        "groups": []
+      },
+      {
+        "key": "fps",
+        "enabled": true,
+        "tiers": [
+          "60 / 59.94 fps",
+          "50 fps",
+          "30 / 29.97 fps",
+          "25 fps",
+          "24 / 23.976 fps",
+          "其他 / 未识别"
+        ],
+        "groups": []
+      },
+      {
+        "key": "bitdepth",
+        "enabled": true,
+        "tiers": ["12bit", "10bit", "8bit", "其他 / 未识别"],
+        "groups": []
+      },
+      {
+        "key": "audio",
+        "enabled": true,
+        "tiers": [
+          "TrueHD Atmos / DTS:X",
+          "TrueHD / DTS-HD MA",
+          "LPCM / FLAC",
+          "Audio Vivid / AV3A",
+          "DD+ Atmos",
+          "DD+ / E-AC-3",
+          "DTS",
+          "AC3 / DD",
+          "AAC",
+          "其他 / 未识别"
+        ],
+        "groups": []
+      },
+      {
+        "key": "size",
+        "enabled": true,
+        "tiers": [],
+        "groups": []
+      }
+    ],
+    "quality8_coexist_dv": true,
+    "movie_directory_template": "{title} ({year}) [tmdb-{tmdb_id}]",
+    "tv_directory_template": "{title} ({year}) [tmdb-{tmdb_id}]",
+    "season_directory_template": "Season {season:02d}",
+    "movie_file_template": "{title}.{year}.{resolution}.{source}.{codec}{ext}",
+    "tv_file_template": "{title}.{year}.S{season:02d}E{episode:02d}.{resolution}.{source}.{codec}{ext}"
+  },
+  "config": {
+    "emby_host": "http://127.0.0.1:8096",
+    "emby_key": "",
+    "tmdb_key": "",
+    "http_proxy_enabled": "0",
+    "http_proxy_url": "",
+    "http_proxy_username": "",
+    "http_proxy_password": "",
+    "background_light_url": "",
+    "background_dark_url": "",
+    "tgto_enabled": "0",
+    "tgto_url": "",
+    "tgto_token": "",
+    "tgto_max_points": "0",
+    "emby_local_path": "/strm/115网盘/影视媒体库",
+    "emby_share_path": "/strm/115网盘/分享影视库",
+    "telegram_bot_token": "",
+    "telegram_chat_id": "",
+    "telegram_allowed_users": "",
+    "strategy_decision": "quality_first",
+    "match_strategy": "title_year",
+    "strategy_multi_season_protect": "compare",
+    "strategy_tie_keep_local": "0",
+    "strategy_season_ratio": "0.9",
+    "strategy_cover": "",
+    "strategy_exempt_keywords": "",
+    "strategy_special_action": "compare",
+    "ingest_quiet_minutes": "15",
+    "ingest_enabled": "1",
+    "ingest_interval_min": "5",
+    "ingest_mode": "poll",
+    "ingest_webhook_token": "",
+    "ingest_reconcile_hours": "24",
+    "subscribe_enabled": "1",
+    "subscribe_interval_min": "30",
+    "subscribe_calibration_interval_hours": "6",
+    "subscribe_calibration_last_ts": "0",
+    "subscribe_check_tmdb": "1",
+    "subscriptions": "[]",
+    "morning_report_enabled": "0",
+    "morning_report_hour": "9",
+    "morning_report_minute": "0",
+    "morning_report_items": "stats,subscriptions,emby_gap",
+    "morning_report_last_date": "",
+    "morning_prescan_min": "5",
+    "morning_prescan_last_date": "",
+    "tmdb_scan_enabled": "1",
+    "tmdb_scan_interval_hours": "24",
+    "tmdb_scan_last_ts": "0"
+  }
+}

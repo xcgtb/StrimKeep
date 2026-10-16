@@ -79,7 +79,7 @@ assert not Path(engine.DATA_DIR).exists()
 
 
 def test_real_static_mount_serves_all_frontend_assets_and_retains_uncached_html(tmp_path):
-    code = '''import hashlib, re
+    code = r'''import hashlib, re
 from urllib.parse import urlsplit, parse_qs
 from fastapi.testclient import TestClient
 from app.main import app
@@ -91,18 +91,19 @@ assert 'no-store' in page.headers['cache-control']
 urls = re.findall(r'(?:src|href)="(/static/[^"]+)"', page.text)
 assert urls and len(set(urls)) == len(urls), 'missing or duplicate static assets'
 paths = {urlsplit(url).path for url in urls}
-required = {'/static/css/app.css', '/static/css/overview.css', '/static/css/glass.css',
-            '/static/js/bootstrap.js', '/static/js/theme-meta.js',
-            '/static/icons/favicon.ico', '/static/icons/favicon.svg',
-            '/static/icons/apple-touch-icon.png'}
+required = {'/static/icons/favicon.ico', '/static/icons/favicon.svg', '/static/icons/apple-touch-icon.png'}
 assert required <= paths, ('missing required assets', required - paths)
+assert '<div id="app"></div>' in page.text and 'type="module"' in page.text
+assert '/static/js/' not in page.text and '/static/css/' not in page.text
+assert any(p.startswith('/static/assets/') and p.endswith('.js') for p in paths)
+assert any(p.startswith('/static/assets/') and p.endswith('.css') for p in paths)
 for url in urls:
     response = client.get(url)
     assert response.status_code == 200, url
     kind = {'css': 'css', 'js': 'javascript', 'svg': 'image/svg+xml',
             'png': 'image/png', 'ico': 'image/'}.get(urlsplit(url).path.rsplit('.', 1)[-1])
     assert kind in response.headers['content-type'], url
-    assert parse_qs(urlsplit(url).query)['v'][0] == hashlib.sha256(response.content).hexdigest()[:12], url
+    if '/assets/' in url: assert re.search(r'-[A-Za-z0-9_-]{8,}\.(js|css)$',url), url
 assert client.get('/static/js/missing-file.js').status_code == 404
 icon = client.get('/favicon.ico')
 assert icon.status_code == 200 and icon.headers['content-type'] == 'image/vnd.microsoft.icon'

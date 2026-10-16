@@ -1,5 +1,7 @@
 # 🎬 StrimKeep
 
+当前源码的正式前端已迁移至 Vue 3，包含 24 个业务工作区。包内已提供编译产物，运行不需要 Node；[安装与开发说明](frontend/README.md) · [功能与验证范围](docs/frontend-vue3-progress.md)。
+
 **StrimKeep｜面向 302 STRM + Emby 的影视库管理与智能治理工具**
 
 [![License](https://img.shields.io/badge/LICENSE-MIT-blueviolet?style=for-the-badge)](LICENSE)
