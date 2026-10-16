@@ -10,22 +10,29 @@ const props = defineProps<{
   subscribable?: boolean;
   subscribed?: boolean;
   busy?: boolean;
+  priority?: boolean;
 }>();
 defineEmits<{ open: []; select: []; subscribe: [] }>();
-const failed = ref(false),
+const loaded = ref(false),
+  failed = ref(false),
   url = computed(() => posterUrl(props.card));
-watch(url, () => (failed.value = false));
+watch(url, () => {
+  failed.value = false;
+  loaded.value = false;
+});
 </script>
 <template>
   <article class="poster-card" :class="{ selected }">
-    <div class="poster-art">
+    <div class="poster-art" :class="{ 'poster-waiting': url && !loaded && !failed }">
       <button class="poster-open" :aria-label="`查看${titleOf(card)}详情`" @click="$emit('open')">
         <img
           v-if="url && !failed"
           :src="url"
           alt=""
-          loading="lazy"
+          :loading="priority ? 'eager' : 'lazy'"
+          :fetchpriority="priority ? 'high' : 'auto'"
           decoding="async"
+          @load="loaded = true"
           @error="failed = true"
         /><span v-else class="poster-fallback"
           ><Film :size="32" /><span>{{ titleOf(card) }}</span></span

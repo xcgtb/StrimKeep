@@ -1,0 +1,7 @@
+{
+  "movie_directory_template": "{title} ({year}) [tmdb-{tmdb_id}]",
+  "tv_directory_template": "{title} ({year}) [tmdb-{tmdb_id}]",
+  "season_directory_template": "Season {season:02d}",
+  "movie_file_template": "{title}.{year}.{resolution}.{source}.{codec}{ext}",
+  "tv_file_template": "{title}.{year}.S{season:02d}E{episode:02d}.{resolution}.{source}.{codec}{ext}"
+}

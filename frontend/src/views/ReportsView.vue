@@ -7,6 +7,7 @@ import { date } from '../composables/format';
 import PageHeading from '../components/PageHeading.vue';
 import FormFields, { type Field } from '../components/FormFields.vue';
 import EvidenceDetails from '../components/EvidenceDetails.vue';
+import IngestSummary from '../components/IngestSummary.vue';
 import ConfirmAction from '../components/ConfirmAction.vue';
 import ModalDialog from '../components/ModalDialog.vue';
 import OperationState from '../components/OperationState.vue';
@@ -14,6 +15,8 @@ const ingest = useRequest<Data>(),
   recordsRequest = useRequest<Data>(),
   morning = useRequest<Data>(),
   detail = useRequest<Data>(),
+  watched = useRequest<Data>(),
+  libraryStats = useRequest<Data>(),
   op = useOperation(),
   tab = ref('ingest'),
   form = ref<Data>({}),
@@ -41,6 +44,11 @@ async function load() {
 async function preview(force = false) {
   const r = await op.run(() => writeData('/api/morning/preview', { items: items.value, force }));
   if (r) previewText.value = String(r.text || '');
+}
+function selectTab(key: string) {
+  tab.value = key;
+  if (key === 'watched') void watched.run((signal) => readData('/api/played', signal));
+  if (key === 'stats') void libraryStats.run((signal) => readData('/api/library_stats', signal));
 }
 async function execute() {
   const r = await op.run(() =>
@@ -74,10 +82,16 @@ onMounted(load);
   >
   <nav class="browse-tabs">
     <button
-      v-for="(label, key) in { ingest: '近期入库', records: '执行记录', morning: '每日晨报' }"
+      v-for="(label, key) in {
+        ingest: '近期入库',
+        records: '执行记录',
+        morning: '每日晨报',
+        stats: 'STRM 分类统计',
+        watched: '观看进度',
+      }"
       :key="key"
       :class="{ active: tab === key }"
-      @click="tab = key"
+      @click="selectTab(key)"
     >
       {{ label }}
     </button>
@@ -91,8 +105,84 @@ onMounted(load);
     :receipt="op.receipt.value"
   />
   <section v-if="tab === 'ingest'" class="panel">
-    <h2>已确认的近期入库统计</h2>
-    <EvidenceDetails :value="ingest.data.value" />
+    <h2>Emby 近期入库 · 分类明细</h2>
+    <p class="muted-text">按真实 Emby 记录呈现本地库、分享库与作品分类；不显示后端原始 JSON。</p>
+    <IngestSummary :value="ingest.data.value" />
+  </section>
+  <section v-if="tab === 'stats'" class="panel">
+    <header class="section-heading">
+      <h2>NAS STRM 分类统计</h2>
+      <button class="button" :disabled="libraryStats.loading.value" @click="selectTab('stats')">
+        读取分类统计
+      </button>
+    </header>
+    <p class="muted-text">
+      统计 NAS 文件，不等同于 Emby 作品数量；无缓存或缓存过期时后端可能扫描目录。
+    </p>
+    <p v-if="libraryStats.loading.value">正在读取分类统计…</p>
+    <p v-if="libraryStats.error.value" class="inline-error">{{ libraryStats.error.value }}</p>
+    <p v-if="libraryStats.data.value" class="data-caption">
+      统计时间 {{ date(Number(libraryStats.data.value.ts)) }} · 本地
+      {{ libraryStats.data.value.local_total ?? '—' }} · 分享
+      {{ libraryStats.data.value.share_total ?? '—' }}
+    </p>
+    <div class="report-stats-table">
+      <table>
+        <thead>
+          <tr>
+            <th>分类</th>
+            <th>本地 STRM</th>
+            <th>分享 STRM</th>
+            <th>合计</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in records(libraryStats.data.value?.rows)" :key="String(row.name)">
+            <td>{{ row.name }}</td>
+            <td>{{ row.local }}</td>
+            <td>{{ row.share }}</td>
+            <td>{{ row.total }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p v-if="libraryStats.data.value" class="muted-text">
+      未归类：本地 {{ libraryStats.data.value.local_other ?? 0 }} · 分享
+      {{ libraryStats.data.value.share_other ?? 0 }}
+    </p>
+  </section>
+  <section v-if="tab === 'watched'" class="panel">
+    <header class="section-heading">
+      <h2>Emby 观看进度与新集提醒</h2>
+      <button class="button" :disabled="watched.loading.value" @click="selectTab('watched')">
+        读取观看进度
+      </button>
+    </header>
+    <p class="muted-text">手动读取 Emby 用户的续播记录，以及相对于观看位置的新入库集数。</p>
+    <p v-if="watched.loading.value">正在读取 Emby 观看记录…</p>
+    <p v-if="watched.error.value" class="inline-error">{{ watched.error.value }}</p>
+    <div class="plan-item-list">
+      <article v-for="(row, i) in records(watched.data.value?.records)" :key="i">
+        <div>
+          <strong>{{ row.name }}</strong>
+          <p>{{ row.text }}</p>
+        </div>
+        <span>{{ row.pct }}%</span>
+      </article>
+    </div>
+    <p v-for="(row, i) in records(watched.data.value?.alerts)" :key="i" class="notice-bar">
+      {{ row.text }}
+    </p>
+    <p
+      v-if="
+        watched.data.value &&
+        !records(watched.data.value.records).length &&
+        !records(watched.data.value.alerts).length
+      "
+      class="muted-text"
+    >
+      当前没有续播记录或新集提醒。
+    </p>
   </section>
   <section v-if="tab === 'records'" class="panel">
     <header class="section-heading">

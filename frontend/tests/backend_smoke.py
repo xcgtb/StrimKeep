@@ -75,6 +75,13 @@ with tempfile.TemporaryDirectory(prefix='strimkeep-vue3-') as folder:
               ('/api/cloud/rules','items'),('/api/wash/empty-dirs/browse','roots')]
             for endpoint,key in reads:
                 result=json.loads(fetch(endpoint)[0]);assert key in result,(endpoint,result)
+            catalog=json.loads(fetch('/api/cloud/resources/catalog')[0])
+            assert catalog==json.loads((ROOT/'frontend/tests/e2e/catalog.json').read_text()), catalog
+            changes=json.loads(fetch('/api/library/changes?since=0')[0])
+            assert isinstance(changes['version'],int) and isinstance(changes['full'],bool)
+            assert isinstance(changes['series'],list) and isinstance(changes['movies'],list)
+            assert 'has_cache' in json.loads(fetch('/api/ingest/status')[0])
+            assert {'L_ROOT','S_ROOT','CLOUD_L_ROOT','DATA_DIR'} <= set(json.loads(fetch('/api/health')[0])['paths'])
             # Round-trip the actual settings contracts without media/network mutations.
             cloud=json.loads(fetch('/api/cloud/settings')[0])['settings']
             fields=(ROOT/'frontend/src/config/cloudFields.ts').read_text()
@@ -100,7 +107,7 @@ with tempfile.TemporaryDirectory(prefix='strimkeep-vue3-') as folder:
                 raise AssertionError('Logout did not revoke browser cookie')
             except urllib.error.HTTPError as error:
                 assert error.code == 401
-            print('PASS real FastAPI: production assets, HTTPOnly login, cookie session, 25 API reads, real configuration round trips, empty-library status and logout')
+            print('PASS real FastAPI: production assets, HTTPOnly login, cookie session, 29 API reads, catalogue parity, library changes, ingest/paths status, configuration round trips, empty-library status and logout')
         finally:
             process.terminate()
             try: process.wait(timeout=5)

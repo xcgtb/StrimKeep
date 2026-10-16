@@ -208,6 +208,32 @@ useVisiblePoll(async () => {
       <p>{{ detail.data.value.job.message }}</p>
       <small>{{ jobId }}</small>
     </div>
+    <section v-if="detail.data.value?.job.progress" class="panel task-progress">
+      <h3>实时处理进度</h3>
+      <p>
+        {{ detail.data.value.job.progress.phase }} ·
+        {{ detail.data.value.job.progress.current || '等待下一项' }}
+      </p>
+      <p>
+        {{ detail.data.value.job.progress.processed ?? 0 }} /
+        {{ detail.data.value.job.progress.total ?? '待统计' }}
+      </p>
+      <progress
+        v-if="Number(detail.data.value.job.progress.total) > 0"
+        :value="Number(detail.data.value.job.progress.processed || 0)"
+        :max="Number(detail.data.value.job.progress.total)"
+        aria-label="任务处理进度"
+      />
+      <p v-if="detail.data.value.job.activity?.label">{{ detail.data.value.job.activity.label }}</p>
+    </section>
+    <details v-if="detail.data.value?.job.steps?.length">
+      <summary>执行步骤与逐步回执</summary>
+      <EvidenceDetails :value="detail.data.value.job.steps" />
+    </details>
+    <details v-if="detail.data.value?.job.upgrades?.length">
+      <summary>洗版记录与保留原因</summary>
+      <EvidenceDetails :value="detail.data.value.job.upgrades" />
+    </details>
     <div v-if="detail.data.value?.job" class="action-row">
       <button
         v-if="detail.data.value.job.state === 'queued'"
@@ -250,7 +276,8 @@ useVisiblePoll(async () => {
       </button>
       <button
         v-if="
-          detail.data.value.job.kind === 'transfer' && detail.data.value.job.state !== 'running'
+          detail.data.value.job.kind === 'transfer' &&
+          !['queued', 'running'].includes(detail.data.value.job.state)
         "
         class="button"
         @click="action = 'continue'"
@@ -258,7 +285,10 @@ useVisiblePoll(async () => {
         核实后继续整理
       </button>
       <button
-        v-if="detail.data.value.job.state !== 'running' && detail.data.value.job.upgrades?.length"
+        v-if="
+          !['queued', 'running'].includes(detail.data.value.job.state) &&
+          detail.data.value.job.upgrades?.length
+        "
         class="button"
         @click="action = 'upgrades/continue'"
       >

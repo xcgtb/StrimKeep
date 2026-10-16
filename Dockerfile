@@ -1,3 +1,12 @@
+# Vue 3 is compiled inside the build stage; the NAS needs no Node installation.
+# Do not use checked-in static assets as the source of truth for released images.
+FROM node:24-bookworm-slim AS frontend_builder
+WORKDIR /build/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY frontend/ ./
+RUN npm run build
+
 FROM python:3.12-slim
 
 LABEL org.opencontainers.image.source="https://github.com/xcgtb/StrimKeep"
@@ -24,7 +33,7 @@ COPY requirements.txt requirements-cloud115.txt ./
 RUN pip install -r requirements.txt
 
 COPY app/ ./app/
-COPY static/ ./static/
+COPY --from=frontend_builder /build/static/ ./static/
 COPY scripts/healthcheck.py ./scripts/healthcheck.py
 
 RUN mkdir -p /data

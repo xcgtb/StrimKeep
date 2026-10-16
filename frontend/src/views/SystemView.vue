@@ -8,12 +8,14 @@ import EvidenceDetails from '../components/EvidenceDetails.vue';
 const runtime = useRequest<Data>(),
   storage = useRequest<Data>(),
   health = useRequest<Data>(),
+  paths = useRequest<Data>(),
   consistency = useRequest<Data>();
 async function load() {
   await Promise.allSettled([
     runtime.run((signal) => readData('/api/runtime/status', signal)),
     storage.run((signal) => readData('/api/storage/status', signal)),
     health.run((signal) => readData('/api/library/health', signal)),
+    paths.run((signal) => readData('/api/health', signal)),
     consistency.run((signal) => readData('/api/consistency', signal)),
   ]);
 }
@@ -32,6 +34,7 @@ useVisiblePoll(() => runtime.run((signal) => readData('/api/runtime/status', sig
         服务与当前任务: runtime,
         数据存储: storage,
         片库健康: health,
+        NAS路径与服务时区: paths,
         事实一致性: consistency,
       }"
       :key="label"

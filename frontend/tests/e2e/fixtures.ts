@@ -1,4 +1,5 @@
 import defaults from './defaults.json' with { type: 'json' };
+import catalog from './catalog.json' with { type: 'json' };
 import type { Page, Route } from '@playwright/test';
 export const movies = Array.from({ length: 12 }, (_, i) => ({
   type: i % 3 === 0 ? 'tv' : 'movie',
@@ -88,7 +89,7 @@ export async function fixtures(page: Page, initialAuth = true) {
       if (path === '/api/runtime/status')
         return fulfill(route, {
           status: 'success',
-          version: '1.4.8',
+          version: '1.4.10',
           readiness: { ready: true },
           memory: { rss_mib: 162 },
         });
@@ -127,6 +128,38 @@ export async function fixtures(page: Page, initialAuth = true) {
               ? movies
               : [{ ...movies[0], tmdb_id: '99', title: '第二页作品' }],
           total_pages: 2,
+        });
+      if (path === '/api/cloud/resources/catalog') return fulfill(route, catalog);
+      if (path === '/api/library/changes')
+        return fulfill(route, {
+          status: 'success',
+          version: 0,
+          full: false,
+          series: [],
+          movies: [],
+        });
+      if (path === '/api/library/events')
+        return route.fulfill({ contentType: 'text/event-stream', body: 'retry: 60000\n\n' });
+      if (path === '/api/ingest/status')
+        return fulfill(route, { status: 'success', has_cache: false });
+      if (path === '/api/played')
+        return fulfill(route, { status: 'success', records: [], alerts: [] });
+      if (path === '/api/library_stats')
+        return fulfill(route, {
+          status: 'success',
+          rows: [],
+          local_total: 0,
+          share_total: 0,
+          local_other: 0,
+          share_other: 0,
+        });
+      if (path === '/api/search')
+        return fulfill(route, { status: 'success', text: '没有找到目录' });
+      if (path === '/api/health')
+        return fulfill(route, {
+          status: 'ok',
+          paths: { L_ROOT: '/media/local ✅', S_ROOT: '/media/share ✅' },
+          tz: { name: 'Asia/Shanghai' },
         });
       if (path === '/api/explore/library-status')
         return fulfill(route, { status: 'success', cards: [] });

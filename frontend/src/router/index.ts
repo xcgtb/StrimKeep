@@ -67,6 +67,16 @@ export const router = createRouter({
       meta: { title: '媒体整理', group: '自动化' },
     },
     {
+      path: '/organize/naming',
+      component: () => import('../views/NamingView.vue'),
+      meta: { title: '自定义命名模板', group: '媒体加工' },
+    },
+    {
+      path: '/organize/quality',
+      component: () => import('../views/Quality8View.vue'),
+      meta: { title: '整理八维与洗版', group: '媒体加工' },
+    },
+    {
       path: '/organize/automation',
       component: () => import('../views/AutomationView.vue'),
       meta: { title: '整理自动化', group: '自动化' },
@@ -125,6 +135,11 @@ export const router = createRouter({
       path: '/system',
       component: () => import('../views/SystemView.vue'),
       meta: { title: '系统状态', group: '运行管理' },
+    },
+    {
+      path: '/workflow',
+      component: () => import('../views/WorkflowView.vue'),
+      meta: { title: '业务流程图', group: '工作台' },
     },
     { path: '/resources/plugins', redirect: '/resources' },
     { path: '/:pathMatch(.*)*', redirect: '/dashboard' },

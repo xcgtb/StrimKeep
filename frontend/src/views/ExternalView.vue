@@ -88,6 +88,13 @@ onMounted(load);
   />
   <section v-if="tab === 'settings'" class="panel">
     <h2>外部服务配置</h2>
+    <p class="muted-text">
+      {{
+        object(request.data.value?.settings).has_token
+          ? '已保存连接令牌；留空继续使用原值。'
+          : '尚未保存连接令牌。'
+      }}
+    </p>
     <FormFields v-model="form" :fields="fields" :disabled="op.busy.value || op.uncertain.value" />
     <div class="action-row">
       <button class="button" @click="load">重新读取</button

@@ -1,67 +1,65 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, watch } from 'vue';
-import { readData, writeData, object, records, strings, type Data } from '../api/domain';
-import { useRequest } from '../composables/useRequest';
-import { useOperation } from '../composables/useOperation';
+import { ref, computed, watch } from 'vue';
+import { useCloudSettingsDraft } from '../composables/useCloudSettingsDraft';
+import { records, strings, type Data } from '../api/domain';
 import { useRoute } from 'vue-router';
-import { cloudSections, namingKeys } from '../config/cloudFields';
+import { cloudSections } from '../config/cloudFields';
 import PageHeading from '../components/PageHeading.vue';
 import FormFields from '../components/FormFields.vue';
 import QualityRules from '../components/QualityRules.vue';
-import ConfirmAction from '../components/ConfirmAction.vue';
+import NamingTemplates from '../components/NamingTemplates.vue';
+import coverDefaults from '../config/quality-defaults.json';
+import CloudSettingsConfirmation from '../components/CloudSettingsConfirmation.vue';
 import EvidenceDetails from '../components/EvidenceDetails.vue';
 import OperationState from '../components/OperationState.vue';
 const route = useRoute();
-const request = useRequest<Data>(),
-  op = useOperation(),
-  draft = ref<Data>({}),
-  tab = ref('output'),
-  confirmation = ref(false),
-  preview = ref<Data>();
+const { request, op, draft, confirmation, preview, changed, changes, load, save, previewNaming } =
+  useCloudSettingsDraft();
+const tab = ref('output');
 watch(
-  () => route.query.section,
-  (v) => {
-    if (cloudSections.some((s) => s.key === v)) tab.value = String(v);
+  () => [route.path, route.query.section],
+  () => {
+    const target =
+      route.path === '/organize/naming'
+        ? 'naming'
+        : route.path === '/organize/quality'
+          ? 'quality'
+          : route.query.section;
+    if (cloudSections.some((s) => s.key === target)) tab.value = String(target);
   },
   { immediate: true },
 );
-const section = computed(() => cloudSections.find((s) => s.key === tab.value)!);
-const changed = computed(() =>
-  Object.keys(draft.value).filter(
-    (k) =>
-      JSON.stringify(draft.value[k]) !== JSON.stringify(object(request.data.value?.settings)[k]),
-  ),
+const visibleFields = computed(() =>
+  tab.value === 'naming'
+    ? section.value.fields.filter(
+        (f) =>
+          ![
+            'movie_directory_template',
+            'tv_directory_template',
+            'season_directory_template',
+            'movie_file_template',
+            'tv_file_template',
+          ].includes(f.key),
+      )
+    : section.value.fields,
 );
-async function load() {
-  const r = await request.run((signal) => readData('/api/cloud/settings', signal));
-  if (r) {
-    draft.value = structuredClone(object(r.settings));
-    op.reconcile();
-  }
+function resetQuality() {
+  const base = coverDefaults.cover.rules as Data[];
+  draft.value = {
+    ...draft.value,
+    quality8_rules: [
+      ...base.map((rule) => ({
+        key: rule.key === 'dolby' ? 'dynamic_range' : rule.key,
+        enabled: rule.enabled,
+        tiers: structuredClone(rule.tiers),
+        groups: structuredClone(rule.groups),
+      })),
+      { key: 'size', enabled: true, tiers: [], groups: [] },
+    ],
+  };
 }
-async function save() {
-  const r = await op.run(() =>
-    writeData(
-      '/api/cloud/settings',
-      Object.fromEntries(changed.value.map((k) => [k, draft.value[k]])),
-    ),
-  );
-  if (r) {
-    confirmation.value = false;
-    request.data.value = r;
-    draft.value = structuredClone(object(r.settings));
-  }
-}
-async function previewNaming(details = false) {
-  const r = await op.run(() =>
-    writeData(details ? '/api/cloud/naming/details' : '/api/cloud/naming/preview', {
-      settings: Object.fromEntries(
-        namingKeys.filter((k) => k in draft.value).map((k) => [k, draft.value[k]]),
-      ),
-    }),
-  );
-  if (r) preview.value = r;
-}
+
+const section = computed(() => cloudSections.find((s) => s.key === tab.value)!);
 function region(i: number, key: string, value: unknown) {
   draft.value = {
     ...draft.value,
@@ -82,11 +80,10 @@ function removeRegion(i: number) {
     region_groups: records(draft.value.region_groups).filter((_, j) => i !== j),
   };
 }
-onMounted(load);
 </script>
 <template>
   <PageHeading
-    title="整理与播放设置"
+    title="媒体加工与播放设置"
     subtitle="统一设置识别命名、分类、过滤、洗版、STRM 输出和通知。"
     ><button
       class="button primary"
@@ -121,9 +118,15 @@ onMounted(load);
         <p class="muted-text">{{ section.description }}</p>
         <FormFields
           v-model="draft"
-          :fields="section.fields"
+          :fields="visibleFields"
           :disabled="op.busy.value || op.uncertain.value"
-        /><template v-if="tab === 'classification'"
+        />
+        <NamingTemplates
+          v-if="tab === 'naming'"
+          v-model="draft"
+          :disabled="op.busy.value || op.uncertain.value"
+        />
+        <template v-if="tab === 'classification'"
           ><h3>地区归组</h3>
           <div v-for="(r, i) in records(draft.region_groups)" :key="i" class="repeat-row">
             <label
@@ -146,7 +149,21 @@ onMounted(load);
             ><button class="button small danger-text" @click="removeRegion(i)">移除</button>
           </div>
           <button class="button small" @click="addRegion">添加地区组</button></template
-        ><QualityRules
+        >
+        <div v-if="tab === 'quality'" class="quality-section-heading">
+          <p class="data-caption">
+            整理八维读取 115 原视频大小。STRM 七维治理独立设置，不按文件大小比较。
+          </p>
+          <button
+            type="button"
+            class="button small"
+            :disabled="op.busy.value || op.uncertain.value"
+            @click="resetQuality"
+          >
+            恢复八维默认草稿
+          </button>
+        </div>
+        <QualityRules
           v-if="tab === 'quality'"
           :model-value="records(draft.quality8_rules)"
           :disabled="op.busy.value || op.uncertain.value"
@@ -177,24 +194,12 @@ onMounted(load);
       </section>
     </div>
   </div>
-  <ConfirmAction
+  <CloudSettingsConfirmation
     v-if="confirmation"
-    title="保存整理与播放设置"
-    description="后续手动与自动任务将使用这些设置。启用洗版或官方源删除会影响真实视频；变更反代端口会重启相关监听。请核对本次修改。"
-    :danger="
-      changed.some((k) =>
-        ['quality8_mode', 'official_delete_enabled', 'governance_generated_enabled'].includes(k),
-      )
-    "
-    :phrase="
-      changed.some((k) => ['official_delete_enabled', 'governance_generated_enabled'].includes(k))
-        ? '启用源文件治理'
-        : undefined
-    "
+    :changes="changes"
     :busy="op.busy.value"
-    :disabled="op.uncertain.value"
+    :uncertain="op.uncertain.value"
     @close="confirmation = false"
     @confirm="save"
-    ><EvidenceDetails :value="Object.fromEntries(changed.map((k) => [k, draft[k]]))"
-  /></ConfirmAction>
+  />
 </template>

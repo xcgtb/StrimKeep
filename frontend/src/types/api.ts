@@ -114,7 +114,14 @@ export interface Overview extends Envelope {
   stale?: boolean;
   refresh?: { running?: boolean; phase?: string; error?: string; warnings?: string[] };
   activity?: {
-    recent?: (MediaCard & { media_type?: MediaType; episodes?: string; ts?: number })[];
+    recent?: (MediaCard & {
+      media_type?: MediaType;
+      episodes?: string;
+      ts?: number;
+      library?: string;
+      category?: string;
+      count?: number;
+    })[];
     ingest_error?: boolean;
   };
 }
@@ -136,7 +143,15 @@ export interface Job {
   updated?: number;
   account_id?: string;
   upgrades?: unknown[];
-  steps?: { step_key?: string; state?: string; result?: unknown }[];
+  steps?: { step?: string; step_key?: string; state?: string; result?: unknown }[];
+  progress?: {
+    total?: number | null;
+    processed?: number;
+    phase?: string;
+    current?: string;
+    updated?: number;
+  };
+  activity?: { label?: string; active?: boolean; needs_attention?: boolean };
   result?: unknown;
 }
 export interface Diagnostic {

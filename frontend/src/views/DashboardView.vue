@@ -7,6 +7,8 @@ import {
   HardDrive,
   LibraryBig,
   Clapperboard,
+  Film,
+  Tv2,
   Bell,
   CheckCircle2,
   CircleAlert,
@@ -19,7 +21,8 @@ import {
 import { mediaApi } from '../api/media';
 import { useRequest } from '../composables/useRequest';
 import { useVisiblePoll } from '../composables/useVisiblePoll';
-import { number, date, titleOf } from '../composables/format';
+import { useLibraryUpdates } from '../composables/useLibraryUpdates';
+import { number, date, titleOf, posterUrl } from '../composables/format';
 import { useUi } from '../stores/ui';
 import PosterCard from '../components/PosterCard.vue';
 import LoadState from '../components/LoadState.vue';
@@ -33,40 +36,63 @@ const overview = useRequest<Overview>(),
 const workflows = [
   { to: '/resources/receive', name: '接收资源', note: '分享 · 磁力 · 秒传', icon: CloudDownload },
   { to: '/organize/workspace', name: '识别整理', note: '命名 · 分类 · 归档', icon: ArrowDownUp },
-  { to: '/media/strm', name: '生成与入库', note: 'STRM · 播放 · Emby', icon: FileVideo },
+  { to: '/media/strm', name: 'STRM 发布', note: '引用 · 播放 · 核实', icon: FileVideo },
+  { to: '/tasks/ingestion', name: 'Emby 核验', note: '扫描 · 入库 · 回执', icon: CheckCircle2 },
   { to: '/governance', name: '片库治理', note: '质量 · 去重 · 清理', icon: ShieldCheck },
 ];
 const dashboard = computed(() => overview.data.value?.dashboard || {});
 const stats = computed(() => [
   {
+    label: '电影作品',
+    value: dashboard.value.libraryHealth?.stats?.total_movies,
+    note: 'Emby 片库 · 部',
+    icon: Film,
+    tone: 'blue',
+    to: '/media/library',
+  },
+  {
+    label: '剧集作品',
+    value: dashboard.value.libraryHealth?.stats?.total_series,
+    note: 'Emby 片库 · 部',
+    icon: Tv2,
+    tone: 'violet',
+    to: '/media/library',
+  },
+  {
+    label: '已入库单集',
+    value: dashboard.value.libraryHealth?.episodes,
+    note: 'Emby 片库 · 集',
+    icon: Clapperboard,
+    tone: 'teal',
+    to: '/media/library',
+  },
+  {
     label: '本地 STRM',
     value: dashboard.value.localCount,
-    note: '个人媒体资源',
+    note: '个人库播放引用',
     icon: HardDrive,
     tone: 'blue',
+    to: '/media/strm',
   },
   {
     label: '分享 STRM',
     value: dashboard.value.shareCount,
-    note: '分享媒体资源',
+    note: '分享库播放引用',
     icon: LibraryBig,
     tone: 'teal',
-  },
-  {
-    label: '已入库剧集',
-    value: dashboard.value.libraryHealth?.stats?.total_series,
-    note: '来自 Emby 片库事实',
-    icon: Clapperboard,
-    tone: 'violet',
+    to: '/media/strm',
   },
   {
     label: '追更订阅',
     value: dashboard.value.subscriptions?.total,
-    note: '持续关注的作品',
+    note: '正在关注的作品',
     icon: Bell,
     tone: 'orange',
+    to: '/media/subscriptions',
   },
 ]);
+const ingest = computed(() => dashboard.value.ingest || {});
+const recent = computed(() => overview.data.value?.activity?.recent || []);
 function load() {
   return overview.run(mediaApi.overview);
 }
@@ -96,6 +122,10 @@ onMounted(() => {
   void loadRecs();
 });
 useVisiblePoll(load, 15000);
+useLibraryUpdates(async () => {
+  if (overview.loading.value) return false;
+  return (await load()) ? undefined : false;
+});
 </script>
 <template>
   <section class="page-heading dashboard-heading">
@@ -151,7 +181,7 @@ useVisiblePoll(load, 15000);
       {{ warning }}
     </div>
     <div class="stats-grid">
-      <article v-for="stat in stats" :key="stat.label" class="stat-card">
+      <RouterLink v-for="stat in stats" :key="stat.label" :to="stat.to" class="stat-card">
         <div class="stat-label">
           {{ stat.label
           }}<span class="stat-icon" :class="stat.tone"
@@ -160,8 +190,18 @@ useVisiblePoll(load, 15000);
         </div>
         <strong>{{ number(stat.value) }}</strong
         ><span>{{ stat.note }}</span>
-      </article>
+      </RouterLink>
     </div>
+    <div class="dashboard-ingest-note" role="status">
+      <span>近 24 小时 Emby 入库</span>
+      <strong>{{ number(ingest.movies) }} 部电影</strong
+      ><strong>{{ number(ingest.series) }} 部剧集</strong
+      ><strong>{{ number(ingest.episodes) }} 集</strong>
+      <RouterLink class="text-link push-right" to="/tasks/reports">查看分类清单 →</RouterLink>
+    </div>
+    <p v-if="dashboard.libraryHealth?.stale" class="data-caption">
+      片库统计来自过期快照，等待服务端更新，不应将当前数字当作实时总量。
+    </p>
     <div class="dashboard-middle">
       <section class="panel activity-panel">
         <header class="section-heading">
@@ -176,13 +216,32 @@ useVisiblePoll(load, 15000);
         <p v-if="overview.data.value.activity?.ingest_error" class="inline-error">
           近期入库同步失败，保留上次快照。
         </p>
-        <div v-if="overview.data.value.activity?.recent?.length" class="recent-grid">
-          <PosterCard
-            v-for="card in overview.data.value.activity.recent"
-            :key="`${card.media_type}:${card.tmdb_id}:${card.title}`"
-            :card="{ ...card, type: card.media_type }"
-            @open="explore({ ...card, type: card.media_type })"
-          />
+        <div v-if="recent.length" class="recent-ingest-list">
+          <button
+            v-for="(card, i) in recent"
+            :key="`${card.media_type}:${card.tmdb_id}:${card.title}:${i}`"
+            :aria-label="`查看${titleOf(card)}详情`"
+            class="recent-ingest-row"
+            @click="explore({ ...card, type: card.media_type })"
+          >
+            <img
+              v-if="posterUrl({ ...card, type: card.media_type })"
+              :src="posterUrl({ ...card, type: card.media_type })"
+              :loading="i < 2 ? 'eager' : 'lazy'"
+              decoding="async"
+              alt=""
+            />
+            <div class="recent-ingest-main">
+              <strong>{{ titleOf(card) }}</strong
+              ><small
+                >{{ card.media_type === 'tv' ? '剧集' : '电影' }} · {{ card.library || 'Emby' }} ·
+                {{ date(card.ts) }}</small
+              ><span v-if="card.episodes" class="ingest-episode-pill"
+                >新增 {{ card.episodes }}</span
+              >
+            </div>
+            <ArrowUpRight :size="16" />
+          </button>
         </div>
         <div v-else class="activity-empty">
           <Clapperboard :size="26" />
@@ -268,6 +327,7 @@ useVisiblePoll(load, 15000);
         v-for="card in recommendations.data.value?.cards?.slice(0, 6)"
         :key="card.tmdb_id"
         :card="card"
+        priority
         @open="explore(card)"
       />
     </div>

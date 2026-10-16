@@ -1,7 +1,16 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { object, text, type Data } from '../api/domain';
 const props = withDefaults(defineProps<{ value: unknown; depth?: number }>(), { depth: 0 });
+const visible = ref(100),
+  expanded = ref(false);
+watch(
+  () => props.value,
+  () => {
+    visible.value = 100;
+    expanded.value = false;
+  },
+);
 const labels: Record<string, string> = {
   name: '名称',
   id: '编号',
@@ -80,6 +89,15 @@ const labels: Record<string, string> = {
   confirmed: '已核实',
   in_emby: 'Emby 已入库',
   source_name: '来源名称',
+  step: '执行步骤',
+  progress: '处理进度',
+  activity: '当前活动',
+  upgrades: '洗版回执',
+  heartbeat_age: '心跳间隔',
+  label: '说明',
+  last_error: '最近错误',
+  last_run: '上次运行',
+  next_run: '下次运行',
 };
 const entries = computed(() =>
   Object.entries(object(props.value)).filter(
@@ -99,14 +117,18 @@ const asData = (value: unknown): Data => object(value);
 <template>
   <span v-if="simple(value)" class="evidence-value">{{ shown(value) }}</span>
   <div v-else-if="list" class="evidence-list">
-    <div v-for="(entry, index) in list.slice(0, 100)" :key="index" class="evidence-item">
-      <EvidenceDetails v-if="depth < 5" :value="entry" :depth="depth + 1" /><span v-else>{{
-        shown(asData(entry).name || asData(entry).reason || '嵌套详情')
-      }}</span>
+    <div v-for="(entry, index) in list.slice(0, visible)" :key="index" class="evidence-item">
+      <EvidenceDetails v-if="depth < 5 || expanded" :value="entry" :depth="depth + 1" /><span
+        v-else
+        >{{ shown(asData(entry).name || asData(entry).reason || '嵌套详情') }}</span
+      >
     </div>
     <p v-if="list.length > 100" class="muted-text">
-      本视图展示前 100 项，共 {{ list.length }} 项。
+      已显示 {{ Math.min(visible, list.length) }} / {{ list.length }} 项。
     </p>
+    <button v-if="list.length > visible" type="button" class="button small" @click="visible += 100">
+      继续显示详情项目
+    </button>
   </div>
   <dl v-else class="evidence-grid">
     <template v-for="[key, entry] in entries" :key="key"
@@ -115,8 +137,16 @@ const asData = (value: unknown): Data => object(value);
       <dd v-else>
         <details>
           <summary>查看{{ label(key) }}</summary>
-          <EvidenceDetails v-if="depth < 5" :value="entry" :depth="depth + 1" />
+          <EvidenceDetails v-if="depth < 5 || expanded" :value="entry" :depth="depth + 1" />
         </details></dd
     ></template>
   </dl>
+  <button
+    v-if="!simple(value) && depth >= 5 && !expanded"
+    type="button"
+    class="button small"
+    @click="expanded = true"
+  >
+    展开深层详情
+  </button>
 </template>

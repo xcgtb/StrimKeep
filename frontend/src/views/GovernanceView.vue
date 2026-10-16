@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { readData, writeData, records, object, type Data } from '../api/domain';
 import { useRequest } from '../composables/useRequest';
 import { useOperation } from '../composables/useOperation';
@@ -20,6 +20,10 @@ const summary = useRequest<Data>(),
   detailOpen = ref(false),
   group = ref('del_local_items'),
   search = ref('');
+const visible = ref(200);
+watch([group, search], () => {
+  visible.value = 200;
+});
 const scan = computed(() => object(summary.data.value?.scan)),
   result = computed(() => object(scan.value.result));
 const items = computed(() =>
@@ -61,7 +65,7 @@ function prepareClean(dry: boolean) {
 onMounted(load);
 </script>
 <template>
-  <PageHeading title="治理决策" subtitle="沿用七维与双库治理逻辑，先诊断，再核对计划执行。"
+  <PageHeading title="治理总览" subtitle="完整度优先、七维比较；扫描只产生计划，确认后才执行清理。"
     ><div class="action-row">
       <RouterLink to="/governance/rules" class="button">七维与治理规则</RouterLink
       ><button
@@ -69,7 +73,7 @@ onMounted(load);
         :disabled="op.busy.value || op.uncertain.value"
         @click="confirmation = 'scan'"
       >
-        诊断双库
+        立即治理扫描
       </button>
     </div></PageHeading
   ><OperationState
@@ -79,7 +83,7 @@ onMounted(load);
     :receipt="op.receipt.value"
   />
   <nav class="context-tabs">
-    <RouterLink to="/governance">治理决策</RouterLink
+    <RouterLink to="/governance">治理总览</RouterLink
     ><RouterLink to="/governance/rules">规则与巡检</RouterLink
     ><RouterLink to="/governance/cleanup">目录与残留清理</RouterLink>
   </nav>
@@ -149,7 +153,7 @@ onMounted(load);
     </nav>
     <input v-model="search" aria-label="搜索治理项目" placeholder="搜索作品或原因" />
     <div class="plan-item-list">
-      <article v-for="(item, i) in items.slice(0, 200)" :key="i">
+      <article v-for="(item, i) in items.slice(0, visible)" :key="i">
         <div>
           <strong>{{ item.title || item.name || item.text }}</strong>
           <p>{{ item.reason_label || item.reason || item.detail }}</p>
@@ -166,6 +170,9 @@ onMounted(load);
       </article>
       <p v-if="!items.length" class="muted-text">当前分组暂无项目。</p>
     </div>
+    <button v-if="items.length > visible" class="button" @click="visible += 200">
+      加载更多治理项目（{{ visible }} / {{ items.length }}）
+    </button>
     <details>
       <summary>诊断与一致性证据</summary>
       <EvidenceDetails :value="summary.data.value" />
@@ -202,7 +209,7 @@ onMounted(load);
     v-if="confirmation"
     :title="
       confirmation === 'scan'
-        ? '诊断双库'
+        ? '立即治理扫描'
         : confirmation === 'dry'
           ? '预演治理计划'
           : '执行治理计划'

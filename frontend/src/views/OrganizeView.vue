@@ -113,7 +113,8 @@ watch(
   <nav class="context-tabs">
     <RouterLink to="/organize/workspace">整理工作区</RouterLink
     ><RouterLink to="/organize/automation">整理自动化</RouterLink
-    ><RouterLink to="/settings/cloud">命名与分类设置</RouterLink
+    ><RouterLink to="/organize/naming">自定义命名模板</RouterLink
+    ><RouterLink to="/organize/quality">整理八维</RouterLink
     ><RouterLink to="/tasks">处理记录</RouterLink>
   </nav>
   <OperationState
@@ -200,7 +201,7 @@ watch(
         <span class="eyebrow">整理前核对</span>
         <h2>让归档符合你的习惯</h2>
         <p>命名、分类和输出位置统一配置，当前任务使用已保存的规则。</p>
-        <RouterLink :to="{ path: '/settings/cloud', query: { section: 'naming' } }"
+        <RouterLink :to="'/organize/naming'"
           ><span>命名模板<small>目录与文件如何命名</small></span
           ><span>↗</span></RouterLink
         ><RouterLink :to="{ path: '/settings/cloud', query: { section: 'classification' } }"
@@ -208,6 +209,9 @@ watch(
           ><span>↗</span></RouterLink
         ><RouterLink :to="{ path: '/settings/cloud', query: { section: 'output' } }"
           ><span>STRM 输出<small>NAS 与 Emby 路径</small></span
+          ><span>↗</span></RouterLink
+        ><RouterLink to="/organize/quality"
+          ><span>整理八维与洗版<small>维度排序、版本预览、共存策略</small></span
           ><span>↗</span></RouterLink
         ><RouterLink to="/organize/automation" class="text-link">设置自动整理 →</RouterLink>
       </div>

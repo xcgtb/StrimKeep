@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue';
+import { computed, reactive, ref, watch, onMounted } from 'vue';
 import { request } from '../api/client';
 import { readData, writeData, records, object, uuid, type Data } from '../api/domain';
 import type { MediaCard } from '../types/api';
@@ -32,6 +32,34 @@ const props = defineProps<{ card?: MediaCard }>(),
   selected = ref<Data>(),
   operationId = ref(''),
   link = ref('');
+const filters = reactive({ source: '', resolution: '', video_effect: '', unlocked: '' });
+const allCandidates = computed(() => records(candidates.data.value?.items));
+const filteredCandidates = computed(() =>
+  allCandidates.value.filter(
+    (c) =>
+      (!filters.source || String(c.provider || c.source || '') === filters.source) &&
+      (!filters.resolution || String(c.resolution || c.quality || '') === filters.resolution) &&
+      (!filters.video_effect || String(c.video_effect || '') === filters.video_effect) &&
+      (!filters.unlocked || String(c.unlocked) === filters.unlocked),
+  ),
+);
+function filterOptions(key: string) {
+  return [
+    ...new Set(
+      allCandidates.value
+        .map((c) =>
+          String(
+            key === 'source'
+              ? c.provider || c.source || ''
+              : key === 'resolution'
+                ? c.resolution || c.quality || ''
+                : c[key] || '',
+          ),
+        )
+        .filter(Boolean),
+    ),
+  ];
+}
 const fields: Field[] = [
   { key: 'title', label: '作品名称' },
   {
@@ -202,8 +230,36 @@ useVisiblePoll(
       </p>
     </section>
     <div class="candidate-cards">
+      <div v-if="allCandidates.length" class="filter-panel">
+        <label
+          v-for="(label, key) in {
+            source: '资源来源',
+            resolution: '分辨率',
+            video_effect: '动态范围',
+          }"
+          :key="key"
+          >{{ label
+          }}<select v-model="filters[key]" :aria-label="label">
+            <option value="">全部</option>
+            <option v-for="value in filterOptions(key)" :key="value">{{ value }}</option>
+          </select></label
+        >
+        <label
+          >解锁状态<select v-model="filters.unlocked" aria-label="解锁状态">
+            <option value="">全部</option>
+            <option value="true">已解锁</option>
+            <option value="false">未解锁</option>
+          </select></label
+        >
+        <p class="muted-text">
+          筛选本次返回候选 {{ filteredCandidates.length }} / {{ allCandidates.length }} 项
+        </p>
+      </div>
+      <p v-if="candidates.data.value?.truncated" class="notice-bar">
+        后端本次最多返回 50 项候选，请补充年份、季集等条件缩小搜索范围。
+      </p>
       <article
-        v-for="(c, i) in records(candidates.data.value?.items)"
+        v-for="(c, i) in filteredCandidates"
         :key="String(c.handle || i)"
         class="panel candidate-card"
       >
@@ -217,10 +273,18 @@ useVisiblePoll(
           ><span v-if="c.video_effect">{{ c.video_effect }}</span
           ><span v-if="c.codec">{{ c.codec }}</span
           ><span v-if="c.size">{{ c.size }}</span>
+          <span v-if="c.release_type">{{ c.release_type }}</span
+          ><span v-if="c.release_group">{{ c.release_group }}</span
+          ><span v-if="c.audio">{{ c.audio }}</span
+          ><span v-if="c.subtitles">{{ c.subtitles }}</span>
         </div>
         <p>
-          分享者 {{ c.publisher || '未提供' }} · 积分 {{ c.points || '未提供' }} ·
+          分享者 {{ c.publisher || '未提供' }} · 积分 {{ c.points ?? '未提供' }} ·
           {{ c.unlocked === true ? '已解锁' : c.unlocked === false ? '未解锁' : '解锁状态未知' }}
+        </p>
+        <p v-if="c.file_count || c.unlock_count || c.reviewed_count" class="muted-text">
+          文件数 {{ c.file_count || '未知' }} · 解锁人数 {{ c.unlock_count || '未知' }} · 评价数
+          {{ c.reviewed_count || '未知' }}
         </p>
         <p v-if="c.note" class="muted-text">{{ c.note }}</p>
         <details>
@@ -250,6 +314,9 @@ useVisiblePoll(
         </div>
       </article>
     </div>
+    <p v-if="allCandidates.length && !filteredCandidates.length" class="muted-text">
+      没有符合当前筛选的候选资源。
+    </p>
     <p
       v-if="candidates.data.value && !records(candidates.data.value.items).length"
       class="muted-text"

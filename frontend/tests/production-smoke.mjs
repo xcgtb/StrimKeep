@@ -72,6 +72,10 @@ try {
           'organize/workspace',
           'settings/cloud',
           'resources/share',
+          'organize/naming',
+          'organize/quality',
+          'logs',
+          'workflow',
         ].includes(route) &&
         process.env.STRIMKEEP_SCREENSHOT_DIR
       ) {
@@ -89,7 +93,7 @@ try {
     assert.deepEqual(missing, [], `${name} missing built assets`);
     await context.close();
     console.log(
-      `PASS ${name}: 24 built routes, no page errors, no missing chunks, no horizontal overflow`,
+      `PASS ${name}: ${routes.length} built routes, no page errors, no missing chunks, no horizontal overflow`,
     );
   }
 } finally {

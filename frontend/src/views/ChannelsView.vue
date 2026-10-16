@@ -24,6 +24,7 @@ const cloud = useCloud(),
   op = useOperation(() => cloud.id),
   rules = useRequest<Data>(),
   reader = useRequest<Data>(),
+  catalog = useRequest<Data>(),
   inbox = useRequest<Data>(),
   tab = ref('channels'),
   draft = ref<Data>(),
@@ -116,6 +117,7 @@ async function load() {
     rules.run((signal) => readData(accountPath(aid, 'channels'), signal)),
     reader.run((signal) => readData(accountPath(aid, 'telegram-reader'), signal)),
     loadInbox(),
+    catalog.run((signal) => readData('/api/cloud/resources/catalog', signal)),
   ]);
 }
 function loadInbox() {
@@ -190,6 +192,13 @@ function updateCard(i: number, v: Data) {
       ...draft.value,
       rule_cards: records(draft.value.rule_cards).map((c, j) => (j === i ? v : c)),
     };
+}
+function toggleCatalog(key: 'countries' | 'genres', ids: string[]) {
+  if (!draft.value || op.busy.value || op.uncertain.value) return;
+  const selected = new Set(strings(draft.value[key]));
+  const remove = ids.every((id) => selected.has(id));
+  ids.forEach((id) => (remove ? selected.delete(id) : selected.add(id)));
+  draft.value = { ...draft.value, [key]: [...selected] };
 }
 watch(
   () => cloud.id,
@@ -274,9 +283,50 @@ watch(
         </header>
         <FormFields
           v-model="draft"
-          :fields="fields"
+          :fields="fields.filter((f) => !['countries', 'genres'].includes(f.key))"
           :disabled="op.busy.value || op.uncertain.value"
         /><DirectoryPicker v-model="target" :account-id="cloud.id" label="频道保存目录" />
+        <section class="catalog-filters">
+          <h3 class="detail-section-title">地区与题材筛选</h3>
+          <p class="muted-text">留空表示不限；题材会同时选择后端提供的电影与剧集分类。</p>
+          <p v-if="catalog.error.value" class="inline-error">{{ catalog.error.value }}</p>
+          <h4>允许地区</h4>
+          <div class="source-checkboxes">
+            <button
+              v-for="country in records(catalog.data.value?.countries)"
+              :key="String(country.id)"
+              class="button small"
+              :class="{ active: strings(draft.countries).includes(String(country.id)) }"
+              :aria-pressed="strings(draft.countries).includes(String(country.id))"
+              @click="toggleCatalog('countries', [String(country.id)])"
+            >
+              {{ country.name }}
+            </button>
+          </div>
+          <h4>允许题材</h4>
+          <div class="source-checkboxes">
+            <button
+              v-for="genre in records(catalog.data.value?.genres)"
+              :key="String(genre.name)"
+              class="button small"
+              :class="{
+                active: strings(genre.ids).every((id) => strings(draft?.genres).includes(id)),
+              }"
+              :aria-pressed="strings(genre.ids).every((id) => strings(draft?.genres).includes(id))"
+              @click="toggleCatalog('genres', strings(genre.ids))"
+            >
+              {{ genre.name }}
+            </button>
+          </div>
+          <details>
+            <summary>直接编辑地区代码与题材编号</summary>
+            <FormFields
+              v-model="draft"
+              :fields="fields.filter((f) => ['countries', 'genres'].includes(f.key))"
+              :disabled="op.busy.value || op.uncertain.value"
+            />
+          </details>
+        </section>
         <h3 class="detail-section-title">作品规则卡片</h3>
         <div v-for="(card, i) in records(draft.rule_cards)" :key="i" class="panel repeat-card">
           <FormFields

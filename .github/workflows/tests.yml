@@ -50,7 +50,8 @@ jobs:
           npm --prefix frontend test
           npm --prefix frontend run build
           node dev/tools/verify_frontend.cjs
-          git diff --exit-code -- static
+          # Runtime Docker stage compiles from Vue sources, not checked-in static hashes.
+          # Production entry and generated assets are verified above.
       - name: Install browser
         run: cd frontend && npx playwright install --with-deps chromium --only-shell
       - name: Desktop, mobile and built-path browser tests

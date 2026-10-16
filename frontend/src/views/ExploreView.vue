@@ -4,7 +4,7 @@ import { useRoute } from 'vue-router';
 import { Search, SlidersHorizontal, ArrowDown, Compass } from '@lucide/vue';
 import { mediaApi } from '../api/media';
 import { useRequest } from '../composables/useRequest';
-import { useVisiblePoll } from '../composables/useVisiblePoll';
+import { useLibraryUpdates } from '../composables/useLibraryUpdates';
 import { useSubscriptions } from '../stores/subscriptions';
 import { useUi } from '../stores/ui';
 import { titleOf, posterUrl, badge } from '../composables/format';
@@ -13,7 +13,9 @@ import PosterCard from '../components/PosterCard.vue';
 import LoadState from '../components/LoadState.vue';
 import ModalDialog from '../components/ModalDialog.vue';
 import ResourceSearch from '../components/ResourceSearch.vue';
+import { readData, records, type Data } from '../api/domain';
 const resourceCard = ref<MediaCard>();
+const catalog = useRequest<Data>();
 const route = useRoute(),
   ui = useUi(),
   subscriptions = useSubscriptions(),
@@ -69,9 +71,17 @@ async function updateBadges() {
   badgeController?.abort();
   badgeController = new AbortController();
   try {
-    const response = await mediaApi.badges(cards.value.slice(-200), badgeController.signal);
+    const updates = new Map<string, MediaCard>();
+    let response: ExploreResponse = {};
+    for (let offset = 0; offset < cards.value.length; offset += 200) {
+      response = await mediaApi.badges(
+        cards.value.slice(offset, offset + 200),
+        badgeController.signal,
+      );
+      if (version !== generation) return false;
+      for (const card of response.cards || []) updates.set(`${card.type}:${card.tmdb_id}`, card);
+    }
     if (version !== generation) return;
-    const updates = new Map((response.cards || []).map((c) => [`${c.type}:${c.tmdb_id}`, c]));
     cards.value = cards.value.map((c) => ({ ...c, ...updates.get(`${c.type}:${c.tmdb_id}`) }));
     libraryNotice.value = response.library_error
       ? '片库状态同步失败，请稍后重试。'
@@ -81,6 +91,7 @@ async function updateBadges() {
   } catch (e) {
     if (!(e instanceof DOMException && e.name === 'AbortError') && version === generation)
       libraryNotice.value = (e as Error).message;
+    return false;
   }
 }
 async function toggle(card: MediaCard) {
@@ -116,9 +127,13 @@ watch(
 onMounted(() => {
   void load();
   void loadSubscriptions();
+  void catalog.run((signal) => readData('/api/cloud/resources/catalog', signal));
 });
 onBeforeUnmount(() => badgeController?.abort());
-useVisiblePoll(updateBadges, 10000);
+const live = useLibraryUpdates(async () => {
+  if (request.loading.value || !cards.value.length) return false;
+  return updateBadges();
+});
 </script>
 <template>
   <section class="page-heading">
@@ -183,13 +198,13 @@ useVisiblePoll(updateBadges, 10000);
     ><label
       >题材<select v-model="filters.genre">
         <option value="">全部题材</option>
-        <option>剧情</option>
-        <option>喜剧</option>
-        <option>动作</option>
-        <option>科幻</option>
-        <option>悬疑</option>
-        <option>动画</option>
-        <option>纪录</option>
+        <option
+          v-for="genre in records(catalog.data.value?.genres)"
+          :key="String(genre.name)"
+          :value="genre.name"
+        >
+          {{ genre.name }}
+        </option>
       </select></label
     >
   </div>
@@ -197,6 +212,9 @@ useVisiblePoll(updateBadges, 10000);
     输入片名可同时搜索电影与剧集；当前浏览展示热门电影。
   </p>
   <p v-if="libraryNotice" class="notice-bar" role="status">{{ libraryNotice }}</p>
+  <p v-if="catalog.error.value || live.error.value" class="notice-bar">
+    {{ catalog.error.value || live.error.value }}
+  </p>
   <p v-if="subscriptionError || subscriptions.uncertain" class="notice-bar warning-text">
     {{ subscriptionError || '订阅保存结果待核实，请重新读取订阅后再操作。'
     }}<button class="text-link" @click="loadSubscriptions">重新读取订阅</button>
@@ -210,9 +228,10 @@ useVisiblePoll(updateBadges, 10000);
   />
   <div class="poster-grid">
     <PosterCard
-      v-for="card in cards"
+      v-for="(card, index) in cards"
       :key="`${card.type}:${card.tmdb_id}`"
       :card="card"
+      :priority="index < 6"
       :subscribable="card.type === 'tv'"
       :subscribed="subscriptions.has(card.tmdb_id)"
       :busy="subscriptions.busy || !!subscriptionError || subscriptions.uncertain"

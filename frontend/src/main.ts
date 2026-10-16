@@ -6,6 +6,7 @@ import { onUnauthorized, onAccepted } from './api/client';
 import { useSession } from './stores/session';
 import { useUi } from './stores/ui';
 import './styles/main.css';
+import './styles/template.css';
 import { useTasks } from './stores/tasks';
 const app = createApp(App);
 app.use(createPinia());

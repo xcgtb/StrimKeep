@@ -4,6 +4,7 @@ import { Search, RefreshCw, CheckSquare } from '@lucide/vue';
 import { mediaApi } from '../api/media';
 import { useRequest } from '../composables/useRequest';
 import { useVisiblePoll } from '../composables/useVisiblePoll';
+import { useLibraryUpdates } from '../composables/useLibraryUpdates';
 import { titleOf, posterUrl, date, badge } from '../composables/format';
 import type { LibraryType, LibraryPage, LibraryItem, MediaCard } from '../types/api';
 import PosterCard from '../components/PosterCard.vue';
@@ -22,6 +23,8 @@ import EvidenceDetails from '../components/EvidenceDetails.vue';
 import { readData, records, type Data } from '../api/domain';
 const episodes = useRequest<Data>(),
   comparisonProgress = useRequest<Data>(),
+  nasSearch = useRequest<Data>(),
+  nasKeyword = ref(''),
   refreshMode = ref('');
 async function refreshLibrary() {
   const kind = refreshMode.value;
@@ -166,10 +169,32 @@ async function resync() {
   await load();
 }
 onMounted(() => void load());
-useVisiblePoll(() => {
-  if (offset.value <= 40 && !detailOpen.value && !selectionMode.value && !request.loading.value)
-    return load(false, true);
-}, 30000);
+async function refreshLoaded() {
+  if (request.loading.value || detailOpen.value || operation.busy.value) return false;
+  const count = Math.max(cards.value.length, 40),
+    current = { ...filters };
+  const response = await request.run(async (signal) => {
+    let rows: MediaCard[] = [],
+      result: LibraryPage;
+    do {
+      result = await mediaApi.library(
+        { ...current, offset: rows.length, limit: Math.min(80, count - rows.length) },
+        signal,
+      );
+      rows = [...rows, ...(result.rows || [])];
+    } while (rows.length < count && result.has_more && (result.rows || []).length);
+    return { ...result, rows };
+  });
+  if (!response) return false;
+  cards.value = response.rows || [];
+  total.value = response.total || 0;
+  offset.value = response.next_offset || 0;
+  hasMore.value = !!response.has_more;
+  selectedIds.value = new Set(
+    [...selectedIds.value].filter((id) => cards.value.some((c) => c.id === id)),
+  );
+}
+const live = useLibraryUpdates(refreshLoaded);
 </script>
 <template>
   <PageHeading title="片库映射" subtitle="对照本地与分享资源，查看已入库版本、季集和缺集。"
@@ -197,6 +222,35 @@ useVisiblePoll(() => {
     <h2>TMDB 后台对照进度</h2>
     <EvidenceDetails :value="comparisonProgress.data.value?.progress" />
   </section>
+  <details class="panel nas-library-search">
+    <summary>在 NAS 的 STRM 目录中检索作品</summary>
+    <p class="muted-text">
+      直接按目录名检索本地库和分享库，适用于尚未被 Emby 收录的资源。点击查询时读取目录。
+    </p>
+    <form
+      class="search-toolbar"
+      @submit.prevent="
+        nasSearch.run((signal) =>
+          readData(`/api/search?q=${encodeURIComponent(nasKeyword.trim())}`, signal),
+        )
+      "
+    >
+      <input
+        v-model="nasKeyword"
+        aria-label="NAS 目录关键词"
+        maxlength="200"
+        placeholder="输入作品目录关键词"
+        required
+      />
+      <button class="button" :disabled="!nasKeyword.trim() || nasSearch.loading.value">
+        查询 NAS 目录
+      </button>
+    </form>
+    <p v-if="nasSearch.error.value" class="inline-error">{{ nasSearch.error.value }}</p>
+    <pre v-if="nasSearch.data.value?.text" class="report-preview">{{
+      nasSearch.data.value.text
+    }}</pre>
+  </details>
   <div class="browse-tabs">
     <button
       :class="{ active: filters.media === 'series' }"
@@ -234,6 +288,8 @@ useVisiblePoll(() => {
       <option value="aligned">已对齐</option>
       <option value="ongoing">连载中</option>
       <option value="unmatched">待对照</option>
+      <option value="no_tmdb">未匹配 TMDB</option>
+      <option value="pending">等待对照结果</option>
       <option value="extra">存在多集</option></select
     ><input
       v-model.lazy="filters.category"
@@ -256,7 +312,11 @@ useVisiblePoll(() => {
   </div>
   <p class="data-caption">
     事实快照 {{ date(request.data.value?.facts_ts)
-    }}<span v-if="request.data.value?.stale"> · 缓存待更新</span>
+    }}<span v-if="request.data.value?.stale"> · 缓存待更新</span> ·
+    {{ live.connected.value ? '实时变化已连接' : '变化检查与断线回退已启用' }}
+  </p>
+  <p v-if="live.error.value" class="notice-bar">
+    {{ live.error.value }}<button class="text-link" @click="live.poll">重新读取变化</button>
   </p>
   <div v-if="selectionMode" class="selection-toolbar">
     <span>{{
@@ -319,9 +379,10 @@ useVisiblePoll(() => {
   />
   <div class="poster-grid">
     <PosterCard
-      v-for="card in cards"
+      v-for="(card, index) in cards"
       :key="card.id"
       :card="card"
+      :priority="index < 6"
       :selectable="selectionMode"
       :selected="allSelected || selectedIds.has(card.id!)"
       @select="toggle(card.id)"

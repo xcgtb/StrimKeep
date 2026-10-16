@@ -37,6 +37,8 @@ const states: Record<string, string> = {
   timeout: '核实超时',
   paused: '已暂停',
   unverified: '尚未登记核实',
+  generated: '已生成 STRM · 待入库',
+  failed: '核实失败',
 };
 async function load() {
   if (!cloud.id) return;
@@ -160,7 +162,17 @@ useVisiblePoll(() => {
         </header>
         <p class="path-text">{{ row.path }}</p>
         <p class="muted-text">{{ row.connection_name }} · {{ date(Number(row.updated)) }}</p>
-        <EvidenceDetails :value="row.result" /><button
+        <p v-if="row.current_configuration === false" class="notice-bar">
+          此回执来自旧连接设置，仅作历史参考。
+        </p>
+        <small class="muted-text"
+          >核实尝试 {{ row.attempts ?? 0 }} 次 · 生成 STRM 不等于 Emby 已入库</small
+        >
+        <details v-if="row.result" class="ingestion-evidence">
+          <summary>查看核实依据与原始回执</summary>
+          <EvidenceDetails :value="row.result" />
+        </details>
+        <button
           v-if="row.id && ['timeout', 'paused'].includes(String(row.state))"
           class="button small"
           @click="
@@ -212,6 +224,10 @@ useVisiblePoll(() => {
       </div>
       <section v-if="form" class="panel">
         <h2>编辑入库连接</h2>
+        <p class="muted-text">
+          已有 API Key 不回显原文；编辑时留空保留，只有主动输入新 Key 才替换原值。连接与 STRM
+          映射保存后才生效。
+        </p>
         <FormFields
           v-model="form"
           :fields="fields"

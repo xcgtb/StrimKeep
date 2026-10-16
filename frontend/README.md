@@ -1,10 +1,12 @@
 # StrimKeep Vue 3 前端
 
-正式首页使用 Vue 3 + TypeScript + Vite + Pinia + Vue Router（Hash 路由），共 24 个业务页面。资源与工具页参考 dian115 演示的分组导航、页签与功能卡片组织；没有复制其私有应用代码，也没有添加后端不存在的插件安装器。
+正式首页使用 Vue 3 + TypeScript + Vite + Pinia + Vue Router（Hash 路由），共 27 个业务页面。当前界面以用户提供的 `StrimKeep-UI-Naming-Variables-v2(2).html` 为布局参考：默认白色侧栏、统一深浅主题、七大业务分组、五段工作流、独立命名模板与整理八维工作区。页面数据及写入来自现有 Python API。
 
 ## 使用完整源码包
 
-包内 `static/` 已编译，可直接随现有 Python 应用或 Dockerfile 运行；运行环境不需要 Node。访问 `http://NAS地址:8321/`，使用原管理账号登录。
+后端接口与功能覆盖记录见 [前后端功能审计](../docs/frontend-backend-parity-v1411.md)。片库变更使用 SSE 提示配合变化接口，断线每 15 秒检查；NAS 目录检索、分类统计和观看进度由用户在对应页主动读取。
+
+包内 `static/` 已编译，可直接随现有 Python 应用运行。Dockerfile 会在 Node 构建阶段重新编译 Vue，运行阶段仅使用 Python；NAS 无需安装 Node。访问 `http://NAS地址:8321/`，使用原管理账号登录。
 
 在现有源码目录更新时，用包中的 `frontend/`、`static/`、相关文档和 CI 文件替换对应源码。**整个替换 `static/` 目录**，清除旧的 `static/js/`、`static/css/` 和临时 `static/vue3/`，避免保留无用旧文件。原有部署配置、数据目录、数据库、密码和媒体挂载保持使用原值。预编译文件不是可双击运行的离线网页，需要当前 StrimKeep 后端。
 

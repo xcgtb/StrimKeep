@@ -48,6 +48,10 @@ test('theme and responsive navigation work without horizontal overflow', async (
   );
   if (await page.getByRole('button', { name: '展开导航' }).isVisible())
     await page.getByRole('button', { name: '展开导航' }).click();
+  const mediaGroup = page
+    .getByRole('navigation', { name: '主导航' })
+    .getByRole('button', { name: /片库管理/ });
+  if ((await mediaGroup.getAttribute('aria-expanded')) !== 'true') await mediaGroup.click();
   await page
     .getByRole('navigation', { name: '主导航' })
     .getByRole('link', { name: '追更订阅' })
@@ -211,9 +215,9 @@ test('mobile shortcut dock opens resources and the full navigation', async ({ pa
   await fixtures(page);
   await page.goto('/#/dashboard');
   const dock = page.getByRole('navigation', { name: '快捷导航' });
-  await dock.getByRole('link', { name: '资源', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '资源与工具', exact: true })).toBeVisible();
-  await dock.getByRole('button', { name: '打开全部功能' }).click();
+  await dock.getByRole('link', { name: '接收', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '资源接收', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '展开导航' }).click();
   await page
     .getByRole('navigation', { name: '主导航' })
     .getByRole('link', { name: '分享免转存', exact: true })
@@ -228,8 +232,31 @@ test('compact tablet navigation stays above its backdrop', async ({ page }) => {
   await page.getByRole('button', { name: '展开导航' }).click();
   await page
     .getByRole('navigation', { name: '主导航' })
-    .getByRole('link', { name: '媒体整理', exact: true })
+    .getByRole('link', { name: '影视整理', exact: true })
     .click();
   await expect(page.getByRole('heading', { name: '媒体整理', exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test('naming variable guide inserts into the selected real backend settings draft', async ({
+  page,
+}) => {
+  const state = await fixtures(page);
+  await page.goto('/#/organize/naming');
+  await expect(page.getByRole('heading', { name: '模板变量词典 · 中文解释与示例' })).toBeVisible();
+  const input = page.getByLabel('搜索模板变量');
+  await input.fill('年份');
+  await expect(page.getByText('上映／首播年份')).toBeVisible();
+  expect(state.writes).toHaveLength(0);
+});
+
+test('quality rule presets retain separate eight-dimensional settings and source-size dimension', async ({
+  page,
+}) => {
+  const state = await fixtures(page);
+  await page.goto('/#/organize/quality');
+  await expect(page.getByRole('button', { name: '恢复八维默认草稿' })).toBeVisible();
+  await page.getByRole('button', { name: '恢复八维默认草稿' }).click();
+  await expect(page.getByText('真实源文件大小')).toBeVisible();
+  expect(state.writes).toHaveLength(0);
 });

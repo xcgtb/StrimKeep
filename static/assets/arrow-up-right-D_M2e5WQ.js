@@ -1,1 +1,0 @@
-import{t as e}from"./createLucideIcon-CXSMmP7g.js";var t=e({name:`arrow-up-right`,size:24,node:[[`path`,{d:`M7 7h10v10`,key:`1tivn9`}],[`path`,{d:`M7 17 17 7`,key:`1vkiza`}]]});export{t};

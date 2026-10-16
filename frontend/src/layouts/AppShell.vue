@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onBeforeUnmount } from 'vue';
+import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   Activity,
@@ -9,12 +9,14 @@ import {
   X,
   LogOut,
   ChevronRight,
+  ChevronDown,
   Search,
   LayoutDashboard,
-  Compass,
   Layers,
   ListTodo,
   Settings2,
+  ArrowDownUp,
+  LibraryBig,
 } from '@lucide/vue';
 import { useSession } from '../stores/session';
 import { useUi } from '../stores/ui';
@@ -28,12 +30,36 @@ const route = useRoute(),
   open = ref(false),
   searchOpen = ref(false),
   search = ref('');
+const expandedGroups = ref<Set<string>>(new Set(['工作台', '媒体加工']));
+function expandMobileMenu() {
+  expandedGroups.value = new Set(navigation.map((group) => group.group));
+  open.value = true;
+}
+function toggleGroup(name: string) {
+  const next = new Set(expandedGroups.value);
+  next.has(name) ? next.delete(name) : next.add(name);
+  expandedGroups.value = next;
+}
+watch(
+  () => route.path,
+  (path) => {
+    const group = navigation.find((g) => g.items.some((item) => item.to === path));
+    if (group && !expandedGroups.value.has(group.group)) {
+      expandedGroups.value = new Set([...expandedGroups.value, group.group]);
+    }
+  },
+  { immediate: true },
+);
 const dock = [
   { to: '/dashboard', name: '总览', icon: LayoutDashboard },
-  { to: '/media/explore', name: '探索', icon: Compass },
-  { to: '/resources', name: '资源', icon: Layers },
+  { to: '/resources/receive', name: '接收', icon: Layers },
+  { to: '/organize/workspace', name: '整理', icon: ArrowDownUp },
+  { to: '/media/library', name: '片库', icon: LibraryBig },
   { to: '/tasks', name: '任务', icon: ListTodo },
 ];
+const activeGroup = computed(() =>
+  navigation.find((g) => g.items.some((i) => i.to === route.path)),
+);
 const version = computed(() => session.runtime.version?.match(/^\d+\.\d+\.\d+/)?.[0] || '本地开发');
 const searchResults = computed(() =>
   allNavigation.filter((item) => (item.group + item.name).includes(search.value.trim())),
@@ -67,7 +93,7 @@ onMounted(() => {
 onBeforeUnmount(() => document.removeEventListener('keydown', keys));
 </script>
 <template>
-  <div class="app-shell">
+  <div class="app-shell template-shell">
     <button v-if="open" class="nav-scrim" aria-label="关闭导航" @click="open = false"></button>
     <aside class="sidebar" :class="{ expanded: open }">
       <RouterLink to="/dashboard" class="brand" @click="open = false"
@@ -78,9 +104,18 @@ onBeforeUnmount(() => document.removeEventListener('keydown', keys));
       </button>
       <nav aria-label="主导航">
         <div v-for="group in navigation" :key="group.group" class="nav-group">
-          <p>{{ group.group }}</p>
+          <button
+            type="button"
+            class="nav-group-toggle"
+            :aria-expanded="expandedGroups.has(group.group)"
+            @click="toggleGroup(group.group)"
+          >
+            <span>{{ group.group }}</span
+            ><span class="nav-group-count">{{ group.items.length }}</span
+            ><ChevronDown :size="14" :class="{ expanded: expandedGroups.has(group.group) }" />
+          </button>
           <RouterLink
-            v-for="item in group.items"
+            v-for="item in expandedGroups.has(group.group) ? group.items : []"
             :key="item.to"
             :to="item.to"
             :class="{ current: route.path === item.to }"
@@ -105,7 +140,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', keys));
     <div class="workspace">
       <header class="topbar">
         <div class="breadcrumb">
-          <button class="icon-button mobile-menu" aria-label="展开导航" @click="open = true">
+          <button class="icon-button mobile-menu" aria-label="展开导航" @click="expandMobileMenu">
             <Menu :size="21" /></button
           ><span>{{ route.meta.group }}</span
           ><ChevronRight :size="14" /><strong>{{ route.meta.title }}</strong>
@@ -134,6 +169,15 @@ onBeforeUnmount(() => document.removeEventListener('keydown', keys));
         </div>
       </header>
       <main id="main-content" class="page">
+        <nav v-if="activeGroup" class="module-chips" aria-label="当前模块页面">
+          <RouterLink
+            v-for="item in activeGroup.items"
+            :key="item.to"
+            :to="item.to"
+            :class="{ current: item.to === route.path }"
+            >{{ item.name }}</RouterLink
+          >
+        </nav>
         <RouterView v-slot="{ Component }"
           ><component :is="Component" :key="route.path"
         /></RouterView>
@@ -141,16 +185,14 @@ onBeforeUnmount(() => document.removeEventListener('keydown', keys));
       <footer class="page-footer">StrimKeep <span>接收 · 整理 · 入库 · 治理</span></footer>
     </div>
   </div>
-  <nav class="mobile-dock" aria-label="快捷导航">
+  <nav v-if="!open" class="mobile-dock" aria-label="快捷导航">
     <RouterLink
       v-for="item in dock"
       :key="item.to"
       :to="item.to"
       :class="{ current: route.path === item.to }"
       ><component :is="item.icon" :size="20" /><span>{{ item.name }}</span></RouterLink
-    ><button @click="open = true" aria-label="打开全部功能">
-      <Menu :size="20" /><span>全部</span>
-    </button>
+    >
   </nav>
   <ModalDialog v-if="searchOpen" title="搜索功能" @close="searchOpen = false"
     ><input

@@ -4,19 +4,25 @@ import { get, post, ApiError } from '../api/client';
 import { readData, writeData, object, type Data } from '../api/domain';
 import { useRequest } from '../composables/useRequest';
 import { useOperation } from '../composables/useOperation';
+import { useVisiblePoll } from '../composables/useVisiblePoll';
+import { date } from '../composables/format';
 import { useUi } from '../stores/ui';
 import PageHeading from '../components/PageHeading.vue';
 import FormFields, { type Field } from '../components/FormFields.vue';
 import ConfirmAction from '../components/ConfirmAction.vue';
 import EvidenceDetails from '../components/EvidenceDetails.vue';
 import OperationState from '../components/OperationState.vue';
+import ModalDialog from '../components/ModalDialog.vue';
 interface ConfigResponse {
+  masked?: boolean;
+  sensitive_keys?: string[];
   config: Record<string, string>;
   env_overridden: string[];
   skipped_env?: string[];
 }
 const request = useRequest<ConfigResponse>(),
   ingest = useRequest<Data>(),
+  ingestStatus = useRequest<Data>(),
   op = useOperation(),
   ui = useUi(),
   form = ref<Data>({}),
@@ -25,7 +31,10 @@ const request = useRequest<ConfigResponse>(),
   testing = ref(''),
   result = ref(''),
   uncertain = ref(false),
-  confirmation = ref('');
+  confirmation = ref(''),
+  testOpen = ref(false),
+  testedService = ref('');
+const secretKeys = new Set(['emby_key', 'tmdb_key', 'telegram_bot_token', 'http_proxy_password']);
 const switchOptions = [
   { value: '0', label: '关闭' },
   { value: '1', label: '开启' },
@@ -133,19 +142,41 @@ const ingestFields: Field[] = [
   { key: 'reconcile_hours', label: '全量校准间隔（小时）', type: 'number', min: 1, max: 168 },
 ];
 const changed = computed(() =>
-  Object.keys(form.value).filter(
-    (k) =>
-      String(form.value[k] ?? '') !== String(request.data.value?.config[k] ?? '') &&
-      !request.data.value?.env_overridden.includes(k),
-  ),
+  Object.keys(form.value).filter((key) => {
+    if (request.data.value?.env_overridden.includes(key)) return false;
+    if (secretKeys.has(key)) return String(form.value[key] || '').length > 0;
+    return String(form.value[key] ?? '') !== String(request.data.value?.config[key] ?? '');
+  }),
 );
+function hasSecret(key: string): boolean {
+  const value = String(request.data.value?.config?.[key] || '');
+  return !!value && (value.includes('****') || /^\*+$/.test(value));
+}
+function visibleFields(fields: Field[]): Field[] {
+  return fields.map((field) => {
+    const controlled = !!request.data.value?.env_overridden.includes(field.key);
+    const secretNote =
+      field.type === 'secret'
+        ? `${hasSecret(field.key) ? '✓ 已保存凭据' : '尚未配置'}；留空不会覆盖原密钥。`
+        : '';
+    return {
+      ...field,
+      disabled: controlled || field.disabled,
+      hint: controlled
+        ? '由 Docker/YAML 环境变量控制，请在部署配置中修改'
+        : [secretNote, field.hint].filter(Boolean).join(' '),
+    };
+  });
+}
 const callback = computed(() => {
   const token = request.data.value?.config.ingest_webhook_token;
   return token ? `${location.origin}/api/emby/webhook?token=${encodeURIComponent(token)}` : '';
 });
 function fill(response: ConfigResponse) {
   form.value = Object.fromEntries(
-    groups.flatMap((g) => g.fields).map((f) => [f.key, response.config[f.key] ?? '']),
+    groups
+      .flatMap((g) => g.fields)
+      .map((f) => [f.key, secretKeys.has(f.key) ? '' : (response.config[f.key] ?? '')]),
   );
 }
 async function load() {
@@ -156,6 +187,10 @@ async function load() {
     ui.setAppearance(response.config);
   }
   await loadIngest();
+  await loadIngestStatus();
+}
+function loadIngestStatus() {
+  return ingestStatus.run((signal) => readData('/api/ingest/status', signal));
 }
 async function loadIngest() {
   const r = await ingest.run((signal) => readData('/api/ingest/settings', signal));
@@ -191,10 +226,17 @@ async function save() {
   }
 }
 async function test(service: string) {
+  testOpen.value = true;
+  testedService.value = groups.find((g) => g.test === service)?.title || service;
   testing.value = service;
   result.value = '';
   try {
-    const r = await post<{ message?: string }>(`/api/config/test/${service}`, form.value);
+    const body = Object.fromEntries(
+      Object.entries(form.value).filter(
+        ([key, value]) => !secretKeys.has(key) || String(value || '').trim().length > 0,
+      ),
+    );
+    const r = await post<{ message?: string }>(`/api/config/test/${service}`, body);
     result.value = r.message || '连接测试完成';
   } catch (e) {
     result.value = (e as Error).message;
@@ -231,6 +273,12 @@ function scrollTo(key: string) {
   document.getElementById(`settings-${key}`)?.scrollIntoView({ behavior: 'smooth' });
 }
 onMounted(load);
+useVisiblePoll(async () => {
+  await Promise.allSettled([
+    loadIngestStatus(),
+    ingest.run((signal) => readData('/api/ingest/settings', signal)),
+  ]);
+}, 15000);
 </script>
 <template>
   <PageHeading title="连接与设置" subtitle="集中管理服务、通知、网络、实时入库与外观，保存后生效。"
@@ -250,6 +298,9 @@ onMounted(load);
     ><RouterLink to="/settings/external">外部服务</RouterLink>
   </nav>
   <OperationState :busy="request.loading.value" :error="request.error.value" />
+  <p v-if="request.data.value?.env_overridden.length" class="notice-bar">
+    部分连接参数由 Docker/YAML 环境变量控制，已锁定相关输入项；界面显示不代表凭据丢失。
+  </p>
   <p v-if="uncertain" class="notice-bar">
     保存结果待核实。<button class="text-link" @click="load">重新读取已保存配置</button>
   </p>
@@ -275,15 +326,7 @@ onMounted(load);
         </header>
         <FormFields
           v-model="form"
-          :fields="
-            group.fields.map((f) => ({
-              ...f,
-              disabled: request.data.value!.env_overridden.includes(f.key),
-              hint: request.data.value!.env_overridden.includes(f.key)
-                ? '由部署环境变量控制'
-                : f.hint,
-            }))
-          "
+          :fields="visibleFields(group.fields)"
           :disabled="saving || !!testing || uncertain"
         /><button
           v-if="group.test"
@@ -347,11 +390,41 @@ onMounted(load);
             重新读取监控状态
           </button>
         </div>
-        <EvidenceDetails :value="ingest.data.value?.webhook" />
+        <section class="ingest-monitor-status">
+          <h3 class="detail-section-title">监控状态与最近入库缓存</h3>
+          <p v-if="ingestStatus.error.value" class="inline-error">{{ ingestStatus.error.value }}</p>
+          <p v-else-if="ingestStatus.data.value?.has_cache">
+            最近更新 {{ date(Number(ingestStatus.data.value.ts)) }} · 距今
+            {{ ingestStatus.data.value.age_sec }} 秒
+          </p>
+          <p v-else class="muted-text">尚无入库统计缓存。</p>
+          <p v-if="ingestStatus.data.value?.warning" class="notice-bar">
+            {{ ingestStatus.data.value.warning }}
+          </p>
+          <EvidenceDetails :value="ingest.data.value?.webhook" />
+          <details v-if="ingestStatus.data.value?.stats">
+            <summary>最近入库统计</summary>
+            <EvidenceDetails :value="ingestStatus.data.value.stats" />
+          </details>
+        </section>
       </section>
     </div>
   </div>
-  <pre v-if="result" class="test-result" role="status">{{ result }}</pre>
+  <ModalDialog v-if="testOpen" :title="`${testedService} · 连接测试`" @close="testOpen = false">
+    <p v-if="testing" class="notice-bar">正在调用后端测试接口，请稍候…</p>
+    <p v-else class="notice-bar" role="status">
+      {{ result || '接口未返回测试信息，请查看运行日志。' }}
+    </p>
+    <p class="data-caption">
+      本结果来自 StrimKeep 的真实后端连接检测；不会回显已保存 API Key 或 Token。
+    </p>
+    <template #footer
+      ><button class="button" @click="testOpen = false">关闭</button
+      ><RouterLink to="/logs" class="button" @click="testOpen = false"
+        >查看实时日志</RouterLink
+      ></template
+    >
+  </ModalDialog>
   <ConfirmAction
     v-if="confirmation"
     title="确认入库监控配置"

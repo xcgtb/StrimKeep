@@ -22,9 +22,9 @@ export function badge(card: MediaCard) {
   const info = card.tmdb_info;
   if (info?.match_status === 'missing') return `缺 ${Math.abs(info.diff || 0)} 集`;
   const labels: Record<string, string> = {
-    aligned: '已对齐',
+    aligned: '完整',
     ongoing: '连载中',
-    extra: '存在多集',
+    extra: '超集',
     unmatched: '待对照',
     no_tmdb: '未匹配',
     pending: '对照中',

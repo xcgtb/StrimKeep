@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useId } from 'vue';
 import type { Data } from '../api/domain';
 export interface Field {
   key: string;
@@ -11,6 +12,7 @@ export interface Field {
   hint?: string;
   disabled?: boolean;
 }
+const prefix = useId();
 const props = defineProps<{ modelValue: Data; fields: Field[]; disabled?: boolean }>();
 const emit = defineEmits<{ 'update:modelValue': [value: Data] }>();
 function set(field: Field, event: Event) {
@@ -35,12 +37,15 @@ function value(field: Field) {
     <label
       v-for="field in fields"
       :key="field.key"
+      :for="`${prefix}-${field.key}`"
       :class="{
         'checkbox-label': field.type === 'check',
         'wide-field': field.type === 'area' || field.type === 'lines',
       }"
       ><template v-if="field.type === 'check'"
         ><input
+          :id="`${prefix}-${field.key}`"
+          :aria-label="field.label"
           type="checkbox"
           :checked="!!modelValue[field.key]"
           :disabled="disabled || field.disabled"
@@ -50,6 +55,8 @@ function value(field: Field) {
         >{{ field.label
         }}<select
           v-if="field.type === 'select'"
+          :id="`${prefix}-${field.key}`"
+          :aria-label="field.label"
           :value="value(field)"
           :disabled="disabled || field.disabled"
           @change="set(field, $event)"
@@ -59,6 +66,8 @@ function value(field: Field) {
           </option></select
         ><textarea
           v-else-if="field.type === 'area' || field.type === 'lines'"
+          :id="`${prefix}-${field.key}`"
+          :aria-label="field.label"
           :value="value(field)"
           rows="4"
           :disabled="disabled || field.disabled"
@@ -66,6 +75,8 @@ function value(field: Field) {
         ></textarea
         ><input
           v-else
+          :id="`${prefix}-${field.key}`"
+          :aria-label="field.label"
           :value="value(field)"
           :type="field.type === 'secret' ? 'password' : field.type === 'number' ? 'number' : 'text'"
           :min="field.min"
