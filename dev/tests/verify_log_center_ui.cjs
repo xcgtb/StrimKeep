@@ -54,6 +54,8 @@ async function respond(task,rows,cursor){const req=requests.shift();req.resolve(
  assert(nodes.recordsList.children.at(-1).html.includes('重命名'));
  console.log('PASS module/keyword filters discard stale replies, reset cursor and label cloud stages');
  const evidence=ctx.runtimeLogDetails({details:{job_id:'a'.repeat(32),status:'dispatched',file_id:'4',sha1:'B'.repeat(40),elapsed_ms:1234,source_name:'<script>secret</script>',cookie:'must-not-display'}});
+ const counts=ctx.runtimeLogDetails({details:{event:'action_plan',status:'finished',directory_count:2,video_count:5,renamed_count:5,failed_count:0}});
+ assert(counts.includes('动作规划')&&counts.includes('目标 / 子目录数')&&counts.includes('视频数')&&counts.includes('计划重命名数')&&counts.includes('异常数量'),'phase counters need readable Chinese labels');
  assert(evidence.includes('已发送，待核实')&&evidence.includes('1.23 秒')&&evidence.includes('115 文件 ID'));
  assert(evidence.includes('&lt;script&gt;')&&!evidence.includes('<script>')&&!evidence.includes('must-not-display'));
  assert(evidence.includes('focusRuntimeTask'));

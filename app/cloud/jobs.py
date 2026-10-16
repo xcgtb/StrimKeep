@@ -214,10 +214,33 @@ def _execute(job_id):
 
 
 def notify(job_id, kind, state, message):
-    from app.cloud import settings
+    from app.cloud import settings, notifications
 
     cfg = settings.get()
     category = {"intake":"transfer", "transfer":"transfer", "organize":"organize", "workflow":"organize", "categories":"organize", "sync":"strm", "publish":"strm", "share_strm":"strm", "channel":"channel", "maintenance":"maintenance"}.get(kind, "organize")
+    job = store.job(job_id)
+    result = (job or {}).get("result", {})
+    operation = result.get('organization') or result
+    notice_key = 'notification'
+    if kind == 'publish':
+        combined = notifications.deferred_result(job_id)
+        if combined is None:
+            events.emit('notify','等待本批延时 STRM 发布收尾，暂不发送零散通知',job_id)
+            return
+        job_id, operation = combined
+        notice_key = 'notification:deferred'
+        state = 'needs_review' if operation['errors'] else 'success'
+        message = '延时 STRM 批量完成' if not operation['errors'] else '延时 STRM 部分项目需要处理'
+    if operation.get('deferred') and not operation.get('generated'):
+        events.emit('strm','已安排延时 STRM 发布；落盘后统一发送海报与结果',job_id,details={'event':'deferred','status':'queued','count':len(operation['deferred'])})
+        return
+    if kind in ('organize','workflow','sync','share_strm') and state == 'success' and not any(operation.get(k) for k in ('files','unknown','generated','deferred','errors','skipped','refresh_pending')) and not operation.get('reconciliation',{}).get('removed'):
+        events.emit('strm','本次没有新增或更新内容，跳过 STRM 通知与 Emby 刷新',job_id,details={'event':'empty_batch','status':'skipped','count':0})
+        return
+    # A combined organize+STRM job follows the STRM switch for its result;
+    # the earlier work poster independently follows notify_organize.
+    if operation.get('generated') or operation.get('deferred'):
+        category = 'strm'
     if not cfg["notify_enabled"] or not cfg["notify_"+category]:
         reason = '网盘任务通知总开关 notify_enabled 已关闭' if not cfg['notify_enabled'] else '分模块通知 notify_'+category+' 已关闭'
         events.emit('notify','此类任务通知已关闭，本次不发送：'+reason,job_id)
@@ -235,46 +258,20 @@ def notify(job_id, kind, state, message):
         "share_strm": "分享免转存 STRM", "intake": "资源接收", "channel": "频道接收", "maintenance": "日常维护",
     }
     try:
-        job = store.job(job_id)
         text = "115 " + names.get(kind, kind) + "：" + html.escape(message)
-        result = (job or {}).get("result", {})
-        operation=result.get('organization') or result
         generated=operation.get('generated',[])
-        errors=operation.get('errors',[])
-        if kind in ('workflow','organize','sync','publish','share_strm'):
-            text+='\nSTRM 更新：'+str(len(generated))+' 个\n异常：'+str(len(errors))+' 个'
-            if operation.get('deferred'):text+='\n等待联动生成：'+str(len(operation['deferred']))+' 项'
-            if generated:text+='\n生成完成；Emby 实际入库以确认通知为准。'
-        sent=bool(notify_telegram(text))
-        if cfg['notify_strm_details'] and generated:
-            paths=[]
-            for item in generated:
-                path=item.get('path','') if isinstance(item,dict) else item
-                if path:paths.append(('🔗',str(path)))
-                asset=store.asset(item.get('asset_id','')) if isinstance(item,dict) and item.get('asset_id') else None
-                if asset:
-                    paths.extend(('⬇️',str(v['path'])) for v in asset['payload'].get('owned',[]) if v.get('path'))
-            paths=list(dict.fromkeys(paths))
-            batches=[paths[i:i+20] for i in range(0,len(paths),20)]
-            for index,chunk in enumerate(batches,1):
-                detail='📄 STRM 文件明细 '+str(index)+'/'+str(len(batches))+'\n'
-                detail+='\n'.join(mark+' '+html.escape(path) for mark,path in chunk)
-                if not notify_telegram(detail):sent=False;break
+        rows=[]
+        if kind in ('workflow','organize','sync','publish','share_strm') or result.get('organization'):
+            text, rows = notifications.batch_result(operation,state,message)
+        sent=notifications.deliver(job_id, notice_key, lambda: notify_telegram(text))
+        if sent and cfg['notify_strm_details'] and generated:
+            for index, detail in enumerate(notifications.detail_batches(rows),1):
+                if not notifications.deliver(job_id, notice_key+':details:'+str(index), lambda: notify_telegram(detail)):
+                    sent=False
+                    break
     except Exception:
         sent = False
     events.emit('notify','任务通知已发送' if sent else '任务通知发送失败或结果未知，请核对机器人配置',job_id,level='INFO' if sent else 'WARNING')
-    with store.db() as con:
-        con.execute(
-            "INSERT OR REPLACE INTO cloud_steps VALUES(?,?,?,?,?,?)",
-            (
-                job_id,
-                "notification",
-                "verified" if sent else "failed",
-                "{}",
-                store.encode({"sent": sent}),
-                time.time(),
-            ),
-        )
 
 
 def details(job_id):
@@ -462,6 +459,10 @@ def _loop():
                     while not task.done.wait(0.5):
                         if _STOP.is_set():
                             return
+                        # Scans must continue while organization/metadata work
+                        # is running; this scheduler never submits 115 writes.
+                        from app.cloud import emby_library
+                        emby_library.schedule()
         except Exception:
             log.error("网盘任务调度失败，保留待处理记录")
         _WAKE.wait(2)

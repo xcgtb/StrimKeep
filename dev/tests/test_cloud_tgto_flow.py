@@ -123,7 +123,7 @@ def test_compatibility_share_strm_command_does_not_transfer(receiving):
     assert not receiving.remote.writes
 
 
-def test_confirmed_season_is_one_card_with_paths_and_counts(receiving,monkeypatch):
+def test_confirmed_season_updates_web_without_another_card(receiving,monkeypatch):
     connection(receiving);settings.save({'notify_enabled':True,'nfo_enabled':False})
     origin=jobs.enqueue('workflow',{'account_id':receiving.id})
     token=events._JOB.set(origin)
@@ -141,14 +141,9 @@ def test_confirmed_season_is_one_card_with_paths_and_counts(receiving,monkeypatc
     monkeypatch.setattr(emby,'confirmed_item',lambda *a:{'Id':'55'})
     for i in range(3):emby.poll_one()
     assert not sent.called,'wait for the publication batch to finish'
-    with store.db() as con:
-        con.execute("UPDATE cloud_jobs SET state='success' WHERE id=?",(origin,))
-        group=json.loads(con.execute('SELECT payload FROM cloud_ingestion LIMIT 1').fetchone()[0])['notification_group']
-    c=services.get(receiving.id,'emby_library',emby.DEFAULT)['config']['connections'][0]
-    notifications.send_confirmed(group,c);notifications.send_confirmed(group,c)
-    assert sent.call_count==1
-    text=sent.call_args.args[0]
-    assert '&lt;Season&gt;' in text and 'E01-E02, E05' in text and '文件：3 个' in text and '3.00 GB' in text and 'TMDB 44' in text
+    assert all(r['state']=='confirmed' for r in emby.records(receiving.id))
+    emby.poll_batch()
+    sent.assert_not_called()
     assert all(path=='/Library/Media/Updated' and args['body']['Updates'][0]['UpdateType']=='Created' for path,args in scans)
 
 
@@ -163,18 +158,19 @@ def test_strm_details_are_batched_without_truncating_files(receiving,monkeypatch
     assert all(sum(p['path'].replace('<','&lt;').replace('>','&gt;') in v for v in sent[1:])==1 for p in paths)
 
 
-@pytest.mark.parametrize('master,module,connection_notify,reason',[
-    (False,True,True,'notify_enabled'),
-    (True,False,True,'notify_strm'),
-    (True,True,False,'Emby 连接'),
+@pytest.mark.parametrize('master,module,reason',[
+    (False,True,'notify_enabled'),
+    (True,False,'notify_organize'),
 ])
-def test_disabled_arrival_notification_records_which_switch_blocked_it(receiving,monkeypatch,master,module,connection_notify,reason):
-    settings.save({'notify_enabled':master,'notify_strm':module})
+def test_disabled_poster_records_which_switch_blocked_it(receiving,monkeypatch,master,module,reason):
+    settings.save({'notify_enabled':master,'notify_organize':module})
     logs=[]
     monkeypatch.setattr(events,'emit',lambda *args,**kw:logs.append(args))
     sent=Mock();monkeypatch.setattr(tg,'notify_telegram_card',sent)
-    group='disabled-fixture'
-    notifications.send_confirmed(group,{'notify':connection_notify})
-    notifications.send_confirmed(group,{'notify':connection_notify})
+    media=recognition.recognize('Movie.2024.1080p.mkv')
+    posters=notifications.BatchPosters(jobs.enqueue('organize',{}),[{'media':media}])
+    posters.verified(0,receiving.remote.info('4'),media)
+    posters.flush()
+    logs=[row for row in logs if row[0]=='notify']
     assert len(logs)==1 and reason in logs[0][1]
     sent.assert_not_called()

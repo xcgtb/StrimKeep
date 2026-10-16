@@ -205,7 +205,7 @@ def fetch_artwork(poster_path):
         raise CloudError("海报下载失败，可稍后重新同步", 502) from None
 
 
-def generate(account_id, row, media, scope_cid=None, companions=None, provider=None, source_context=None):
+def generate(account_id, row, media, scope_cid=None, companions=None, provider=None, source_context=None, expected_output=None):
     from app.cloud import events
     events.emit('strm','开始生成 STRM：'+row['name'])
     companions = companions or []
@@ -219,10 +219,14 @@ def generate(account_id, row, media, scope_cid=None, companions=None, provider=N
     base = root("share") if share else root()
     file_key = "share:" + source_context["share_id"] + ":" + row["id"] if share else row["id"]
     def output(path, data, previous=None):
+        if expected_output and any(settings.get()[k] != v for k,v in expected_output.items()):
+            raise CloudError('发布期间输出配置变化，请重新预览同步',409)
         if share:
             return publish(path, data, previous, base=base)
         return publish(path, data, previous)
     cfg = settings.get()
+    if expected_output and any(cfg[k] != v for k,v in expected_output.items()):
+        raise CloudError('队列等待期间输出配置变化，请重新预览同步',409)
     relative = (
         media["directory"]
         + "/"
@@ -367,6 +371,12 @@ def generate(account_id, row, media, scope_cid=None, companions=None, provider=N
                 (store.encode(payload), time.time(), asset_id),
             )
         published = store.asset(asset_id)
+        # A successful transport/write is not enough for a ready poster or an
+        # old-source replacement: re-read the bound file on the same mount.
+        verified_root = root('share') if share else root()
+        verified_path = target(verified_root, relative)
+        if (str(verified_root) != payload['output_root'] or [verified_root.stat().st_dev, verified_root.stat().st_ino] != payload['root_identity'] or not verified_path.is_file() or digest(verified_path.read_bytes()) != payload['digest'] or (expected_output and any(settings.get()[k] != v for k,v in expected_output.items()))):
+            raise CloudError('STRM 写入后挂载或内容核验失败，请检查输出目录',409)
         from app.cloud import emby_library
         emby_library.watch(published)
         events.emit('strm','STRM 已发布：'+published['local_path']+(' · 分享库' if share else ' · 115网盘'),details={'status':'published','asset_id':asset_id,'account_id':account_id,'file_id':row['id'],'sha1':row['sha1'],'size':row['size'],'path':published['local_path'],'tmdb_id':media['tmdb_id'],'source_count':1+len(companions),'result':'已写入并登记；实际 Emby 入库另行确认'})

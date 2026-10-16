@@ -72,3 +72,22 @@ def test_timed_retry_resubmits_unconfirmed_paths_without_full_library_scan(cloud
     emby.poll_one()
     assert len(calls) == 2
     assert all(path == "/Library/Media/Updated" and len(kw["body"]["Updates"]) == 3 for path,kw in calls)
+
+
+def test_worker_advances_a_bounded_batch_without_any_telegram_card(cloud, monkeypatch):
+    assets(cloud, count=18)
+    settings.save({'notify_enabled': True})
+    from app import tg
+    sender = Mock(side_effect=AssertionError('Emby receipts must stay web-only'))
+    monkeypatch.setattr(tg, 'notify_telegram_card', sender)
+    monkeypatch.setattr(tg, 'notify_telegram', sender)
+    monkeypatch.setattr(emby, 'request', lambda *args, **kw: {})
+    monkeypatch.setattr(emby, 'confirmed_item', lambda *args: {'Id': 'confirmed'})
+    # Deterministic clock: exercise the quantity bound independently of timing.
+    monkeypatch.setattr(emby.time, 'monotonic', lambda: 1)
+    emby.poll_batch()
+    records = emby.records(cloud.id)
+    assert sum(r['state'] == 'confirmed' for r in records) == 16
+    emby.poll_batch()
+    assert all(r['state'] == 'confirmed' for r in emby.records(cloud.id))
+    sender.assert_not_called()

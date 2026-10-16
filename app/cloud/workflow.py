@@ -19,6 +19,7 @@ def verify_account(payload):
 
 
 def walk(provider, cid, limit=20000, exclude=None, job_id=None, directory_rows=None, source_ids=None):
+    from app.cloud import events
     queue = [numeric(cid)]
     seen = set()
     result = []
@@ -30,12 +31,16 @@ def walk(provider, cid, limit=20000, exclude=None, job_id=None, directory_rows=N
         seen.add(parent)
         if len(seen) > 20000:
             raise CloudError("目录过大，请选择更具体的目录", 413)
+        started = time.monotonic()
+        events.emit('organize','开始读取目录：'+parent,job_id,details={'event':'directory_read','status':'started','parent_id':parent})
         rows = provider.list(parent)
         if parent == str(cid) and source_ids is not None:
             selected = set(source_ids)
             rows = [r for r in rows if r["id"] in selected]
             if {r["id"] for r in rows} != selected:
                 raise CloudError("本次转存内容已移动或缺失，请重新预览", 409)
+        folders = sum(r['is_dir'] for r in rows)
+        events.emit('organize','目录读取完成：'+parent+' · 子目录 '+str(folders)+' 个，文件 '+str(len(rows)-folders)+' 个',job_id,details={'event':'directory_read','status':'verified','parent_id':parent,'directory_count':folders,'file_count':len(rows)-folders,'elapsed_ms':int((time.monotonic()-started)*1000)})
         for row in rows:
             if row["is_dir"]:
                 if row["id"] not in (exclude or set()):
@@ -151,6 +156,7 @@ def parent_context(provider, row, cache):
 
 def recognize_source(account_id, provider, row, overrides, config, directory_cache=None):
     from app.cloud import events
+    started = time.monotonic()
     events.emit('recognize','识别开始：'+row['name'])
     def probe():
         from app.cloud import media_probe
@@ -176,7 +182,7 @@ def recognize_source(account_id, provider, row, overrides, config, directory_cac
             original = previous.get("quality_source_name") or previous.get("naming_fields", {}).get("original_name") or original
     diagnostic = {'file_id':row['id'],'source_name':row['name'],'sha1':row['sha1'],'size':row['size'],
                   'kind':media['kind'],'tmdb_id':media['tmdb_id'],'season':media.get('season'),'episode':media.get('episode')}
-    events.emit('recognize','识别完成：'+media['title']+' · TMDB '+str(media['tmdb_id']),details={**diagnostic,'status':'verified'})
+    events.emit('recognize','识别完成：'+media['title']+' · TMDB '+str(media['tmdb_id']),details={**diagnostic,'status':'verified','elapsed_ms':int((time.monotonic()-started)*1000)})
     events.emit('naming','命名预览：'+row['name']+' → '+media['directory']+'/'+media['name'],details={**diagnostic,'status':'preview','target_name':media['name'],'path':media['directory']})
     media["quality_source_name"] = original
     from app.cloud import replacement
@@ -184,6 +190,7 @@ def recognize_source(account_id, provider, row, overrides, config, directory_cac
 
 
 def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, job_id=None, source_ids=None):
+    started = time.monotonic()
     account = store.account(account_id)
     if not account:
         raise CloudError("请先扫码登录", 409)
@@ -209,6 +216,7 @@ def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, j
     cleanup_candidates = []
     files = walk(provider, source_cid, exclude={str(target_cid), str(unknown_cid)} - {str(source_cid)}, job_id=job_id, directory_rows=cleanup_candidates if config["cleanup_empty_directories"] else None, source_ids=source_ids)
     videos, filtered = file_filters.select(files, config)
+    events.emit('organize','来源预分析：文件 '+str(len(files))+' 个，可处理视频 '+str(len(videos))+' 个，过滤 '+str(len(filtered))+' 项',job_id,details={'event':'preanalysis','status':'finished','file_count':len(files),'video_count':len(videos),'filtered_count':len(filtered)})
     items = []
     skipped = []
     unknown_items = []
@@ -248,6 +256,7 @@ def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, j
     if replacement.enabled(config):
         comparisons.update(preview_only=False, notice='执行模式：新版本归档并发布后核实删除已登记旧源；平局和较差来片保留原位')
     jobs.checkpoint(job_id)
+    events.emit('organize','动作规划完成：归档视频 '+str(len(items))+' 个，目标目录 '+str(len({i['media']['directory'] for i in items}))+' 个，未识别待处理 '+str(len(unknown_items))+' 个，跳过 '+str(len(skipped))+' 项',job_id,details={'event':'action_plan','status':'finished','video_count':len(items),'directory_count':len({i['media']['directory'] for i in items}),'renamed_count':sum(i['source']['name']!=i['media']['name'] for i in items),'skipped_count':len(skipped),'elapsed_ms':int((time.monotonic()-started)*1000)})
     pid = store.ident()
     payload = {
         "account_id": account_id,
@@ -497,82 +506,93 @@ def organize(job_id, payload):
     moved_parents = set()
     validated_context = set()
     all_items = [*data["items"], *data.get("unknown_items", [])]
+    from app.cloud.notifications import BatchPosters
+    posters = BatchPosters(job_id, all_items)
+    publisher = None
+    if payload.get("generate", True) and config["generate_strm_enabled"] and not config["strm_delay_seconds"] and data["items"]:
+        from app.cloud.publication import IncrementalPublisher
+        publisher = IncrementalPublisher(job_id, data, all_items, result)
     jobs.progress(job_id, len(all_items), 0, "整理")
-    for index, item in enumerate(all_items):
-        if jobs.stopping(job_id):
-            result.update(stopped=True, remaining=[{"file_id": i["source"]["id"], "name": i["source"]["name"]} for i in all_items[index:]])
-            break
-        jobs.progress(job_id, len(all_items), index, "整理", item["source"]["name"])
-        try:
-            for parent in item.get("media", {}).get("recognition_context", {}).get("parents", []):
-                if parent["id"] in validated_context:
-                    continue
-                current_parent = provider.info(parent["id"])
-                if any(current_parent[k] != parent[k] for k in ("id", "parent_id", "name", "is_dir")):
-                    raise CloudError("作品来源父目录在预览后变化，请重新预览", 409)
-                validated_context.add(parent["id"])
-            if item.get('upgrades'):
-                if not payload.get('generate', True) or not config['generate_strm_enabled']:
-                    raise CloudError('洗版必须生成新 STRM，保留源文件', 409)
-                from app.cloud import replacement
-                replacement.validate_refs(item['upgrades'], provider)
-            for source in [item["source"], *item["followers"]]:
-                if not _snapshot_equal(source, provider.info(source["id"])):
-                    raise CloudError("源文件在预览后变化，请重新预览", 409)
-            target = ensure_directory(
-                provider, job_id, data["unknown_cid"] if item.get("unknown") else data["target_cid"], item["directory"] if item.get("unknown") else item["media"]["directory"]
-            )
-            row = relocate(
-                provider, job_id, item["source"], target, item["source"]["name"] if item.get("unknown") else item["media"]["name"]
-            )
-            store.save_file(data["account_id"], row)
-            result["unknown" if item.get("unknown") else "files"].append(row)
-            if not item.get("unknown"):
-                information = item["media"].get("media_info", {"status": "filename"})
-                result["media_info"].append({"file_id": row["id"], "name": row["name"], **information})
-                if information.get("warning"):
-                    result["warnings"].append({"name": row["name"], "reason": information["warning"]})
-            old_stem = PurePosixPath(item["source"]["name"]).stem
-            new_stem = PurePosixPath(row["name"]).stem
-            companions = []
-            for follower in item["followers"]:
-                new_name = new_stem + follower["name"][len(old_stem) :]
-                related = relocate(provider, job_id, follower, target, new_name)
-                store.save_file(data["account_id"], related)
-                companions.append(related)
-            if item.get("unknown"):
-                result["skipped"] = [x for x in result["skipped"] if x["file_id"] != row["id"]]
-            elif payload.get("generate", True) and config["generate_strm_enabled"]:
-                from app.cloud import strm
-
-                if config["strm_delay_seconds"]:
-                    from app.cloud import automation
-                    deferred = automation.defer(job_id, data["account_id"], data["account_revision"], data["target_cid"], row, item["media"], companions, config["strm_delay_seconds"], item.get('upgrades'))
-                    result.setdefault("deferred", []).append(deferred)
+    try:
+        for index, item in enumerate(all_items):
+            if jobs.stopping(job_id):
+                result.update(stopped=True, remaining=[{"file_id": i["source"]["id"], "name": i["source"]["name"]} for i in all_items[index:]])
+                break
+            jobs.progress(job_id, len(all_items), index, "整理", item["source"]["name"])
+            try:
+                for parent in item.get("media", {}).get("recognition_context", {}).get("parents", []):
+                    if parent["id"] in validated_context:
+                        continue
+                    current_parent = provider.info(parent["id"])
+                    if any(current_parent[k] != parent[k] for k in ("id", "parent_id", "name", "is_dir")):
+                        raise CloudError("作品来源父目录在预览后变化，请重新预览", 409)
+                    validated_context.add(parent["id"])
+                if item.get('upgrades'):
+                    if not payload.get('generate', True) or not config['generate_strm_enabled']:
+                        raise CloudError('洗版必须生成新 STRM，保留源文件', 409)
+                    from app.cloud import replacement
+                    replacement.validate_refs(item['upgrades'], provider)
+                for source in [item["source"], *item["followers"]]:
+                    if not _snapshot_equal(source, provider.info(source["id"])):
+                        raise CloudError("源文件在预览后变化，请重新预览", 409)
+                target = ensure_directory(
+                    provider, job_id, data["unknown_cid"] if item.get("unknown") else data["target_cid"], item["directory"] if item.get("unknown") else item["media"]["directory"]
+                )
+                row = relocate(
+                    provider, job_id, item["source"], target, item["source"]["name"] if item.get("unknown") else item["media"]["name"]
+                )
+                store.save_file(data["account_id"], row)
+                result["unknown" if item.get("unknown") else "files"].append(row)
+                if not item.get("unknown"):
+                    information = item["media"].get("media_info", {"status": "filename"})
+                    result["media_info"].append({"file_id": row["id"], "name": row["name"], **information})
+                    if information.get("warning"):
+                        result["warnings"].append({"name": row["name"], "reason": information["warning"]})
+                old_stem = PurePosixPath(item["source"]["name"]).stem
+                new_stem = PurePosixPath(row["name"]).stem
+                companions = []
+                for follower in item["followers"]:
+                    new_name = new_stem + follower["name"][len(old_stem) :]
+                    related = relocate(provider, job_id, follower, target, new_name)
+                    store.save_file(data["account_id"], related)
+                    companions.append(related)
+                if item.get("unknown"):
+                    result["skipped"] = [x for x in result["skipped"] if x["file_id"] != row["id"]]
+                elif payload.get("generate", True) and config["generate_strm_enabled"]:
+                    if config["strm_delay_seconds"]:
+                        from app.cloud import automation
+                        deferred = automation.defer(job_id, data["account_id"], data["account_revision"], data["target_cid"], row, item["media"], companions, config["strm_delay_seconds"], item.get('upgrades'))
+                        result.setdefault("deferred", []).append(deferred)
+                    else:
+                        publisher.submit(index, row, item["media"], companions, item.get('upgrades'))
+                elif not item.get("unknown"):
+                    # Explicit organize-only mode has no STRM stage to wait for.
+                    posters.verified(index, row, item["media"])
+                if row["parent_id"] != item["source"]["parent_id"]:
+                    moved_parents.add(item["source"]["parent_id"])
+            except CloudError as error:
+                from app.cloud import events
+                events.emit('organize','整理未完成：'+item['source']['name']+' · '+str(error),job_id,level='WARNING')
+                if hasattr(error, 'upgrades'):
+                    result['upgrades'] = error.upgrades
+                if error.uncertain:
+                    error.partial_result = result
+                    raise
+                result["errors"].append(
+                    {"file_id": item["source"]["id"], "reason": str(error)}
+                )
+            finally:
+                if publisher:
+                    publisher.skip(index)
                 else:
-                    asset = strm.generate(data["account_id"], row, item["media"], data["target_cid"], companions, provider)
-                    result["generated"].append({"asset_id": asset["id"], "path": asset["local_path"]})
-                    for warning in asset["payload"].get("warnings", []):
-                        result["errors"].append({"file_id": row["id"], "reason": warning})
-                    if item.get('upgrades'):
-                        from app.cloud import replacement
-                        result['upgrades'] = replacement.complete(job_id, asset, item['upgrades'])
-            if row["parent_id"] != item["source"]["parent_id"]:
-                moved_parents.add(item["source"]["parent_id"])
-        except CloudError as error:
-            from app.cloud import events
-            events.emit('organize','整理未完成：'+item['source']['name']+' · '+str(error),job_id,level='WARNING')
-            if hasattr(error, 'upgrades'):
-                result['upgrades'] = error.upgrades
-            if error.uncertain:
-                error.partial_result = result
-                raise
-            result["errors"].append(
-                {"file_id": item["source"]["id"], "reason": str(error)}
+                    posters.finish(index)
+            jobs.progress(
+                job_id, len(all_items), index + 1, "整理", item["source"]["name"]
             )
-        jobs.progress(
-            job_id, len(all_items), index + 1, "整理", item["source"]["name"]
-        )
+    finally:
+        if publisher:
+            publisher.close()
+    posters.flush()
     if config["cleanup_empty_directories"] and not result.get("stopped") and not result["errors"] and not jobs.stopping(job_id):
         from app.cloud import automation
         try:
@@ -829,7 +849,7 @@ def sync(job_id, payload):
     provider = verify_account(payload)
     _directory(provider, payload["source_cid"])
     rows = walk(provider, payload["source_cid"], job_id=job_id)
-    result = {"generated": [], "skipped": [], "errors": [], "warnings": []}
+    result = {"generated": [], "skipped": [], "errors": [], "warnings": [], "publication": {}}
     config = settings.get()
     videos, result["filtered"] = file_filters.select(rows, config)
     directory_cache = {}
@@ -839,12 +859,14 @@ def sync(job_id, payload):
             result.update(stopped=True, remaining=[{"file_id": r["id"], "name": r["name"]} for r in videos[index:]])
             break
         jobs.progress(job_id, len(videos), index, "生成 STRM", row["name"])
+        media = None
         try:
             media = recognize_source(payload["account_id"], provider, row, payload.get("overrides"), config, directory_cache)
             if media.get("media_info", {}).get("warning"):
                 result["warnings"].append({"name": row["name"], "reason": media["media_info"]["warning"]})
             from app.cloud import strm
 
+            counts = result['publication'].setdefault(media['directory'], {'published':0,'failed':0})
             companions = related_companions(rows, row, config)
             asset = strm.generate(
                 payload["account_id"],
@@ -855,10 +877,13 @@ def sync(job_id, payload):
                 provider,
             )
             result["generated"].append(asset["local_path"])
+            counts['published'] += 1
             for warning in asset["payload"].get("warnings", []):
                 result["errors"].append({"file_id": row["id"], "reason": warning})
             store.save_file(payload["account_id"], row)
         except CloudError as error:
+            if media is not None:
+                result['publication'].setdefault(media['directory'], {'published':0,'failed':0})['failed'] += 1
             from app.cloud import events
             events.emit('strm','生成跳过：'+row['name']+' · '+str(error),job_id,level='WARNING')
             result["skipped"].append(

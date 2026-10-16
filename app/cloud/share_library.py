@@ -181,7 +181,7 @@ def apply(plan_id, confirmed=False):
 
 
 def run(job_id, payload):
-    result = {"generated": [], "skipped": payload["skipped"], "filtered": payload["filtered"], "errors": []}
+    result = {"generated": [], "skipped": payload["skipped"], "filtered": payload["filtered"], "errors": [], "publication": {}}
     provider, access = current(payload)
     if snapshot(settings.get()) != payload["config"]:
         raise CloudError("命名或输出配置已变化，请重新预览分享 STRM", 409)
@@ -189,8 +189,13 @@ def run(job_id, payload):
     if [base.stat().st_dev, base.stat().st_ino] != payload["root_identity"]:
         raise CloudError("分享库挂载身份变化，请重新预览", 409)
     view = View(provider, access, [r for i in payload["items"] for r in [i["source"], *i["followers"]]])
+    from app.cloud.notifications import BatchPosters
+    posters = BatchPosters(job_id, payload["items"], "share")
     for index, item in enumerate(payload["items"]):
+        if jobs.stopping(job_id):
+            posters.flush()
         jobs.checkpoint(job_id, result)
+        counts = result['publication'].setdefault(item['media']['directory'], {'published':0,'failed':0})
         try:
             current(payload)
             if snapshot(settings.get()) != payload["config"]:
@@ -204,10 +209,14 @@ def run(job_id, payload):
             asset = strm.generate(payload["account_id"], item["source"], item["media"], companions=item["followers"], provider=view, source_context={"source_kind": "share", "share_id": payload["share_id"], "share_revision": payload["share_revision"]})
             result["generated"].append({"asset_id": asset["id"], "path": asset["local_path"]})
             result.setdefault("warnings", []).extend({"name": item["source"]["name"], "reason": w} for w in asset["payload"].get("warnings", []))
+            counts['published'] += 1
+            posters.verified(index, item["source"], item["media"])
         except (CloudError, OSError):
+            counts['failed'] += 1
             result["errors"].append({"name": item["source"]["name"], "reason": "分享读取或输出核验失败，保留现有引用；请检查分享、挂载与配置后重新预览"})
             break
         jobs.progress(job_id, len(payload["items"]), index+1, "生成分享 STRM", item["source"]["name"])
+    posters.flush()
     if result["generated"]:
         result["refresh_pending"] = not workflow.refresh_library(payload["account_id"])
     return result

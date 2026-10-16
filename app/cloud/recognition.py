@@ -212,6 +212,9 @@ def recognize(name, override=None, naming_config=None, probe=None, context=None)
         "year": year,
         "season": season,
         "episode": episode,
+        # Reuse already-fetched series metadata; no extra season lookup just
+        # for a notification, and never infer the total from incoming files.
+        "season_episode_count": next((s['episode_count'] for s in (detail.get('seasons') or []) if isinstance(s, dict) and type(s.get('season_number')) is int and s['season_number'] == season and type(s.get('episode_count')) is int and 0 <= s['episode_count'] <= 10000), None) if kind == 'tv' else None,
         "directory": relative,
         "name": filename,
         "poster_path": detail.get("poster_path") or "",

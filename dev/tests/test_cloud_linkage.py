@@ -163,15 +163,15 @@ def test_same_title_or_wrong_identity_never_confirms(receiving,monkeypatch,bad):
     emby.poll_one();assert emby.records(receiving.id)[0]['state']=='pending'
 
 
-def test_confirmed_notification_poster_tmdb_and_library_source_once(receiving,monkeypatch):
+def test_confirmed_receipt_does_not_send_an_extra_poster(receiving,monkeypatch):
     connection(receiving);published=asset(receiving)
     settings.save({'notify_enabled':True})
     path=emby.mapped_path(published,services.get(receiving.id,'emby_library',emby.DEFAULT)['config']['connections'][0])
     monkeypatch.setattr(emby,'request',lambda *a,**kw:{'Items':[{'Id':'55','Type':'Movie','Path':path,'ProviderIds':{'Tmdb':'44'}}]})
     card=Mock(return_value=True);monkeypatch.setattr(tg,'notify_telegram_card',card)
     emby.poll_one();emby.poll_one()
-    assert emby.records(receiving.id)[0]['state']=='confirmed' and card.call_count==1
-    assert 'TMDB 44' in card.call_args.args[0] and '115网盘' in card.call_args.args[0]
+    assert emby.records(receiving.id)[0]['state']=='confirmed'
+    card.assert_not_called()
 
 
 def test_tv_confirmation_requires_season_episode_and_series_identity(receiving,monkeypatch):
@@ -234,7 +234,7 @@ def test_edit_during_emby_read_does_not_confirm_or_notify(receiving,monkeypatch)
     emby.poll_one();assert emby.records(receiving.id)[0]['state']=='stale' and not notify.called
 
 
-def test_poster_and_share_badge_when_confirmed(receiving,monkeypatch):
+def test_share_confirmation_is_also_web_only(receiving,monkeypatch):
     connection(receiving);published=asset(receiving)
     published['payload']['source_kind']='share';published['payload']['media']['poster_path']='/poster.jpg'
     with store.db() as con:
@@ -245,8 +245,8 @@ def test_poster_and_share_badge_when_confirmed(receiving,monkeypatch):
     path=emby.mapped_path(published,c)
     monkeypatch.setattr(emby,'request',lambda *a,**kw:{'Items':[{'Id':'55','Type':'Movie','Path':path,'ProviderIds':{'Tmdb':'44'}}]})
     card=Mock(return_value=True);monkeypatch.setattr(tg,'notify_telegram_card',card)
-    emby.poll_one();assert '分享库' in card.call_args.args[0]
-    assert card.call_args.args[1]=='https://image.tmdb.org/t/p/w500/poster.jpg'
+    emby.poll_one();assert emby.records(receiving.id)[0]['state']=='confirmed'
+    card.assert_not_called()
 
 
 def test_new_account_api_endpoints_do_not_echo_secrets(receiving,client,monkeypatch):

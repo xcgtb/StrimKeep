@@ -219,16 +219,14 @@ def poll_one():
         bound = con.execute("SELECT state,local_path,payload FROM cloud_assets WHERE id=?", (asset_id,)).fetchone()
         if not current or current[0] != revision or not bound or bound[0] != "active" or bound[1] != payload["local_path"] or json.loads(bound[2]).get("digest") != payload["digest"]:
             state, item, result = "stale", None, {"message":"读取期间连接或资产变化，请重新检查"}
-    # Commit confirmed receipt before sending: ambiguous Telegram sends are never replayed.
+    # Confirmation is a web receipt only; never send another arrival poster.
     with store.db() as con:
         changed = con.execute("UPDATE cloud_ingestion SET state=?,next_check=?,attempts=?,result=?,updated=? WHERE id=? AND state='pending'", (state,now+60,attempts+1,store.encode(result),now,iid)).rowcount
     if not changed:
-        return
+        return False
     if state != 'pending' or attempts in (0,9,29,59):
         events.emit('emby',result.get('message','')+' · '+str(asset_id)[:12],level='WARNING' if state in ('timeout','stale') else 'INFO')
-    if state != 'pending' and connection:
-        from app.cloud import notifications
-        notifications.send_confirmed(payload.get('notification_group'),connection)
+    return True
 
 
 def records(account_id):
@@ -250,22 +248,17 @@ def retry(account_id, iid):
         con.execute("UPDATE cloud_ingestion SET state='pending',attempts=0,next_check=?,payload=json_remove(payload,'$.refresh_attempt') WHERE id=? AND state IN ('timeout','paused')", (time.time(),iid))
 
 
-def _flush_confirmed():
-    from app.cloud import notifications
-    with store.db() as con:
-        groups=con.execute("SELECT DISTINCT connection_id,revision,payload FROM cloud_ingestion i WHERE state='confirmed' AND json_extract(payload,'$.notification_group') NOT IN (SELECT id FROM cloud_ingestion_notifications) AND NOT EXISTS (SELECT 1 FROM cloud_ingestion p WHERE p.state='pending' AND json_extract(p.payload,'$.notification_group')=json_extract(i.payload,'$.notification_group')) LIMIT 20").fetchall()
-    for cid,revision,raw in groups:
-        p=json.loads(raw);cfg=services.get(p['account_id'],'emby_library',DEFAULT)
-        connection=next((c for c in cfg['config']['connections'] if c['id']==cid and c['enabled']),None)
-        if connection and cfg['revision']==revision:notifications.send_confirmed(p.get('notification_group'),connection)
-        elif p.get('notification_group'):
-            with store.db() as con:con.execute("INSERT OR IGNORE INTO cloud_ingestion_notifications VALUES(?,'stale',?)",(p['notification_group'],time.time()))
-    poll_one()
+def poll_batch():
+    """Advance a bounded set of due receipts without holding up cloud jobs."""
+    deadline = time.monotonic() + 2
+    for _ in range(16):
+        if not poll_one() or time.monotonic() >= deadline:
+            break
 
 
 def schedule():
     global _future
     if _future is None or _future.done():
         with store.db() as con:
-            exists=con.execute("SELECT 1 FROM cloud_ingestion WHERE (state='pending' AND next_check<=?) OR (state='confirmed' AND json_extract(payload,'$.notification_group') NOT IN (SELECT id FROM cloud_ingestion_notifications)) LIMIT 1",(time.time(),)).fetchone()
-        if exists:_future=_POOL.submit(_flush_confirmed)
+            exists=con.execute("SELECT 1 FROM cloud_ingestion WHERE state='pending' AND next_check<=? LIMIT 1",(time.time(),)).fetchone()
+        if exists:_future=_POOL.submit(poll_batch)

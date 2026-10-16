@@ -14,7 +14,9 @@ SOURCES = {'queue':'cloud_queue','transfer':'cloud_transfer','organize':'cloud_o
 DETAIL_FIELDS = frozenset(('job_id','event','status','file_id','parent_id','target_id',
     'source_name','target_name','path','sha1','size','asset_id','tmdb_id','kind',
     'season','episode','elapsed_ms','cache_hit','source_count','result','connection',
-    'count','reason','account_id','binding_version'))
+    'count','reason','account_id','binding_version','directory_count','file_count',
+    'video_count','filtered_count','skipped_count','published_count','failed_count',
+    'metadata_count','queued_count','renamed_count','moved_count','removed_count'))
 
 
 def safe_details(value):
