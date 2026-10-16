@@ -42,6 +42,8 @@ def docker_requirements_errors(root):
         if relative in seen:
             continue
         seen.add(relative)
+        if relative.suffix != '.txt':
+            errors.append(f'Dependabot requirements include must use .txt: {relative.as_posix()}')
         if relative.as_posix() not in copied:
             errors.append(f'Docker install stage missing requirements file: {relative.as_posix()}')
             continue

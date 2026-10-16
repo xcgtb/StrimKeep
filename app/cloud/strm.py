@@ -411,12 +411,13 @@ def recover():
             )
 
 
-def list_assets(limit=100, offset=0):
+def list_assets(limit=100, offset=0, account_id=None):
     with store.db() as con:
+        where, args = ('WHERE account_id=? ', (account_id,)) if account_id else ('', ())
         rows = con.execute(
             "SELECT id,account_id,file_id,local_path,state,updated FROM cloud_assets "
-            "ORDER BY updated DESC LIMIT ? OFFSET ?",
-            (min(limit, 200), offset),
+            + where + "ORDER BY updated DESC,id LIMIT ? OFFSET ?",
+            (*args, min(limit, 200), offset),
         ).fetchall()
     return [
         dict(zip(("id", "account_id", "file_id", "path", "state", "updated"), r))

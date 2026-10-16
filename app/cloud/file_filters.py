@@ -31,16 +31,17 @@ def validate(config):
         raise CloudError("忽略正则语法错误，请检查表达式") from None
 
 
-def regex_matches(patterns, rows):
+def regex_matches(patterns, rows, with_rules=False):
     if not patterns or not rows:
-        return set()
+        return {} if with_rules else set()
     # No user expressions execute as Python; expensive regex is killed as a process.
-    code = "import json,re,sys;p,rows=json.load(sys.stdin);rules=[re.compile(v,re.I) for v in p];json.dump([i for i,n in rows if any(r.search(n) for r in rules)],sys.stdout)"
+    code = "import json,re,sys;p,rows=json.load(sys.stdin);rules=[re.compile(v,re.I) for v in p];json.dump([(i,next(p[j] for j,r in enumerate(rules) if r.search(n))) for i,n in rows if any(r.search(n) for r in rules)],sys.stdout)"
     try:
         process = subprocess.run([sys.executable, "-I", "-c", code], input=json.dumps([patterns, [(r["id"], r["name"]) for r in rows]]), capture_output=True, text=True, timeout=3, check=False)
         if process.returncode:
             raise ValueError()
-        return set(json.loads(process.stdout))
+        matches = dict(json.loads(process.stdout))
+        return matches if with_rules else set(matches)
     except Exception:
         raise CloudError("忽略正则执行超时或失败；未移动文件，请简化表达式", 409) from None
 
@@ -50,22 +51,25 @@ def select(rows, config):
     accepted, filtered = [], []
     for row in rows:
         extension = PurePosixPath(row["name"]).suffix.lower()
-        reason = ""
+        reason, rule = "", ""
         if extension not in config["video_extensions"]:
             if extension in VIDEO or extension == ".strm":
                 reason = "未选择的视频扩展名" if extension != ".strm" else "STRM 不是源视频"
+                rule = '当前扩展名 '+extension+'；允许 '+', '.join(config['video_extensions'])
             else:
                 continue
         elif row["size"] < config["min_video_mb"]*1048576:
             reason = "小于最小视频大小"
+            rule = '最小 '+str(config['min_video_mb'])+' MB；实际 '+str(round(row['size']/1048576, 3))+' MB'
         elif any(v.casefold() in row["name"].casefold() for v in config["ignore_keywords"]):
             reason = "命中忽略关键词"
+            rule = next(v for v in config['ignore_keywords'] if v.casefold() in row['name'].casefold())
         if reason:
-            filtered.append({"file_id": row["id"], "name": row["name"], "reason": reason, "action": "filtered"})
+            filtered.append({"file_id": row["id"], "name": row["name"], "reason": reason, "rule": rule, "action": "filtered"})
         else:
             accepted.append(row)
-    matches = regex_matches(config["ignore_regex"], accepted)
+    matches = regex_matches(config["ignore_regex"], accepted, with_rules=True)
     for row in accepted:
         if row["id"] in matches:
-            filtered.append({"file_id": row["id"], "name": row["name"], "reason": "命中忽略正则", "action": "filtered"})
+            filtered.append({"file_id": row["id"], "name": row["name"], "reason": "命中忽略正则", "rule": matches[row['id']], "action": "filtered"})
     return [r for r in accepted if r["id"] not in matches], filtered

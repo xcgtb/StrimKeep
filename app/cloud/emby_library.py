@@ -102,23 +102,30 @@ def mapped_path(asset, connection):
     return str(PurePosixPath(root)/relative)
 
 
-def watch(asset):
+def watch(asset, *, backfill=False, config=None):
     """Record once for each published content/path and connection configuration."""
     if not settings.get()["emby_refresh_enabled"]:
         return
-    cfg = services.get(asset["account_id"], "emby_library", DEFAULT)
+    cfg = config or services.get(asset["account_id"], "emby_library", DEFAULT)
     for c in cfg["config"]["connections"]:
         if not c["enabled"]:
             continue
         path = mapped_path(asset, c)
         if not path:
             continue
+        if backfill:
+            with store.db() as con:
+                found = con.execute("SELECT 1 FROM cloud_ingestion WHERE asset_id=? AND connection_id=? AND revision=? AND json_extract(payload,'$.digest')=? AND json_extract(payload,'$.path')=? AND json_extract(payload,'$.local_path')=? LIMIT 1", (asset['id'],c['id'],cfg['revision'],asset['payload']['digest'],path,asset['local_path'])).fetchone()
+            if found:
+                continue
         from app.cloud import notifications
         origin=events._JOB.get() or ""
         with store.db() as con:
             due=con.execute("SELECT origin_job FROM cloud_job_due WHERE job_id=?",(origin,)).fetchone()
         if due:origin=due[0]
         payload = {"account_id":asset["account_id"], "path":path, "digest":asset["payload"]["digest"], "local_path":asset["local_path"],"origin_job":origin,"notification_group":notifications.group_key(asset,c["id"],cfg["revision"],origin)}
+        if backfill:
+            payload['check_existing_first'] = True
         key = hashlib.sha256(store.encode([asset["id"],c["id"],cfg["revision"],payload]).encode()).hexdigest()
         with store.db() as con:
             changed = con.execute("INSERT OR IGNORE INTO cloud_ingestion VALUES(?,?,?,?,?,'pending',?,0,'{}',?)", (key,asset["id"],c["id"],cfg["revision"],store.encode(payload),time.time(),time.time())).rowcount
@@ -203,9 +210,14 @@ def poll_one():
         elif not settings.get()["emby_refresh_enabled"]:
             state, result = "paused", {"message":"Emby 联动已关闭"}
         else:
-            if attempts % 10 == 0:
+            # A receipt may be registered after Emby has already scanned the file.
+            # Read its exact identity before requesting another library update.
+            if payload.get('check_existing_first') and attempts == 0:
+                item = confirmed_item(connection, asset, payload["path"])
+            if not item and attempts % 10 == 0:
                 refresh_pending(connection, payload["account_id"], revision, now)
-            item = confirmed_item(connection, asset, payload["path"])
+            if not item:
+                item = confirmed_item(connection, asset, payload["path"])
             state = "confirmed" if item else "pending"
             result = {"message":"Emby 已确认入库" if item else "等待 Emby 扫描与刮削", "emby_item_id":item["Id"] if item else ""}
     except CloudError as error:
@@ -230,9 +242,38 @@ def poll_one():
 
 
 def records(account_id):
+    """Reconcile recent local publications; HTTP/Emby checks stay in the worker."""
+    cfg = services.get(account_id, 'emby_library', DEFAULT)
+    enabled = settings.get()['emby_refresh_enabled']
     with store.db() as con:
-        rows = con.execute("SELECT i.id,i.asset_id,i.connection_id,i.state,i.result,i.attempts,i.updated,json_extract(i.payload,'$.path'),json_extract(a.payload,'$.media.title') FROM cloud_ingestion i LEFT JOIN cloud_assets a ON a.id=i.asset_id WHERE json_extract(i.payload,'$.account_id')=? ORDER BY i.updated DESC LIMIT 100", (account_id,)).fetchall()
-    return [{"id":r[0],"asset_id":r[1],"connection_id":r[2],"state":r[3],"result":json.loads(r[4]),"attempts":r[5],"updated":r[6],"path":r[7] or "","title":r[8] or ""} for r in rows]
+        assets = con.execute("SELECT id,updated FROM cloud_assets WHERE account_id=? AND state='active' ORDER BY updated DESC LIMIT 100", (account_id,)).fetchall()
+    unpublished_checks = []
+    for asset_id, updated in assets:
+        asset = store.asset(asset_id)
+        if not asset or asset['state'] != 'active':
+            continue
+        message = ''
+        try:
+            if not enabled:
+                message = 'STRM 已生成；全局 Emby 入库联动已关闭，请在网盘设置中启用后检查。'
+            elif not any(c['enabled'] for c in cfg['config']['connections']):
+                message = 'STRM 已生成；尚未启用独立 Emby 入库连接，请填写地址、API Key 和映射路径并保存。'
+            elif not any(mapped_path(asset,c) for c in cfg['config']['connections'] if c['enabled']):
+                message = 'STRM 已生成；此来源未设置 Emby 路径映射，请补齐个人库或分享库根目录。'
+            else:
+                watch(asset, backfill=True, config=cfg)
+        except CloudError as error:
+            message = 'STRM 已生成；入库登记未完成：'+events.clean(str(error))
+        if message:
+            unpublished_checks.append({'id':'','asset_id':asset_id,'connection_id':'','state':'unverified','result':{'message':message},'attempts':0,'updated':updated,'path':asset['local_path'],'title':asset['payload'].get('media',{}).get('title','')})
+    with store.db() as con:
+        rows = con.execute("SELECT i.id,i.asset_id,i.connection_id,i.state,i.result,i.attempts,i.updated,json_extract(i.payload,'$.path'),json_extract(a.payload,'$.media.title'),i.revision FROM cloud_ingestion i JOIN cloud_assets a ON a.id=i.asset_id WHERE a.account_id=? AND a.state='active' AND json_extract(i.payload,'$.account_id')=? AND json_extract(i.payload,'$.digest')=json_extract(a.payload,'$.digest') AND json_extract(i.payload,'$.local_path')=a.local_path ORDER BY i.updated DESC LIMIT 100", (account_id,account_id)).fetchall()
+    receipts = [{"id":r[0],"asset_id":r[1],"connection_id":r[2],"state":r[3],"result":json.loads(r[4]),"attempts":r[5],"updated":r[6],"path":r[7] or "","title":r[8] or "","revision":r[9],"connection_name":next((c["name"] for c in cfg["config"]["connections"] if c["id"]==r[2]),"已移除连接"),"current_configuration":r[9]==cfg["revision"]} for r in rows]
+    # A verified receipt is still useful when the connection is later paused.
+    confirmed = {r['asset_id'] for r in receipts if r['state']=='confirmed'}
+    unverified = {r['asset_id'] for r in unpublished_checks if r['asset_id'] not in confirmed}
+    receipts = [r for r in receipts if r['asset_id'] not in unverified]
+    return sorted(receipts+[r for r in unpublished_checks if r['asset_id'] in unverified], key=lambda r:r['updated'], reverse=True)[:100]
 
 
 def retry(account_id, iid):

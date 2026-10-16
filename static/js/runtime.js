@@ -735,7 +735,7 @@ function renderMenu(){
     var links = g.items.map(function(item){
       var id=item[0], label=item[1], ico=item[2], kind=item[3];
       if(id==='cloud'){
-        var pages=[['workspace','网盘工作台'],['transfer','资源接收'],['files','网盘文件'],['strm','STRM 媒体库'],['jobs','任务中心'],['configuration','网盘设置']];
+        var pages=[['workspace','网盘工作台'],['transfer','资源接收'],['share-library','分享免转存'],['files','网盘文件'],['strm','STRM 媒体库'],['jobs','任务中心'],['configuration','网盘设置']];
         var expanded=current==='cloud';
         return '<div class="nav-drive"><button class="nav-drive-toggle" type="button" aria-expanded="'+expanded+'" onclick="toggleDriveMenu(this)"><span class="icon">'+icon(ico)+'</span><span class="nav-label">我的网盘</span><span aria-hidden="true">⌄</span></button><div class="nav-drive-children"'+(expanded?'':' hidden')+'>'+pages.map(function(p){return '<a data-tab="cloud" data-drive-page="'+p[0]+'" onclick="openDrivePage(\''+p[0]+'\')"><span class="nav-label">'+p[1]+'</span></a>';}).join('')+'</div></div>';
       }
@@ -784,7 +784,12 @@ function switchTab(id){
   if (id === 'dashboard')  loadDashboard();
   if (id === 'governance') { if (!currentPlan) restoreGovStateFromSession(); loadLatestGov(); loadGovTruth(); }
   if (id === 'explore')    ensureExploreLoaded();
-  if (id === 'cloud')      cloudWorkbench.load();
+  if (id === 'cloud') {
+    var requestedJob=window.__cloudJobToOpen;window.__cloudJobToOpen='';
+    Promise.resolve(cloudWorkbench.load()).then(function(ok){
+      if(ok!==false&&requestedJob&&window.__activeTab==='cloud')cloudWorkbench.inspectJob(requestedJob);
+    });
+  }
   if (id === 'settings')   { loadConfig(); loadBotStatus(); loadStrategy(); loadIngest(); loadGovAuto(); loadCoverStrategy(); }
   if (id === 'mapping')    ensureEmbyLoaded();
   if (id === 'subscribe')  loadSubscriptions();

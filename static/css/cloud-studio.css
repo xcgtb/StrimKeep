@@ -1,4 +1,62 @@
 /* My Drive studio. Shared palette, separate hierarchy for work and configuration. */
+.cw-task-search{display:flex;gap:8px;align-items:center;margin-top:16px}
+.cw-task-search input{flex:1;min-width:0}
+.cw-job-dialog{box-sizing:border-box;margin:auto;width:min(920px,calc(100vw - 28px));max-height:90dvh;padding:0;border:1px solid var(--border);border-radius:16px;background:var(--studio-panel,var(--panel));color:var(--text);box-shadow:0 20px 80px rgba(0,0,0,.35)}
+.cw-job-dialog::backdrop{background:rgba(4,12,24,.65);backdrop-filter:blur(5px)}
+.cw-job-dialog>header{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border)}
+.cw-job-dialog>header strong{font-size:15px}
+.cw-job-dialog>header>div{display:flex;gap:6px}
+#tab-cloud .cw-job-dialog>header .btn{margin:0;padding:8px 12px;min-height:40px;font-size:12px}
+.cw-job-dialog-body{max-height:calc(90dvh - 76px);overflow:auto;padding:20px;overscroll-behavior:contain}
+#tab-cloud .cw-job-dialog #cw-job-summary{margin:0;padding:0;border:0}
+.cw-diagnostics h4{font-size:16px;margin:18px 0 8px}
+.cw-diagnostic-filters{display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin:14px 0}
+.cw-diagnostic-filters label{flex:1 1 180px;font-size:12px;color:var(--text-dim)}
+.cw-diagnostic-filters input,.cw-diagnostic-filters select{width:100%;margin-top:6px;box-sizing:border-box}
+.cw-diagnostic-card{border:1px solid var(--border);background:var(--studio-soft,var(--surface));border-radius:12px;margin:12px 0;padding:16px;overflow-wrap:anywhere}
+.cw-diagnostic-card[data-attention=true]{border-color:rgba(200,145,39,.4)}
+.cw-diagnostic-card header{display:flex;justify-content:space-between;gap:8px;align-items:start;font-size:12px}
+.cw-diagnostic-card header span{color:var(--text-dim)}
+.cw-diagnostic-card h5{font-size:14px;line-height:1.8;margin:12px 0;color:var(--text)}
+.cw-diagnostic-card dl{display:grid;grid-template-columns:80px minmax(0,1fr);font-size:12px;line-height:1.9;gap:8px;margin:12px 0}
+.cw-diagnostic-card dt{color:var(--text-dim)}
+.cw-diagnostic-card dd{margin:0;color:var(--text)}
+.cw-diagnostic-actions{display:flex;flex-wrap:wrap;gap:8px}
+.log-problem-reason{line-height:1.8;font-size:12px;overflow-wrap:anywhere}
+@media(max-width:610px){.cw-job-dialog-body{padding:14px}.cw-job-dialog>header{padding:12px;gap:8px}.cw-diagnostic-card{padding:13px}.cw-diagnostic-card dl{grid-template-columns:1fr;gap:3px}.cw-diagnostic-card dd{margin-bottom:9px}.cw-diagnostic-filters label{flex-basis:100%}}
+.cw-studio-receive-nav{display:flex;gap:8px;flex-wrap:wrap;padding:6px;margin:0 0 18px;border:1px solid var(--border);border-radius:12px;background:var(--studio-panel,var(--panel))}
+.cw-studio-receive-nav[hidden]{display:none}
+.cw-studio-receive-nav button{flex:1 1 140px;font:inherit;font-size:13px;color:var(--text-mid);background:transparent;border:1px solid transparent;border-radius:8px;min-height:42px;padding:10px 14px;cursor:pointer}
+.cw-studio-receive-nav button[aria-current=page]{color:var(--brand);background:var(--surface-active);border-color:var(--border)}
+/* Task cards keep the live stage separate from per-file processing progress. */
+.cw-task-filters{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0}
+#tab-cloud .cw-task-filters .btn{margin:0;min-height:38px;font-size:12px}
+.cw-task-filters button[aria-pressed=true]{border-color:var(--brand);background:var(--surface-active);color:var(--brand)}
+.cw-task-filters span{margin-left:6px;font-variant-numeric:tabular-nums}
+.cw-task-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.cw-task-card{min-width:0;padding:20px;border:1px solid var(--border);border-radius:12px;background:var(--studio-panel,var(--panel));overflow-wrap:anywhere}
+.cw-task-card[data-selected=true]{border-color:var(--brand)}
+.cw-task-card header{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.cw-task-card header strong{font-size:14px;font-weight:600}
+#tab-cloud .cw-task-card p{font-size:12px;line-height:1.8;margin:12px 0;color:var(--text-mid)}
+#tab-cloud .cw-task-card .cw-task-time{color:var(--text-dim);font-size:11px;margin:8px 0 14px;display:flex;flex-wrap:wrap;justify-content:space-between;gap:5px}
+#tab-cloud .cw-task-card .cw-task-counter{font-size:11px;margin:6px 0;color:var(--text-dim)}
+#tab-cloud .cw-task-card .cw-task-progress-label{margin-bottom:5px}
+.cw-task-card progress{display:block;width:100%;height:5px;border:0;border-radius:5px;overflow:hidden;accent-color:var(--brand);background:var(--surface-active)}
+.cw-task-card progress::-webkit-progress-bar{background:var(--surface-active)}
+.cw-task-card progress::-webkit-progress-value{background:var(--brand)}
+.cw-task-card footer{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px;padding-top:14px;border-top:1px solid var(--border)}
+#tab-cloud .cw-task-card footer .btn{margin:0;font-size:12px;min-height:38px;padding:8px 12px}
+#cw-job-summary:empty{display:none}
+#cw-job-summary{margin-top:24px;border-top:1px solid var(--border);padding-top:22px;overflow-wrap:anywhere}
+#cw-job-summary>p{font-size:12px;color:var(--text-mid);line-height:1.8}
+.cw-task-issues{border:1px solid rgba(200,145,39,.3);border-radius:10px;background:rgba(200,145,39,.08);padding:16px;margin:16px 0;font-size:12px;overflow-wrap:anywhere}
+.cw-task-issues strong{color:var(--text);font-weight:600}
+.cw-task-issues p{margin:8px 0;color:var(--text-mid);line-height:1.8}
+.cw-task-files{border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin:14px 0;font-size:12px;line-height:1.8}
+.cw-task-files summary{cursor:pointer;color:var(--brand)}
+.cw-task-files p{overflow-wrap:anywhere;color:var(--text-mid)}
+@media(max-width:760px){.cw-task-grid{grid-template-columns:minmax(0,1fr)}.cw-task-card{padding:16px}.cw-task-filters{gap:6px}#tab-cloud .cw-task-filters .btn{padding:8px 10px;flex:1 1 calc(50% - 6px)}}
 #tab-cloud.cw-studio{max-width:1440px;margin:0 auto;color:var(--text)}
 #tab-cloud.cw-studio{--studio-panel:rgba(246,251,255,.96);--studio-soft:rgba(235,245,255,.94)}
 [data-theme=dark] #tab-cloud.cw-studio{--studio-panel:rgba(20,31,46,.97);--studio-soft:rgba(27,40,57,.96)}

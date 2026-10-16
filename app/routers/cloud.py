@@ -437,8 +437,8 @@ def sync(body: SyncInput):
 
 
 @router.get("/assets")
-def assets(limit: int = Query(100, ge=1, le=200), offset: int = Query(0, ge=0)):
-    return {"status": "success", "items": call(strm.list_assets, limit, offset)}
+def assets(limit: int = Query(100, ge=1, le=200), offset: int = Query(0, ge=0), account_id: str | None = None):
+    return {"status": "success", "items": call(strm.list_assets, limit, offset, account_id)}
 
 
 @router.post("/assets/{asset_id}/revoke")
@@ -516,13 +516,23 @@ def reset_deletion(asset_id: str, body: dict):
 
 
 @router.get("/jobs")
-def list_jobs():
-    return {"status": "success", "items": call(store.jobs)}
+def list_jobs(query: str = Query('', max_length=200)):
+    return {"status": "success", "items": call(store.job_summaries, 50, query)}
 
 
 @router.get("/jobs/{job_id}")
 def job_details(job_id: str):
     return {"status": "success", "job": call(jobs.details, job_id)}
+
+
+@router.get("/jobs/{job_id}/diagnostics")
+def job_diagnostics(job_id: str, offset: int = Query(0, ge=0), limit: int = Query(30, ge=1, le=100),
+                    category: str = Query('', max_length=30), query: str = Query('', max_length=200)):
+    from app.cloud import diagnostics
+    value = call(store.job, job_id)
+    if value is None:
+        raise HTTPException(404, "任务不存在")
+    return {"status": "success", "diagnostics": call(diagnostics.for_job, value, offset, limit, category, query)}
 
 
 @router.post("/jobs/{job_id}/verify")

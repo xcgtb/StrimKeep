@@ -54,7 +54,7 @@ window.cloudPanels=(function(){
     if(accounts){var end=byId('cw-svc-maintenance');wrap(accounts.children[1],end?end.previousSibling:accounts.lastChild,'login','115 登录凭证','选择客户端，扫码或填写 Cookie；在本卡片内管理当前账号授权。',false);}
     existing('cw-svc-maintenance','maintenance','115 日常维护','配置签到、回收站保留天数与执行时间。');
     if(transfer)wrap(transfer.children[1],byId('cw-transfer-status'),'receive','115链接转存','保存转存目录后直接提交链接，后续由定时整理扫描。',true);
-    var share=byId('cw-share-library');if(share)wrap(share.children[1],share.lastChild,'share-library','分享直出 STRM','按三步操作：读取、选择、核对生成。不会转存或修改网盘。',true);
+    var share=byId('cw-share-library');if(share)wrap(share.children[1],share.lastChild,'share-library','分享免转存 STRM','按三步操作：读取、选择、核对生成。不会转存或修改网盘。',true);
     existing('cw-svc-receiving','intake','磁力、ed2k 与机器人接收','分别选择保存目录，配置机器人接收与查询云下载状态。');
     if(organize){var grid=top(byId('cw-source-cid'),organize),first=organize.querySelector('details');if(grid&&first)wrap(grid,first.previousSibling,'organize-directories','扫描来源与归档目录','直接读取115目录并保存；后续整理复用相同目录。',true);
       Array.from(organize.querySelectorAll('details.cw-settings-group')).forEach(function(d,i){var title=d.querySelector('summary').textContent;enhance(d,'organize-'+i,title,{'文件过滤':'按类型、大小、关键词与正则排除文件。','识别与自定义命名':'TMDB 识别、ffprobe 媒体信息和目录/文件命名模板。','分类策略':'类型、地区与年份分类，按需创建并复用目录。','整理八维洗版策略':'配置比较优先级、预览或执行模式和杜比分组共存。'}[title]||'展开配置具体规则。',false);});}

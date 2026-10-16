@@ -56,7 +56,7 @@ STRM 更新仅清理本项目记录拥有的本地文件：同一个账号、同
 - 原 SQLite 中增加 `cloud_*` 表，不替换旧表和配置，不复制出第二套业务数据库。
 - 账号凭据加密保存；账号密钥与播放签名密钥位于原运行状态目录，权限为 0600。它们与数据库需一起备份，缺失时停止解密或签名，不静默生成替代密钥。
 - STRM 中只有资源标识与播放签名，没有 Cookie。签名入口是可分享的播放凭据；撤销引用可立即停用。
-- Python 3.12 是当前 `p115client` 的运行要求，Docker 与 CI 一起升级；运行依赖见 `requirements.txt` 和 `requirements-cloud115.lock`。
+- Python 3.12 是当前 `p115client` 的运行要求，Docker 与 CI 一起升级；运行依赖见 `requirements.txt` 和 `requirements-cloud115.txt`。
 - 可选反代失败不会改变管理台密码。原 v1.2.12 就绪检查、历史 SQLite 兼容与诊断接口保留。
 
 ## 验收范围

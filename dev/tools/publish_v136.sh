@@ -28,7 +28,7 @@ else
   echo 'NAS未安装Node：前端检查将由标签CI执行。'
 fi
 git diff --check
-git add -- app static docs dev README.md CHANGELOG.md Dockerfile requirements-cloud115.lock
+git add -- app static docs dev README.md CHANGELOG.md Dockerfile requirements-cloud115.txt
 git diff --cached --check
 if ! git diff --cached --quiet; then
   git commit -m 'release: v1.3.6 频道历史、接收整理和实际入库确认'

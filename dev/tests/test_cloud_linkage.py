@@ -190,7 +190,10 @@ def test_connection_change_invalidates_pending_receipt(receiving,monkeypatch):
     c=connection(receiving);asset(receiving)
     emby.save(receiving.id,{'expected_revision':1,'connection':{'id':c['items'][0]['id'],'personal_root':'/new'}})
     request=Mock();monkeypatch.setattr(emby,'request',request)
-    emby.poll_one();assert emby.records(receiving.id)[0]['state']=='stale' and not request.called
+    emby.poll_one()
+    receipts=emby.records(receiving.id)
+    assert any(r['state']=='stale' for r in receipts) and not request.called
+    assert receipts[0]['state']=='pending' and receipts[0]['path'].startswith('/new/')
 
 
 def test_sources_dedup_and_schedule_reuses_rules(receiving):
@@ -231,7 +234,10 @@ def test_edit_during_emby_read_does_not_confirm_or_notify(receiving,monkeypatch)
         return {'Items':[{'Id':'55','Type':'Movie','Path':path,'ProviderIds':{'Tmdb':'44'}}]}
     monkeypatch.setattr(emby,'request',request)
     notify=Mock();monkeypatch.setattr(tg,'notify_telegram_card',notify)
-    emby.poll_one();assert emby.records(receiving.id)[0]['state']=='stale' and not notify.called
+    emby.poll_one()
+    records=emby.records(receiving.id)
+    assert records[0]['state']=='unverified' and '尚未启用独立' in records[0]['result']['message'] and not notify.called
+    with store.db() as con:assert con.execute('SELECT state FROM cloud_ingestion').fetchone()[0]=='stale'
 
 
 def test_share_confirmation_is_also_web_only(receiving,monkeypatch):

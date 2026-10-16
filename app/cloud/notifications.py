@@ -152,16 +152,19 @@ def result_files(generated):
     return sorted(rows,key=lambda r:(natural(r['directory']), r['media'].get('season') if type(r['media'].get('season')) is int else -1, r['media'].get('episode') if type(r['media'].get('episode')) is int else -1, natural(r['name'])))
 
 
-def batch_result(operation, state, message):
+def batch_result(operation, state, message, job_id='', kind='', diagnostic_report=None):
+    from app.cloud import diagnostics
     rows = result_files(operation.get('generated', []))
     directories = operation.get('publication') or {r['directory']:{'published':1,'failed':0} for r in rows}
     success = sum(v.get('published',0)>0 and not v.get('failed') for v in directories.values())
     failed = sum(bool(v.get('failed')) for v in directories.values())
     metadata = {v['path'] for r in rows for v in r['owned'] if v.get('path')}
-    text = '📦 STRM 批量结果：' + html.escape(message)
+    title = 'STRM 批量结果' if rows or directories or kind in ('sync', 'publish', 'share_strm') else '整理结果'
+    text = '📦 '+title+'：' + html.escape(events.clean(message)[:160])
     text += '\n同步目录：'+str(len(directories))+' 个\n目录成功：'+str(success)+' 个 | 目录异常：'+str(failed)+' 个'
     text += '\nSTRM 更新：'+str(len(rows))+' 个\n元数据写入：'+str(len(metadata))+' 个'
     text += '\n处理异常：'+str(len(operation.get('errors',[])))+' 项 | 跳过：'+str(len(operation.get('skipped',[])))+' 项'
+    text += '\n规则过滤：'+str(len(operation.get('filtered',[])))+' 项 | 版本保留：'+str(len(operation.get('quality_held',[])))+' 项'
     removed = operation.get('reconciliation',{}).get('removed',[])
     if removed:
         text += '\n失效引用清理：'+str(len(removed))+' 项'
@@ -171,6 +174,22 @@ def batch_result(operation, state, message):
         text += '\n等待延时生成：'+str(len(operation['deferred']))+' 项'
     if state == 'stopped':
         text += '\n任务已停止，仅统计已完成项目。'
+    problems = diagnostic_report or diagnostics.report(operation, state, message, limit=3)
+    shown = 0
+    for item in problems['items'][:3]:
+        chunk = '\n\n'+html.escape(item['label']+'：'+item['name'][:90])
+        chunk += '\n原因：'+html.escape(item['reason'][:180])
+        if item['rule']:
+            chunk += '\n规则：'+html.escape(item['rule'][:100])
+        chunk += '\n处理：'+html.escape(item['suggestion'][:120])
+        if len((text+chunk).encode('utf-16-le'))//2 > 3300:
+            break
+        text += chunk
+        shown += 1
+    if job_id:
+        text += '\n\n任务：'+html.escape(job_id[:12])+'（网页任务中心可搜索此编号）'
+    if problems['total'] > shown:
+        text += '\n其余 '+str(problems['total']-shown)+' 项在任务详情的处理清单中查看。'
     return text, rows
 
 

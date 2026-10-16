@@ -106,8 +106,20 @@ def step(job_id, key, payload, fn):
     try:
         result = fn()
     except CloudError as error:
+        with store.db() as con:
+            con.execute("UPDATE cloud_steps SET result=?,updated=? WHERE job_id=? AND step_key=? AND state='dispatched'",
+                        (store.encode({'reason': events.clean(str(error)), 'uncertain': error.uncertain}), time.time(), job_id, key))
         if stage:
             events.emit(stage,label+('结果待核实：' if error.uncertain else '未完成：')+str(error),job_id,level='WARNING',details={**diagnostic,'status':'uncertain' if error.uncertain else 'failed','elapsed_ms':int((time.monotonic()-started)*1000),'reason':str(error)})
+        raise
+    except Exception as error:
+        # The exception type is useful; provider exception text can carry credentials.
+        reason = '调用出现 '+type(error).__name__+'，该操作结果未核实；先查看文件当前状态，不要重复提交。'
+        with store.db() as con:
+            con.execute("UPDATE cloud_steps SET result=?,updated=? WHERE job_id=? AND step_key=? AND state='dispatched'",
+                        (store.encode({'reason': reason, 'uncertain': True}), time.time(), job_id, key))
+        if stage:
+            events.emit(stage, label+'结果未核实：'+reason, job_id, level='WARNING', details={**diagnostic, 'status': 'uncertain', 'reason': reason})
         raise
     with store.db() as con:
         con.execute(
@@ -151,7 +163,7 @@ def execute(job_id):
 
 
 def _execute(job_id):
-    from app.cloud import workflow
+    from app.cloud import workflow, diagnostics
 
     with store.db() as con:
         changed = con.execute(
@@ -174,9 +186,7 @@ def _execute(job_id):
             result["stopped"] = True
         state = (
             "needs_review"
-            if result.get("errors")
-            or result.get("skipped")
-            or result.get("refresh_pending")
+            if diagnostics.requires_review(result)
             else "success"
         )
         if result.get("stopped"):
@@ -202,6 +212,7 @@ def _execute(job_id):
             (state, store.encode(result), message, time.time(), job_id),
         )
     events.emit('queue',message+' · '+state,job_id,level='ERROR' if state=='failed' else 'WARNING' if state in ('uncertain','needs_review') else 'INFO',details={'event':row[0],'status':state,'elapsed_ms':int((time.monotonic()-started)*1000),'result':message})
+    diagnostics.emit_result(job_id, result, state, message)
     try:
         notify(job_id, row[0], state, message)
     except Exception:
@@ -214,7 +225,7 @@ def _execute(job_id):
 
 
 def notify(job_id, kind, state, message):
-    from app.cloud import settings, notifications
+    from app.cloud import settings, notifications, diagnostics
 
     cfg = settings.get()
     category = {"intake":"transfer", "transfer":"transfer", "organize":"organize", "workflow":"organize", "categories":"organize", "sync":"strm", "publish":"strm", "share_strm":"strm", "channel":"channel", "maintenance":"maintenance"}.get(kind, "organize")
@@ -262,7 +273,8 @@ def notify(job_id, kind, state, message):
         generated=operation.get('generated',[])
         rows=[]
         if kind in ('workflow','organize','sync','publish','share_strm') or result.get('organization'):
-            text, rows = notifications.batch_result(operation,state,message)
+            problems = diagnostics.for_job(job) if job and kind != 'publish' else None
+            text, rows = notifications.batch_result(operation,state,message,job_id=job_id,kind=kind,diagnostic_report=problems)
         sent=notifications.deliver(job_id, notice_key, lambda: notify_telegram(text))
         if sent and cfg['notify_strm_details'] and generated:
             for index, detail in enumerate(notifications.detail_batches(rows),1):
@@ -271,7 +283,7 @@ def notify(job_id, kind, state, message):
                     break
     except Exception:
         sent = False
-    events.emit('notify','任务通知已发送' if sent else '任务通知发送失败或结果未知，请核对机器人配置',job_id,level='INFO' if sent else 'WARNING')
+        events.emit('notify','任务通知内容处理失败，结果记录已保存，请查看任务详情',job_id,level='WARNING')
 
 
 def details(job_id):
@@ -288,6 +300,9 @@ def details(job_id):
     ]
     from app.cloud import replacement
     result['upgrades'] = replacement.summary(job_id)
+    store.attach_job_activity(result)
+    from app.cloud import diagnostics
+    result['diagnostics'] = diagnostics.for_job(result)
     return result
 
 

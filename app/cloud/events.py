@@ -16,7 +16,8 @@ DETAIL_FIELDS = frozenset(('job_id','event','status','file_id','parent_id','targ
     'season','episode','elapsed_ms','cache_hit','source_count','result','connection',
     'count','reason','account_id','binding_version','directory_count','file_count',
     'video_count','filtered_count','skipped_count','published_count','failed_count',
-    'metadata_count','queued_count','renamed_count','moved_count','removed_count'))
+    'metadata_count','queued_count','renamed_count','moved_count','removed_count',
+    'suggestion','category','stage','rule'))
 
 
 def safe_details(value):

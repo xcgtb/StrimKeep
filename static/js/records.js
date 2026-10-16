@@ -293,10 +293,12 @@ function toggleExecutionDetail(btn){
 
 var logCenter = { cursor: 0, timer: null, busy: false, paused: false, generation: 0, ids: new Set(), source:'', query:'', level:'', task:'' };
 function runtimeLogDetails(row){
-  var d=row.details||{},html='',labels={event:'动作',status:'结果',file_id:'115 文件 ID',parent_id:'原父目录 ID',target_id:'目标目录 ID',source_name:'原文件名',target_name:'目标名称',path:'NAS 路径 / 归档目录',sha1:'源文件 SHA1',size:'源文件字节数',asset_id:'播放引用 ID',tmdb_id:'TMDB ID',kind:'媒体类型',season:'季',episode:'集',cache_hit:'媒体缓存命中',source_count:'绑定源文件数',result:'结果说明',connection:'Emby 连接',count:'处理数量',reason:'原因',account_id:'账号记录 ID',binding_version:'绑定格式版本',directory_count:'目标 / 子目录数',file_count:'文件数',video_count:'视频数',filtered_count:'过滤项数',skipped_count:'跳过项数',published_count:'已发布数量',failed_count:'异常数量',metadata_count:'元数据数量',queued_count:'排队数量',renamed_count:'计划重命名数',moved_count:'已移动数量',removed_count:'已清理数量'};
+  var d=row.details||{},html='',labels={event:'动作',status:'结果',file_id:'115 文件 ID',parent_id:'原父目录 ID',target_id:'目标目录 ID',source_name:'原文件名',target_name:'目标名称',path:'NAS 路径 / 归档目录',sha1:'源文件 SHA1',size:'源文件字节数',asset_id:'播放引用 ID',tmdb_id:'TMDB ID',kind:'媒体类型',season:'季',episode:'集',cache_hit:'媒体缓存命中',source_count:'绑定源文件数',result:'结果说明',connection:'Emby 连接',count:'处理数量',reason:'原因',suggestion:'处理建议',category:'处理分类',stage:'发生阶段',rule:'命中规则',account_id:'账号记录 ID',binding_version:'绑定格式版本',directory_count:'目标 / 子目录数',file_count:'文件数',video_count:'视频数',filtered_count:'过滤项数',skipped_count:'跳过项数',published_count:'已发布数量',failed_count:'异常数量',metadata_count:'元数据数量',queued_count:'排队数量',renamed_count:'计划重命名数',moved_count:'已移动数量',removed_count:'已清理数量'};
   var states={started:'开始',preflight:'核验中',preview:'仅预览',dispatched:'已发送，待核实',published:'已落盘',verified:'已核实',acknowledged:'已接受，待核实',uncertain:'结果未知',blocked:'已阻止',revoked:'已撤销',success:'任务完成',needs_review:'需要处理',failed:'未完成',stopped:'已停止',queued:'已排队',draining:'等待收尾',finished:'已完成',skipped:'已跳过',unknown:'结果未知',sent:'已发送'};
   var actions={directory_read:'读取目录',preanalysis:'来源预分析',action_plan:'动作规划',publish_queue:'增量发布队列',publication:'STRM 发布',deferred:'延时生成',empty_batch:'空任务检查',poster:'作品海报推送',result:'任务结果推送',rename:'重命名',move:'移动归档',mkdir:'创建目录'};
   if(/^[a-f0-9]{32}$/.test(d.job_id||''))html+='<button class="log-task" type="button" title="只看此任务日志" onclick="focusRuntimeTask(\''+d.job_id+'\')">任务 '+esc(d.job_id.slice(0,12))+'</button>';
+  if(/^[a-f0-9]{32}$/.test(d.job_id||''))html+='<button class="log-task" type="button" onclick="openRuntimeTaskDetail(\''+d.job_id+'\')">查看任务详情</button>';
+  if(d.reason)html+='<p class="log-problem-reason">原因：'+esc(String(d.reason))+(d.suggestion?'<br>处理：'+esc(String(d.suggestion)):'')+'</p>';
   if(states[d.status])html+='<span class="log-result">'+esc(states[d.status])+'</span>';
   if(Number.isFinite(d.elapsed_ms))html+='<span class="log-duration">耗时 '+esc((Math.max(0,d.elapsed_ms)/1000).toFixed(2))+' 秒</span>';
   var fields=Object.keys(labels).filter(function(k){return d[k]!==undefined&&d[k]!==null;});
@@ -306,6 +308,13 @@ function runtimeLogDetails(row){
 function focusRuntimeTask(id){
   if(!/^[a-f0-9]{32}$/.test(id))return;
   $('logTask').value=id;filterRuntimeLogs();
+}
+function openRuntimeTaskDetail(id){
+  if(!/^[a-f0-9]{32}$/.test(id)||!window.cloudWorkbench)return;
+  try{sessionStorage.setItem('sk-drive-page','jobs');}catch(_){}
+  if(window.__activeTab==='cloud')return cloudWorkbench.inspectJob(id);
+  window.__cloudJobToOpen=id;
+  if(typeof switchTab==='function')switchTab('cloud');
 }
 function stopLogCenter(){
   logCenter.generation++;

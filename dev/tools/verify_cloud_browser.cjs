@@ -14,7 +14,10 @@ fs.mkdirSync(out,{recursive:true});
   await page.setViewportSize({width:size.width,height:Math.max(size.height,height)});await page.waitForTimeout(100);
   await page.screenshot({path:path.join(out,name),fullPage:false});await page.setViewportSize(size);
  }
+ const problemItems=Array.from({length:41},(_,i)=>({category:'skipped',label:'识别或执行跳过',name:'演示来源.第'+(i+1)+'集.mkv',file_id:String(100+i),reason:'未识别到对应作品，文件名缺少可确认的片名或季集信息。',stage:'影视识别',suggestion:'核对片名、年份和 TMDB，剧集同时核对季集；修正作品后重新预览。',page:'organize',module:'run',path:'',rule:'',attention:true})).concat([{category:'filtered',label:'规则过滤',name:'sample.mkv',file_id:'999',reason:'命中忽略关键词',rule:'sample',stage:'文件过滤',suggestion:'如需处理此文件，调整过滤条件后重新预览来源目录。',page:'organize',module:'naming',path:'',attention:false}]);
+ function diagnosticFixture(params){let category=params.get('category')||'',query=params.get('query')||'',offset=Number(params.get('offset')||0),limit=Number(params.get('limit')||30);let selected=problemItems.filter(i=>(!category||i.category===category)&&(!query||JSON.stringify(i).includes(query)));return {items:selected.slice(offset,offset+limit),offset,total:selected.length,has_more:offset+limit<selected.length,counts:{skipped:41,filtered:1},attention:41};}
  const config={public_url:'http://nas.example:8321',output_root:'/strm/local',emby_output_root:'/strimkeep-strm/local',share_output_root:'/strm/share',share_emby_output_root:'',nfo_enabled:true,proxy_port:8322,proxy_enabled:false,video_extensions:['.mkv','.mp4','.avi','.ts'],metadata_extensions:['.srt','.ass','.nfo'],naming_style:'standard',rename_enabled:true,generate_strm_enabled:true};
+ let ingestionItems=[{id:'receipt-fixture-1',asset_id:'asset-fixture',title:'作品演示',path:'/strimkeep-strm/local/作品演示.strm',state:'confirmed',result:{message:'Emby 已确认入库'}},{id:'',asset_id:'unverified-fixture',title:'已生成 · 等待连接配置',path:'/strm/share/分享作品.strm',state:'unverified',result:{message:'STRM 已生成；此来源未设置 Emby 路径映射，请补齐个人库或分享库根目录。'}},{id:'pending-fixture',asset_id:'pending-asset',title:'已登记 · 后台核验中',path:'/strimkeep-strm/local/新影片.strm',state:'pending',result:{}}];
  let connections=[{id:'b'.repeat(32),name:'家庭 Emby',url:'http://emby.fixture:8096',enabled:true,notify:true,personal_root:'/strimkeep-strm/local',share_root:'/strimkeep-strm/share',key_saved:true}],connectionRevision=1;
  await page.route('http://strimkeep.test/**',async route=>{
   const url=new URL(route.request().url()),p=url.pathname;
@@ -42,13 +45,16 @@ fs.mkdirSync(out,{recursive:true});
    else if(p.endsWith('/maintenance'))body={revision:0,config:{signin_enabled:false,recycle_enabled:false,signin_cron:'0 8 * * *',recycle_cron:'0 4 * * *',timezone:'Asia/Shanghai'}};
    else if(p.endsWith('/organizer-sources'))body={revision:1,items:[],target:{id:'2',name:'影视归档'}};
    else if(p.endsWith('/jobs'))body={items:[
-    {id:'job-fixture-1',kind:'organize',state:'running',message:'正在整理',progress:{phase:'移动归档',current:'征途 · S01E01—E28',processed:16,total:28}},
-    {id:'job-fixture-2',kind:'sync',state:'success',message:'STRM 已生成 · 等待 Emby 入库检查'},
+    {id:'job-fixture-1',kind:'organize',state:'running',message:'正在整理',progress:{phase:'移动归档',current:'征途 · S01E01—E28',processed:16,total:28},activity:{label:'整理与 STRM 生成中',active:true,needs_attention:false,publication:{verified:14,queued:2},notification:{verified:1}}},
+    {id:'job-fixture-2',kind:'sync',state:'success',message:'整理完成 · 延时 STRM 仍在排队',activity:{label:'STRM 后续处理中',active:true,needs_attention:false,deferred:{success:6,queued:2},notification:{verified:1}}},
     {id:'job-fixture-3',kind:'transfer',state:'success',message:'分享接收已核实 · 1 个作品目录'},
     {id:'job-fixture-4',kind:'organize',state:'needs_review',message:'1 个文件识别不明确，已保留原位'},
     {id:'job-fixture-5',kind:'channel',state:'success',message:'频道资源已接收，等待定时整理'}]};
+   else if(p.endsWith('/diagnostics'))body={diagnostics:diagnosticFixture(url.searchParams)};
+   else if(p==='/api/cloud/jobs/job-fixture-4'||p==='/api/cloud/jobs/'+('a'.repeat(32)))body={job:{id:p.split('/').pop(),kind:'workflow',state:'needs_review',message:'部分项目需要处理',progress:{phase:'整理',processed:0,total:0,current:''},result:{skipped:problemItems.slice(0,41)},steps:[],diagnostics:diagnosticFixture(new URLSearchParams())}};
+   else if(p==='/api/cloud/jobs/job-fixture-1')body={job:{id:'job-fixture-1',kind:'organize',state:'running',message:'已归档 16 / 28 项，STRM 持续生成',progress:{phase:'移动归档',processed:16,total:28,current:'征途 · S01E01—E28'},activity:{label:'整理与 STRM 生成中',active:true,needs_attention:true,publication:{verified:14,queued:2},notification:{verified:1,unknown:1}},result:{files:Array.from({length:80},(_,i)=>({name:'征途.2026.S01E'+String(i+1).padStart(2,'0')+'.mkv'})),errors:[{name:'征途.特别篇.mkv',reason:'季集信息不明确，已保留原位，请修正后重新预览。'}]},steps:[]}};
    else if(p.endsWith('/assets'))body={items:[0,1,2,3].map(i=>({id:('a'+i).padEnd(32,'0'),account_id:'A',state:'active',path:'/strm/local/电影/动画电影/作品演示/作品演示.'+i+'.strm'}))};
-   else if(p.endsWith('/ingestion'))body={items:[{id:'receipt-fixture-1',asset_id:'asset-fixture',title:'作品演示',path:'/strimkeep-strm/local/作品演示.strm',state:'confirmed',result:{message:'Emby 已确认入库'}}]};
+   else if(p.endsWith('/ingestion'))body={items:ingestionItems};
    else if(p.endsWith('/plans'))body={plan:{id:'preview-fixture',items:[],skipped:[],quality8:{notice:'八维预览测试',comparisons:[{new_name:'<New>.mkv',existing_name:'Old.mkv',suggestion:'新版本更优',dimensions:[{label:'分辨率',new:'2160p',existing:'1080p',reason:'新版本优先',verdict:'new'}]}]}}};
    else if(p.endsWith('/telegram-reader'))body={revision:0,connected:false};
    else if(p.endsWith('/resources/catalog'))body={genres:[],countries:[]};
@@ -126,6 +132,15 @@ fs.mkdirSync(out,{recursive:true});
  await page.evaluate(()=>{openDrivePage('playback');cloudPanels.open('playback','emby');});
  await page.waitForFunction(()=>document.getElementById('cw-link-emby-url').value==='http://emby.fixture:8096');
  assert(await page.locator('#cw-link-emby-name').isVisible(),'connection name is editable');
+ await page.locator('#cw-link-ingestion .cw-ingestion-row').nth(2).waitFor();
+ assert((await page.locator('#cw-link-ingestion').innerText()).includes('STRM 已生成 · 尚未核验'));
+ assert((await page.locator('#cw-link-ingestion').innerText()).includes('已登记，等待后台核对'));
+ assert(await page.locator('#cw-link-ingestion [data-ingestion-retry]').count()===1,'unregistered publications cannot submit an empty receipt ID');
+ for(const width of [1440,390]){await page.setViewportSize({width,height:900});await page.locator('#cw-link-ingestion').screenshot({path:path.join(out,'ingestion-records-'+width+'.png')});}
+ await page.locator('#cw-link-ingestion [data-link-action=locateEmby]').click();assert(await page.locator('#cw-link-emby-url').evaluate(n=>document.activeElement===n),'missing configuration action focuses the real connection form');
+ ingestionItems[2]={...ingestionItems[2],state:'confirmed',result:{message:'Emby 已确认入库'}};
+ await page.locator('[data-link-action=loadIngestion]').click();await page.waitForFunction(()=>document.querySelectorAll('#cw-link-ingestion [data-ingestion-retry]').length===0);
+ assert(await page.locator('#cw-link-ingestion .cw-ingestion-row').count()===3,'refresh retains generated records and updates confirmations');
  assert(await page.locator('#cw-link-emby-notify').count()===0,'there is no duplicate Emby poster switch');
  await page.locator('#cw-link-emby-url').fill('http://unsaved.fixture:8096');
  await page.evaluate(()=>openDrivePage('strm'));await page.evaluate(()=>openDrivePage('playback'));
@@ -166,7 +181,7 @@ fs.mkdirSync(out,{recursive:true});
  await page.evaluate(()=>document.documentElement.dataset.theme='dark');await page.screenshot({path:path.join(out,'drive-mobile-dark.png'),fullPage:true});
  // Studio is the production shell, not a standalone mockup. Only APIs carry demo data.
  await page.setViewportSize({width:1440,height:1050});await page.evaluate(()=>{document.documentElement.dataset.theme='light';openDrivePage('workspace');window.scrollTo(0,0);});
- await page.waitForFunction(()=>document.getElementById('cw-studio-running').textContent==='1'&&document.querySelectorAll('#cw-studio-recent [data-studio-job]').length===5);
+ await page.waitForFunction(()=>document.getElementById('cw-studio-running').textContent==='2'&&document.querySelectorAll('#cw-studio-recent [data-studio-job]').length===5);
  assert(await page.locator('#cw-studio-recent [data-studio-job]').count()===5);
  assert(await page.locator('.cw-studio-nav button').count()===6);
  assert((await page.locator('#cw-studio-attention').textContent())==='1');
@@ -177,7 +192,7 @@ fs.mkdirSync(out,{recursive:true});
  await page.locator('#cw-studio-filter').fill('Emby');assert(await page.locator('.cw-studio-setup:visible').count()===1);
  await page.locator('.cw-studio-setup:visible').click();assert(await page.locator('#cw-link-emby-url').isVisible());
  await page.setViewportSize({width:390,height:844});await page.evaluate(()=>{openDrivePage('workspace');window.scrollTo(0,0);});
- await page.waitForFunction(()=>document.getElementById('cw-studio-running').textContent==='1');
+ await page.waitForFunction(()=>document.getElementById('cw-studio-running').textContent==='2');
  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1),'studio mobile overflow');
  await capture('studio-workspace-mobile.png');
  await page.evaluate(()=>{openDrivePage('configuration');document.getElementById('cw-studio-filter').value='';document.getElementById('cw-studio-filter').dispatchEvent(new Event('input'));window.scrollTo(0,0);});
@@ -190,7 +205,24 @@ fs.mkdirSync(out,{recursive:true});
  await capture('studio-workspace-dark.png');
  await page.evaluate(()=>{document.documentElement.dataset.theme='light';openDrivePage('organize');cloudPanels.open('organize','organize-directories');window.scrollTo(0,0);});
  await capture('studio-organize-desktop.png');
- await page.evaluate(()=>{openDrivePage('share-library');});
+ await page.setViewportSize({width:390,height:844});
+ await page.evaluate(()=>{openDrivePage('workspace');});
+ await page.locator('#cw-workspace [data-studio-page="share-library"]').click();
+ assert(await page.locator('#cw-share-library-link').isVisible(),'workspace shortcut reaches share without transfer');
+ assert((await page.locator('#cw-page-title').innerText())==='分享免转存');
+ await page.evaluate(()=>openDrivePage('transfer'));
+ await page.locator('#cw-studio-receive-nav [data-studio-page="share-library"]').click();
+ assert(await page.locator('#cw-share-library-link').isVisible(),'receiving mode switch reaches the share form');
+ assert((await page.locator('#cw-studio-receive-nav [data-studio-page="share-library"]').getAttribute('aria-current'))==='page');
+ assert((await page.locator('[data-studio-nav="transfer"]').getAttribute('aria-current'))==='page');
+ assert((await page.locator('[data-drive-page="share-library"]').getAttribute('aria-current'))==='page');
+ assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1),'share mode entry fits mobile');
+ await capture('share-entry-mobile.png');
+ await page.setViewportSize({width:1440,height:1050});
+ await page.locator('[data-drive-page="share-library"]').click();
+ assert(await page.locator('#cw-share-library-link').isVisible(),'sidebar reaches the share form');
+ await capture('share-entry-desktop.png');
+ await page.setViewportSize({width:390,height:844});
  assert(!await page.locator('#cw-share-repair').isVisible(),'repair form is not shown before identification');
  assert(await page.locator('#cw-share-auto-organize').count()===0,'share direct output cannot show a transfer mutation checkbox');
  await page.locator('#cw-share-library-link').fill('https://115.com/s/fixtureabc');await page.locator('#cw-share-library [data-cwa="preview"]').click();
@@ -198,7 +230,7 @@ fs.mkdirSync(out,{recursive:true});
  await page.locator('#cw-share-library [data-cwa="shareStrmPreview"]').first().click();await page.locator('#cw-share-step-result').waitFor({state:'visible'});
  assert(!await page.locator('#cw-share-season').isVisible(),'movie correction cannot show season/episode fields');
  assert(!await page.locator('#cw-share-library [data-cwa="shareStrmApply"]').isDisabled());
- await capture('share-flow-desktop.png');
+ await page.setViewportSize({width:1440,height:1050});await capture('share-flow-desktop.png');
  await page.setViewportSize({width:390,height:844});await capture('share-flow-mobile.png');
  await page.locator('#cw-share-repair > summary').click();assert(!await page.locator('#cw-share-season').isVisible());
  await page.locator('#cw-share-kind').selectOption('tv');assert(await page.locator('#cw-share-season').isVisible());
@@ -211,7 +243,40 @@ fs.mkdirSync(out,{recursive:true});
  await page.setViewportSize({width:390,height:844});
  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1),'log evidence mobile overflow');
  await capture('evidence-logs-mobile.png');
+ await page.addScriptTag({content:runtime.slice(runtime.indexOf('function switchTab(id){'),runtime.indexOf('/* 手机 Floating Dock'))});
+ await page.evaluate(()=>{window.MENU=[{id:'cloud',name:'我的网盘'}];window.groupOf=id=>id;});
+ await page.locator('.log-task').filter({hasText:'查看任务详情'}).first().click();
+ await page.locator('#cw-job-dialog .cw-diagnostic-card').first().waitFor();
+ assert(await page.locator('#cw-job-dialog').evaluate(n=>n.open),'log entry opens the real task dialog');
+ assert((await page.locator('#cw-job-dialog').innerText()).includes('未识别到对应作品'));
+ await capture('diagnostics-from-log-mobile.png');
+ await page.locator('#cw-job-dialog [data-cwa="closeJobDetail"]').click();
  await page.evaluate(()=>{stopLogCenter();window.__activeTab='cloud';document.querySelectorAll('.tab').forEach(n=>n.classList.toggle('active',n.id==='tab-cloud'));});
+ await page.evaluate(()=>openDrivePage('jobs'));
+ await page.locator('.cw-task-card').first().waitFor();
+ assert((await page.locator('#cw-job-list').innerText()).includes('STRM 后续处理中'));
+ await page.locator('[data-job="job-fixture-1"]').click();
+ await page.locator('#cw-job-summary .cw-task-issues').first().waitFor();
+ assert((await page.locator('#cw-job-summary').innerText()).includes('文件结果各显示前 30 项'));
+ for(const theme of ['light','dark'])for(const width of [1440,390]){
+  await page.setViewportSize({width,height:900});await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
+  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1),'task center must fit mobile width');
+  await capture('task-center-'+theme+'-'+width+'.png');
+ }
+ await page.locator('#cw-job-dialog [data-cwa="closeJobDetail"]').click();
+ await page.locator('[data-job-filter="attention"]').click();
+ assert(await page.locator('.cw-task-card').count()===1,'attention filter uses the durable follow-up status');
+ await page.locator('[data-job="job-fixture-4"]').click();
+ await page.locator('#cw-job-dialog .cw-diagnostic-card').first().waitFor();
+ for(const width of [1440,390]){await page.setViewportSize({width,height:900});await page.evaluate(()=>document.documentElement.dataset.theme='light');assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1),'diagnostic dialog fits the viewport');assert((await page.locator('#cw-job-dialog').boundingBox()).x>=10,'dialog stays horizontally centered');await capture('task-diagnostics-'+width+'.png');}
+ await page.locator('[data-diagnostic-next]').click();
+ await page.waitForFunction(()=>document.getElementById('cw-diagnostic-status').textContent.includes('31—42'));
+ await page.locator('#cw-diagnostic-category').selectOption('filtered');
+ await page.waitForFunction(()=>document.querySelector('.cw-diagnostic-card h5').textContent==='sample.mkv');
+ assert((await page.locator('.cw-diagnostic-card').innerText()).includes('命中规则'));
+ await capture('task-diagnostics-filter-mobile.png');
+ await page.locator('#cw-job-dialog [data-cwa="closeJobDetail"]').click();
+ await page.locator('[data-job-filter="all"]').click();
  const buttonAudit=[];
  for(const theme of ['light','dark'])for(const width of [390,1440]){
   await page.setViewportSize({width,height:900});await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
@@ -239,6 +304,6 @@ fs.mkdirSync(out,{recursive:true});
  fs.writeFileSync(path.join(out,'button-audit.json'),JSON.stringify(buttonAudit,null,2));
  assert(buttonAudit.every(c=>c.text&&c.fill!=='rgba(0, 0, 0, 0)'&&c.fill!==c.bg&&parseFloat(c.font)>=11),'every visible drive button needs readable text');
  assert.deepStrictEqual(errors,[]);
- console.log('PASS real Chromium: desktop/mobile modules, extension edits, unsaved drafts, output save, archive scan default, all module widths, no page errors. Fixture APIs only.');
+ console.log('PASS real Chromium: diagnostic dialog, log-to-task navigation, cause/rule pagination, three visible share-without-transfer entries, desktop/mobile modules, extension edits, unsaved drafts, output save, archive scan default, all module widths, no page errors. Fixture APIs only.');
  await browser.close();
 })().catch(e=>{console.error(e);process.exit(1);});

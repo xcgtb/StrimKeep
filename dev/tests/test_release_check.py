@@ -12,7 +12,7 @@ spec.loader.exec_module(checker)
 def base(tmp_path):
     (tmp_path/'app').mkdir()
     for name in ('app/version.py', 'Dockerfile', 'CHANGELOG.md',
-                 'requirements.txt', 'requirements-cloud115.lock',
+                 'requirements.txt', 'requirements-cloud115.txt',
                  'docker-compose.yml', 'dev/docker-compose.build.yml', 'dev/.env.example'):
         (tmp_path/name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT/name, tmp_path/name)
@@ -94,16 +94,26 @@ def test_public_compose_rejects_real_password(tmp_path):
     assert all('private-fixture-password' not in issue for issue in issues)
 
 
-def test_docker_requirements_glob_must_include_referenced_lock(tmp_path):
+def test_docker_must_include_referenced_runtime_requirements(tmp_path):
     root = base(tmp_path)
     docker = root/'Dockerfile'
     docker.write_text(docker.read_text().replace(
-        'COPY requirements.txt requirements-cloud115.lock ./', 'COPY requirements*.txt ./'))
-    assert 'Docker install stage missing requirements file: requirements-cloud115.lock' in checker.check(root)
+        'COPY requirements.txt requirements-cloud115.txt ./', 'COPY requirements.txt ./'))
+    assert 'Docker install stage missing requirements file: requirements-cloud115.txt' in checker.check(root)
 
 
 def test_nested_requirements_dependency_must_be_copied(tmp_path):
     root = base(tmp_path)
-    (root/'requirements-cloud115.lock').write_text('-r another-runtime.lock\n')
+    (root/'requirements-cloud115.txt').write_text('-r another-runtime.lock\n')
     (root/'another-runtime.lock').write_text('fixture-package==1\n')
     assert 'Docker install stage missing requirements file: another-runtime.lock' in checker.check(root)
+
+
+def test_dependabot_can_discover_every_runtime_include(tmp_path):
+    root = base(tmp_path)
+    pins = root/'requirements-cloud115.txt'
+    pins.rename(root/'requirements-cloud115.lock')
+    for name in ('requirements.txt', 'Dockerfile'):
+        p = root/name
+        p.write_text(p.read_text().replace('requirements-cloud115.txt', 'requirements-cloud115.lock'))
+    assert 'Dependabot requirements include must use .txt: requirements-cloud115.lock' in checker.check(root)
