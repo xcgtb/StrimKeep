@@ -87,7 +87,8 @@ const selectionMode = ref(false),
   selectedIds = ref(new Set<string>()),
   detailOpen = ref(false),
   compareOpen = ref(false);
-const selectedCards = computed(() => cards.value.filter((c) => selectedIds.value.has(c.id!)));
+const selectedCards = computed(() => cards.value.filter((c) => allSelected.value || selectedIds.value.has(c.id!)));
+const selectedCount = computed(() => allSelected.value ? total.value : selectedIds.value.size);
 const seasons = computed(() => {
   const item = detail.data.value?.item;
   const expected = new Map((item?.tmdb_info?.seasons || []).map((s) => [s.season, s.tmdb]));
@@ -127,14 +128,26 @@ async function load(more = false, background = false) {
   );
 }
 async function open(card: MediaCard) {
+  if (selectionMode.value) {
+    // Poster and title clicks become selection actions while in batch mode.
+    // The checkbox itself emits only select, so there is no double toggle.
+    toggle(card.id);
+    return;
+  }
   episodes.data.value = undefined;
   detailOpen.value = true;
   detail.data.value = undefined;
   await detail.run((signal) => mediaApi.detail(filters.media, card.id!, signal));
 }
 function toggle(id?: string) {
-  allSelected.value = false;
   if (!id) return;
+  if (allSelected.value) {
+    // A filtered global selection cannot express one excluded ID. Switch to the
+    // visible cards instead of incorrectly selecting just the clicked poster.
+    allSelected.value = false;
+    selectedIds.value = new Set(cards.value.map((card) => card.id!).filter((key) => key && key !== id));
+    return;
+  }
   const next = new Set(selectedIds.value);
   next.has(id) ? next.delete(id) : next.add(id);
   selectedIds.value = next;
@@ -147,6 +160,9 @@ function submitSearch() {
 watch(filters, () => {
   detailOpen.value = false;
   detail.cancel();
+  allSelected.value = false;
+  selectedIds.value = new Set();
+  compareOpen.value = false;
   void load();
 });
 async function manualDone() {
@@ -348,12 +364,19 @@ const live = useLibraryUpdates(refreshLoaded);
       清空</button
     ><button
       class="button primary push-right"
-      :disabled="!selectedIds.size"
+      :disabled="!selectedCount"
       @click="compareOpen = true"
     >
       查看所选状态
     </button>
   </div>
+  <p v-if="selectionMode" class="data-caption">
+    批量删除前请先把“片库范围”限定为个人库或分享库。个人库一次最多 20 部，分享库最多 600 部，后端预览核验后才可执行。
+    <span v-if="allSelected">全选模式点击单张海报，将切换为已加载海报的局部选择。</span>
+  </p>
+  <p v-if="selectionMode && filters.scope === 'all'" class="notice-bar">
+    当前显示全部片库。批量操作前请选择“本地库”或“分享库”，避免误判删除范围。
+  </p>
   <MappingDelete
     v-if="selectionMode"
     :media="filters.media"
@@ -499,7 +522,10 @@ const live = useLibraryUpdates(refreshLoaded);
           /></div></template></template
   ></ModalDialog>
   <ModalDialog v-if="compareOpen" title="所选作品状态" @close="compareOpen = false"
-    ><div class="comparison-list">
+    ><div v-if="allSelected" class="notice-bar">
+      已选中当前筛选条件下的全部 {{ total }} 部作品（可能包含尚未加载的海报）。本窗口仅预览当前已加载的卡片；实际删除范围以后台只读核验为准。
+    </div>
+    <div class="comparison-list">
       <div v-for="card in selectedCards" :key="card.id">
         <strong>{{ titleOf(card) }}</strong
         ><span>{{ badge(card) || '电影资源' }}</span

@@ -43,10 +43,8 @@ export const navigation = [
     items: [
       { to: '/settings/accounts', name: '115 网盘配置', icon: KeyRound },
       { to: '/resources/channels', name: '115 频道监控', icon: Radio },
-      { to: '/resources/receive?tab=batch', name: '链接转存', icon: Link2 },
-      { to: '/resources/receive?tab=offline', name: '离线转存', icon: Download },
+      { to: '/resources/receive?tab=batch', name: '资源接收', icon: Link2 },
       { to: '/organize/workspace', name: '影视整理', icon: ArrowDownUp },
-      { to: '/media/strm', name: 'STRM 生成', icon: FileVideo },
       { to: '/resources/share', name: '分享 STRM 生成与整理', icon: Share2 },
       { to: '/resources/files', name: '文件管理', icon: FolderOpen },
     ],
@@ -174,6 +172,20 @@ const moduleTools = [
     keywords: 'TG Telegram Emby 海报 通知',
   },
   {
+    to: '/resources/receive?tab=offline',
+    name: '离线转存',
+    group: '资源接收',
+    icon: Download,
+    keywords: '磁力 magnet ed2k 离线任务 下载接续',
+  },
+  {
+    to: '/media/strm',
+    name: 'STRM 生成及资源核验',
+    group: '影视整理',
+    icon: FileVideo,
+    keywords: 'STRM 同步 输出 源文件 视频 播放',
+  },
+  {
     to: '/resources/receive?tab=bot',
     name: '机器人接收',
     group: '我的网盘',
@@ -255,6 +267,9 @@ export const moduleNavigation: Record<string, { to: string; name: string }[]> = 
     { to: '/organize/quality', name: '八维洗版' },
     { to: '/settings/cloud?section=quality', name: '源文件治理' },
     { to: '/organize/automation', name: '自动整理' },
+    { to: '/media/strm', name: 'STRM 生成及同步' },
+    { to: '/settings/cloud?section=output', name: 'STRM 与播放设置' },
+    { to: '/tasks/ingestion', name: 'Emby 入库核验' },
     { to: '/settings/cloud?section=notifications', name: '入库与通知' },
   ],
   governance: [

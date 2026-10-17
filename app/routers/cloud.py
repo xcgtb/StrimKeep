@@ -318,6 +318,14 @@ def offline_resources(account_id:str,page:int=Query(1,ge=1,le=1000)):
     return {"status":"success",**call(provider.offline_tasks,page)}
 
 
+@router.get("/accounts/{account_id}/offline-handoffs")
+def offline_handoff_records(account_id: str):
+    from app.cloud import offline_handoff
+    if not call(store.account, account_id):
+        raise HTTPException(404, "账号不存在")
+    return {"status": "success", "items": call(offline_handoff.records, account_id)}
+
+
 @router.get("/resources/catalog")
 def receiving_catalog():
     from app import engine
@@ -583,7 +591,19 @@ def pipeline_status(account_id: str, response: Response):
 @router.post("/settings")
 def save_settings(body: dict):
     previous = call(settings.get)
-    result = call(settings.save, body)
+    source_keys = {'governance_source_mode', 'governance_generated_enabled',
+                   'governance_generated_only', 'output_root', 'share_output_root'}
+    if source_keys.intersection(body):
+        # Both CLI/Web scanner and cleaner use the shared task manager. Prevent
+        # changing their root contract while a registered scan/cleanup is active.
+        from app import tasks as governance_tasks
+        with governance_tasks.manager.lock:
+            active = governance_tasks.manager.current
+            if active is not None and active.status == 'running' and active.kind in ('inter_check', 'inter_clean'):
+                raise HTTPException(409, '正在执行治理扫描或清理；请完成后再切换治理来源或输出目录')
+            result = call(settings.save, body)
+    else:
+        result = call(settings.save, body)
     # Naming/authorization changes must not interrupt active playback listeners.
     if any(previous[k] != result[k] for k in ("proxy_enabled", "proxy_port")):
         emby_proxy.stop()

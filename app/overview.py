@@ -44,7 +44,7 @@ def _facts_reconcile_due():
 def _read_or_recompute_stats(forced):
     cached = state_store.read(engine.STATE_DIR / 'library_stats_cache.json', {})
     interval = config.get_ingest_cfg()['reconcile_hours'] * 3600 if config.load_config().get('ingest_mode') == 'webhook' else _STATS_RECHECK_INTERVAL
-    if not forced and isinstance(cached.get('rows'), list) and time.time() - float(cached.get('verified_ts') or cached.get('ts') or 0) < interval:
+    if not forced and stats._mounts_match_disk() and isinstance(cached.get('rows'), list) and time.time() - float(cached.get('verified_ts') or cached.get('ts') or 0) < interval:
         return cached
     with engine._strm_count_refreshing:
         return (engine._recompute_all_stats(allow_root_change=True) if forced
@@ -79,6 +79,11 @@ def _read():
         if data and data.get('emby_host') != engine.EMBY_HOST:
             data = None
         _memory.update(path=path, stamp=stamp, data=data, health_stamp=None)
+    # A new-only/hybrid governance scope may have replaced the legacy library.
+    # Do not serve a recently saved dashboard from the *previous* root set while
+    # the scoped recount is still pending. Keep the SQLite facts for recovery.
+    if _memory['data'] is not None and not stats._scope_matches_disk():
+        _memory.update(data=None, stamp=None, health_stamp=None)
     return _memory['data']
 
 
@@ -243,9 +248,13 @@ def get_overview():
                 if _memory['data']:
                     _memory['data']['dashboard']['libraryHealth'] = health
             _memory['health_stamp'] = stamp
+        mounts_ready = stats._mounts_match_disk()
         result.update(status='success' if data else 'pending', refresh=dict(_job),
                       strategy=config.get_strategy(), ttl_sec=engine._CACHE_TTL,
-                      stale=not data or time.time() - float(data.get('ts') or 0) >= engine._CACHE_TTL)
+                      stale=(not data or not mounts_ready or
+                             time.time() - float(data.get('ts') or 0) >= engine._CACHE_TTL),
+                      root_status={'verified': mounts_ready,
+                                   'message': '' if mounts_ready else 'STRM 库范围或挂载身份暂不可核验；显示上次已核实数据，切勿据此执行删除'})
     health = (result.get('dashboard') or {}).get('libraryHealth')
     if health:
         health['stale'] = not health.get('ts') or time.time() - health['ts'] > 1800

@@ -142,8 +142,9 @@ def _nat_key(text):
 def _split_root(path):
     """返回 (库标签, 相对根目录的路径)；不在两个库内则 ('', None)"""
     p = Path(path)
-    for root, label in ((_eng().L_ROOT, '本地'), (_eng().S_ROOT, '分享')):
+    for local, label in ((True, '本地'), (False, '分享')):
         try:
+            root = _cloud_bridge.governance_root(p, local)
             return label, p.relative_to(root)
         except ValueError:
             continue
@@ -1126,7 +1127,11 @@ def _current_rule_snapshot():
     rules['strategy'] = strategy
     from app.cloud import settings as cloud_settings
     cloud_cfg = cloud_settings.get()
-    rules['generated_strm'] = {k:cloud_cfg[k] for k in ('governance_generated_enabled','output_root','share_output_root')}
+    from app.cloud.settings import effective_governance_mode
+    rules['generated_strm'] = {k:cloud_cfg[k] for k in ('governance_generated_enabled','governance_generated_only','output_root','share_output_root')}
+    # Source mode is part of the signed plan. A scan from one mechanism cannot
+    # be executed after selecting another, even if the STRM filenames coincide.
+    rules['governance_source_mode'] = effective_governance_mode(cloud_cfg)
     # 七维画质规则同样决定删除方向。指纹必须覆盖顺序、开关、档位和发布组，
     # 否则修改画质设置后，旧计划仍会通过执行前的规则校验。
     # 只取规范化后的业务字段，排除文案以及 JSON 缩进等非业务变化。

@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
+// Legacy API fields 'governance_generated_enabled' and
+// 'governance_generated_only' are still returned for older deployments.
+// The governance_source_mode dropdown owns both; duplicate toggles would conflict.
 import { useCloudSettingsDraft } from '../composables/useCloudSettingsDraft';
 import { records, strings, type Data } from '../api/domain';
 import { useRoute } from 'vue-router';

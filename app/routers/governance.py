@@ -254,7 +254,32 @@ def api_governance_summary():
         file_guard_ready = not pid or bool(plan and plan.get('guard_version') == FILE_GUARD_VERSION)
         scan_status = load_scan_status()
         usable = bool(latest) and bool(ts) and age <= ttl and (state in ('pending', 'none')) and rule_aligned and file_guard_ready and scan_status.get('status') != 'failed'
-        return {'status':'success', 'schema_version':2,
+        # Display which STRM roots the current engine actually considers. Only stat
+        # paths, never enumerate or alter media while rendering a management page.
+        from pathlib import Path
+        from app.cloud import settings as cloud_settings
+        cloud_cfg = cloud_settings.get()
+        mode = cloud_settings.effective_governance_mode(cloud_cfg)
+        generated = mode in ('generated', 'combined')
+        upstream = mode in ('upstream', 'combined')
+        source_rows = []
+        for label, path, enabled, origin, method in (
+            ('上游个人 STRM', engine.L_ROOT, upstream, 'legacy', 'path'),
+            ('上游分享 STRM', engine.S_ROOT, upstream, 'legacy', 'path'),
+            ('自产个人 STRM', cloud_cfg.get('output_root') or '', generated, 'generated', 'asset_id'),
+            ('自产分享 STRM', cloud_cfg.get('share_output_root') or '', generated, 'generated', 'asset_id'),
+        ):
+            candidate = Path(path) if path else None
+            source_rows.append({'label': label, 'path': str(path), 'enabled': enabled,
+                                'present': bool(candidate and candidate.is_dir()),
+                                'origin': origin, 'method': method})
+        return {'status':'success', 'schema_version':2, 'sources': source_rows,
+                'source_mode': mode,
+                'source_mode_description': {
+                    'upstream':'只按旧挂载路径治理上游 STRM，沿用原路径删除保护',
+                    'generated':'只按 StrimKeep 资产身份核验自产 STRM；源文件操作依赖 115 授权',
+                    'combined':'兼容旧安装：扫描两类来源；各文件仍按自身路径与登记身份分别核验',
+                }[mode],
                 'scan': {'found': bool(latest), 'ts': ts, 'age_sec': int(age or 0),
                          'plan_id': pid or '', 'plan_state': state, 'usable': usable,
                          'ttl_sec': int(ttl), 'remaining_sec': max(0, int(ttl-(age or 0))) if ts else 0,

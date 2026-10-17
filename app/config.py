@@ -45,7 +45,7 @@ DEFAULTS = {
     'strategy_decision':             'quality_first',
     'match_strategy':                'title_year',  # title_year | tmdb_first —— 双库治理配对身份策略
     'strategy_multi_season_protect': 'compare',  # off | compare —— 多季合集保护（compare 即“开启”）
-    'strategy_tie_keep_local':       os.environ.get('TIE_KEEP_LOCAL', '0'),
+    'strategy_tie_keep_local':       os.environ.get('TIE_KEEP_LOCAL', '1'),
     'strategy_season_ratio':         '0.9',     # 剧集分享达标率阈值（0.5~1.0）：共同集里分享达标的占比 ≥ 此值才删本地
     'strategy_cover': '',  # 画质对比规则（7 维）JSON；空 = 默认规则
     'strategy_exempt_keywords':      '',
@@ -144,6 +144,9 @@ def load_config() -> dict:
             data = _state.read(CONFIG_FILE)
             if isinstance(data, dict):
                 base.update({k: str(v) for k, v in data.items() if v is not None})
+                # Do not reinterpret an old partial config's missing setting.
+                if 'strategy_tie_keep_local' not in data and not os.environ.get('TIE_KEEP_LOCAL'):
+                    base['strategy_tie_keep_local'] = '0'
         except FileNotFoundError:
             pass
         _CFG_CACHE['sig'] = sig

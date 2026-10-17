@@ -71,6 +71,7 @@ function groups(i: number, event: Event) {
             @change="patch(i, { enabled: ($event.target as HTMLInputElement).checked })"
         /></label>
         <div class="rule-actions">
+          <span class="quality-rule-state" :class="{ 'is-enabled': rule.enabled }">{{ rule.enabled ? '已启用' : '已关闭' }}</span>
           <button
             type="button"
             class="icon-button"
@@ -94,7 +95,7 @@ function groups(i: number, event: Event) {
             :aria-expanded="expanded.has(String(rule.key))"
             @click="toggleDetails(String(rule.key))"
           >
-            {{ expanded.has(String(rule.key)) ? '收起' : '详情' }}
+            {{ expanded.has(String(rule.key)) ? '收起档位' : '调整档位' }}
           </button>
         </div>
       </header>

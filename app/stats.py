@@ -105,6 +105,36 @@ def _statistics_files(root):
         raise LibraryScanError(root, root, '根目录未完成遍历')
 
 
+def _stats_sources(*, verify_mount=True):
+    """Use exactly the roots selected for governance; scanning always verifies mounts."""
+    from . import cloud_bridge
+    return [(root, kind) for local, kind in ((True, 'local'), (False, 'share'))
+            for root in cloud_bridge.governance_roots(local, verify_mount=verify_mount)]
+
+
+def _scope_matches_disk():
+    """Check config-root identity, not mount health; preserve last-known facts."""
+    try:
+        sources = _stats_sources(verify_mount=False)
+        ledger = _state.read(_eng().STATE_DIR / 'strm_directory_counts.json', {})
+        return ledger.get('roots') == [str(root) for root, _ in sources]
+    except (ValueError, OSError):
+        return False
+
+
+def _mounts_match_disk():
+    """Separate mount check: stale snapshots may be displayed, never promoted as live."""
+    if not _scope_matches_disk():
+        return False
+    try:
+        sources = _stats_sources()
+        identities = _state.read(_eng().STATE_DIR / 'strm_directory_counts.json', {}).get('identities') or {}
+        return all(identities.get(str(root)) == list(_root_identity(root))
+                   for root, _ in sources)
+    except (LibraryScanError, ValueError, OSError):
+        return False
+
+
 def _verified_stats(allow_root_change):
     """单次遍历双库，同时更新「分类统计」与「STRM 计数」两套缓存。
     之前两处各自独立遍历，时间不同/网络挂载抖动会导致数字对不上；
@@ -122,16 +152,19 @@ def _verified_stats(allow_root_change):
 
     directories = {}
     buckets = {}
-    roots = (_eng().L_ROOT, _eng().S_ROOT)
+    sources = _stats_sources()
+    roots = [root for root, _ in sources]
     identities = {str(root): list(_root_identity(root)) for root in roots}
     previous = _state.read(_eng().STATE_DIR / 'strm_directory_counts.json', {})
-    if previous.get('roots') == list(map(str, roots)) and not allow_root_change:
+    if not allow_root_change:
+        # Shared roots retain identity protection even when the configured root
+        # set changes; a stale old cache must not authorize an empty scan.
         for root in roots:
             old = previous.get('identities', {}).get(str(root))
             if old and old != identities[str(root)]:
                 raise LibraryScanError(root, root, '根目录挂载身份已变化，请确认挂载后手动刷新总览')
 
-    for root, key in ((_eng().L_ROOT, 'local'), (_eng().S_ROOT, 'share')):
+    for root, key in sources:
         for f in _statistics_files(root):
             try:
                 if not stat.S_ISREG(f.lstat().st_mode):
@@ -208,7 +241,8 @@ def refresh_event_directories(paths):
     Idempotent for duplicate/retried events. No count is inferred from episode
     numbers or callbacks. A missing baseline waits for explicit initialization.
     """
-    roots = [Path(_eng().L_ROOT), Path(_eng().S_ROOT)]
+    sources = _stats_sources()
+    roots = [root for root, _ in sources]
     with _eng()._strm_count_refreshing:
         ledger_path = _eng().STATE_DIR / 'strm_directory_counts.json'
         cache_path = _eng().STATE_DIR / 'library_stats_cache.json'
@@ -221,10 +255,10 @@ def refresh_event_directories(paths):
         changed = False
         for value in sorted(set(paths)):
             directory = Path(value)
-            for root, lib in zip(roots, ['local', 'share']):
+            for root, lib in sources:
                 try:
-                    relative = directory.resolve().relative_to(root.resolve())
-                except ValueError:
+                    directory.resolve(strict=True).relative_to(root.resolve(strict=True))
+                except (ValueError, OSError):
                     continue
                 identity = ledger.get('identities', {}).get(str(root))
                 if not root.is_dir() or (identity and identity != [root.stat().st_dev, root.stat().st_ino]):
@@ -281,26 +315,29 @@ def action_library_stats(args):
     # 缓存命中则直接返回
     now = time.time()
     from . import config
-    if config.load_config().get('ingest_mode') == 'webhook':
+    if config.load_config().get('ingest_mode') == 'webhook' and _scope_matches_disk():
         disk = _state.read(_eng().STATE_DIR / 'library_stats_cache.json', {})
         if isinstance(disk.get('rows'), list):
             _eng()._lib_stats_cache.update(ts=disk.get('ts', 0), data=disk)
             return disk
-    if _eng()._lib_stats_cache['data'] is not None and (now - _eng()._lib_stats_cache['ts']) < _STATS_AUTO_TTL:
+    scope_current = _scope_matches_disk()
+    if scope_current and _eng()._lib_stats_cache['data'] is not None and (now - _eng()._lib_stats_cache['ts']) < _STATS_AUTO_TTL:
         return _eng()._lib_stats_cache['data']
     disk = _state.read(_eng().STATE_DIR / 'library_stats_cache.json', {})
-    if isinstance(disk, dict) and isinstance(disk.get('rows'), list):
+    if scope_current and isinstance(disk, dict) and isinstance(disk.get('rows'), list):
         _eng()._lib_stats_cache.update(ts=disk.get('ts', 0), data=disk)
         if now - float(disk.get('ts') or 0) >= _STATS_AUTO_TTL:
             threading.Thread(target=_strm_count_bg_refresh, daemon=True,
                              name='library-stats-refresh').start()
         return disk
     with _eng()._strm_count_refreshing:
-        if _eng()._lib_stats_cache['data'] is not None and now - _eng()._lib_stats_cache['ts'] < _STATS_AUTO_TTL:
+        if _scope_matches_disk() and _eng()._lib_stats_cache['data'] is not None and now - _eng()._lib_stats_cache['ts'] < _STATS_AUTO_TTL:
             return _eng()._lib_stats_cache['data']
         return _recompute_all_stats()
 
 def _load_strm_count_disk():
+    if not _scope_matches_disk():
+        return None
     try:
         data = _state.read(_eng()._STRM_COUNT_CACHE_FILE)
         local, share = int(data['local']), int(data['share'])
@@ -340,7 +377,7 @@ def _get_strm_counts():
         disk = _load_strm_count_disk()
         if disk is not None:
             return disk[:2]
-    if now - _eng()._strm_count_cache['ts'] < _STATS_AUTO_TTL and _eng()._strm_count_cache['ts'] > 0:
+    if _scope_matches_disk() and now - _eng()._strm_count_cache['ts'] < _STATS_AUTO_TTL and _eng()._strm_count_cache['ts'] > 0:
         return _eng()._strm_count_cache['local'], _eng()._strm_count_cache['share']
     disk = _load_strm_count_disk()
     if disk is not None:

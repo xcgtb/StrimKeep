@@ -110,7 +110,7 @@
     "decision": "quality_first",
     "match_strategy": "title_year",
     "multi_season_protect": "compare",
-    "tie_keep_local": false,
+    "tie_keep_local": true,
     "season_replace_ratio": 0.9,
     "exempt_keywords": [],
     "special_action": "compare"

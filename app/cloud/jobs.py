@@ -418,6 +418,8 @@ def schedule():
     from app.cloud import maintenance, receiving
     maintenance.schedule()
     receiving.schedule()
+    from app.cloud import offline_handoff
+    offline_handoff.schedule()
     from app.cloud import channel_reader, emby_library
     channel_reader.schedule()
     emby_library.schedule()
@@ -476,8 +478,9 @@ def _loop():
                             return
                         # Scans must continue while organization/metadata work
                         # is running; this scheduler never submits 115 writes.
-                        from app.cloud import emby_library
+                        from app.cloud import emby_library, offline_handoff
                         emby_library.schedule()
+                        offline_handoff.schedule()
         except Exception:
             log.error("网盘任务调度失败，保留待处理记录")
         _WAKE.wait(2)

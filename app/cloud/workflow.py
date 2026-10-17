@@ -947,6 +947,10 @@ def run(job_id, kind, payload):
         return sync(job_id, payload)
     if kind == "workflow":
         from app.cloud import pipeline
+        if payload.get('expected_directory_revision') is not None:
+            current = directories.get(payload['account_id'])
+            if current['revision'] != payload['expected_directory_revision'] or not current['directories'].get('target') or str(current['directories']['target']['id']) != str(payload['target_cid']):
+                raise CloudError('云下载完成后接收目录或归档配置已改变，自动整理已暂停', 409)
         pipeline.prepare()
         if payload.get("intake_rule"):
             from app.cloud import intake_automation

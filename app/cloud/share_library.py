@@ -133,7 +133,7 @@ def preview(preview_id, ids, overrides=None):
     sid, revision = save_source(data["account_id"], access["code"], access["password"])
     selected, filtered = file_filters.select(rows, cfg)
     view = View(provider, access, rows)
-    items, skipped, paths = [], [], set()
+    items, skipped = [], []
     for row in selected:
         try:
             if not re.fullmatch(r"[A-Fa-f0-9]{40}", row["sha1"]) or row["size"] <= 0:
@@ -147,28 +147,39 @@ def preview(preview_id, ids, overrides=None):
                         raise
                     return {"status": "fallback", "fields": {}, "warning": "分享媒体提取失败，已按设置回退文件名解析"}
             media = recognition.recognize(row["name"], (overrides or {}).get(row["id"]), cfg, probe if cfg["ffprobe_enabled"] else None)
-            relative = media["directory"]+"/"+str(PurePosixPath(media["name"]).with_suffix(".strm"))
-            destination = strm.target(base, relative)
-            if destination.exists():
-                with store.db() as con:
-                    bound = con.execute("SELECT id FROM cloud_assets WHERE account_id=? AND file_id=? AND local_path=?", (data["account_id"], "share:"+sid+":"+row["id"], str(destination))).fetchone()
-                asset = store.asset(bound[0]) if bound else None
-                if not asset or not destination.is_file() or strm.digest(destination.read_bytes()) != asset["payload"].get("digest"):
-                    raise CloudError("同名 STRM 已存在，保留现有版本；请先在片库核对去留，不另建分享来源目录", 409)
-            if relative in paths:
-                raise CloudError("本批命名输出相同，请修正模板或分次选择版本", 409)
-            paths.add(relative)
             items.append({"source": row, "media": media, "followers": workflow.related_companions(rows, row, cfg)})
         except CloudError as error:
             skipped.append({"file_id": row["id"], "name": row["name"], "reason": str(error)})
+    from app.cloud import share_versions
+    items, quality_held = share_versions.select(items, data['account_id'], cfg, base, sid)
+    skipped.extend(item for item in quality_held if item.get('blocked'))
+    publishable, paths = [], set()
+    for item in items:
+        row, media = item['source'], item['media']
+        try:
+            relative = media['directory']+'/'+str(PurePosixPath(media['name']).with_suffix('.strm'))
+            destination = strm.target(base,relative)
+            if destination.exists():
+                with store.db() as con:
+                    bound = con.execute("SELECT id FROM cloud_assets WHERE account_id=? AND file_id=? AND local_path=?",(data['account_id'], 'share:'+sid+':'+row['id'],str(destination))).fetchone()
+                asset = store.asset(bound[0]) if bound else None
+                if not asset or not destination.is_file() or strm.digest(destination.read_bytes()) != asset['payload'].get('digest'):
+                    raise CloudError('同名 STRM 已存在，保留现有版本；请先在片库核对去留',409)
+            if relative.casefold() in paths:
+                raise CloudError('本批命名输出相同，请修正模板或分次选择版本',409)
+            paths.add(relative.casefold())
+            publishable.append(item)
+        except CloudError as error:
+            skipped.append({'file_id':row['id'],'name':row['name'],'reason':str(error)})
+    items = publishable
     payload = {"account_id": data["account_id"], "account_revision": data["account_revision"],
                "share_id": sid, "share_revision": revision, "items": items, "skipped": skipped,
-               "filtered": filtered, "config": snapshot(cfg), "root_identity": [base.stat().st_dev, base.stat().st_ino]}
+               "quality_held": quality_held, "filtered": filtered, "config": snapshot(cfg), "root_identity": [base.stat().st_dev, base.stat().st_ino]}
     current(payload)
     pid = store.ident()
     with store.db() as con:
         con.execute("INSERT INTO cloud_plans VALUES(?,?,?,?,?,?)", (pid, data["account_id"], data["account_revision"], "share_strm_pending", store.encode(payload), time.time()+600))
-    return {"id": pid, "items": items, "skipped": skipped, "filtered": filtered, "output_root": str(base), "effect": "仅生成 NAS 分享库 STRM；不转存、不改名、不移动、不删除 115 文件"}
+    return {"id": pid, "items": items, "skipped": skipped, "quality_held": quality_held, "filtered": filtered, "output_root": str(base), "effect": "仅生成 NAS 分享库 STRM；优先选择更优版本，旧播放引用需入库确认后人工清理；绝不删除 115 分享源文件"}
 
 
 def apply(plan_id, confirmed=False):
@@ -211,7 +222,7 @@ def prune_legacy_directory(base, previous, share_id, identity):
 
 
 def run(job_id, payload):
-    result = {"generated": [], "skipped": payload["skipped"], "filtered": payload["filtered"], "errors": [], "publication": {}}
+    result = {"generated": [], "skipped": payload["skipped"], "quality_held": payload.get("quality_held", []), "filtered": payload["filtered"], "errors": [], "publication": {}}
     provider, access = current(payload)
     if snapshot(settings.get()) != payload["config"]:
         raise CloudError("命名或输出配置已变化，请重新预览分享 STRM", 409)
@@ -236,6 +247,8 @@ def run(job_id, payload):
             base = strm.root("share")
             if [base.stat().st_dev, base.stat().st_ino] != payload["root_identity"]:
                 raise CloudError("分享库挂载变化，请重新预览", 409)
+            from app.cloud import share_versions
+            share_versions.recheck(item, payload['account_id'], settings.get(), base)
             with store.db() as con:
                 previous = con.execute("SELECT local_path FROM cloud_assets WHERE account_id=? AND file_id=? AND json_extract(payload,'$.output_root')=?", (payload["account_id"], "share:"+payload["share_id"]+":"+item["source"]["id"], str(base))).fetchone()
             asset = strm.generate(payload["account_id"], item["source"], item["media"], companions=item["followers"], provider=view, source_context={"source_kind": "share", "share_id": payload["share_id"], "share_revision": payload["share_revision"]})

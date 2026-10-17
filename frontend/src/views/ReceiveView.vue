@@ -29,6 +29,7 @@ const route = useRoute(),
   op = useOperation(() => cloud.id),
   preview = useRequest<Data>(),
   offline = useRequest<Data>(),
+  handoffs = useRequest<Data>(),
   receiving = useRequest<Data>(),
   directoryConfig = useRequest<Data>();
 const shareOnly = computed(() => route.path === '/resources/share'),
@@ -187,14 +188,28 @@ async function execute() {
     plan.value = undefined;
   }
 }
+function handoffLabel(row: Data) {
+  if (row.state === 'waiting') return '等待下载完成';
+  if (row.state === 'blocked') return '配置已变化，需要人工核对';
+  if (row.state === 'paused') return '自动接续已安全暂停';
+  if (row.child_state === 'success') return '自动整理完成（Emby 仍需核验）';
+  if (['failed', 'needs_review', 'uncertain'].includes(String(row.child_state)))
+    return '整理异常，需要人工核对';
+  if (row.child_state === 'running') return '正在整理归档';
+  return '已接续整理任务';
+}
 async function loadOffline() {
-  if (cloud.id)
-    await offline.run((signal) =>
+  if (!cloud.id) return;
+  const aid = cloud.id;
+  await Promise.allSettled([
+    offline.run((signal) =>
       readData(
-        query('/api/cloud/resources/offline', { account_id: cloud.id, page: offlinePage.value }),
+        query('/api/cloud/resources/offline', { account_id: aid, page: offlinePage.value }),
         signal,
       ),
-    );
+    ),
+    handoffs.run((signal) => readData(accountPath(aid, 'offline-handoffs'), signal)),
+  ]);
 }
 async function loadReceiving() {
   if (!cloud.id) return;
@@ -270,6 +285,7 @@ watch(
   () => {
     receiving.cancel();
     offline.cancel();
+    handoffs.cancel();
     directoryConfig.cancel();
     offlinePage.value = 1;
     organize.value = false;
@@ -301,7 +317,7 @@ watch(
 </script>
 <template>
   <PageHeading
-    :title="shareOnly ? '分享 STRM 生成与整理' : '链接与离线转存'"
+    :title="shareOnly ? '分享 STRM 生成与整理' : '资源接收'"
     :subtitle="
       shareOnly
         ? '浏览分享，直接生成到分类目录，保留分享源文件。'
@@ -323,6 +339,11 @@ watch(
     <RouterLink to="/settings/cloud?section=output">分享输出目录</RouterLink>
     <RouterLink to="/tasks/ingestion">入库核验</RouterLink>
   </nav>
+  <p v-if="!shareOnly" class="notice-bar" role="status">
+    115 分享完成核实后可衔接整理；磁力与 ed2k 的任务提交不代表下载完成。
+    云下载完成后的自动整理依赖已启用的定时整理规则，且必须勾选磁力、ed2k 对应接收目录；否则资源只会进入115待整理区。
+    <RouterLink to="/organize/automation" class="text-link">检查自动整理 →</RouterLink>
+  </p>
   <nav v-if="!shareOnly" class="browse-tabs">
     <button
       v-for="(label, key) in {
@@ -371,7 +392,7 @@ watch(
             required
           ></textarea></label
         ><label class="checkbox-label"
-          ><input v-model="organize" type="checkbox" />接收后按已保存归档配置整理</label
+          ><input v-model="organize" type="checkbox" />可立即接续的资源在接收后整理</label
         ><RouterLink to="/settings/accounts" class="text-link">核对各类接收目录 →</RouterLink>
         <div class="action-row">
           <button
@@ -507,6 +528,47 @@ watch(
           {{ shareOnly ? '识别并预览分享 STRM' : '核对转存范围' }}
         </button></template
       >
+    </section>
+    <section v-if="!shareOnly && tab === 'offline'" class="panel">
+      <header class="section-heading">
+        <div>
+          <h2>下载完成后自动整理</h2>
+          <p>勾选“接收后整理”，核对下载任务和目录后自动接续；不会重复提交云下载。</p>
+        </div>
+        <button class="button" :disabled="handoffs.loading.value" @click="loadOffline">刷新状态</button>
+      </header>
+      <p v-if="handoffs.error.value" class="inline-error">{{ handoffs.error.value }}</p>
+      <p
+        v-if="
+          !handoffs.loading.value &&
+          !handoffs.error.value &&
+          !records(handoffs.data.value?.items).length
+        "
+        class="muted-text"
+      >
+        暂无等待接续的下载；未开启自动整理的资源不会自动移动。
+      </p>
+      <div
+        v-for="handoff in records(handoffs.data.value?.items)"
+        :key="String(handoff.origin_job) + '-' + String(handoff.item_index)"
+        class="automation-rule"
+      >
+        <div>
+          <strong>{{ handoffLabel(handoff) }}</strong>
+          <p>
+            接收位置：{{ handoff.source_name || '已保存接收目录' }} · 下载校验：{{
+              handoff.task_hash
+            }}
+          </p>
+          <small v-if="handoff.detail" class="warning-text">{{ handoff.detail }}</small>
+        </div>
+        <RouterLink
+          v-if="handoff.child_job"
+          class="button small"
+          :to="'/tasks?job=' + handoff.child_job"
+          >查看整理任务</RouterLink
+        >
+      </div>
     </section>
     <section v-if="!shareOnly && tab === 'offline'" class="panel">
       <h2>115 离线任务</h2>

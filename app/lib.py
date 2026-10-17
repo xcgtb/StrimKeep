@@ -179,6 +179,21 @@ class Lib:
                  if k in container and self.meta[k][2] == year]
         return cands[0] if len(cands) == 1 else None
 
+def _read_active_libraries():
+    """Use the same opt-in roots as governance for Emby/TMDB disk fallback.
+
+    The legacy scan remains untouched until a user enables generated library
+    integration. Missing generated roots raise in the bridge; callers already
+    preserve stale facts on failure instead of publishing an empty library.
+    """
+    roots = (_engine_ns().L_ROOT, _engine_ns().S_ROOT)
+    from app.cloud import settings as _cloud_settings
+    if _cloud_settings.get()['governance_generated_enabled']:
+        from app import cloud_bridge
+        return [cloud_bridge.governance_library(r) for r in roots]
+    return [_get_lib(r) for r in roots]
+
+
 def _disk_tmdb_lookup():
     """合并两库磁盘扫描的「标题目录绝对路径 -> tmdb_id」兜底表。
 
@@ -188,7 +203,7 @@ def _disk_tmdb_lookup():
     """
     lookup = {}
     try:
-        for lib in (_get_lib(_engine_ns().L_ROOT), _get_lib(_engine_ns().S_ROOT)):
+        for lib in _read_active_libraries():
             lookup.update(lib.path_tmdb)
     except Exception as e:
         log.warning('磁盘 tmdb 兜底表构建失败: %s', e)
@@ -203,7 +218,7 @@ def _disk_eps_by_tmdb():
     """
     out = defaultdict(lambda: {'episodes': set(), 'local_eps': set(), 'share_eps': set()})
     try:
-        for lib, tag in ((_get_lib(_engine_ns().L_ROOT), 'local'), (_get_lib(_engine_ns().S_ROOT), 'share')):
+        for lib, tag in zip(_read_active_libraries(), ('local', 'share')):
             for key, tid in lib.key_tmdb_tv.items():
                 for sn, files in lib.tv.get(key, {}).items():
                     if sn <= 0:

@@ -4459,3 +4459,65 @@ summary {
     margin-left: auto;
   }
 }
+
+/* Governance usability recovery - Vue3 1.4.12. No unrelated layout overrides. */
+.governance-workspace .section-heading { align-items: flex-start; }
+.gov-source-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 14px 0; }
+.gov-source-card { padding: 14px 16px; min-width: 0; border: 1px solid var(--border); background: var(--panel-solid); border-radius: 14px; display: grid; gap: 10px; }
+.gov-source-card.gov-source-off { opacity: .72; }
+.gov-source-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.gov-source-card code { overflow-wrap: anywhere; font-size: 12px; line-height: 1.55; color: var(--text); }
+.gov-source-card small { color: var(--text-muted, var(--text-dim)); }
+.gov-scan-notice { line-height: 1.65; margin: 10px 0 0; color: var(--text); }
+.gov-item-context { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; opacity: .8; }
+.gov-detail-intro { padding: 12px 14px; border-radius: 12px; background: var(--panel-solid); line-height: 1.65; }
+.gov-detail-intro p { margin: 8px 0 0; }
+.quality-rule-state { padding: 3px 8px; font-size: 11px; border-radius: 99px; border: 1px solid var(--border); color: var(--text-dim); white-space: nowrap; }
+.quality-rule-state.is-enabled { color: var(--accent); border-color: var(--accent); }
+/* Unified organizer readiness panel. Only inherited theme tokens are used. */
+.organize-readiness .section-heading { align-items: flex-start; }
+.organize-readiness-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }
+.organize-readiness-step { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; padding: 13px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-solid); }
+.organize-readiness-step strong { font-size: 14px; }
+.organize-readiness-step small { font-size: 12px; line-height: 1.6; color: var(--text-dim); overflow-wrap: anywhere; }
+.organize-workspace-links { display: flex; flex-wrap: wrap; gap: 8px; }
+.organize-workspace-links a { display: inline-flex; padding: 9px 12px; border: 1px solid var(--border); border-radius: 9px; text-decoration: none; color: var(--text); background: var(--panel-solid); font-size: 13px; }
+.organize-workspace-links a:hover, .organize-workspace-links a:focus-visible { color: var(--accent); border-color: var(--accent); }
+@media (max-width: 900px) { .organize-readiness-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 720px) { .organize-readiness-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 720px) { .gov-source-grid { grid-template-columns: minmax(0, 1fr); } .governance-workspace .section-heading { flex-wrap: wrap; } }
+
+/* Unified content density and keyboard focus for core media workspace. */
+.organize-readiness-grid .state-pill { max-width: 100%; }
+.organize-workspace-links a { min-height: 36px; align-items: center; }
+.organize-workspace-links a.router-link-active { color: var(--accent); border-color: var(--accent); }
+.organize-workspace-links a:focus-visible,
+.gov-source-card:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 720px) {
+  .organize-workspace-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .organize-workspace-links a { min-width: 0; justify-content: center; text-align: center; }
+  .gov-source-card code { font-size: 11px; }
+}
+
+.gov-preview-paths { display: grid; gap: 14px; grid-template-columns: repeat(2, minmax(0,1fr)); }
+.gov-preview-paths > div { min-width:0; padding: 12px; background: var(--panel-solid); border:1px solid var(--border); border-radius:10px; }
+.gov-preview-paths strong { display:block; margin-bottom: 7px; font-size:12px; }
+.gov-preview-paths code { display:block; font-size:11px; white-space:normal; overflow-wrap:anywhere; padding:4px 0; }
+@media (max-width:720px) { .gov-preview-paths { grid-template-columns:minmax(0,1fr); } }
+@media (max-width: 380px) { .organize-workspace-links { grid-template-columns: 1fr; } }
+
+/* Real cloud task phase: summary first, raw diagnostic data only by request. */
+.task-user-message { font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }
+.task-live-progress { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--panel-solid); display: grid; gap: 12px; }
+.task-live-progress .action-row { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.task-live-progress .muted-text { overflow-wrap: anywhere; min-width: 0; }
+.task-progress-track { height: 8px; background: var(--border); border-radius: 99px; overflow: hidden; }
+.task-progress-track > div { height: 100%; background: var(--accent); border-radius: inherit; transition: width .25s ease; }
+.task-technical-details { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px; }
+
+/* Distinct governance engines: clear selection before preview or deletion. */
+.gov-source-selector-actions { display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-end; gap: 8px; min-width: 0; }
+.gov-source-selector-actions .muted-text { margin: 0; }
+.governance-workspace .form-grid > label { min-width: 0; }
+.governance-workspace .form-grid select { width: 100%; max-width: 100%; }
+@media (max-width: 720px) { .gov-source-selector-actions .button { width: 100%; } }
