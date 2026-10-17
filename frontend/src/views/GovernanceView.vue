@@ -6,7 +6,6 @@ import { useOperation } from '../composables/useOperation';
 import { date } from '../composables/format';
 import PageHeading from '../components/PageHeading.vue';
 import EvidenceDetails from '../components/EvidenceDetails.vue';
-import GovernanceEvidence from '../components/GovernanceEvidence.vue';
 import OperationState from '../components/OperationState.vue';
 import TaskReceipt from '../components/TaskReceipt.vue';
 import ConfirmAction from '../components/ConfirmAction.vue';
@@ -20,8 +19,7 @@ const summary = useRequest<Data>(),
   selected = ref<Data>(),
   detailOpen = ref(false),
   group = ref('del_local_items'),
-  search = ref(''),
-  taskNotice = ref('');
+  search = ref('');
 const visible = ref(200);
 watch([group, search], () => {
   visible.value = 200;
@@ -31,12 +29,6 @@ const scan = computed(() => object(summary.data.value?.scan)),
 const items = computed(() =>
   records(result.value[group.value]).filter((r) => JSON.stringify(r).includes(search.value)),
 );
-const identityConflictCount = computed(() => Number(result.value.identity_conflict_count || 0));
-const ruleAligned = computed(() => scan.value.rule_aligned !== false);
-async function taskFinished() {
-  taskNotice.value = '后台任务已结束，正在读取最新治理计划与执行记录。';
-  await load();
-}
 const planId = computed(() =>
   String(object(detail.data.value?.plan).id || scan.value.plan_id || ''),
 );
@@ -61,11 +53,6 @@ async function execute() {
   }
   const r = await op.run(() => writeData(path, body));
   if (r) {
-    if (!r.task_id) {
-      taskNotice.value = '请求已返回，但未取得可跟踪任务编号。请从执行记录核实，不要重复执行。';
-      return;
-    }
-    taskNotice.value = confirmation.value === 'scan' ? '治理扫描已提交，正在生成计划。' : '治理清理已提交，后台会持续核验来源及规则。';
     task.value = String(r.task_id);
     confirmation.value = '';
     detailOpen.value = false;
@@ -95,14 +82,6 @@ onMounted(load);
     :uncertain="op.uncertain.value"
     :receipt="op.receipt.value"
   />
-  <nav class="governance-hub-links" aria-label="治理工作台功能">
-    <RouterLink to="/governance">治理清单与执行</RouterLink>
-    <RouterLink to="/governance/rules">治理策略 · 七维排序 · S00 · 白名单 · 对比测试</RouterLink>
-    <RouterLink to="/governance/cleanup">洗版残留与目录清理</RouterLink>
-  </nav>
-  <p v-if="taskNotice" class="notice-bar" role="status">{{ taskNotice }}</p>
-  <p v-if="!ruleAligned" class="notice-bar warning-text">治理规则已变更，旧扫描计划已失效。请重新扫描，禁止按旧计划清理。</p>
-  <p v-if="identityConflictCount" class="notice-bar warning-text">存在 {{ identityConflictCount }} 个作品身份冲突，冲突项目不自动删除，请先查看详情。</p>
   <div class="summary-strip">
     <span>最近诊断 {{ date(Number(scan.ts)) }}</span
     ><span class="state-pill" :class="{ success: scan.usable, needs_review: !scan.usable }">{{
@@ -125,7 +104,6 @@ onMounted(load);
         del_share_cnt: '分享待治理',
         exempted_count: '白名单豁免',
         quiet_skipped: '静默期跳过',
-        identity_conflict_count: '身份冲突',
       }"
       :key="key"
       class="stat-card"
@@ -174,7 +152,6 @@ onMounted(load);
         <div>
           <strong>{{ item.title || item.name || item.text }}</strong>
           <p>{{ item.reason_label || item.reason || item.detail }}</p>
-          <small v-if="item.files_count">{{ item.files_count }} 个文件 · 查看详情可核对路径与七维理由</small>
         </div>
         <button
           class="button small"
@@ -196,7 +173,7 @@ onMounted(load);
       <EvidenceDetails :value="summary.data.value" />
     </details>
   </section>
-  <TaskReceipt v-if="task" :id="task" kind="task" @done="taskFinished" @failed="taskFinished" />
+  <TaskReceipt v-if="task" :id="task" kind="task" @done="load" />
   <section class="panel">
     <h2>治理计划与执行归档</h2>
     <div v-for="p in records(plans.data.value?.plans)" :key="String(p.id)" class="automation-rule">
@@ -222,8 +199,7 @@ onMounted(load);
       detail.cancel();
     "
     ><p v-if="detail.error.value" class="inline-error">{{ detail.error.value }}</p>
-    <GovernanceEvidence v-if="selected" :value="selected" />
-    <EvidenceDetails v-else :value="detail.data.value?.plan" /></ModalDialog
+    <EvidenceDetails :value="selected || detail.data.value?.plan" /></ModalDialog
   ><ConfirmAction
     v-if="confirmation"
     :title="

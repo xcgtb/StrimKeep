@@ -12,7 +12,7 @@ const props = defineProps<{
   media: 'series' | 'movies';
   target: 'local' | 'share';
 }>();
-const emit = defineEmits<{ done: [result: Data]; failed: [message: string] }>();
+const emit = defineEmits<{ done: [] }>();
 const op = useOperation(() =>
     JSON.stringify([props.item.id, props.item.tmdb_id, props.media, props.target]),
   ),
@@ -85,11 +85,7 @@ async function execute() {
       kind="delete"
       @done="
         submitted = false;
-        emit('done', $event);
-      "
-      @failed="
-        submitted = false;
-        emit('failed', '后台删除失败，请展开执行明细核实，勿重复提交。');
+        emit('done');
       "
     /><ConfirmAction
       v-if="preview && Number(preview.count) > 0"

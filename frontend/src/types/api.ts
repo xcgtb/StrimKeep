@@ -57,7 +57,6 @@ export interface ExploreResponse extends Envelope {
   library_refreshing?: boolean;
 }
 export interface LibraryPage extends Envelope {
-  stats?: Record<string, number>;
   rows?: MediaCard[];
   total?: number;
   next_offset?: number;
