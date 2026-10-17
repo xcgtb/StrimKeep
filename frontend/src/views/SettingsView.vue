@@ -8,9 +8,11 @@ import { useVisiblePoll } from '../composables/useVisiblePoll';
 import { date } from '../composables/format';
 import { useUi } from '../stores/ui';
 import PageHeading from '../components/PageHeading.vue';
+import FormFields, { type Field } from '../components/FormFields.vue';
 import ConfirmAction from '../components/ConfirmAction.vue';
+import EvidenceDetails from '../components/EvidenceDetails.vue';
 import OperationState from '../components/OperationState.vue';
-
+import ModalDialog from '../components/ModalDialog.vue';
 interface ConfigResponse {
   masked?: boolean;
   sensitive_keys?: string[];
@@ -18,31 +20,20 @@ interface ConfigResponse {
   env_overridden: string[];
   skipped_env?: string[];
 }
-interface Field {
-  key: string;
-  label: string;
-  type?: 'text' | 'secret' | 'number' | 'select';
-  options?: { value: string; label: string }[];
-  min?: number;
-  max?: number;
-  hint?: string;
-  disabled?: boolean;
-}
-
 const request = useRequest<ConfigResponse>(),
   ingest = useRequest<Data>(),
   ingestStatus = useRequest<Data>(),
-  bot = useRequest<Data>(),
   op = useOperation(),
   ui = useUi(),
   form = ref<Data>({}),
   ingestForm = ref<Data>({}),
   saving = ref(false),
   testing = ref(''),
+  result = ref(''),
   uncertain = ref(false),
   confirmation = ref(''),
-  revealed = ref(new Set<string>());
-
+  testOpen = ref(false),
+  testedService = ref('');
 const secretKeys = new Set(['emby_key', 'tmdb_key', 'telegram_bot_token', 'http_proxy_password']);
 const switchOptions = [
   { value: '0', label: '关闭' },
@@ -61,10 +52,10 @@ const groups: {
     description: '全局治理片库连接与路径映射',
     test: 'emby',
     fields: [
-      { key: 'emby_host', label: 'Emby 服务器地址', hint: '例如 http://你的Emby地址:8096' },
-      { key: 'emby_key', label: 'Emby API Key', type: 'secret' },
-      { key: 'emby_local_path', label: 'Emby 中的本地库路径' },
-      { key: 'emby_share_path', label: 'Emby 中的分享库路径' },
+      { key: 'emby_host', label: '服务地址' },
+      { key: 'emby_key', label: 'API Key', type: 'secret' },
+      { key: 'emby_local_path', label: 'Emby 中的本地 STRM 路径' },
+      { key: 'emby_share_path', label: 'Emby 中的分享 STRM 路径' },
     ],
   },
   {
@@ -73,7 +64,7 @@ const groups: {
     description: '影视识别、海报与已播集数',
     test: 'tmdb',
     fields: [
-      { key: 'tmdb_key', label: 'TMDB API Key', type: 'secret' },
+      { key: 'tmdb_key', label: 'API Key / Read Access Token', type: 'secret' },
       { key: 'tmdb_scan_enabled', label: '定期 TMDB 对照', type: 'select', options: switchOptions },
       {
         key: 'tmdb_scan_interval_hours',
@@ -90,13 +81,9 @@ const groups: {
     description: '机器人、接收位置与资源接收白名单',
     test: 'telegram',
     fields: [
-      { key: 'telegram_bot_token', label: 'Telegram Bot Token', type: 'secret' },
-      { key: 'telegram_chat_id', label: 'Telegram Chat ID' },
-      {
-        key: 'telegram_allowed_users',
-        label: 'Telegram 允许用户（白名单）',
-        hint: '逗号分隔的 User ID',
-      },
+      { key: 'telegram_bot_token', label: 'Bot Token', type: 'secret' },
+      { key: 'telegram_chat_id', label: 'Chat ID' },
+      { key: 'telegram_allowed_users', label: '允许使用机器人的用户 ID（按原配置分隔）' },
     ],
   },
   {
@@ -111,13 +98,9 @@ const groups: {
         type: 'select',
         options: switchOptions,
       },
-      {
-        key: 'http_proxy_url',
-        label: '代理地址',
-        hint: '填写 NAS 能访问的 HTTP / 混合代理端口，不是 SOCKS5 端口。',
-      },
-      { key: 'http_proxy_username', label: '用户名（可选）' },
-      { key: 'http_proxy_password', label: '密码（可选）', type: 'secret' },
+      { key: 'http_proxy_url', label: 'HTTP 代理地址' },
+      { key: 'http_proxy_username', label: '代理用户名' },
+      { key: 'http_proxy_password', label: '代理密码', type: 'secret' },
     ],
   },
   {
@@ -139,16 +122,25 @@ const groups: {
     title: '外观背景',
     description: '图片直链留空使用默认天空蓝磨砂背景',
     fields: [
-      {
-        key: 'background_light_url',
-        label: '浅色主题背景图片 URL',
-        hint: '填写图床的图片直链，留空使用内置背景',
-      },
+      { key: 'background_light_url', label: '浅色主题背景图片 URL' },
       { key: 'background_dark_url', label: '深色主题背景图片 URL' },
     ],
   },
 ];
-const disabled = computed(() => saving.value || !!testing.value || uncertain.value);
+const ingestFields: Field[] = [
+  { key: 'enabled', label: '启用入库监控', type: 'check' },
+  {
+    key: 'mode',
+    label: '监控模式',
+    type: 'select',
+    options: [
+      { value: 'poll', label: '定时增量发现' },
+      { value: 'webhook', label: 'Emby 实时回调' },
+    ],
+  },
+  { key: 'interval_min', label: '增量轮询间隔（分钟）', type: 'number', min: 1, max: 1440 },
+  { key: 'reconcile_hours', label: '全量校准间隔（小时）', type: 'number', min: 1, max: 168 },
+];
 const changed = computed(() =>
   Object.keys(form.value).filter((key) => {
     if (request.data.value?.env_overridden.includes(key)) return false;
@@ -156,31 +148,6 @@ const changed = computed(() =>
     return String(form.value[key] ?? '') !== String(request.data.value?.config[key] ?? '');
   }),
 );
-const callback = computed(() => {
-  const token = request.data.value?.config.ingest_webhook_token;
-  return token ? `${location.origin}/api/emby/webhook?token=${encodeURIComponent(token)}` : '';
-});
-const testResults = ref<Record<string, string>>({});
-const botView = computed(() => {
-  const b = object(bot.data.value?.bot);
-  const st = b.state || (b.running ? 'ok' : 'stopped');
-  const map: Record<string, [string, string]> = {
-    ok: ['on', 'Bot 运行中'],
-    starting: ['warn', 'Bot 启动中'],
-    degraded: ['warn', 'Bot 网络不稳定，正在重试'],
-    down: ['bad', 'Bot 无响应'],
-    stopped: ['off', 'Bot 未运行'],
-  };
-  const m = map[String(st)] || map.stopped;
-  return {
-    dot: m[0],
-    label: m[1] + (b.bot_username ? ' @' + b.bot_username : ''),
-    last_poll_ago: b.last_poll_ago,
-    last_error: b.last_error,
-    fail_count: b.fail_count,
-  };
-});
-
 function hasSecret(key: string): boolean {
   const value = String(request.data.value?.config?.[key] || '');
   return !!value && (value.includes('****') || /^\*+$/.test(value));
@@ -201,55 +168,10 @@ function visibleFields(fields: Field[]): Field[] {
     };
   });
 }
-const isSwitchField = (f: Field) =>
-  f.type === 'select' &&
-  f.options?.length === 2 &&
-  f.options.every((o) => o.value === '0' || o.value === '1');
-const isSwitchOn = (f: Field) => String(form.value[f.key] ?? '0') === '1';
-function inputValue(field: Field): string {
-  if (field.type === 'number')
-    return form.value[field.key] == null ? '' : String(form.value[field.key]);
-  return String(form.value[field.key] ?? '');
-}
-function onFieldInput(field: Field, event: Event) {
-  const value = (event.target as HTMLInputElement).value;
-  form.value = {
-    ...form.value,
-    [field.key]: field.type === 'number' ? (value === '' ? null : Number(value)) : value,
-  };
-}
-function onSwitchField(field: Field, event: Event) {
-  const on = (event.target as HTMLInputElement).checked;
-  form.value = { ...form.value, [field.key]: on ? '1' : '0' };
-}
-async function toggleReveal(key: string) {
-  if (revealed.value.has(key)) {
-    const next = new Set(revealed.value);
-    next.delete(key);
-    revealed.value = next;
-    form.value = { ...form.value, [key]: '' };
-    return;
-  }
-  if (!confirm('⚠️ 即将显示完整密钥，请确保周围环境安全。继续？')) return;
-  try {
-    const r = await get<ConfigResponse>('/api/config?reveal=1');
-    form.value = { ...form.value, [key]: r.config[key] || '' };
-    const next = new Set(revealed.value);
-    next.add(key);
-    revealed.value = next;
-    setTimeout(() => {
-      if (revealed.value.has(key)) {
-        const s = new Set(revealed.value);
-        s.delete(key);
-        revealed.value = s;
-        form.value = { ...form.value, [key]: '' };
-      }
-    }, 60000);
-  } catch (e) {
-    ui.notify((e as Error).message, 'error');
-  }
-}
-
+const callback = computed(() => {
+  const token = request.data.value?.config.ingest_webhook_token;
+  return token ? `${location.origin}/api/emby/webhook?token=${encodeURIComponent(token)}` : '';
+});
 function fill(response: ConfigResponse) {
   form.value = Object.fromEntries(
     groups
@@ -264,13 +186,11 @@ async function load() {
     uncertain.value = false;
     ui.setAppearance(response.config);
   }
-  await Promise.allSettled([loadIngest(), loadIngestStatus(), loadBotStatus()]);
+  await loadIngest();
+  await loadIngestStatus();
 }
 function loadIngestStatus() {
   return ingestStatus.run((signal) => readData('/api/ingest/status', signal));
-}
-function loadBotStatus() {
-  return bot.run((signal) => readData('/api/bot/status', signal));
 }
 async function loadIngest() {
   const r = await ingest.run((signal) => readData('/api/ingest/settings', signal));
@@ -306,8 +226,10 @@ async function save() {
   }
 }
 async function test(service: string) {
+  testOpen.value = true;
+  testedService.value = groups.find((g) => g.test === service)?.title || service;
   testing.value = service;
-  testResults.value = { ...testResults.value, [service]: '正在调用后端测试接口，请稍候…' };
+  result.value = '';
   try {
     const body = Object.fromEntries(
       Object.entries(form.value).filter(
@@ -315,9 +237,9 @@ async function test(service: string) {
       ),
     );
     const r = await post<{ message?: string }>(`/api/config/test/${service}`, body);
-    testResults.value = { ...testResults.value, [service]: r.message || '连接测试完成' };
+    result.value = r.message || '连接测试完成';
   } catch (e) {
-    testResults.value = { ...testResults.value, [service]: (e as Error).message };
+    result.value = (e as Error).message;
   } finally {
     testing.value = '';
   }
@@ -354,7 +276,6 @@ onMounted(load);
 useVisiblePoll(async () => {
   await Promise.allSettled([
     loadIngestStatus(),
-    loadBotStatus(),
     ingest.run((signal) => readData('/api/ingest/settings', signal)),
   ]);
 }, 15000);
@@ -362,7 +283,7 @@ useVisiblePoll(async () => {
 <template>
   <PageHeading title="连接与设置" subtitle="集中管理服务、通知、网络、实时入库与外观，保存后生效。"
     ><button
-      class="btn"
+      class="button primary"
       :disabled="saving || !!testing || !changed.length || !!request.error.value || uncertain"
       @click="save"
     >
@@ -396,211 +317,64 @@ useVisiblePoll(async () => {
             <p>{{ group.description }}</p>
           </div>
         </header>
-        <div :class="{ 'proxy-settings': group.key === 'proxy' }">
-          <template v-for="field in visibleFields(group.fields)" :key="field.key">
-            <div v-if="isSwitchField(field)" class="toggle-row">
-              <div>
-                <div class="lbl">{{ field.label }}</div>
-                <div v-if="field.hint" class="desc">{{ field.hint }}</div>
-              </div>
-              <label class="switch"
-                ><input
-                  type="checkbox"
-                  :checked="isSwitchOn(field)"
-                  :disabled="disabled || field.disabled"
-                  @change="onSwitchField(field, $event)" /><span class="slider"></span
-              ></label>
-            </div>
-            <div v-else class="form-row">
-              <label>{{ field.label }}</label>
-              <div v-if="field.type === 'secret'" class="input-row">
-                <input
-                  :type="revealed.has(field.key) ? 'text' : 'password'"
-                  :value="inputValue(field)"
-                  autocomplete="off"
-                  :disabled="disabled || field.disabled"
-                  @input="onFieldInput(field, $event)"
-                /><button
-                  class="eye-btn"
-                  :class="{ on: revealed.has(field.key) }"
-                  type="button"
-                  @click="toggleReveal(field.key)"
-                >
-                  {{ revealed.has(field.key) ? '隐藏' : '查看' }}
-                </button>
-              </div>
-              <input
-                v-else
-                :type="field.type === 'number' ? 'number' : 'text'"
-                :value="inputValue(field)"
-                :min="field.min"
-                :max="field.max"
-                autocomplete="off"
-                spellcheck="false"
-                :disabled="disabled || field.disabled"
-                @input="onFieldInput(field, $event)"
-              />
-              <div v-if="field.hint" class="hint">{{ field.hint }}</div>
-            </div>
-          </template>
-        </div>
-        <div v-if="group.test" class="btn-row">
-          <button
-            class="btn gray"
-            :disabled="!!testing || saving || uncertain"
-            @click="test(group.test)"
-          >
-            {{
-              testing === group.test
-                ? '正在测试…'
-                : group.test === 'telegram'
-                  ? '发送一条测试通知'
-                  : group.test === 'proxy'
-                    ? '测试代理连接'
-                    : '测试连接'
-            }}
-          </button>
-        </div>
-        <p v-if="group.test && testResults[group.test]" class="hint test-result" role="status">
-          {{ testResults[group.test] }}
-        </p>
-        <div v-if="group.key === 'appearance'" class="btn-row">
-          <button class="btn gray" @click="ui.toggleTheme">
-            {{ ui.theme === 'light' ? '切换为深色' : '切换为浅色' }}
-          </button>
-        </div>
+        <FormFields
+          v-model="form"
+          :fields="visibleFields(group.fields)"
+          :disabled="saving || !!testing || uncertain"
+        /><button
+          v-if="group.test"
+          class="button"
+          :disabled="!!testing || saving || uncertain"
+          @click="test(group.test)"
+        >
+          {{
+            testing === group.test
+              ? '正在测试…'
+              : group.test === 'telegram'
+                ? '发送一条测试通知'
+                : '测试连接'
+          }}</button
+        ><button v-if="group.key === 'appearance'" class="button" @click="ui.toggleTheme">
+          {{ ui.theme === 'light' ? '切换为深色' : '切换为浅色' }}
+        </button>
       </section>
-
-      <section class="panel settings-panel">
-        <header class="section-heading">
-          <div>
-            <h2>Bot 状态</h2>
-            <p>Telegram 机器人连接状态，自动轮询刷新</p>
-          </div>
-        </header>
-        <div class="bot-status">
-          <span class="dot" :class="botView.dot"></span><span>{{ botView.label }}</span>
-        </div>
-        <p class="hint">
-          上次轮询: {{ botView.last_poll_ago != null ? botView.last_poll_ago + ' 秒前' : '—'
-          }}<template v-if="botView.last_error">
-            · ⚠️ {{ botView.last_error
-            }}<template v-if="Number(botView.fail_count) > 1"
-              >（连续 {{ botView.fail_count }} 次）</template
-            ></template
-          >
-        </p>
-      </section>
-
       <section id="settings-ingest" class="panel settings-panel">
-        <header class="section-heading">
-          <div>
-            <h2>入库监控与 Emby 回调</h2>
-            <p>实时回调同步总览、探索入库角标和片库局部对照；全量校准负责补漏。</p>
-          </div>
-        </header>
-        <div class="toggle-row">
-          <div>
-            <div class="lbl">启用后台入库监控</div>
-            <div class="desc">关闭后停止自动接收入库事件及入库检查</div>
-          </div>
-          <label class="switch"
-            ><input
-              v-model="ingestForm.enabled"
-              type="checkbox"
-              :disabled="op.busy.value || op.uncertain.value" /><span class="slider"></span
-          ></label>
-        </div>
-        <div class="toggle-row">
-          <div>
-            <div class="lbl">同步方式</div>
-            <div class="desc">先配置并测试 Emby 回调，再切换实时模式</div>
-          </div>
-          <select v-model="ingestForm.mode" :disabled="op.busy.value || op.uncertain.value">
-            <option value="poll">定时增量（兼容）</option>
-            <option value="webhook">Emby 实时回调</option>
-          </select>
-        </div>
-        <div class="toggle-row" v-show="ingestForm.mode !== 'webhook'">
-          <div>
-            <div class="lbl">刷新间隔（分钟）</div>
-            <div class="desc">建议 5 分钟</div>
-          </div>
-          <div class="num-field">
-            <input
-              v-model.number="ingestForm.interval_min"
-              type="number"
-              min="1"
-              max="1440"
-              :disabled="op.busy.value || op.uncertain.value"
-            />
-          </div>
-        </div>
-        <div class="toggle-row">
-          <div>
-            <div class="lbl">全量兜底间隔（小时）</div>
-            <div class="desc">实时模式默认 24 小时，校准 STRM 数量、Emby 事实及 TMDB 对照</div>
-          </div>
-          <div class="num-field">
-            <input
-              v-model.number="ingestForm.reconcile_hours"
-              type="number"
-              min="1"
-              max="168"
-              :disabled="op.busy.value || op.uncertain.value"
-            />
-          </div>
-        </div>
-
-        <div class="form-row">
-          <label>Emby 回调地址</label>
-          <input v-if="callback" :value="callback" type="password" readonly />
-          <p v-else class="hint">尚未生成回调令牌</p>
-          <div class="btn-row">
-            <button
-              v-if="!callback"
-              class="btn gray"
-              :disabled="op.busy.value || op.uncertain.value"
-              @click="confirmation = 'generate'"
-            >
-              首次生成回调地址
-            </button>
-            <template v-else>
-              <button class="btn gray" @click="copyCallback">复制回调地址</button>
-              <button class="btn red" @click="confirmation = 'reset'">重置回调令牌</button>
-            </template>
-          </div>
-        </div>
-
-        <OperationState
+        <h2>入库监控与 Emby 回调</h2>
+        <FormFields
+          v-model="ingestForm"
+          :fields="ingestFields"
+          :disabled="op.busy.value || op.uncertain.value"
+        /><OperationState
           :error="ingest.error.value || op.error.value"
           :uncertain="op.uncertain.value"
           :receipt="op.receipt.value"
-        />
-        <section class="ingest-monitor-status">
-          <h3 class="detail-section-title">监控状态与最近入库缓存</h3>
-          <p v-if="ingestStatus.error.value" class="inline-error">{{ ingestStatus.error.value }}</p>
-          <p v-else-if="ingestStatus.data.value?.has_cache">
-            最近更新 {{ date(Number(ingestStatus.data.value.ts)) }} · 距今
-            {{ ingestStatus.data.value.age_sec }} 秒
-          </p>
-          <p v-else class="hint">尚无入库统计缓存。</p>
-          <p v-if="ingestStatus.data.value?.warning" class="notice-bar">
-            {{ ingestStatus.data.value.warning }}
-          </p>
-        </section>
-        <div class="btn-row">
+        /><label v-if="callback"
+          >Emby 回调地址（含令牌，请妥善保管）<input
+            :value="callback"
+            type="password"
+            readonly
+          /><button class="button small" @click="copyCallback">复制回调地址</button></label
+        >
+        <div class="action-row">
           <button
-            class="btn"
+            class="button primary"
             :disabled="
               !ingest.data.value || !!ingest.error.value || op.busy.value || op.uncertain.value
             "
             @click="confirmation = 'save'"
           >
-            保存入库监控
-          </button>
-          <button
-            class="btn gray"
+            保存入库监控</button
+          ><button
+            v-if="!callback"
+            class="button"
+            :disabled="op.busy.value || op.uncertain.value"
+            @click="confirmation = 'generate'"
+          >
+            首次生成回调令牌</button
+          ><button v-else class="button danger-text" @click="confirmation = 'reset'">
+            重置回调令牌</button
+          ><button
+            class="button"
             @click="
               load();
               op.reconcile();
@@ -609,9 +383,41 @@ useVisiblePoll(async () => {
             重新读取监控状态
           </button>
         </div>
+        <section class="ingest-monitor-status">
+          <h3 class="detail-section-title">监控状态与最近入库缓存</h3>
+          <p v-if="ingestStatus.error.value" class="inline-error">{{ ingestStatus.error.value }}</p>
+          <p v-else-if="ingestStatus.data.value?.has_cache">
+            最近更新 {{ date(Number(ingestStatus.data.value.ts)) }} · 距今
+            {{ ingestStatus.data.value.age_sec }} 秒
+          </p>
+          <p v-else class="muted-text">尚无入库统计缓存。</p>
+          <p v-if="ingestStatus.data.value?.warning" class="notice-bar">
+            {{ ingestStatus.data.value.warning }}
+          </p>
+          <EvidenceDetails :value="ingest.data.value?.webhook" />
+          <details v-if="ingestStatus.data.value?.stats">
+            <summary>最近入库统计</summary>
+            <EvidenceDetails :value="ingestStatus.data.value.stats" />
+          </details>
+        </section>
       </section>
     </div>
   </div>
+  <ModalDialog v-if="testOpen" :title="`${testedService} · 连接测试`" @close="testOpen = false">
+    <p v-if="testing" class="notice-bar">正在调用后端测试接口，请稍候…</p>
+    <p v-else class="notice-bar" role="status">
+      {{ result || '接口未返回测试信息，请查看运行日志。' }}
+    </p>
+    <p class="data-caption">
+      本结果来自 StrimKeep 的真实后端连接检测；不会回显已保存 API Key 或 Token。
+    </p>
+    <template #footer
+      ><button class="button" @click="testOpen = false">关闭</button
+      ><RouterLink to="/logs" class="button" @click="testOpen = false"
+        >查看实时日志</RouterLink
+      ></template
+    >
+  </ModalDialog>
   <ConfirmAction
     v-if="confirmation"
     title="确认入库监控配置"
@@ -629,97 +435,3 @@ useVisiblePoll(async () => {
     @confirm="ingestAction"
   />
 </template>
-
-<style scoped>
-.form-row {
-  margin: 12px 0;
-}
-.form-row > label {
-  display: block;
-  font-size: 12px;
-  color: var(--text-mid);
-  margin-bottom: 6px;
-  font-weight: 600;
-}
-.form-row input,
-.form-row select {
-  width: 100%;
-  padding: 9px 11px;
-  border-radius: 10px;
-  border: 1px solid var(--border-input);
-  background: var(--surface-solid);
-  color: var(--text);
-  font-size: 13px;
-  font-family: inherit;
-}
-.form-row input:disabled,
-.form-row select:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-.hint {
-  font-size: 11px;
-  color: var(--text-dim);
-  margin-top: 5px;
-  line-height: 1.6;
-}
-.test-result {
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--text-mid);
-}
-.input-row {
-  display: flex;
-  gap: 8px;
-  align-items: stretch;
-}
-.input-row input {
-  flex: 1;
-}
-.eye-btn {
-  flex-shrink: 0;
-  padding: 0 12px;
-  border: 1px solid var(--border-input);
-  border-radius: 10px;
-  background: var(--surface-hover);
-  color: var(--text-mid);
-  font-size: 12px;
-  cursor: pointer;
-  font-family: inherit;
-  font-weight: 600;
-}
-.eye-btn.on {
-  color: var(--brand);
-  border-color: var(--brand);
-}
-.proxy-settings {
-  border: 1px dashed var(--border-strong);
-  border-radius: 12px;
-  padding: 4px 14px 12px;
-  margin-top: 6px;
-}
-.btn-row {
-  display: flex;
-  gap: 8px;
-  margin-top: 10px;
-  flex-wrap: wrap;
-}
-.num-field {
-  width: 100px;
-  flex-shrink: 0;
-}
-.num-field input {
-  width: 100%;
-}
-.ingest-monitor-status {
-  margin-top: 14px;
-  border-top: 1px solid var(--border);
-  padding-top: 12px;
-}
-.detail-section-title {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--text-mid);
-  margin-bottom: 6px;
-}
-</style>

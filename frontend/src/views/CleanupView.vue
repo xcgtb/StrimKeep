@@ -170,7 +170,7 @@ function emptyDirFileSummary(x: Data) {
 
 <template>
   <PageHeading
-    title="目录清理"
+    title="目录与残留清理"
     subtitle="扫描只读 NAS；执行时联动清理 NAS 与对应 115 残留，不产生备份，失败逐项保留原因。"
   />
 

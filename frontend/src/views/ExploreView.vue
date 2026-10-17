@@ -87,10 +87,6 @@ const search = ref(filters.q),
 let badgeController: AbortController | undefined,
   generation = 0;
 
-// 题材 chip 随「类型」联动：隐藏不适用题材，类型切换后若当前题材失效则重置
-const genreOptions = computed(() =>
-  GENRES.filter((g) => g.media === 'both' || filters.media === 'all' || g.media === filters.media),
-);
 const yearOptions = computed(() => {
   const years: number[] = [];
   for (let y = new Date().getFullYear() + 1; y >= 1900; y--) years.push(y);
@@ -244,7 +240,7 @@ const live = useLibraryUpdates(async () => {
       :aria-expanded="showFilters"
       @click="showFilters = !showFilters"
     >
-      <span>{{ showFilters ? '收起筛选' : '展开筛选' }}</span
+      <span>筛选</span
       ><ChevronDown :size="14" />
     </button>
   </div>
@@ -279,18 +275,15 @@ const live = useLibraryUpdates(async () => {
       </div>
     </div>
     <div class="filter-row">
-      <span class="filter-label">题材</span>
-      <div class="filter-chips">
-        <button
-          v-for="opt in genreOptions"
-          :key="opt.v"
-          class="chip"
-          :class="{ active: filters.genre === opt.v }"
-          @click="selectFilter('genre', opt.v)"
-        >
-          {{ opt.label }}
-        </button>
-      </div>
+      <label class="filter-label" style="display: flex; align-items: center; gap: 14px; flex: 1">
+        <span>题材</span>
+        <select v-model="filters.genre" style="flex: 1; max-width: 240px">
+          <option value="">全部题材</option>
+          <option v-for="opt in GENRES.filter((g) => g.v)" :key="opt.v" :value="opt.v">
+            {{ opt.label }}
+          </option>
+        </select>
+      </label>
     </div>
     <div class="filter-row">
       <span class="filter-label">年份</span>
@@ -371,7 +364,7 @@ const live = useLibraryUpdates(async () => {
       :disabled="request.loading.value"
       @click="load(true)"
     >
-      <ArrowDown :size="16" />{{ request.loading.value ? '正在加载…' : '加载更多' }}
+      <ArrowDown :size="16" />{{ request.loading.value ? '正在加载…' : '加载更多作品' }}
     </button>
   </div>
 

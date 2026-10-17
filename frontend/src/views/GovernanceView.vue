@@ -186,7 +186,7 @@ onMounted(load);
 
 <template>
   <PageHeading
-    title="双库治理"
+    title="治理总览"
     subtitle="扫描生成清单，复核删除范围，再执行清理。本地库联动清理 NAS 与对应 115 源文件；分享库只清理 NAS。"
   >
     <div class="action-row">

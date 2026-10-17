@@ -15,12 +15,20 @@ html body::before {
   display: none !important;
 }
 
-/* ── 框架保护 2：还原 1.4.12 的移动端底部导航（glass.css 会改它的表面） ── */
+/* ── 框架保护 2：还原 1.4.12 的移动端底部导航（glass.css 会改它的表面，
+      classic 还会把 z-index 提到 105，盖住弹窗，一并压回 35） ── */
 html .mobile-dock {
   background: var(--panel);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
   border-color: var(--border);
+  z-index: 35;
+}
+
+/* ── 框架保护 3：classic 把 .sidebar 的 z-index 提到 100，与弹窗同级，
+      移动端抽屉会盖住 ModalDialog 的按钮；压回 1.4.12 的 30 ── */
+.template-shell .sidebar {
+  z-index: 30;
 }
 
 /* panel：Vue3 用 .template-shell .panel（0,2,0）压过 classic .panel，
@@ -50,4 +58,17 @@ html .mobile-dock {
 /* 深色主题下，玻璃 panel 保持半透明表面 */
 html[data-theme='dark'] .template-shell .panel {
   background: var(--surface);
+}
+
+/* 开关可访问性：classic 的 .switch input 尺寸为 0，无法点击/键盘操作。
+   让其覆盖整个开关，点击区域与视觉一致。 */
+.switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 1;
+  margin: 0;
 }
