@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { get } from '../api/client';
+import { get, post } from '../api/client';
 import { query, records, text } from '../api/domain';
 
 const regions = [
@@ -81,8 +81,45 @@ function badge(card: Record<string, unknown>) {
   if (card.in_share) return '分享库';
   return '';
 }
+const subscribed = ref<Set<string>>(new Set());
+const subList = ref<Record<string, unknown>[]>([]);
+async function loadSubscriptions() {
+  try {
+    const data = await get<Record<string, unknown>>('/api/subscriptions');
+    subList.value = records(data.subscriptions);
+    subscribed.value = new Set(subList.value.map((s) => text(s.tmdb_id)));
+  } catch {
+    /* 忽略 */
+  }
+}
+async function toggleSubscribe(card: Record<string, unknown>) {
+  if (card.type !== 'tv' || !card.tmdb_id) return;
+  const id = text(card.tmdb_id);
+  const next = new Set(subscribed.value);
+  let list: Record<string, unknown>[];
+  if (next.has(id)) {
+    next.delete(id);
+    list = subList.value.filter((s) => text(s.tmdb_id) !== id);
+  } else {
+    next.add(id);
+    list = [
+      ...subList.value,
+      { id, tmdb_id: id, name: text(card.title), poster: text(card.poster), enabled: true },
+    ];
+  }
+  try {
+    await post('/api/subscriptions', { subscriptions: list });
+    subscribed.value = next;
+    subList.value = list;
+  } catch (e) {
+    error.value = (e as Error).message;
+  }
+}
 watch(keyword, () => void load());
-onMounted(() => void load());
+onMounted(() => {
+  void load();
+  void loadSubscriptions();
+});
 </script>
 <template>
   <section class="tab active">
@@ -135,7 +172,12 @@ onMounted(() => void load());
           <span class="badge-type">{{ card.type === 'tv' ? '剧集' : '电影' }}</span><span v-if="card.rating" class="badge-rate">{{ card.rating }}</span><span v-if="badge(card)" class="badge-status ok">{{ badge(card) }}</span>
         </div>
         <div class="info"><div class="t">{{ text(card.title) }}</div>
-        <div class="meta"><span>{{ text(card.year) }}</span></div></div>
+        <div class="meta"><span>{{ text(card.year) }}</span><button
+          v-if="card.type === 'tv'"
+          class="sub-btn"
+          :class="{ on: subscribed.has(text(card.tmdb_id)) }"
+          @click="toggleSubscribe(card)"
+        >{{ subscribed.has(text(card.tmdb_id)) ? '已订阅' : '追更订阅' }}</button></div></div>
       </article>
     </div>
     <div v-if="!cards.length && !loading" class="list-empty">没有找到相关作品</div>

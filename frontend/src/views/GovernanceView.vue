@@ -9,6 +9,7 @@ const error = ref('');
 const busy = ref(false);
 const message = ref('');
 const armed = ref(false);
+const cleanArmed = ref(false);
 
 const scan = computed(() => object(summary.value.scan));
 const result = computed(() => object(scan.value.result));
@@ -78,6 +79,23 @@ async function scanNow() {
     busy.value = false;
   }
 }
+async function cleanNow() {
+  if (!cleanArmed.value) {
+    cleanArmed.value = true;
+    return;
+  }
+  cleanArmed.value = false;
+  busy.value = true;
+  try {
+    const data = await post<Record<string, unknown>>('/api/clean', { confirmed: true });
+    message.value = data.task_id ? `清理任务已提交（${text(data.task_id)}）` : '清理完成，正在刷新…';
+    await load();
+  } catch (e) {
+    message.value = (e as Error).message;
+  } finally {
+    busy.value = false;
+  }
+}
 onMounted(load);
 </script>
 <template>
@@ -98,13 +116,16 @@ onMounted(load);
           <button class="btn gray" :disabled="busy" @click="scanNow" data-icon="refresh">
             {{ busy ? '扫描中…' : armed ? '确认重新扫描' : '重新扫描' }}
           </button>
-          <button class="btn red" disabled data-icon="trash">执行清理</button>
+          <button class="btn red" :disabled="busy || !(scan && scan.usable)" data-icon="trash" @click="cleanNow">
+            {{ cleanArmed ? '确认执行清理' : '执行清理' }}
+          </button>
         </div>
       </div>
       <div class="governance-flow"><span><i>1</i>扫描比对</span><span><i>2</i>复核清单</span><span><i>3</i>执行清理</span></div>
       <p class="section-note">本地库同步清理 NAS 与对应 115 源文件；分享库清理 NAS。逐季匹配只处理选中季。</p>
       <div class="governance-readiness"><span>{{ readyState }}</span><span>{{ pendingCount }}</span></div>
       <p v-if="armed" class="section-note">再次点击确认：将遍历本地与分享 STRM 库生成清单，不会删除文件。</p>
+      <p v-if="cleanArmed" class="section-note">再次点击确认：将按当前治理清单删除冗余 STRM（本地库联动删除源文件）。</p>
       <p v-if="message" class="section-note" role="status">{{ message }}</p>
       <p v-if="error" class="section-note">{{ error }}</p>
     </div>

@@ -1,1 +1,0 @@
-import{l as r,E as s,G as _}from"./index-Tv4f3fjT.js";const a=(e,t)=>{const o=e.__vccOpts||e;for(const[c,n]of t)o[c]=n;return o},u={};function f(e,t){const o=_("RouterView");return r(),s(o)}const p=a(u,[["render",f]]);export{p as default};

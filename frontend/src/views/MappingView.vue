@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
-import { get } from '../api/client';
+import { get, post } from '../api/client';
 import { compact, query, records, text } from '../api/domain';
 
 const media = ref<'series' | 'movies'>('series');
@@ -55,6 +55,52 @@ function pick(target: 'media' | 'status' | 'scope', value: string) {
 }
 function badge(card: Record<string, unknown>) {
   return statusLabels[text(card.status)] || text(card.status);
+}
+// 批量删除
+const selectMode = ref(false);
+const selected = ref<Set<string>>(new Set());
+const previewing = ref(false);
+const batchSummary = ref<Record<string, unknown>>({});
+const batchMessage = ref('');
+
+function toggleSelect(card: Record<string, unknown>) {
+  const id = text(card.id || card.tmdb_id);
+  const next = new Set(selected.value);
+  next.has(id) ? next.delete(id) : next.add(id);
+  selected.value = next;
+}
+async function previewBatch() {
+  if (!selected.value.size) return;
+  previewing.value = true;
+  batchMessage.value = '';
+  batchSummary.value = {};
+  try {
+    const data = await post<Record<string, unknown>>(
+      `/api/emby/${media.value === 'series' ? 'series' : 'movies'}/batch-delete/preview`,
+      { ids: [...selected.value] },
+    );
+    batchSummary.value = data;
+    batchMessage.value = `已核验 ${compact(data.count || data.strm_count || 0)} 个 STRM`;
+  } catch (e) {
+    batchMessage.value = (e as Error).message;
+  } finally {
+    previewing.value = false;
+  }
+}
+async function executeBatch() {
+  try {
+    await post<Record<string, unknown>>(
+      `/api/emby/${media.value === 'series' ? 'series' : 'movies'}/batch-delete/execute`,
+      { ids: [...selected.value] },
+    );
+    batchMessage.value = '已提交批量删除任务';
+    selected.value = new Set();
+    batchSummary.value = {};
+    selectMode.value = false;
+    await load();
+  } catch (e) {
+    batchMessage.value = (e as Error).message;
+  }
 }
 onMounted(load);
 </script>
@@ -126,8 +172,28 @@ onMounted(load);
 
     <p v-if="error" class="section-note">{{ error }}</p>
 
+    <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0">
+      <button class="btn gray" :class="{ active: selectMode }" @click="selectMode = !selectMode; selected = new Set()">
+        {{ selectMode ? '退出多选' : '多选清理' }}
+      </button>
+      <template v-if="selectMode">
+        <span class="hint">已选 {{ selected.size }} 部</span>
+        <button class="btn" :disabled="!selected.size || previewing" @click="previewBatch">
+          {{ previewing ? '核验中…' : '预览批量删除' }}
+        </button>
+        <button
+          v-if="Number(batchSummary.count || batchSummary.strm_count || 0) > 0"
+          class="btn danger"
+          @click="executeBatch"
+        >
+          确认执行删除
+        </button>
+      </template>
+    </div>
+    <p v-if="batchMessage" class="section-note" role="status">{{ batchMessage }}</p>
+
     <div class="poster-grid">
-      <article v-for="card in cards" :key="text(card.id)" class="poster-card">
+      <article v-for="card in cards" :key="text(card.id)" class="poster-card" :style="selectMode && selected.has(text(card.id || card.tmdb_id)) ? 'outline:2px solid var(--brand);outline-offset:-2px' : ''" @click="selectMode && toggleSelect(card)">
         <div class="poster-wrap">
           <img v-if="card.poster" :src="text(card.poster)" :alt="text(card.name)" loading="lazy" />
           <span class="badge-type">{{ media === 'series' ? '剧集' : '电影' }}</span>

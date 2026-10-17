@@ -9,6 +9,8 @@ const ingest = ref<Record<string, unknown>>({});
 const auto = ref<Record<string, unknown>>({});
 const config = ref<Record<string, unknown>>({});
 const bot = ref<Record<string, unknown>>({});
+const upstream = ref<Record<string, unknown>>({});
+const testResult = ref('');
 const exemptText = ref('');
 const newGroup = ref('');
 const message = ref('');
@@ -172,7 +174,29 @@ function shown(value: unknown) {
   if (typeof value === 'object') return JSON.stringify(value);
   return text(value);
 }
-onMounted(loadAll);
+async function testService(name: string) {
+  busy.value = true;
+  testResult.value = '正在测试 ' + name + ' …';
+  try {
+    const data = await post<Record<string, unknown>>(`/api/config/test/${name}`, {});
+    testResult.value = text(data.status === 'success' || data.ok ? '连接正常' : data.message || '测试完成');
+  } catch (e) {
+    testResult.value = (e as Error).message;
+  } finally {
+    busy.value = false;
+  }
+}
+async function loadUpstream() {
+  try {
+    upstream.value = object(await get<Record<string, unknown>>('/api/upstream/config'));
+  } catch {
+    upstream.value = {};
+  }
+}
+onMounted(() => {
+  void loadAll();
+  void loadUpstream();
+});
 </script>
 <template>
   <section class="tab active">
@@ -378,6 +402,31 @@ onMounted(loadAll);
       <div class="meta-row"><span class="k">本地库路径</span><span class="v"><input v-model="config.emby_local_path" style="width: 100%" /></span></div>
       <div class="meta-row"><span class="k">分享库路径</span><span class="v"><input v-model="config.emby_share_path" style="width: 100%" /></span></div>
       <div class="meta-row"><span class="k">HTTP 代理</span><span class="v"><input v-model="config.http_proxy_url" style="width: 100%" placeholder="留空为不使用" /></span></div>
+      <div class="meta-row"><span class="k">浅色背景图</span><span class="v"><input v-model="config.background_light_url" style="width: 100%" placeholder="留空为默认" /></span></div>
+      <div class="meta-row"><span class="k">深色背景图</span><span class="v"><input v-model="config.background_dark_url" style="width: 100%" placeholder="留空为默认" /></span></div>
+      <div class="meta-row">
+        <span class="k">连接测试</span>
+        <span class="v" style="display: flex; gap: 8px; flex-wrap: wrap">
+          <button class="btn gray sm" :disabled="busy" @click="testService('emby')">Emby</button>
+          <button class="btn gray sm" :disabled="busy" @click="testService('tmdb')">TMDB</button>
+          <button class="btn gray sm" :disabled="busy" @click="testService('telegram')">Telegram</button>
+          <button class="btn gray sm" :disabled="busy" @click="testService('proxy')">代理</button>
+          <span v-if="testResult" class="hint">{{ testResult }}</span>
+        </span>
+      </div>
+    </div>
+
+    <!-- 上游接入 -->
+    <div class="panel">
+      <div class="row-between">
+        <h3 data-icon="share">上游接入</h3>
+        <button class="btn gray sm" :disabled="busy" @click="loadUpstream">刷新</button>
+      </div>
+      <div v-if="!Object.keys(upstream).length" class="list-empty">未配置上游服务</div>
+      <div v-for="[key, value] in Object.entries(upstream)" :key="key" class="meta-row">
+        <span class="k">{{ key }}</span>
+        <span class="v">{{ shown(value) }}</span>
+      </div>
     </div>
 
     <!-- 机器人 -->

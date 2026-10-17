@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
 import { del, get, post } from '../api/client';
-import { object, records, text } from '../api/domain';
+import { object, records, strings, text } from '../api/domain';
+import DirectoryPicker from '../components/DirectoryPicker.vue';
 
 const accounts = ref<Record<string, unknown>[]>([]);
 const accountId = ref('');
@@ -17,6 +18,14 @@ const query = ref('');
 const kind = ref<'movie' | 'tv'>('tv');
 const season = ref('');
 const episode = ref('');
+// 整理参数（/api/cloud/settings）
+const settings = ref<Record<string, unknown>>({});
+const videoExt = ref('');
+const metaExt = ref('');
+const ignoreKw = ref('');
+const ignoreRe = ref('');
+const customCat = ref('');
+const allCategories = ['电影', '剧集', '动漫', '纪录片', '综艺', '儿童节目', '演唱会'];
 
 const dirLabels: Record<string, string> = {
   source: '整理来源目录',
@@ -25,6 +34,48 @@ const dirLabels: Record<string, string> = {
   transfer: '转存目录',
   strm: 'STRM 来源目录',
 };
+
+async function loadSettings() {
+  try {
+    const data = object(await get<Record<string, unknown>>('/api/cloud/settings'));
+    settings.value = object(data.settings ?? data);
+    videoExt.value = strings(settings.value.video_extensions).join(', ');
+    metaExt.value = strings(settings.value.metadata_extensions).join(', ');
+    ignoreKw.value = strings(settings.value.ignore_keywords).join('\n');
+    ignoreRe.value = strings(settings.value.ignore_regex).join('\n');
+    customCat.value = strings(settings.value.custom_categories).join('\n');
+  } catch {
+    settings.value = {};
+  }
+}
+function splitList(value: string) {
+  return value
+    .split(/[\n,，、]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+async function saveSettings() {
+  busy.value = true;
+  try {
+    settings.value.video_extensions = splitList(videoExt.value);
+    settings.value.metadata_extensions = splitList(metaExt.value);
+    settings.value.ignore_keywords = ignoreKw.value.split('\n').map((s) => s.trim()).filter(Boolean);
+    settings.value.ignore_regex = ignoreRe.value.split('\n').map((s) => s.trim()).filter(Boolean);
+    settings.value.custom_categories = customCat.value.split('\n').map((s) => s.trim()).filter(Boolean);
+    await post('/api/cloud/settings', settings.value);
+    message.value = '整理参数已保存';
+  } catch (e) {
+    error.value = (e as Error).message;
+  } finally {
+    busy.value = false;
+  }
+}
+function toggleCategory(name: string) {
+  const list = strings(settings.value.enabled_categories);
+  settings.value.enabled_categories = list.includes(name)
+    ? list.filter((c) => c !== name)
+    : [...list, name];
+}
 
 async function loadAccounts() {
   const data = object(await get<Record<string, unknown>>('/api/cloud/status'));
@@ -119,6 +170,7 @@ async function removeRule(id: string) {
 onMounted(async () => {
   await loadAccounts();
   await loadRules();
+  await loadSettings();
 });
 </script>
 <template>
@@ -145,7 +197,13 @@ onMounted(async () => {
         </label>
       </div>
     </div>
-    <p class="hint">目录 ID 可在「文件管理」里点击目录查看；保存后整理按这些目录扫描。</p>
+    <p class="hint">
+      目录 ID 也可点下方浏览选择：
+      <DirectoryPicker
+        :account-id="accountId"
+        @pick="(id, name) => { directories.source = id; }"
+      />
+    </p>
 
     <div style="display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0">
       <button class="btn" :disabled="busy" @click="runOrganizer">立即整理 115 网盘</button>
@@ -158,6 +216,59 @@ onMounted(async () => {
 
     <p class="hint" role="status">{{ message }}</p>
     <p v-if="error" class="hint">{{ error }}</p>
+
+    <details class="cw-settings-group" open>
+      <summary>整理参数（命名 / 分类 / 过滤 / 八维）</summary>
+      <div class="cw-form-grid">
+        <label>命名方式
+          <select v-model="settings.naming_style">
+            <option value="standard">完整媒体信息</option>
+            <option value="compact">简洁 · 片名、年份和画质</option>
+            <option value="original">保留原名</option>
+            <option value="template">自定义模板</option>
+          </select>
+        </label>
+        <label><input v-model="settings.rename_enabled" type="checkbox" />规范重命名</label>
+        <label><input v-model="settings.classification_enabled" type="checkbox" />启用分类归档</label>
+        <label><input v-model="settings.region_classification" type="checkbox" />地区二次分类</label>
+        <label><input v-model="settings.year_classification" type="checkbox" />年份分类</label>
+        <label><input v-model="settings.unknown_enabled" type="checkbox" />未识别移入未识别目录</label>
+        <label><input v-model="settings.ffprobe_enabled" type="checkbox" />ffprobe 媒体信息提取</label>
+        <label><input v-model="settings.generate_strm_enabled" type="checkbox" />整理后生成 STRM</label>
+        <label><input v-model="settings.quality8_enabled" type="checkbox" />启用八维洗版</label>
+      </div>
+      <div class="cw-form-grid">
+        <label>电影目录<input v-model="settings.movie_folder" /></label>
+        <label>剧集目录<input v-model="settings.tv_folder" /></label>
+        <label>八维模式
+          <select v-model="settings.quality8_mode">
+            <option value="preview">仅预览建议</option>
+            <option value="upgrade">按策略执行洗版</option>
+          </select>
+        </label>
+      </div>
+      <div class="cw-settings-group">
+        <strong>分类开关</strong>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px">
+          <label v-for="cat in allCategories" :key="cat" style="display: flex; gap: 4px; align-items: center">
+            <input type="checkbox" :checked="strings(settings.enabled_categories).includes(cat)" @change="toggleCategory(cat)" />{{ cat }}
+          </label>
+        </div>
+        <label style="margin-top: 6px">自定义分类（每行一个）
+          <textarea v-model="customCat" rows="2" placeholder="例如：短剧"></textarea>
+        </label>
+      </div>
+      <div class="cw-settings-group">
+        <strong>文件过滤</strong>
+        <div class="cw-form-grid">
+          <label>视频扩展名（逗号分隔）<input v-model="videoExt" /></label>
+          <label>附属文件扩展名（逗号分隔）<input v-model="metaExt" /></label>
+          <label>忽略关键词（每行一个）<textarea v-model="ignoreKw" rows="2"></textarea></label>
+          <label>忽略正则（每行一个）<textarea v-model="ignoreRe" rows="2"></textarea></label>
+        </div>
+      </div>
+      <button class="btn" :disabled="busy" @click="saveSettings">保存整理参数</button>
+    </details>
 
     <div v-if="plan.length" class="cw-settings-group">
       <h4>预览结果（{{ plan.length }} 项）</h4>
