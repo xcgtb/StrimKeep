@@ -45,7 +45,10 @@ const ratio = computed(() => {
   return Number.isFinite(raw) ? Math.min(1, Math.max(0.5, raw)) : 0.9;
 });
 function setRatio(event: Event) {
-  form.value = { ...form.value, season_replace_ratio: Number((event.target as HTMLInputElement).value) };
+  form.value = {
+    ...form.value,
+    season_replace_ratio: Number((event.target as HTMLInputElement).value),
+  };
 }
 const exemptText = computed({
   get: () =>
@@ -125,7 +128,9 @@ onMounted(load);
     <header class="section-heading">
       <div>
         <h2>双库决策策略</h2>
-        <p class="muted-text">决定本地库与分享库冲突时谁保留；保存后旧治理计划会因规则指纹变化而失效。</p>
+        <p class="muted-text">
+          决定本地库与分享库冲突时谁保留；保存后旧治理计划会因规则指纹变化而失效。
+        </p>
       </div>
       <button
         class="button primary"
@@ -141,7 +146,9 @@ onMounted(load);
       <label class="decision-field">
         <span>决策策略</span>
         <select v-model="form.decision" :disabled="op.busy.value || op.uncertain.value">
-          <option v-for="o in decisionOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+          <option v-for="o in decisionOptions" :key="o.value" :value="o.value">
+            {{ o.label }}
+          </option>
         </select>
         <small>画质优先后按七维依次比较；保留类选项直接中止替换。</small>
       </label>

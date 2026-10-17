@@ -112,10 +112,18 @@ useVisiblePoll(() => {
         <i :style="{ width: deleteProgress.percent + '%' }"></i>
       </div>
       <div class="task-progress-counts">
-        <span>已处理 <b>{{ deleteProgress.processed }} / {{ deleteProgress.total }}</b></span>
-        <span>STRM 已删除 <b>{{ deleteProgress.strm_removed }}</b></span>
-        <span>115 源文件已删除 <b>{{ deleteProgress.cloud_removed }}</b></span>
-        <span>保留 <b>{{ deleteProgress.retained }}</b></span>
+        <span
+          >已处理 <b>{{ deleteProgress.processed }} / {{ deleteProgress.total }}</b></span
+        >
+        <span
+          >STRM 已删除 <b>{{ deleteProgress.strm_removed }}</b></span
+        >
+        <span
+          >115 源文件已删除 <b>{{ deleteProgress.cloud_removed }}</b></span
+        >
+        <span
+          >保留 <b>{{ deleteProgress.retained }}</b></span
+        >
         <span v-if="deleteProgress.error_count"
           >失败 <b>{{ deleteProgress.error_count }}</b></span
         >

@@ -175,8 +175,9 @@ useVisiblePoll(poll, 2000);
       @confirm="execute"
       ><div class="batch-summary">
         <p>
-          共 <b>{{ preview.count ?? '—' }}</b> 部 / <b>{{ preview.strm_count ?? '—' }}</b> 个 STRM，分
-          <b>{{ preview.batch_count || 1 }}</b> 批执行（每批上限 {{ preview.batch_size || '—' }} 部）。
+          共 <b>{{ preview.count ?? '—' }}</b> 部 / <b>{{ preview.strm_count ?? '—' }}</b> 个
+          STRM，分 <b>{{ preview.batch_count || 1 }}</b> 批执行（每批上限
+          {{ preview.batch_size || '—' }} 部）。
         </p>
         <p class="muted-text">执行中会再次核验，已变化的文件自动跳过。</p>
         <ul v-if="previewSeries.length" class="batch-titles">
@@ -188,7 +189,7 @@ useVisiblePoll(poll, 2000);
       </div>
       <details>
         <summary>核验明细与证据</summary>
-        <EvidenceDetails :value="preview" />
-      </details></ConfirmAction>
+        <EvidenceDetails :value="preview" /></details
+    ></ConfirmAction>
   </div>
 </template>

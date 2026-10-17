@@ -50,7 +50,10 @@ const truthRows = computed(() => {
       key: '待处理',
       value: `${Number(result.value.total_clean_cnt || 0)} 项 / ${Number(result.value.del_local_files || 0) + Number(result.value.del_share_files || 0)} 文件`,
     },
-    { key: '保护 / 豁免', value: `${protectedCount} / ${Number(result.value.exempted_count || 0)}` },
+    {
+      key: '保护 / 豁免',
+      value: `${protectedCount} / ${Number(result.value.exempted_count || 0)}`,
+    },
     { key: '静默跳过', value: `${Number(result.value.quiet_skipped || 0)} 项` },
     {
       key: 'STRM',

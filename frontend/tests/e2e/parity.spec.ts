@@ -117,9 +117,10 @@ test('explore offers the complete backend genre dictionary and passes its select
     return fulfill(r, { status: 'success', cards: [], total_pages: 1 });
   });
   await page.goto('/#/media/explore');
-  await page.getByRole('button', { name: '筛选', exact: true }).click();
-  await expect(page.getByLabel('题材').locator('option')).toHaveCount(25);
-  await page.getByLabel('题材').selectOption('西部');
+  // 1.2.12 式常驻芯片条：题材组直接可见，无需展开折叠面板
+  const genres = page.getByRole('group', { name: '题材' });
+  await expect(genres.getByRole('button')).toHaveCount(25);
+  await genres.getByRole('button', { name: '西部', exact: true }).click();
   await expect.poll(() => genre).toBe('西部');
 });
 

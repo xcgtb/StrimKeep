@@ -190,11 +190,7 @@ onMounted(() => loadBrowse());
         </div>
         <button v-if="browse.data.value?.has_more" class="button small" @click="loadMore">
           更多目录</button
-        ><button
-          class="button"
-          :disabled="!browse.data.value?.path"
-          @click="useCurrentDirectory"
-        >
+        ><button class="button" :disabled="!browse.data.value?.path" @click="useCurrentDirectory">
           使用当前目录
         </button>
       </div>

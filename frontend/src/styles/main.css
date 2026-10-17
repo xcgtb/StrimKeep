@@ -4880,3 +4880,19 @@ summary {
   line-height: 1.8;
   color: var(--muted);
 }
+
+/* 芯片行必须能被压缩，否则 127 个年份按钮会把移动端页面撑出横向滚动 */
+.chip-panel,
+.chip-row,
+.chip-track {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* 芯片行必须能被压缩，否则 127 个年份按钮会把移动端页面撑出横向滚动 */
+.chip-panel,
+.chip-row,
+.chip-track {
+  min-width: 0;
+  max-width: 100%;
+}
