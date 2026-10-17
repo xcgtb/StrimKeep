@@ -64,6 +64,7 @@ export interface LibraryPage extends Envelope {
   facts_ts?: number;
   facts_version?: string;
   stale?: boolean;
+  emby_host?: string;
 }
 export interface Subscription {
   id: string;

@@ -1,0 +1,36 @@
+/* ═══════════════════════════════════════════════
+   StrimKeep · Vue3 适配层
+   完整组件样式已由 classic-app.css / classic-glass.css /
+   classic-overview.css / classic-upstream.css 提供。
+   本文件只处理 Vue3 的 .template-shell 前缀（更高 specificity）
+   压过 classic 类的场景，让 classic 视觉正确生效。
+   ═══════════════════════════════════════════════ */
+
+/* panel：Vue3 用 .template-shell .panel（0,2,0）压过 classic .panel，
+   这里补回 classic 的毛玻璃表面。 */
+.template-shell .panel {
+  background: var(--surface);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border-color: var(--glass-edge, var(--border));
+  box-shadow: var(--shadow-sm, var(--shadow));
+}
+
+/* 海报卡片选中态（Vue3 多选用 .selected，classic 用 .mapping-batch-selected） */
+.poster-card.selected .poster-wrap {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* 输入框在玻璃表面上用实色底，避免透明底对比度不足 */
+.template-shell input:not([type='checkbox']),
+.template-shell select,
+.template-shell textarea {
+  background: var(--surface-solid);
+  border-color: var(--border-input, var(--border));
+}
+
+/* 深色主题下，玻璃 panel 保持半透明表面 */
+html[data-theme='dark'] .template-shell .panel {
+  background: var(--surface);
+}
