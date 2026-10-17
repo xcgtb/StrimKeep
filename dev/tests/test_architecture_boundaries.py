@@ -79,31 +79,38 @@ assert not Path(engine.DATA_DIR).exists()
 
 
 def test_real_static_mount_serves_all_frontend_assets_and_retains_uncached_html(tmp_path):
-    code = r'''import hashlib, re
-from urllib.parse import urlsplit, parse_qs
+    code = r'''import re
+from urllib.parse import urlsplit
 from fastapi.testclient import TestClient
 from app.main import app
-# No lifespan: no scheduler, Bot, CD2 or media/API calls.
+# No lifespan: no scheduler, Bot, CD2 or real media/API calls.
 client = TestClient(app)
-page = client.get('/')
-assert page.status_code == 200
-assert 'no-store' in page.headers['cache-control']
-urls = re.findall(r'(?:src|href)="(/static/[^"]+)"', page.text)
-assert urls and len(set(urls)) == len(urls), 'missing or duplicate static assets'
-paths = {urlsplit(url).path for url in urls}
-required = {'/static/icons/favicon.ico', '/static/icons/favicon.svg', '/static/icons/apple-touch-icon.png'}
-assert required <= paths, ('missing required assets', required - paths)
-assert '<div id="app"></div>' in page.text and 'type="module"' in page.text
-assert '/static/js/' not in page.text and '/static/css/' not in page.text
-assert any(p.startswith('/static/assets/') and p.endswith('.js') for p in paths)
-assert any(p.startswith('/static/assets/') and p.endswith('.css') for p in paths)
-for url in urls:
-    response = client.get(url)
-    assert response.status_code == 200, url
-    kind = {'css': 'css', 'js': 'javascript', 'svg': 'image/svg+xml',
-            'png': 'image/png', 'ico': 'image/'}.get(urlsplit(url).path.rsplit('.', 1)[-1])
-    assert kind in response.headers['content-type'], url
-    if '/assets/' in url: assert re.search(r'-[A-Za-z0-9_-]{8,}\.(js|css)$',url), url
+classic = client.get('/')
+assert classic.status_code == 200
+assert 'no-store' in classic.headers['cache-control']
+assert 'id="tab-governance"' in classic.text
+assert 'id="tab-mapping"' in classic.text
+assert 'id="tab-explore"' in classic.text
+assert 'id="cloudVueFrame"' in classic.text
+assert '/static/classic/js/governance.js' in classic.text
+assert '/static/classic/js/mapping.js' in classic.text
+assert '/static/classic/js/explore.js' in classic.text
+assert '/static/classic/js/cloud-workbench.js' not in classic.text
+modern = client.get('/static/index.html')
+assert modern.status_code == 200
+assert '<div id="app"></div>' in modern.text and 'type="module"' in modern.text
+assert '/static/js/' not in modern.text and '/static/css/' not in modern.text
+assert '/static/assets/' in modern.text
+for document in (classic, modern):
+    urls = re.findall(r'(?:src|href)="(/static/[^"]+)"', document.text)
+    assert urls and len(set(urls)) == len(urls)
+    for url in urls:
+        response = client.get(url)
+        assert response.status_code == 200, url
+        kind = {'css': 'css', 'js': 'javascript', 'svg': 'image/svg+xml',
+                'png': 'image/png', 'ico': 'image/'}.get(urlsplit(url).path.rsplit('.', 1)[-1])
+        assert kind in response.headers['content-type'], url
+assert client.get('/static/classic/js/missing.js').status_code == 404
 assert client.get('/static/js/missing-file.js').status_code == 404
 icon = client.get('/favicon.ico')
 assert icon.status_code == 200 and icon.headers['content-type'] == 'image/vnd.microsoft.icon'

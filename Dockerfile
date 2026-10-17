@@ -34,6 +34,7 @@ RUN pip install -r requirements.txt
 
 COPY app/ ./app/
 COPY --from=frontend_builder /build/static/ ./static/
+COPY static/classic/ ./static/classic/
 COPY scripts/healthcheck.py ./scripts/healthcheck.py
 
 RUN mkdir -p /data

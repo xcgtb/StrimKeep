@@ -4521,3 +4521,25 @@ summary {
 .governance-workspace .form-grid > label { min-width: 0; }
 .governance-workspace .form-grid select { width: 100%; max-width: 100%; }
 @media (max-width: 720px) { .gov-source-selector-actions .button { width: 100%; } }
+
+/* Classic non-115 shell embeds only the modern 115 workspace. */
+.app-shell.embedded .sidebar,
+.app-shell.embedded .nav-scrim,
+.app-shell.embedded .topbar,
+.app-shell.embedded .mobile-dock,
+.app-shell.embedded .page-footer {
+  display: none !important;
+}
+.app-shell.embedded,
+.app-shell.embedded .workspace {
+  width: 100%;
+  min-height: 0;
+  margin: 0;
+}
+.app-shell.embedded .workspace {
+  padding: 0;
+}
+.app-shell.embedded .page {
+  max-width: none;
+  padding: 12px;
+}

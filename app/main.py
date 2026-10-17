@@ -162,6 +162,13 @@ async def _security_mw(request: Request, call_next):
     resp = await call_next(request)
     for k, v in _sec.SECURITY_HEADERS.items():
         resp.headers.setdefault(k, v)
+    # Only the first-party Vue 3 workbench may be framed by the restored
+    # same-origin classic shell. Every other route keeps DENY / 'none'.
+    if request.url.path == '/workspace/embed' and request.query_params.get('embedded') == '1':
+        resp.headers['X-Frame-Options'] = 'SAMEORIGIN'
+        resp.headers['Content-Security-Policy'] = (
+            "frame-ancestors 'self'; object-src 'none'; base-uri 'self'; form-action 'self'"
+        )
     return resp
 
 
