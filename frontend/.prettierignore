@@ -1,4 +1,4 @@
-src/styles/classic-app.css
-src/styles/classic-glass.css
-src/styles/classic-overview.css
-src/styles/classic-upstream.css
+node_modules/
+test-results/
+playwright-report/
+package-lock.json

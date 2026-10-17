@@ -86,8 +86,7 @@ const filters = reactive({
 const selectionMode = ref(false),
   selectedIds = ref(new Set<string>()),
   detailOpen = ref(false),
-  compareOpen = ref(false),
-  embyHost = ref('');
+  compareOpen = ref(false);
 const selectedCards = computed(() => cards.value.filter((c) => selectedIds.value.has(c.id!)));
 const seasons = computed(() => {
   const item = detail.data.value?.item;
@@ -101,20 +100,6 @@ const seasons = computed(() => {
       local: actual.get(season)?.local_eps,
       share: actual.get(season)?.share_eps,
     }));
-});
-const detailStatus = computed(() => {
-  const info = detail.data.value?.item?.tmdb_info;
-  const mst = info?.match_status || 'unmatched';
-  const map: Record<string, { text: string; cls: string }> = {
-    aligned: { text: '✓ 完整', cls: 'ok' },
-    missing: { text: `缺 ${Math.abs(info?.diff || 0)} 集`, cls: 'miss' },
-    extra: { text: `超 ${info?.diff || 0} 集`, cls: 'extra' },
-    ongoing: { text: '在更', cls: 'ongoing' },
-    unmatched: { text: '未匹配', cls: 'dim' },
-    no_tmdb: { text: '无 TMDB', cls: 'dim' },
-    pending: { text: '待对照', cls: 'gen' },
-  };
-  return map[mst] || { text: '', cls: 'dim' };
 });
 async function load(more = false, background = false) {
   const next = more ? offset.value : 0;
@@ -137,7 +122,6 @@ async function load(more = false, background = false) {
   offset.value = response.next_offset || 0;
   hasMore.value = !!response.has_more;
   total.value = response.total || 0;
-  if (response.emby_host) embyHost.value = response.emby_host;
   selectedIds.value = new Set(
     [...selectedIds.value].filter((id) => cards.value.some((c) => c.id === id)),
   );
@@ -432,25 +416,8 @@ const live = useLibraryUpdates(refreshLoaded);
         <div>
           <p class="eyebrow">LIBRARY DETAILS · {{ detail.data.value.item.year }}</p>
           <h3>{{ detail.data.value.item.name }}</h3>
-          <div class="emby-badges">
-            <span
-              v-if="detail.data.value.item.in_local && detail.data.value.item.in_share"
-              class="emby-badge loc"
-              >本地+分享</span
-            >
-            <span v-else-if="detail.data.value.item.in_local" class="emby-badge loc">本地</span>
-            <span v-else-if="detail.data.value.item.in_share" class="emby-badge shr">分享</span>
-            <span v-if="detail.data.value.item._md" class="emby-badge ok">✓ 完整</span>
-            <span v-else-if="detailStatus.text" class="emby-badge" :class="detailStatus.cls">{{
-              detailStatus.text
-            }}</span>
-            <span v-if="detail.data.value.item.year" class="emby-badge gen">{{
-              detail.data.value.item.year
-            }}</span>
-            <span v-if="detail.data.value.item.tmdb_id" class="emby-badge gen"
-              >TMDB {{ detail.data.value.item.tmdb_id }}</span
-            >
-          </div>
+          <p>{{ badge(detail.data.value.item) || '电影资源' }}</p>
+          <p>TMDB {{ detail.data.value.item.tmdb_id || '未匹配' }}</p>
           <div class="detail-stats">
             <div>
               <strong>{{ detail.data.value.item.local_eps ?? '—' }}</strong
@@ -506,13 +473,6 @@ const live = useLibraryUpdates(refreshLoaded);
     ><template #footer
       ><template v-if="detail.data.value?.item"
         ><button class="button" @click="openResources">搜索资源候选</button
-        ><a
-          v-if="detail.data.value.item.id && embyHost"
-          :href="`${embyHost.replace(/\/+$/, '')}/web/index.html#!/item?id=${detail.data.value.item.id}`"
-          target="_blank"
-          rel="noopener"
-          class="btn gray"
-          >在 Emby 中打开</a
         ><button v-if="filters.media === 'series'" class="button" @click="manualConfirm = true">
           {{ detail.data.value.item._md ? '取消手动完结' : '手动完结' }}</button
         ><button
