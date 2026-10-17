@@ -78,6 +78,8 @@ test('share STRM uses the independent preview and apply contract', async ({ page
   await expect(page.getByRole('button', { name: '确认执行' })).toBeDisabled();
   await page.getByLabel('我已核对上面的操作范围和影响').check();
   await page.getByRole('button', { name: '确认执行' }).click();
+  // 技术编号按产品设计默认折叠；展开后仍须可核查原始作业回执。
+  await page.locator('.task-receipt details.receipt-technical summary').click();
   await expect(
     page.locator('.task-receipt .mono').filter({ hasText: 'accepted-job' }),
   ).toBeVisible();
@@ -207,7 +209,10 @@ test('batch all-selection uses a sealed preview and never limits deletion to the
     fulfill(r, { status: 'success', state: 'running' }),
   );
   await page.goto('/#/media/library');
-  await page.getByLabel('片库范围').selectOption('share');
+  await page
+    .getByRole('group', { name: '片库范围' })
+    .getByRole('button', { name: '仅分享' })
+    .click();
   await page.getByRole('button', { name: '选择对照' }).click();
   await page.getByRole('button', { name: '选择全部筛选结果' }).click();
   await page.getByRole('button', { name: '预览批量删除 · 分享库' }).click();

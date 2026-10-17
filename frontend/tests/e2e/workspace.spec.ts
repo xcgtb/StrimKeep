@@ -61,7 +61,8 @@ test('explore loads another page and subscription buttons do not open details', 
   const state = await fixtures(page);
   await page.goto('/#/media/explore');
   await expect(page.locator('.poster-card')).toHaveCount(12);
-  await page.getByRole('button', { name: '加载更多作品' }).click();
+  // 新版影视探索是无限滚动：滚动到底部触发续页，不再依赖旧按钮。
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await expect(page.locator('.poster-card')).toHaveCount(13);
   await page.locator('.poster-card').first().getByRole('button', { name: '已订阅' }).click();
   await expect(

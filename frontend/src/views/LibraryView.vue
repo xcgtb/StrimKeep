@@ -370,7 +370,7 @@ const live = useLibraryUpdates(refreshLoaded);
         placeholder="搜索片库"
       /><button class="button">搜索</button>
     </form>
-    <div class="mapping-scope-tabs" aria-label="片库范围">
+    <div class="mapping-scope-tabs" role="group" aria-label="片库范围">
       <button
         type="button"
         :class="{ active: filters.scope === 'all' }"

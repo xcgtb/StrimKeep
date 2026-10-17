@@ -56,7 +56,7 @@ watch(url, () => {
         v-if="selectable"
         class="selection-button"
         :class="{ checked: selected }"
-        :aria-label="`${selected ? '取消选择' : '选择'}${titleOf(card)}`"
+        :aria-label="`切换勾选状态：${titleOf(card)}`"
         :aria-pressed="!!selected"
         @click.stop="$emit('select')"
       >
