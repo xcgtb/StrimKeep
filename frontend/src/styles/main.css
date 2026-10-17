@@ -4713,3 +4713,170 @@ summary {
   color: var(--text);
   font-weight: 600;
 }
+
+/* 治理规则：决策策略表单与档位排序的可读性重做 */
+.decision-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px 24px;
+  margin-top: 18px;
+}
+.decision-grid.disabled {
+  opacity: 0.6;
+}
+.decision-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+.decision-field.wide {
+  grid-column: 1 / -1;
+}
+.decision-field > span {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.02em;
+}
+.decision-field small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.decision-field select,
+.decision-field textarea,
+.decision-field input[type='range'] {
+  width: 100%;
+  font-size: 13px;
+}
+.switch-field {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.switch-field > span {
+  flex: 0 0 auto;
+}
+.switch-field small {
+  flex: 1 0 100%;
+}
+.ratio-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.ratio-row input[type='range'] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+.ratio-row output {
+  flex: 0 0 52px;
+  padding: 4px 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--subtle);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 档位排序：纵向列表，序号徽标 + 名称 + 升降按钮 */
+.tier-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  margin-top: 14px;
+}
+.tier-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-solid);
+  font-size: 12px;
+}
+.tier-list li:hover {
+  border-color: var(--accent);
+}
+.tier-number {
+  display: grid;
+  place-items: center;
+  flex: 0 0 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+.tier-list li > span:nth-of-type(2) {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tier-list li.fixed {
+  background: var(--subtle);
+  color: var(--muted);
+}
+.tier-list li.fixed .tier-number {
+  background: transparent;
+  color: var(--muted);
+}
+.tier-fixed-tag {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10px;
+  font-style: normal;
+  color: var(--muted);
+}
+.tier-list button {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-solid);
+  color: var(--accent);
+  font-size: 11px;
+  line-height: 1;
+}
+.tier-list button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+@media (max-width: 860px) {
+  .decision-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 目录清理：扫描中与空结果的显式反馈，避免"点了没反应" */
+.scan-hint {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+.empty-result {
+  margin: 4px 0 14px;
+  padding: 16px 18px;
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+  background: var(--subtle);
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--muted);
+}

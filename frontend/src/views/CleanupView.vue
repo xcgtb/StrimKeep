@@ -13,7 +13,9 @@ const browse = useRequest<Data>(),
   op = useOperation(),
   tab = ref('directories'),
   path = ref(''),
-  scope = ref('directory'),
+  // 默认「整个本地与分享库」：1.2.12 的默认扫描范围就是整个媒体库，
+  // 且这样首屏按钮可用，不会因为没选目录而呈现为不可点击的死按钮。
+  scope = ref('all'),
   limit = ref(100),
   depth = ref(5),
   selected = ref(new Set<string>()),
@@ -93,6 +95,14 @@ function toggle(p: string) {
   next.has(p) ? next.delete(p) : next.add(p);
   selected.value = next;
 }
+// 选中某个目录后自动切到「所选目录」范围，避免用户以为扫描了整个库。
+function useCurrentDirectory() {
+  path.value = String(browse.data.value?.path || '');
+  if (path.value) scope.value = 'directory';
+}
+watch(scope, (value) => {
+  if (value === 'all') path.value = '';
+});
 async function previewClean() {
   if (tab.value === 'orphans') {
     const r = await op.run(() =>
@@ -183,13 +193,21 @@ onMounted(() => loadBrowse());
         ><button
           class="button"
           :disabled="!browse.data.value?.path"
-          @click="path = String(browse.data.value?.path)"
+          @click="useCurrentDirectory"
         >
           使用当前目录
         </button>
       </div>
       <div class="form-stack">
-        <label>选中目录<input v-model="path" placeholder="选择媒体库中的绝对目录路径" /></label
+        <label
+          >选中目录<input
+            v-model="path"
+            :disabled="tab === 'directories' && scope === 'all'"
+            :placeholder="
+              tab === 'directories' && scope === 'all'
+                ? '整个库扫描无需指定目录'
+                : '选择媒体库中的绝对目录路径'
+            " /></label
         ><label v-if="tab === 'directories'"
           >范围<select v-model="scope">
             <option value="directory">所选目录</option>
@@ -210,13 +228,39 @@ onMounted(() => loadBrowse());
           "
           @click="loadScan"
         >
-          扫描并预览
+          {{ scan.loading.value ? '正在扫描…' : '扫描并预览' }}
         </button>
+        <p v-if="scan.loading.value" class="scan-hint" role="status">
+          正在读取目录，媒体库较大时可能需要几十秒，请勿重复点击。
+        </p>
+        <p v-else class="scan-hint">
+          扫描范围：{{
+            tab === 'orphans'
+              ? `目录树深度 ${depth} 层`
+              : tab === 'residue'
+                ? path || '请先选择网盘对应目录'
+                : scope === 'all'
+                  ? '整个本地库与分享库'
+                  : path || '请先选择目录'
+          }}
+        </p>
       </div>
     </div>
   </section>
   <section v-if="scan.data.value" class="panel">
-    <h2>扫描结果</h2>
+    <header class="section-heading">
+      <div>
+        <h2>扫描结果</h2>
+        <p class="muted-text">
+          共命中 <b>{{ candidates.length }}</b> 项<span v-if="tab === 'directories'"
+            >（预览上限 {{ limit }}）</span
+          >；勾选后再核对影响，才会进入清理。
+        </p>
+      </div>
+      <span class="state-pill" :class="{ success: candidates.length }">{{
+        candidates.length ? '可核对清理' : '未发现可清理项'
+      }}</span>
+    </header>
     <template v-if="tab !== 'residue'"
       ><div class="selection-toolbar">
         <span>已选 {{ selected.size }} 项</span
@@ -238,7 +282,10 @@ onMounted(() => loadBrowse());
           清空
         </button>
       </div>
-      <div class="plan-item-list">
+      <p v-if="!candidates.length" class="empty-result">
+        本次扫描没有发现空目录、附属文件或残留。若确认这里有内容，请检查扫描范围是否选对，或换个目录再试。
+      </p>
+      <div v-else class="plan-item-list">
         <article v-for="(item, i) in candidates" :key="i">
           <label class="checkbox-label"
             ><input

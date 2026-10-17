@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { computed, ref, onMounted } from 'vue';
 import { readData, writeData, object, records, type Data } from '../api/domain';
 import { useRequest } from '../composables/useRequest';
 import { useOperation } from '../composables/useOperation';
@@ -22,56 +22,46 @@ const strategy = useRequest<Data>(),
   a = ref(''),
   b = ref(''),
   confirmation = ref('');
-const fields: Field[] = [
-  {
-    key: 'decision',
-    label: '决策策略',
-    type: 'select',
-    options: [
-      { value: 'quality_first', label: '画质优先' },
-      { value: 'keep_local', label: '优先保留本地' },
-      { value: 'keep_share', label: '优先保留分享' },
-    ],
-  },
-  {
-    key: 'match_strategy',
-    label: '作品匹配',
-    type: 'select',
-    options: [
-      { value: 'title_year', label: '片名与年份' },
-      { value: 'tmdb_first', label: 'TMDB 优先' },
-    ],
-  },
-  {
-    key: 'multi_season_protect',
-    label: '多季保护',
-    type: 'select',
-    options: [
-      { value: 'compare', label: '开启比较保护' },
-      { value: 'off', label: '关闭' },
-    ],
-  },
-  { key: 'tie_keep_local', label: '平局保留本地', type: 'check' },
-  {
-    key: 'season_replace_ratio',
-    label: '分享达标比例（0.5～1）',
-    type: 'number',
-    min: 0.5,
-    max: 1,
-    step: 0.01,
-  },
-  {
-    key: 'special_action',
-    label: '特别篇处理',
-    type: 'select',
-    options: [
-      { value: 'compare', label: '参与比较' },
-      { value: 'ignore', label: '忽略' },
-      { value: 'delete', label: '按删除策略处理' },
-    ],
-  },
-  { key: 'exempt_keywords', label: '豁免关键词（每行一个）', type: 'lines' },
+const decisionOptions = [
+  { value: 'quality_first', label: '画质优先' },
+  { value: 'keep_local', label: '优先保留本地' },
+  { value: 'keep_share', label: '优先保留分享' },
 ];
+const matchOptions = [
+  { value: 'title_year', label: '片名与年份' },
+  { value: 'tmdb_first', label: 'TMDB 优先' },
+];
+const seasonOptions = [
+  { value: 'compare', label: '开启比较保护' },
+  { value: 'off', label: '关闭' },
+];
+const specialOptions = [
+  { value: 'compare', label: '参与比较' },
+  { value: 'ignore', label: '忽略' },
+  { value: 'delete', label: '按删除策略处理' },
+];
+const ratio = computed(() => {
+  const raw = Number(form.value.season_replace_ratio);
+  return Number.isFinite(raw) ? Math.min(1, Math.max(0.5, raw)) : 0.9;
+});
+function setRatio(event: Event) {
+  form.value = { ...form.value, season_replace_ratio: Number((event.target as HTMLInputElement).value) };
+}
+const exemptText = computed({
+  get: () =>
+    Array.isArray(form.value.exempt_keywords)
+      ? (form.value.exempt_keywords as string[]).join('\n')
+      : '',
+  set: (value: string) => {
+    form.value = {
+      ...form.value,
+      exempt_keywords: value
+        .split(/\r?\n/)
+        .map((item) => item.trim())
+        .filter(Boolean),
+    };
+  },
+});
 const autoFields: Field[] = [
   { key: 'enabled', label: '启用定期治理诊断', type: 'check' },
   { key: 'interval_hours', label: '诊断间隔（小时）', type: 'number', min: 1, max: 168 },
@@ -132,20 +122,88 @@ onMounted(load);
     :uncertain="op.uncertain.value"
   />
   <section class="panel">
-    <h2>双库决策策略</h2>
-    <FormFields
-      v-model="form"
-      :fields="fields"
-      :disabled="op.busy.value || op.uncertain.value"
-    /><button
-      class="button primary"
-      :disabled="
-        !strategy.data.value || !!strategy.error.value || op.busy.value || op.uncertain.value
-      "
-      @click="confirmation = 'strategy'"
-    >
-      保存治理策略
-    </button>
+    <header class="section-heading">
+      <div>
+        <h2>双库决策策略</h2>
+        <p class="muted-text">决定本地库与分享库冲突时谁保留；保存后旧治理计划会因规则指纹变化而失效。</p>
+      </div>
+      <button
+        class="button primary"
+        :disabled="
+          !strategy.data.value || !!strategy.error.value || op.busy.value || op.uncertain.value
+        "
+        @click="confirmation = 'strategy'"
+      >
+        保存治理策略
+      </button>
+    </header>
+    <div class="decision-grid" :class="{ disabled: op.busy.value || op.uncertain.value }">
+      <label class="decision-field">
+        <span>决策策略</span>
+        <select v-model="form.decision" :disabled="op.busy.value || op.uncertain.value">
+          <option v-for="o in decisionOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+        </select>
+        <small>画质优先后按七维依次比较；保留类选项直接中止替换。</small>
+      </label>
+      <label class="decision-field">
+        <span>作品匹配</span>
+        <select v-model="form.match_strategy" :disabled="op.busy.value || op.uncertain.value">
+          <option v-for="o in matchOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+        </select>
+        <small>TMDB 优先时按 TMDB 编号配对，片名与年份仅作兜底。</small>
+      </label>
+      <label class="decision-field">
+        <span>多季保护</span>
+        <select v-model="form.multi_season_protect" :disabled="op.busy.value || op.uncertain.value">
+          <option v-for="o in seasonOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+        </select>
+        <small>开启后，整季被替换需要先通过比例阈值。</small>
+      </label>
+      <label class="decision-field switch-field">
+        <span>平局保留本地</span>
+        <input
+          v-model="form.tie_keep_local"
+          type="checkbox"
+          class="quality-switch"
+          :disabled="op.busy.value || op.uncertain.value"
+        />
+        <small>七维完全打平时不替换，保留本地版本。</small>
+      </label>
+      <div class="decision-field wide">
+        <span>分享达标比例</span>
+        <div class="ratio-row">
+          <input
+            :value="ratio"
+            type="range"
+            min="0.5"
+            max="1"
+            step="0.01"
+            :disabled="op.busy.value || op.uncertain.value"
+            aria-label="分享达标比例"
+            @input="setRatio"
+          />
+          <output>{{ Math.round(ratio * 100) }}%</output>
+        </div>
+        <small>评分/集数达到本地该比例时，才认为分享版本可以整季替换。</small>
+      </div>
+      <label class="decision-field">
+        <span>特别篇处理</span>
+        <select v-model="form.special_action" :disabled="op.busy.value || op.uncertain.value">
+          <option v-for="o in specialOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+        </select>
+        <small>特辑盘（S00）独立于正片季度单独判定。</small>
+      </label>
+      <label class="decision-field wide">
+        <span>豁免关键词（白名单）</span>
+        <textarea
+          v-model="exemptText"
+          rows="4"
+          placeholder="每行一个关键词，命中的作品不参与治理"
+          :disabled="op.busy.value || op.uncertain.value"
+        ></textarea>
+        <small>保存后可用下方「扫描豁免匹配」核对实际命中的目录。</small>
+      </label>
+    </div>
   </section>
   <section class="panel">
     <header class="section-heading">

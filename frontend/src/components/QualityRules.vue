@@ -110,9 +110,16 @@ function groups(i: number, event: Event) {
           ></textarea>
         </label>
         <ol v-if="strings(rule.tiers).length" class="tier-list">
-          <li v-for="(item, j) in strings(rule.tiers)" :key="item">
-            <span class="tier-number">{{ j + 1 }}</span
+          <li
+            v-for="(item, j) in strings(rule.tiers)"
+            :key="item"
+            :class="{ fixed: j === strings(rule.tiers).length - 1 }"
+          >
+            <span class="tier-number">{{
+              j === strings(rule.tiers).length - 1 ? '末' : j + 1
+            }}</span
             ><span>{{ item }}</span
+            ><em v-if="j === strings(rule.tiers).length - 1" class="tier-fixed-tag">不参与排序</em
             ><button
               type="button"
               :disabled="disabled || j === 0 || j === strings(rule.tiers).length - 1"
