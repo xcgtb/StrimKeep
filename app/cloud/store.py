@@ -83,15 +83,6 @@ CREATE TABLE IF NOT EXISTS cloud_transfer_requests (
 CREATE TABLE IF NOT EXISTS cloud_progress (
  job_id TEXT PRIMARY KEY, total INTEGER, processed INTEGER NOT NULL,
  phase TEXT NOT NULL, current TEXT NOT NULL, updated REAL NOT NULL);
-CREATE TABLE IF NOT EXISTS cloud_offline_handoffs (
- origin_job TEXT NOT NULL, item_index INTEGER NOT NULL,
- account_id TEXT NOT NULL, account_revision INTEGER NOT NULL,
- directory_revision INTEGER NOT NULL, info_hash TEXT NOT NULL,
- source_cid TEXT NOT NULL, target_cid TEXT NOT NULL, unknown_cid TEXT NOT NULL,
- state TEXT NOT NULL, child_job TEXT NOT NULL, next_check REAL NOT NULL,
- last_error TEXT NOT NULL DEFAULT '', updated REAL NOT NULL,
- PRIMARY KEY(origin_job,item_index));
-CREATE INDEX IF NOT EXISTS cloud_offline_handoffs_due ON cloud_offline_handoffs(state,next_check);
 CREATE TABLE IF NOT EXISTS cloud_deletions (
  account_id TEXT NOT NULL, file_id TEXT NOT NULL, asset_id TEXT NOT NULL,
  state TEXT NOT NULL, payload TEXT NOT NULL, result TEXT NOT NULL,

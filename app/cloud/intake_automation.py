@@ -142,8 +142,6 @@ def stop_all(account_id):
     from app.cloud import jobs
     if not store.account(account_id):
         raise CloudError('账号不存在',404)
-    from app.cloud import offline_handoff
-    paused_downloads = offline_handoff.pause(account_id)
     with store.db() as con:
         con.execute("UPDATE cloud_rules SET enabled=0,updated=? WHERE json_extract(payload,'$.account_id')=? AND json_extract(payload,'$.kind')='workflow'",(time.time(),account_id))
         running = con.execute("SELECT id FROM cloud_jobs WHERE kind IN ('organize','workflow') AND state IN ('queued','running') AND json_extract(payload,'$.account_id')=?",(account_id,)).fetchall()
@@ -152,4 +150,4 @@ def stop_all(account_id):
     ids = list(dict.fromkeys(r[0] for r in running))
     for jid in ids:
         jobs.request_stop(jid)
-    return {'stopped':ids,'offline_paused':paused_downloads,'message':'定时整理已暂停；'+str(len(ids))+' 个任务将在当前文件核实后停止，'+str(paused_downloads)+' 个等待云下载的自动接续已暂停。'}
+    return {'stopped':ids,'message':'定时整理已暂停；'+str(len(ids))+' 个任务将在当前文件核实后停止。'}

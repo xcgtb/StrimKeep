@@ -4460,86 +4460,61 @@ summary {
   }
 }
 
-/* Governance usability recovery - Vue3 1.4.12. No unrelated layout overrides. */
-.governance-workspace .section-heading { align-items: flex-start; }
-.gov-source-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 14px 0; }
-.gov-source-card { padding: 14px 16px; min-width: 0; border: 1px solid var(--border); background: var(--panel-solid); border-radius: 14px; display: grid; gap: 10px; }
-.gov-source-card.gov-source-off { opacity: .72; }
-.gov-source-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
-.gov-source-card code { overflow-wrap: anywhere; font-size: 12px; line-height: 1.55; color: var(--text); }
-.gov-source-card small { color: var(--text-muted, var(--text-dim)); }
-.gov-scan-notice { line-height: 1.65; margin: 10px 0 0; color: var(--text); }
-.gov-item-context { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; opacity: .8; }
-.gov-detail-intro { padding: 12px 14px; border-radius: 12px; background: var(--panel-solid); line-height: 1.65; }
-.gov-detail-intro p { margin: 8px 0 0; }
-.quality-rule-state { padding: 3px 8px; font-size: 11px; border-radius: 99px; border: 1px solid var(--border); color: var(--text-dim); white-space: nowrap; }
-.quality-rule-state.is-enabled { color: var(--accent); border-color: var(--accent); }
-/* Unified organizer readiness panel. Only inherited theme tokens are used. */
-.organize-readiness .section-heading { align-items: flex-start; }
-.organize-readiness-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }
-.organize-readiness-step { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; padding: 13px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-solid); }
-.organize-readiness-step strong { font-size: 14px; }
-.organize-readiness-step small { font-size: 12px; line-height: 1.6; color: var(--text-dim); overflow-wrap: anywhere; }
-.organize-workspace-links { display: flex; flex-wrap: wrap; gap: 8px; }
-.organize-workspace-links a { display: inline-flex; padding: 9px 12px; border: 1px solid var(--border); border-radius: 9px; text-decoration: none; color: var(--text); background: var(--panel-solid); font-size: 13px; }
-.organize-workspace-links a:hover, .organize-workspace-links a:focus-visible { color: var(--accent); border-color: var(--accent); }
-@media (max-width: 900px) { .organize-readiness-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 720px) { .organize-readiness-grid { grid-template-columns: minmax(0, 1fr); } }
-@media (max-width: 720px) { .gov-source-grid { grid-template-columns: minmax(0, 1fr); } .governance-workspace .section-heading { flex-wrap: wrap; } }
+/* v1.4.7 behaviour restored using native Vue components; no legacy script dependency. */
+.delete-progress { display: grid; gap: 10px; margin: 14px 0; }
+.delete-progress .progress-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.delete-progress progress { display: block; width: 100%; height: 10px; accent-color: var(--accent); border-radius: 999px; }
+.delete-progress .progress-metrics { display: flex; flex-wrap: wrap; gap: 10px 18px; color: var(--muted); font-size: 12px; }
+.delete-progress .progress-metrics strong { color: var(--text); font-variant-numeric: tabular-nums; }
+.delete-progress.progress-failed progress { accent-color: var(--danger, #cc4545); }
+.receipt-technical { border-top: 1px solid var(--border); padding-top: 12px; }
+.receipt-technical > summary { cursor: pointer; color: var(--accent); }
 
-/* Unified content density and keyboard focus for core media workspace. */
-.organize-readiness-grid .state-pill { max-width: 100%; }
-.organize-workspace-links a { min-height: 36px; align-items: center; }
-.organize-workspace-links a.router-link-active { color: var(--accent); border-color: var(--accent); }
-.organize-workspace-links a:focus-visible,
-.gov-source-card:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
-@media (max-width: 720px) {
-  .organize-workspace-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .organize-workspace-links a { min-width: 0; justify-content: center; text-align: center; }
-  .gov-source-card code { font-size: 11px; }
+/* Compact legacy poster-wall interactions, implemented entirely in Vue 3. */
+.poster-type { position: absolute; top: 8px; left: 8px; pointer-events: none; font-size: 10px; color: white; background: #142336b8; padding: 4px 7px; border-radius: 7px; backdrop-filter: blur(5px); }
+.poster-grid.discovery-grid, .poster-grid.library-poster-grid { gap: 17px 13px; }
+.poster-card .poster-art { border-radius: 13px; }
+.poster-card.selectable .poster-art { cursor: pointer; }
+.poster-card.selectable.selected .poster-art { outline: 3px solid var(--accent); outline-offset: -3px; }
+.explore-filter-summary { margin: 10px 0; gap: 10px; }
+.explore-filter-summary .button { flex: none; }
+@media (max-width: 700px) {
+  .poster-grid.discovery-grid, .poster-grid.library-poster-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 9px; }
+  .poster-type { font-size: 9px; padding: 3px 5px; top: 5px; left: 5px; }
+  .poster-grid.discovery-grid .poster-caption, .poster-grid.library-poster-grid .poster-caption { padding-top: 7px; }
+  .poster-grid.discovery-grid .poster-meta, .poster-grid.library-poster-grid .poster-meta { font-size: 9px; }
 }
-
-.gov-preview-paths { display: grid; gap: 14px; grid-template-columns: repeat(2, minmax(0,1fr)); }
-.gov-preview-paths > div { min-width:0; padding: 12px; background: var(--panel-solid); border:1px solid var(--border); border-radius:10px; }
-.gov-preview-paths strong { display:block; margin-bottom: 7px; font-size:12px; }
-.gov-preview-paths code { display:block; font-size:11px; white-space:normal; overflow-wrap:anywhere; padding:4px 0; }
-@media (max-width:720px) { .gov-preview-paths { grid-template-columns:minmax(0,1fr); } }
-@media (max-width: 380px) { .organize-workspace-links { grid-template-columns: 1fr; } }
-
-/* Real cloud task phase: summary first, raw diagnostic data only by request. */
-.task-user-message { font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }
-.task-live-progress { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--panel-solid); display: grid; gap: 12px; }
-.task-live-progress .action-row { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
-.task-live-progress .muted-text { overflow-wrap: anywhere; min-width: 0; }
-.task-progress-track { height: 8px; background: var(--border); border-radius: 99px; overflow: hidden; }
-.task-progress-track > div { height: 100%; background: var(--accent); border-radius: inherit; transition: width .25s ease; }
-.task-technical-details { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px; }
-
-/* Distinct governance engines: clear selection before preview or deletion. */
-.gov-source-selector-actions { display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-end; gap: 8px; min-width: 0; }
-.gov-source-selector-actions .muted-text { margin: 0; }
-.governance-workspace .form-grid > label { min-width: 0; }
-.governance-workspace .form-grid select { width: 100%; max-width: 100%; }
-@media (max-width: 720px) { .gov-source-selector-actions .button { width: 100%; } }
-
-/* Classic non-115 shell embeds only the modern 115 workspace. */
-.app-shell.embedded .sidebar,
-.app-shell.embedded .nav-scrim,
-.app-shell.embedded .topbar,
-.app-shell.embedded .mobile-dock,
-.app-shell.embedded .page-footer {
-  display: none !important;
-}
-.app-shell.embedded,
-.app-shell.embedded .workspace {
-  width: 100%;
-  min-height: 0;
-  margin: 0;
-}
-.app-shell.embedded .workspace {
-  padding: 0;
-}
-.app-shell.embedded .page {
-  max-width: none;
-  padding: 12px;
-}
+.governance-hub-links { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 13px; }
+.governance-hub-links a { padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-solid); color: var(--accent); font-size: 12px; }
+.governance-hub-links a.router-link-exact-active { background: var(--accent-soft); }
+.governance-evidence { display: grid; gap: 12px; min-width: 0; }
+.governance-evidence h3 { margin: 0; overflow-wrap: anywhere; }
+.evidence-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.evidence-facts > div { display: grid; gap: 4px; border: 1px solid var(--border); border-radius: 9px; padding: 10px; }
+.evidence-facts span { color: var(--muted); font-size: 11px; }
+.evidence-path-list { display: grid; gap: 7px; margin: 10px 0; max-height: 240px; overflow-y: auto; }
+.evidence-path-list code { display: block; font-size: 11px; white-space: normal; overflow-wrap: anywhere; border-radius: 6px; padding: 8px; background: var(--subtle); }
+.strategy-selection { display: grid; gap: 10px; margin: 13px 0 18px; }
+.strategy-selection.strategy-two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.strategy-option { display: flex; align-items: flex-start; gap: 12px; border: 1px solid var(--border); border-radius: 12px; padding: 13px; cursor: pointer; background: var(--panel-solid); }
+.strategy-option.selected { border-color: var(--accent); background: var(--accent-soft); }
+.strategy-option input { flex-shrink: 0; accent-color: var(--accent); margin: 4px 0 0; }
+.strategy-option span { display: grid; gap: 5px; min-width: 0; }
+.strategy-option small { line-height: 1.5; color: var(--muted); }
+.strategy-controls { display: grid; gap: 13px; padding: 13px 0; }
+.range-control { max-width: 700px; display: grid; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; }
+.range-control label, .range-endpoints { display: flex; justify-content: space-between; gap: 12px; }
+.range-control input { width: 100%; accent-color: var(--accent); }
+.range-endpoints { font-size: 11px; color: var(--muted); }
+.whitelist-editor { display: grid; gap: 8px; }
+.whitelist-editor textarea { min-height: 90px; }
+@media (max-width: 700px) { .strategy-selection.strategy-two { grid-template-columns: 1fr; } }
+.mapping-delete-result .progress-metrics { display: flex; flex-wrap: wrap; gap: 10px 18px; margin: 12px 0; font-size: 12px; }
+.mapping-delete-result .progress-metrics strong { color: var(--accent); font-variant-numeric: tabular-nums; }
+.mapping-delete-result details { margin-top: 12px; }
+.mapping-scope-tabs, .mapping-status-tabs { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
+.mapping-scope-tabs button, .mapping-status-tabs button { border: 1px solid var(--border); background: var(--panel-solid); border-radius: 10px; color: var(--muted); padding: 8px 11px; font-size: 12px; }
+.mapping-scope-tabs button.active, .mapping-status-tabs button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.mapping-status-tabs { margin: 12px 0; }
+.mapping-status-tabs button span { font-variant-numeric: tabular-nums; font-size: 11px; margin-left: 6px; }
+@media (max-width: 700px) { .mapping-status-tabs { gap: 5px; } .mapping-status-tabs button { padding: 7px 9px; font-size: 11px; } }

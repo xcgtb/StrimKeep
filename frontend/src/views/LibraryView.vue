@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, onBeforeUnmount, nextTick, reactive, ref, watch } from 'vue';
 import { Search, RefreshCw, CheckSquare } from '@lucide/vue';
 import { mediaApi } from '../api/media';
 import { useRequest } from '../composables/useRequest';
@@ -86,9 +86,27 @@ const filters = reactive({
 const selectionMode = ref(false),
   selectedIds = ref(new Set<string>()),
   detailOpen = ref(false),
-  compareOpen = ref(false);
+  compareOpen = ref(false),
+  deleteNotice = ref(''),
+  lastDeletion = ref<Data>(),
+  pagingMarker = ref<HTMLElement>();
+let pagingObserver: IntersectionObserver | undefined;
+const statusTabs = [
+  { key: 'all', name: '全部' }, { key: 'aligned', name: '完整' },
+  { key: 'missing', name: '缺集' }, { key: 'extra', name: '超集' },
+  { key: 'ongoing', name: '连载中' }, { key: 'unmatched', name: '待对照' },
+];
+async function connectPaging() {
+  await nextTick();
+  pagingObserver?.disconnect();
+  if (!pagingMarker.value || typeof IntersectionObserver === 'undefined') return;
+  pagingObserver = new IntersectionObserver((entries) => {
+    if (entries.some((entry) => entry.isIntersecting) && !request.loading.value &&
+        hasMore.value && !detailOpen.value && !selectionMode.value) void load(true);
+  }, { rootMargin: '700px 0px 700px 0px' });
+  pagingObserver.observe(pagingMarker.value);
+}
 const selectedCards = computed(() => cards.value.filter((c) => allSelected.value || selectedIds.value.has(c.id!)));
-const selectedCount = computed(() => allSelected.value ? total.value : selectedIds.value.size);
 const seasons = computed(() => {
   const item = detail.data.value?.item;
   const expected = new Map((item?.tmdb_info?.seasons || []).map((s) => [s.season, s.tmdb]));
@@ -103,6 +121,7 @@ const seasons = computed(() => {
     }));
 });
 async function load(more = false, background = false) {
+  if (more && (request.loading.value || !hasMore.value)) return;
   const next = more ? offset.value : 0;
   if (!more && !background) {
     cards.value = [];
@@ -123,34 +142,57 @@ async function load(more = false, background = false) {
   offset.value = response.next_offset || 0;
   hasMore.value = !!response.has_more;
   total.value = response.total || 0;
+  void connectPaging();
   selectedIds.value = new Set(
     [...selectedIds.value].filter((id) => cards.value.some((c) => c.id === id)),
   );
 }
 async function open(card: MediaCard) {
-  if (selectionMode.value) {
-    // Poster and title clicks become selection actions while in batch mode.
-    // The checkbox itself emits only select, so there is no double toggle.
-    toggle(card.id);
-    return;
-  }
   episodes.data.value = undefined;
   detailOpen.value = true;
   detail.data.value = undefined;
   await detail.run((signal) => mediaApi.detail(filters.media, card.id!, signal));
 }
 function toggle(id?: string) {
-  if (!id) return;
   if (allSelected.value) {
-    // A filtered global selection cannot express one excluded ID. Switch to the
-    // visible cards instead of incorrectly selecting just the clicked poster.
+    // A partial deselection from 'all filtered' must not silently shrink to loaded rows.
     allSelected.value = false;
-    selectedIds.value = new Set(cards.value.map((card) => card.id!).filter((key) => key && key !== id));
-    return;
+    selectedIds.value = new Set(cards.value.map((card) => card.id!).filter(Boolean));
   }
+  if (!id) return;
   const next = new Set(selectedIds.value);
   next.has(id) ? next.delete(id) : next.add(id);
   selectedIds.value = next;
+}
+async function afterSingleDelete(receipt: Data) {
+  lastDeletion.value = receipt;
+  // The existing Python delete handler has already patched Emby mapping caches;
+  // fetch those verified facts before removing a poster from the UI.
+  deleteNotice.value = '删除已执行，正在同步作品状态和海报…';
+  const previous = detail.data.value?.item;
+  await load();
+  if (request.error.value) {
+    deleteNotice.value = '删除成功，但片库刷新失败，请点击「更新视图」核实。';
+    return;
+  }
+  detailOpen.value = false;
+  const failed = Number(object(receipt.result).failed || receipt.error_count || 0);
+  deleteNotice.value = failed > 0
+    ? `《${previous?.name || '作品'}》有 ${failed} 个失败项目，片库已刷新，请检查执行记录。`
+    : `已核实删除《${previous?.name || '作品'}》，片库列表已更新。`;
+}
+async function afterBatchDelete(receipt: Data) {
+  lastDeletion.value = receipt;
+  deleteNotice.value = '后台执行完成，正在读取删除后的片库状态…';
+  await load();
+  if (request.error.value) {
+    deleteNotice.value = '批量删除已执行，片库刷新失败，请重新读取并核实结果。';
+    return;
+  }
+  const failed = Number(object(receipt.result).failed || receipt.error_count || 0);
+  deleteNotice.value = failed > 0
+    ? `批量处理有 ${failed} 个失败项目；片库已刷新，请展开执行记录逐部核对。`
+    : '批量执行已完成，片库状态已更新；处理记录可在任务回执中展开。';
 }
 function submitSearch() {
   const keyword = search.value.trim();
@@ -160,9 +202,6 @@ function submitSearch() {
 watch(filters, () => {
   detailOpen.value = false;
   detail.cancel();
-  allSelected.value = false;
-  selectedIds.value = new Set();
-  compareOpen.value = false;
   void load();
 });
 async function manualDone() {
@@ -185,6 +224,8 @@ async function resync() {
   await load();
 }
 onMounted(() => void load());
+onBeforeUnmount(() => pagingObserver?.disconnect());
+watch([hasMore, pagingMarker, () => selectionMode.value, () => cards.value.length], () => void connectPaging());
 async function refreshLoaded() {
   if (request.loading.value || detailOpen.value || operation.busy.value) return false;
   const count = Math.max(cards.value.length, 40),
@@ -286,6 +327,11 @@ const live = useLibraryUpdates(refreshLoaded);
       电影片库</button
     ><span class="push-right muted-text">{{ total }} 部作品</span>
   </div>
+  <nav v-if="filters.media === 'series'" class="mapping-status-tabs" aria-label="剧集完整度筛选">
+    <button v-for="tab in statusTabs" :key="tab.key" type="button" :class="{ active: filters.status === tab.key }" @click="filters.status = tab.key">
+      {{ tab.name }}<span v-if="filters.scope === 'all' && !filters.keyword && !filters.category">{{ tab.key === 'all' ? request.data.value?.stats?.total_series ?? '' : request.data.value?.stats?.[tab.key] ?? '' }}</span>
+    </button>
+  </nav>
   <div class="filter-panel library-filters">
     <form class="search-field" @submit.prevent="submitSearch()">
       <Search :size="17" /><input
@@ -294,19 +340,11 @@ const live = useLibraryUpdates(refreshLoaded);
         placeholder="搜索片库"
       /><button class="button">搜索</button>
     </form>
-    <select v-model="filters.scope" aria-label="片库范围">
-      <option value="all">全部片库</option>
-      <option value="local">本地库</option>
-      <option value="share">分享库</option></select
-    ><select v-if="filters.media === 'series'" v-model="filters.status" aria-label="剧集状态">
-      <option value="all">全部状态</option>
-      <option value="missing">存在缺集</option>
-      <option value="aligned">已对齐</option>
-      <option value="ongoing">连载中</option>
-      <option value="unmatched">待对照</option>
-      <option value="no_tmdb">未匹配 TMDB</option>
-      <option value="pending">等待对照结果</option>
-      <option value="extra">存在多集</option></select
+    <div class="mapping-scope-tabs" aria-label="片库范围">
+      <button type="button" :class="{ active: filters.scope === 'all' }" @click="filters.scope = 'all'">本地＋分享</button>
+      <button type="button" :class="{ active: filters.scope === 'local' }" @click="filters.scope = 'local'">仅本地</button>
+      <button type="button" :class="{ active: filters.scope === 'share' }" @click="filters.scope = 'share'">仅分享</button>
+    </div
     ><input
       v-model.lazy="filters.category"
       aria-label="片库分类"
@@ -326,6 +364,16 @@ const live = useLibraryUpdates(refreshLoaded);
       <CheckSquare :size="16" />选择对照
     </button>
   </div>
+  <p v-if="deleteNotice" class="notice-bar" role="status">{{ deleteNotice }}</p>
+  <section v-if="lastDeletion" class="panel mapping-delete-result" aria-label="最近一次删除执行记录">
+    <header class="section-heading"><h2>最近一次删除执行记录</h2><button class="button small" @click="lastDeletion = undefined">收起记录</button></header>
+    <div class="progress-metrics">
+      <span>STRM 已删除 <strong>{{ object(lastDeletion.result).strm_removed ?? lastDeletion.strm_removed ?? 0 }}</strong></span>
+      <span>源文件已删除 <strong>{{ object(lastDeletion.result).cloud_removed ?? lastDeletion.cloud_removed ?? 0 }}</strong></span>
+      <span>失败项 <strong>{{ object(lastDeletion.result).failed ?? lastDeletion.error_count ?? 0 }}</strong></span>
+    </div>
+    <details><summary>查看后台实际执行明细及错误</summary><EvidenceDetails :value="lastDeletion" /></details>
+  </section>
   <p class="data-caption">
     事实快照 {{ date(request.data.value?.facts_ts)
     }}<span v-if="request.data.value?.stale"> · 缓存待更新</span> ·
@@ -364,19 +412,12 @@ const live = useLibraryUpdates(refreshLoaded);
       清空</button
     ><button
       class="button primary push-right"
-      :disabled="!selectedCount"
+      :disabled="!allSelected && !selectedIds.size"
       @click="compareOpen = true"
     >
       查看所选状态
     </button>
   </div>
-  <p v-if="selectionMode" class="data-caption">
-    批量删除前请先把“片库范围”限定为个人库或分享库。个人库一次最多 20 部，分享库最多 600 部，后端预览核验后才可执行。
-    <span v-if="allSelected">全选模式点击单张海报，将切换为已加载海报的局部选择。</span>
-  </p>
-  <p v-if="selectionMode && filters.scope === 'all'" class="notice-bar">
-    当前显示全部片库。批量操作前请选择“本地库”或“分享库”，避免误判删除范围。
-  </p>
   <MappingDelete
     v-if="selectionMode"
     :media="filters.media"
@@ -387,7 +428,7 @@ const live = useLibraryUpdates(refreshLoaded);
     :category="filters.category"
     :category-mode="filters.category_mode"
     :keyword="filters.keyword"
-    @done="load()"
+    @done="afterBatchDelete"
   />
   <LoadState
     :loading="request.loading.value && !cards.length"
@@ -400,7 +441,7 @@ const live = useLibraryUpdates(refreshLoaded);
     "
     @retry="load()"
   />
-  <div class="poster-grid">
+  <div class="poster-grid library-poster-grid">
     <PosterCard
       v-for="(card, index) in cards"
       :key="card.id"
@@ -409,10 +450,10 @@ const live = useLibraryUpdates(refreshLoaded);
       :selectable="selectionMode"
       :selected="allSelected || selectedIds.has(card.id!)"
       @select="toggle(card.id)"
-      @open="open(card)"
+      @open="selectionMode ? toggle(card.id) : open(card)"
     />
   </div>
-  <div v-if="hasMore" class="load-more">
+  <div v-if="hasMore" ref="pagingMarker" class="load-more">
     <button class="button" :disabled="request.loading.value" @click="load(true)">
       {{ request.loading.value ? '正在读取…' : '加载更多作品' }}
     </button>
@@ -512,19 +553,17 @@ const live = useLibraryUpdates(refreshLoaded);
             :media="filters.media"
             target="local"
             :item="detail.data.value.item"
-            @done="load()"
+            @done="afterSingleDelete"
           /><SingleDelete
             v-if="detail.data.value.item.in_share"
             :media="filters.media"
             target="share"
             :item="detail.data.value.item"
-            @done="load()"
+            @done="afterSingleDelete"
           /></div></template></template
   ></ModalDialog>
   <ModalDialog v-if="compareOpen" title="所选作品状态" @close="compareOpen = false"
-    ><div v-if="allSelected" class="notice-bar">
-      已选中当前筛选条件下的全部 {{ total }} 部作品（可能包含尚未加载的海报）。本窗口仅预览当前已加载的卡片；实际删除范围以后台只读核验为准。
-    </div>
+    ><p v-if="allSelected" class="notice-bar">已选中全部 {{ total }} 部筛选作品。以下仅展示当前已加载的卡片；删除核验以服务端全部筛选结果为准。</p>
     <div class="comparison-list">
       <div v-for="card in selectedCards" :key="card.id">
         <strong>{{ titleOf(card) }}</strong

@@ -47,16 +47,11 @@ with tempfile.TemporaryDirectory(prefix='strimkeep-vue3-') as folder:
                     log.seek(0)
                     raise AssertionError('App startup failed: ' + log.read()[-3000:])
                 time.sleep(.1)
-            classic = fetch('/')[0].decode()
-            modern = fetch('/static/index.html')[0].decode()
-            assert 'id="tab-governance"' in classic and 'id="cloudVueFrame"' in classic
-            assert '/static/classic/js/mapping.js' in classic
-            assert '<div id="app"></div>' in modern
-            for html in (classic, modern):
-                assets = re.findall(r'(?:src|href)="(/static/[^\"]+)"', html)
-                assert assets
-                for asset in assets:
-                    assert fetch(asset)[0], asset
+            html = fetch('/')[0].decode()
+            assets = re.findall(r'(?:src|href)="(/static/[^\"]+)"', html)
+            assert assets and '/static/js/' not in html
+            for asset in assets:
+                assert fetch(asset)[0]
             try:
                 fetch('/api/runtime/status')
                 raise AssertionError('Unauthenticated runtime request accepted')

@@ -35,12 +35,6 @@ DEFAULTS = {
     "tv_folder": "电视剧",
     "official_delete_enabled": False,
     "governance_generated_enabled": False,
-    # Explicit replacement for the legacy /media/local and /media/share roots.
-    # Never auto-activate this for an existing installation.
-    "governance_generated_only": False,
-    # Explicit source mode for new settings pages. Empty preserves old installations:
-    # existing enabled/only flags still determine their original scan scope.
-    "governance_source_mode": "",
     "rename_enabled": True,
     "classification_enabled": False,
     "enabled_categories": ["电影", "剧集", "动漫", "纪录片", "综艺"],
@@ -70,22 +64,6 @@ DEFAULTS = {
 }
 
 
-def effective_governance_mode(config=None):
-    """Resolve a named governance source without changing legacy saved settings.
-
-    upstream: previously mounted upstream STRMs, using existing path-based governance.
-    generated: only registered StrimKeep outputs, verified via 115 asset identities.
-    combined: old opt-in behavior combining the two directory sets (compatibility).
-    """
-    cfg = get() if config is None else config
-    mode = cfg.get("governance_source_mode", "")
-    if mode in ("upstream", "generated", "combined"):
-        return mode
-    if cfg.get("governance_generated_only", False):
-        return "generated"
-    return "combined" if cfg.get("governance_generated_enabled", False) else "upstream"
-
-
 def path():
     return storage._diagnostic_dir() / "cloud_workbench_settings.json"
 
@@ -103,16 +81,6 @@ def save(value):
         raise CloudError("配置字段无效")
     result = get()
     result.update(value)
-    if "governance_source_mode" in value:
-        # Maintain the existing boolean contract consumed by library/subscribe.
-        # Never silently alter existing installations until the user selects a mode.
-        mode = value["governance_source_mode"]
-        if mode in ("upstream", "generated", "combined"):
-            result["governance_generated_enabled"] = mode != "upstream"
-            result["governance_generated_only"] = mode == "generated"
-    elif "governance_generated_enabled" in value or "governance_generated_only" in value:
-        # Legacy API clients explicitly changing switches retain their semantics.
-        result["governance_source_mode"] = ""
     result = validate(result)
     state_store.save(path(), result)
     return result
@@ -185,7 +153,7 @@ def validate(result):
         "notify_transfer", "notify_organize", "notify_strm", "notify_strm_details",
         "notify_channel", "notify_maintenance", "emby_refresh_enabled",
         "official_delete_enabled",
-        "governance_generated_enabled", "governance_generated_only",
+        "governance_generated_enabled",
         "rename_enabled", "classification_enabled", "region_classification",
         "year_classification", "unknown_enabled",
         "animation_movie_folder", "ffprobe_enabled",
@@ -194,15 +162,6 @@ def validate(result):
     ):
         if not isinstance(result[key], bool):
             raise CloudError("开关配置必须为布尔值")
-    if result["governance_source_mode"] not in ("", "upstream", "generated", "combined"):
-        raise CloudError("治理来源只能是上游路径、自产来源或兼容双源", 409)
-    if result["governance_source_mode"]:
-        mode = result["governance_source_mode"]
-        if (result["governance_generated_enabled"] != (mode != "upstream") or
-                result["governance_generated_only"] != (mode == "generated")):
-            raise CloudError("治理来源与旧版开关不一致，请刷新后重新选择", 409)
-    if result["governance_generated_only"] and not result["governance_generated_enabled"]:
-        raise CloudError("仅使用自生成 STRM 治理前，请先开启自生成库接入", 409)
     if result["ffprobe_failure"] not in ("skip", "filename"):
         raise CloudError("媒体信息提取失败策略无效")
     if result["quality8_mode"] not in ("preview", "upgrade"):

@@ -16,8 +16,7 @@ import MediaOverride from '../components/MediaOverride.vue';
 const cloud = useCloud(),
   op = useOperation(() => cloud.id),
   preview = useRequest<Data>(),
-  config = useRequest<Data>(),
-  pipeline = useRequest<Data>();
+  config = useRequest<Data>();
 const source = ref(''),
   target = ref(''),
   unknown = ref(''),
@@ -30,12 +29,6 @@ const source = ref(''),
   plan = ref<Data>(),
   confirm = ref(''),
   job = ref('');
-const readinessChecks = computed(() => records(pipeline.data.value?.checks));
-async function loadReadiness() {
-  if (!cloud.id) return;
-  const aid = cloud.id;
-  await pipeline.run((signal) => readData(accountPath(aid, 'pipeline'), signal));
-}
 const candidates = computed(() => [
   ...records(plan.value?.items),
   ...records(plan.value?.skipped),
@@ -100,7 +93,6 @@ watch(
   () => cloud.id,
   () => {
     config.cancel();
-    pipeline.cancel();
     invalidate();
     source.value = '';
     target.value = '';
@@ -112,7 +104,6 @@ watch(
     unknownName.value = '';
     fixing.value = undefined;
     void defaults();
-    void loadReadiness();
   },
   { immediate: true },
 );
@@ -128,34 +119,6 @@ watch(
     :uncertain="op.uncertain.value"
     :receipt="op.receipt.value"
   />
-  <section v-if="cloud.id" class="panel organize-readiness" aria-label="一条龙运行前检查">
-    <header class="section-heading">
-      <div>
-        <h2>一条龙运行前检查</h2>
-        <p class="muted-text">统一核对接收目录、TMDB、归档、STRM输出与Emby入库配置。</p>
-      </div>
-      <button class="button small" :disabled="pipeline.loading.value" @click="loadReadiness">重新检查</button>
-    </header>
-    <p v-if="pipeline.error.value" class="inline-error">{{ pipeline.error.value }}</p>
-    <div class="organize-readiness-grid">
-      <article v-for="item in readinessChecks" :key="String(item.key)" class="organize-readiness-step">
-        <span class="state-pill" :class="{ success: item.ready, needs_review: !item.ready }">{{ item.ready ? '已配置' : '需完善' }}</span>
-        <strong>{{ item.label }}</strong>
-        <small>{{ item.detail }}</small>
-      </article>
-    </div>
-    <p class="gov-scan-notice" role="status">{{ pipeline.data.value?.ready ? '配置初检通过；尚须验证115授权、播放与Emby真实入库。' : '自动入库尚未准备完整，请先补齐配置再启用定时整理。' }}</p>
-    <nav class="organize-workspace-links" aria-label="影视整理内部功能">
-      <RouterLink to="/organize/naming">识别与命名</RouterLink>
-      <RouterLink to="/settings/cloud?section=classification">归档分类</RouterLink>
-      <RouterLink to="/settings/cloud?section=filters">文件过滤</RouterLink>
-      <RouterLink to="/organize/quality">八维洗版</RouterLink>
-      <RouterLink to="/settings/cloud?section=output">STRM与播放</RouterLink>
-      <RouterLink to="/organize/automation">自动整理</RouterLink>
-      <RouterLink to="/media/strm">STRM资源与同步</RouterLink>
-      <RouterLink to="/tasks/ingestion">Emby入库核验</RouterLink>
-    </nav>
-  </section>
   <div v-if="cloud.id" class="organize-layout">
     <section class="panel organize-main">
       <header class="section-heading">

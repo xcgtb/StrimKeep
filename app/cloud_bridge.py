@@ -72,47 +72,31 @@ def snapshots(paths, root, local=True):
     }
 
 
-def governance_roots(local=None, *, verify_mount=True):
-    """Explicitly opted-in roots. Unverified paths are for cache comparisons only.
-
-    Real scans and all deletion entry points keep verify_mount=True.  A cache
-    check may compare saved configuration after an NAS mount disappears without
-    pretending that the missing path is safe to scan.
-    """
+def governance_roots(local=None):
+    """Explicitly opted-in generated roots; never infer a broad parent directory."""
     if not __package__:
         service()
     from importlib import import_module
     engine = import_module('.engine', __package__) if __package__ else import_module('engine')
     from app.cloud import settings
     cfg = settings.get()
-    mode = settings.effective_governance_mode(cfg)
-    only = mode == 'generated'
-    generated = mode in ('generated', 'combined')
-    if only and not cfg['governance_generated_enabled']:
-        raise ValueError('只使用自生成库必须先启用来源接入；治理已停止')
     result = []
     for is_local, legacy, key in ((True,engine.L_ROOT,'output_root'),(False,engine.S_ROOT,'share_output_root')):
         if local is not None and local != is_local:
             continue
-        roots = [] if only else [Path(legacy)]
+        roots = [Path(legacy)]
         candidate = Path(cfg[key])
         other = Path(cfg['share_output_root' if is_local else 'output_root'])
         other_legacy = Path(engine.S_ROOT if is_local else engine.L_ROOT)
-        if generated:
+        if cfg['governance_generated_enabled']:
             if (not candidate.is_absolute() or candidate.is_symlink() or '..' in candidate.parts
                 or candidate == other or candidate.is_relative_to(other) or other.is_relative_to(candidate)):
                 raise ValueError('自生成 STRM 治理根目录无效或相互重叠，已停止')
             if candidate.is_relative_to(other_legacy) or other_legacy.is_relative_to(candidate):
                 raise ValueError('自生成目录与另一类原治理库重叠，已停止')
-            if verify_mount and not candidate.is_dir():
+            if not candidate.is_dir():
                 raise ValueError('自生成 STRM 治理根目录不可读，已停止，不能当作空库')
-            if only:
-                # An explicit new-only mode must never enumerate a missing legacy
-                # volume or reinterpret its contents as an empty library.
-                if candidate.is_relative_to(Path(legacy)) or Path(legacy).is_relative_to(candidate):
-                    raise ValueError('自生成目录与原治理根目录重叠，请使用独立输出位置')
-                roots.append(candidate)
-            elif not candidate.is_relative_to(roots[0]):
+            if not candidate.is_relative_to(roots[0]):
                 if roots[0].is_relative_to(candidate):
                     raise ValueError('自生成目录包含原治理根目录，已停止以避免扩大删除范围')
                 roots.append(candidate)
@@ -133,12 +117,10 @@ def governance_library(root):
     from collections import defaultdict
     from importlib import import_module
     engine = import_module('.engine', __package__) if __package__ else import_module('engine')
+    base = engine._get_lib(root)
     local = Path(root) == Path(engine.L_ROOT)
     roots = governance_roots(local)
-    if not roots:
-        raise ValueError('当前没有可用的治理目录，已停止扫描')
-    base = engine._get_lib(roots[0])
-    extras = [engine._get_lib(r) for r in roots[1:]]
+    extras = [engine._get_lib(r) for r in roots if r != Path(root)]
     if not extras:
         return base
     merged = copy.copy(base)

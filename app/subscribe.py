@@ -781,14 +781,7 @@ def _disk_series_eps(series_tmdb_id: str):
     eps = set()
     names = []
     try:
-        from app.cloud import settings as _cloud_settings
-        if _cloud_settings.get()['governance_generated_enabled']:
-            from app import cloud_bridge
-            libs = (cloud_bridge.governance_library(_eng().L_ROOT),
-                    cloud_bridge.governance_library(_eng().S_ROOT))
-        else:
-            libs = (_eng()._get_lib(_eng().L_ROOT), _eng()._get_lib(_eng().S_ROOT))
-        for lib in libs:
+        for lib in (_eng()._get_lib(_eng().L_ROOT), _eng()._get_lib(_eng().S_ROOT)):
             for key in lib.tmdb_refs.get('tv:' + str(series_tmdb_id), ()):
                 disp = lib.meta.get(key, ('', '', None))[0]
                 if disp and disp not in names:

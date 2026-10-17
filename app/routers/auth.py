@@ -2,7 +2,7 @@
 """登录 / 登出 / 首页"""
 import asyncio, time
 from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 try:
     from app.routers.deps import (
@@ -47,7 +47,7 @@ def api_logout():
 
 @router.get('/')
 def index():
-    idx = STATIC_DIR / 'classic' / 'index.html'
+    idx = STATIC_DIR / 'index.html'
     if not idx.exists():
         return JSONResponse({'error': f'前端文件不存在: {idx}'}, status_code=500)
     return FileResponse(idx, headers={
@@ -55,31 +55,6 @@ def index():
         'Pragma': 'no-cache',
         'Expires': '0',
     })
-
-
-@router.get('/workspace/embed', include_in_schema=False)
-def embedded_cloud_workspace():
-    """Vue 3 cloud-only workspace within the classic first-party application.
-
-    CSS injection is scoped to this endpoint, allowing both prebuilt source
-    bundles and Docker-recompiled Vue assets to hide the second navigation.
-    """
-    idx = STATIC_DIR / 'index.html'
-    if not idx.exists():
-        return JSONResponse({'error': '115 工作台前端构建文件不存在'}, status_code=500)
-    html = idx.read_text(encoding='utf-8')
-    hide_shell = """<style id="classic-cloud-embed">
-        .app-shell > .sidebar, .app-shell > .nav-scrim,
-        .app-shell > .workspace > .topbar, .app-shell .mobile-dock,
-        .app-shell > .workspace > .page-footer {display:none!important}
-        .app-shell, .app-shell > .workspace {width:100%!important;max-width:none!important;
-            min-height:0!important;margin:0!important;padding:0!important}
-        .app-shell > .workspace > .page {max-width:none!important;padding:12px!important}
-        </style>"""
-    if '</head>' not in html:
-        return JSONResponse({'error': '115 工作台前端入口无效'}, status_code=500)
-    html = html.replace('</head>', hide_shell + '</head>', 1)
-    return HTMLResponse(html, headers={'Cache-Control': 'no-store'})
 
 
 @router.get('/favicon.ico', include_in_schema=False)

@@ -61,23 +61,7 @@ def status(account_id):
     add("target", "网盘归档目录", "organize", "organize-directories", lambda: folder("target"))
     add("tmdb", "TMDB 识别", "settings", "", tmdb_configured)
     add("output", "NAS STRM 输出", "strm", "strm-output", lambda: output_ready())
-
-    def emby_receipts_configured():
-        """Local config check only: never claim a successful Emby HTTP test."""
-        from app.cloud import emby_library
-        if not config["emby_refresh_enabled"]:
-            raise CloudError("Emby 入库联动已关闭", 409)
-        connections = emby_library.get(account_id)["items"]
-        active = [c for c in connections if c.get("enabled") and c.get("url")
-                  and c.get("key_saved") and c.get("personal_root")]
-        if not active:
-            raise CloudError("尚无启用的个人库 Emby 连接及 STRM 路径映射；STRM 生成不等于入库", 409)
-        return "已配置 %d 个个人库入库连接，仍需点击测试连接并核对实际入库" % len(active)
-
-    add("emby", "Emby 实际入库核验", "ingestion", "emby-ingestion", emby_receipts_configured)
-    # The overall readiness now reflects the requested full automatic ingestion,
-    # not just the ability to generate an STRM file.  Organize-only still works.
-    required = {"source", "target", "tmdb"} | ({"output", "emby"} if config["generate_strm_enabled"] else set())
+    required = {"source", "target", "tmdb"} | ({"output"} if config["generate_strm_enabled"] else set())
     return {"checks": checks, "ready": all(c["ready"] for c in checks if c["key"] in required),
             "generate": config["generate_strm_enabled"], "public_url": config["public_url"],
             "output_root": config["output_root"], "naming_style": config["naming_style"]}

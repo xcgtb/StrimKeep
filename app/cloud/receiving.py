@@ -347,7 +347,7 @@ def run(job_id,payload):
                 if not allowed:
                     result["filtered"]=[{"name":cfg["name"],"reason":reason}]
                     return result
-                source,target,organize="channel",cfg["target_cid"],bool(cfg.get("organize", False))
+                source,target,organize="channel",cfg["target_cid"],False
             else:
                 cfg=get(payload["account_id"])
                 if cfg["revision"]!=payload["receiving_revision"] or not cfg["config"]["tg_enabled"]:raise CloudError("TG 接收已关闭或配置变化",409)
@@ -392,13 +392,6 @@ def run(job_id,payload):
                 accepted=jobs.step(job_id,"resource:"+str(index),{"kind":"instant","target_cid":target},lambda:provider.instant_receive(item,target))
             else:
                 accepted=jobs.step(job_id,"resource:"+str(index),{"kind":item["kind"],"target_cid":target},lambda:provider.offline_add(item["url"],target))
-            if item['kind'] in ('magnet', 'ed2k') and data.get('organize_target'):
-                from app.cloud import offline_handoff
-                handoff = offline_handoff.register(job_id, index, data, item, accepted)
-                if handoff:
-                    accepted = {**accepted, 'handoff': handoff}
-                    if handoff['state'] == 'needs_review':
-                        result['errors'].append({'name': item['name'], 'reason': handoff['message']})
             result["accepted"].append({"kind":item["kind"],"name":item["name"],"target_cid":target,**accepted})
             jobs.progress(job_id,len(items),index+1,"资源请求已提交",item["name"])
         return result

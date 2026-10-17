@@ -21,7 +21,7 @@ const props = withDefaults(
   }>(),
   { filter: 'all', category: '', categoryMode: 'seg', keyword: '' },
 );
-const emit = defineEmits<{ done: [] }>();
+const emit = defineEmits<{ done: [result: Data]; failed: [message: string] }>();
 const op = useOperation(),
   previewRequest = useRequest<Data>(),
   previewJob = ref(''),
@@ -153,7 +153,11 @@ useVisiblePoll(poll, 2000);
       kind="delete"
       @done="
         submitted = false;
-        emit('done');
+        emit('done', $event);
+      "
+      @failed="
+        submitted = false;
+        emit('failed', '后台删除失败，请展开执行明细核实，勿重复提交。');
       "
     /><ConfirmAction
       v-if="confirmation && preview"

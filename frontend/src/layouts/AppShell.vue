@@ -29,7 +29,6 @@ import {
 } from '../config/navigation';
 import { readData, object } from '../api/domain';
 import ModalDialog from '../components/ModalDialog.vue';
-const embedded = new URLSearchParams(window.location.search).get('embedded') === '1';
 const route = useRoute(),
   router = useRouter(),
   session = useSession(),
@@ -124,7 +123,7 @@ onMounted(() => {
 onBeforeUnmount(() => document.removeEventListener('keydown', keys));
 </script>
 <template>
-  <div class="app-shell template-shell" :class="{ embedded }">
+  <div class="app-shell template-shell">
     <button v-if="open" class="nav-scrim" aria-label="关闭导航" @click="open = false"></button>
     <aside class="sidebar" :class="{ expanded: open }">
       <RouterLink to="/dashboard" class="brand" @click="open = false"
