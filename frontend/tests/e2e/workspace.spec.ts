@@ -48,10 +48,6 @@ test('theme and responsive navigation work without horizontal overflow', async (
   );
   if (await page.getByRole('button', { name: '展开导航' }).isVisible())
     await page.getByRole('button', { name: '展开导航' }).click();
-  const mediaGroup = page
-    .getByRole('navigation', { name: '主导航' })
-    .getByRole('button', { name: /片库管理/ });
-  if ((await mediaGroup.getAttribute('aria-expanded')) !== 'true') await mediaGroup.click();
   await page
     .getByRole('navigation', { name: '主导航' })
     .getByRole('link', { name: '追更订阅' })
@@ -196,7 +192,9 @@ test('resource search opens the matching workspace without any write', async ({ 
   await page.getByRole('textbox', { name: '筛选功能卡片' }).fill('免转存');
   await expect(page.locator('.tool-card')).toHaveCount(1);
   await page.locator('.tool-card').click();
-  await expect(page.getByRole('heading', { name: '分享免转存', exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: '分享 STRM 生成与整理', exact: true }),
+  ).toBeVisible();
   await expect(page.locator('.share-path-banner')).toContainText('share');
   expect(state.writes).toHaveLength(0);
 });
@@ -215,14 +213,16 @@ test('mobile shortcut dock opens resources and the full navigation', async ({ pa
   await fixtures(page);
   await page.goto('/#/dashboard');
   const dock = page.getByRole('navigation', { name: '快捷导航' });
-  await dock.getByRole('link', { name: '接收', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '资源接收', exact: true })).toBeVisible();
+  await dock.getByRole('link', { name: '转存', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '链接与离线转存', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '展开导航' }).click();
   await page
     .getByRole('navigation', { name: '主导航' })
-    .getByRole('link', { name: '分享免转存', exact: true })
+    .getByRole('link', { name: '分享 STRM 生成与整理', exact: true })
     .click();
-  await expect(page.getByRole('heading', { name: '分享免转存', exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: '分享 STRM 生成与整理', exact: true }),
+  ).toBeVisible();
 });
 
 test('compact tablet navigation stays above its backdrop', async ({ page }) => {

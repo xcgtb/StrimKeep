@@ -65,6 +65,10 @@ const kinds: Record<string, string> = {
   workflow: '接收与整理',
   sync: 'STRM 同步',
   receive: '资源接收',
+  intake: '资源接收',
+  channel: '频道接收',
+  publish: 'STRM 发布',
+  categories: '分类目录',
   share_strm: '分享 STRM',
   maintenance: '目录维护',
 };
@@ -193,7 +197,7 @@ useVisiblePoll(async () => {
       <div class="task-description">
         <strong>{{ kinds[job.kind] || job.kind }}</strong>
         <p>{{ job.message || '暂无任务消息' }}</p>
-        <small>{{ date(job.updated || job.created) }} · {{ job.id }}</small>
+        <small>{{ date(job.updated || job.created) }}</small>
       </div>
       <span class="state-pill" :class="job.state">{{ stateLabel(job.state) }}</span
       ><ChevronRight :size="17" />
@@ -206,7 +210,10 @@ useVisiblePoll(async () => {
         stateLabel(detail.data.value.job.state)
       }}</span>
       <p>{{ detail.data.value.job.message }}</p>
-      <small>{{ jobId }}</small>
+      <details class="technical-details">
+        <summary>任务编号（排障时查看）</summary>
+        <code>{{ jobId }}</code>
+      </details>
     </div>
     <section v-if="detail.data.value?.job.progress" class="panel task-progress">
       <h3>实时处理进度</h3>

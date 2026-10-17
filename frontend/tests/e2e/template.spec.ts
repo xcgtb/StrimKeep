@@ -9,7 +9,7 @@ test('light sidebar follows the final reference and dark mode switches the whole
   await expect(page.getByRole('heading', { name: '运行总览', exact: true })).toBeVisible();
   await expect(page.locator('.sidebar')).toHaveCSS('background-color', 'rgb(255, 255, 255)');
   await page.getByRole('button', { name: '切换深色主题' }).click();
-  await expect(page.locator('.sidebar')).toHaveCSS('background-color', 'rgb(24, 38, 56)');
+  await expect(page.locator('.sidebar')).toHaveCSS('background-color', 'rgb(27, 32, 41)');
   await page.goto('/#/organize/naming');
   await expect(page.getByRole('heading', { name: '自定义命名模板', exact: true })).toBeVisible();
   const secondaryButton = page.locator('.naming-variable-card .button:not(.primary)').first();

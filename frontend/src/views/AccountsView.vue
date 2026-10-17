@@ -35,12 +35,14 @@ const tab = ref('accounts'),
   phase = ref(''),
   draft = ref<Data>({}),
   directoryNames = ref<Record<string, string>>({}),
+  pendingDirectory = ref(''),
+  pendingName = ref(''),
   maintenanceForm = ref<Data>({}),
   confirmation = ref(''),
   job = ref('');
 const roles: Record<string, string> = {
-  source: '整理来源',
-  target: '整理归档',
+  source: '待整理目录',
+  target: '整理后目录',
   transfer: '分享转存',
   unknown: '未识别资源',
   strm: 'STRM 同步来源',
@@ -152,6 +154,13 @@ async function importCookie() {
     cloud.id = String(r.account_id);
   }
 }
+function useUnifiedPending() {
+  if (!pendingDirectory.value) return;
+  for (const role of ['source', 'transfer', 'magnet', 'ed2k', 'instant', 'bot']) {
+    draft.value[role] = pendingDirectory.value;
+    directoryNames.value[role] = pendingName.value;
+  }
+}
 async function saveDirectories() {
   const r = await op.run(() =>
     writeData(accountPath(cloud.id, 'directories'), {
@@ -193,6 +202,8 @@ watch(
     maintenance.cancel();
     health.cancel();
     draft.value = {};
+    pendingDirectory.value = '';
+    pendingName.value = '';
     cookie.value = '';
     maintenanceForm.value = {};
     confirmation.value = '';
@@ -206,7 +217,7 @@ onBeforeUnmount(() => void cancelQR());
 </script>
 <template>
   <PageHeading
-    title="账号与目录"
+    title="115 网盘配置"
     subtitle="连接 115、设置各类接收目录，集中管理账号维护。"
   /><AccountPicker />
   <nav class="browse-tabs">
@@ -305,6 +316,31 @@ onBeforeUnmount(() => void cancelQR());
   >
   <section v-if="tab === 'directories' && cloud.id" class="panel">
     <p class="muted-text">目录选择仅更新草稿，点击保存才生效。保存会校验配置版本与账号。</p>
+    <div class="intake-preset">
+      <div>
+        <h2>统一接收与待整理目录</h2>
+        <p class="muted-text">
+          让 Web、机器人、115 分享、磁力与 ed2k 使用同一个待整理目录。下方仍可分别调整。
+        </p>
+      </div>
+      <DirectoryPicker
+        v-model="pendingDirectory"
+        :account-id="cloud.id"
+        :name="pendingName"
+        label="统一待整理目录"
+        @selected="(v) => (pendingName = v.name)"
+      />
+      <button
+        class="button"
+        :disabled="!pendingDirectory || op.busy.value || op.uncertain.value"
+        @click="useUnifiedPending"
+      >
+        应用到所有接收与待整理目录
+      </button>
+      <p class="data-caption">
+        仅修改目录草稿，点击底部“保存目录配置”才生效；频道单独指定的目录保持其已有配置。
+      </p>
+    </div>
     <div class="form-grid">
       <div v-for="(label, key) in roles" :key="key">
         <DirectoryPicker

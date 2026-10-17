@@ -82,11 +82,6 @@ onMounted(load);
     :uncertain="op.uncertain.value"
     :receipt="op.receipt.value"
   />
-  <nav class="context-tabs">
-    <RouterLink to="/governance">治理总览</RouterLink
-    ><RouterLink to="/governance/rules">规则与巡检</RouterLink
-    ><RouterLink to="/governance/cleanup">目录与残留清理</RouterLink>
-  </nav>
   <div class="summary-strip">
     <span>最近诊断 {{ date(Number(scan.ts)) }}</span
     ><span class="state-pill" :class="{ success: scan.usable, needs_review: !scan.usable }">{{

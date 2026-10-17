@@ -1,15 +1,19 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import { ArrowUpRight, ArrowRight, Search } from '@lucide/vue';
-import { allNavigation } from '../config/navigation';
+import { allNavigation, searchFunctions } from '../config/navigation';
 import PageHeading from '../components/PageHeading.vue';
 const search = ref(''),
   group = ref('全部');
 const descriptions: Record<string, string> = {
   '/resources/receive': '把分享、磁力与秒传资源接收到指定位置。',
-  '/resources/share': '从分享直接生成 STRM，保留来源视频。',
+  '/resources/share': '免转存：从分享直接生成 STRM，保留来源视频。',
   '/resources/files': '按账号浏览网盘目录、文件和实际大小。',
   '/settings/accounts': '连接账号，维护授权与接收归档目录。',
+  '/organize/naming': '编辑目录、电影与剧集命名模板。',
+  '/organize/quality': '对真实视频做八维比较与洗版。',
+  '/settings/cloud': '配置命名、分类、过滤、输出和通知。',
+  '/resources/receive?tab=bot': '接收 Telegram 白名单用户提交的资源。',
   '/organize/workspace': '识别作品、修正信息，按规则命名归档。',
   '/organize/automation': '让接收、整理与同步按计划自动运行。',
   '/resources/channels': '订阅频道消息，筛选作品并自动接收。',
@@ -22,17 +26,15 @@ const descriptions: Record<string, string> = {
   '/media/subscriptions': '关注新集入库，管理更新提醒。',
   '/tasks/reports': '查看入库、执行记录与每日晨报。',
 };
+const description = (to: string) => descriptions[to] || descriptions[to.split('?')[0]!] || '';
 const tools = computed(() =>
-  allNavigation.filter(
-    (n) =>
-      descriptions[n.to] &&
-      (group.value === '全部' || n.group === group.value) &&
-      (n.name + descriptions[n.to]).includes(search.value.trim()),
+  searchFunctions(search.value).filter(
+    (n) => description(n.to) && (group.value === '全部' || n.group === group.value),
   ),
 );
 const groups = [
   '全部',
-  ...new Set(allNavigation.filter((n) => descriptions[n.to]).map((n) => n.group)),
+  ...new Set(allNavigation.filter((n) => description(n.to)).map((n) => n.group)),
 ];
 const sections = computed(() =>
   groups
@@ -106,7 +108,7 @@ const featured = [
         ><span class="tool-icon"><component :is="tool.icon" :size="22" /></span>
         <div>
           <h3>{{ tool.name }}</h3>
-          <p>{{ descriptions[tool.to] }}</p>
+          <p>{{ description(tool.to) }}</p>
         </div>
         <ArrowRight :size="17" class="tool-arrow"
       /></RouterLink>

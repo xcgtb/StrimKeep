@@ -131,11 +131,6 @@ onMounted(load);
     :error="op.error.value || strategy.error.value || cover.error.value || auto.error.value"
     :uncertain="op.uncertain.value"
   />
-  <nav class="context-tabs">
-    <RouterLink to="/governance">治理决策</RouterLink
-    ><RouterLink to="/governance/rules">规则与巡检</RouterLink
-    ><RouterLink to="/governance/cleanup">目录清理</RouterLink>
-  </nav>
   <section class="panel">
     <h2>双库决策策略</h2>
     <FormFields

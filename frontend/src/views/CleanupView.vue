@@ -128,10 +128,6 @@ onMounted(() => loadBrowse());
     title="目录与残留清理"
     subtitle="扫描、选择、核对影响，再执行清理；逐项保留实际失败原因。"
   />
-  <nav class="context-tabs">
-    <RouterLink to="/governance">治理决策</RouterLink
-    ><RouterLink to="/governance/cleanup">目录与残留清理</RouterLink>
-  </nav>
   <nav class="browse-tabs">
     <button
       v-for="(label, key) in {

@@ -19,6 +19,8 @@ const cloud = useCloud(),
   source = useRequest<Data>(),
   pipeline = useRequest<Data>(),
   cid = ref(''),
+  cidName = ref(''),
+  directoryConfig = useRequest<Data>(),
   offset = ref(0),
   job = ref(''),
   confirmation = ref(''),
@@ -36,6 +38,18 @@ async function load() {
     ),
     pipeline.run((signal) => readData(accountPath(aid, 'pipeline'), signal)),
   ]);
+}
+async function loadDefaultSource() {
+  if (!cloud.id) return;
+  const aid = cloud.id;
+  const result = await directoryConfig.run((signal) =>
+    readData(accountPath(aid, 'directories'), signal),
+  );
+  if (result && aid === cloud.id) {
+    const saved = object(object(result.directories).strm);
+    cid.value = String(saved.id || '');
+    cidName.value = String(saved.name || '');
+  }
 }
 async function inspect(row: Data) {
   asset.value = row;
@@ -70,14 +84,17 @@ watch(
     assets.cancel();
     pipeline.cancel();
     source.cancel();
+    directoryConfig.cancel();
     sourceOpen.value = false;
     asset.value = undefined;
     offset.value = 0;
     cid.value = '';
+    cidName.value = '';
     job.value = '';
     confirmation.value = '';
     op.reconcile();
     void load();
+    void loadDefaultSource();
   },
   { immediate: true },
 );
@@ -91,7 +108,7 @@ useVisiblePoll(() => {
     subtitle="管理已生成的播放引用、源文件关系与同步任务。"
   /><AccountPicker /><OperationState
     :busy="op.busy.value"
-    :error="op.error.value || assets.error.value"
+    :error="op.error.value || assets.error.value || directoryConfig.error.value"
     :uncertain="op.uncertain.value"
     :receipt="op.receipt.value"
   /><template v-if="cloud.id"
@@ -111,7 +128,13 @@ useVisiblePoll(() => {
         </article>
       </div>
       <div class="form-grid">
-        <DirectoryPicker v-model="cid" :account-id="cloud.id" label="手动同步的 115 来源目录" />
+        <DirectoryPicker
+          v-model="cid"
+          :name="cidName"
+          :account-id="cloud.id"
+          label="手动同步的 115 来源目录"
+          @selected="(v) => (cidName = v.name)"
+        />
         <div class="action-row">
           <button
             class="button primary"

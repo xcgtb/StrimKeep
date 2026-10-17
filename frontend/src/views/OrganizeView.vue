@@ -22,6 +22,7 @@ const source = ref(''),
   unknown = ref(''),
   sourceName = ref(''),
   targetName = ref(''),
+  unknownName = ref(''),
   generate = ref(true),
   overrides = ref<Record<string, Data>>({}),
   fixing = ref<{ id: string; name: string }>(),
@@ -51,6 +52,7 @@ async function defaults() {
     target.value = String(object(d.target).id || '');
     targetName.value = String(object(d.target).name || '');
     unknown.value = String(object(d.unknown).id || '');
+    unknownName.value = String(object(d.unknown).name || '');
   }
 }
 async function load() {
@@ -99,6 +101,7 @@ watch(
     overrides.value = {};
     sourceName.value = '';
     targetName.value = '';
+    unknownName.value = '';
     fixing.value = undefined;
     void defaults();
   },
@@ -110,13 +113,6 @@ watch(
     title="媒体整理"
     subtitle="识别、纠正、命名与归档先预览，核对本批范围后执行。"
   /><AccountPicker />
-  <nav class="context-tabs">
-    <RouterLink to="/organize/workspace">整理工作区</RouterLink
-    ><RouterLink to="/organize/automation">整理自动化</RouterLink
-    ><RouterLink to="/organize/naming">自定义命名模板</RouterLink
-    ><RouterLink to="/organize/quality">整理八维</RouterLink
-    ><RouterLink to="/tasks">处理记录</RouterLink>
-  </nav>
   <OperationState
     :busy="preview.loading.value || op.busy.value"
     :error="preview.error.value || op.error.value"
@@ -166,6 +162,8 @@ watch(
         /><DirectoryPicker
           v-model="unknown"
           :account-id="cloud.id"
+          :name="unknownName"
+          @selected="(v) => (unknownName = v.name)"
           label="未识别目录（可选）"
         /><label class="checkbox-label"
           ><input v-model="generate" type="checkbox" />整理后生成 STRM</label

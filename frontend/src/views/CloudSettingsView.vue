@@ -25,7 +25,7 @@ watch(
         : route.path === '/organize/quality'
           ? 'quality'
           : route.query.section;
-    if (cloudSections.some((s) => s.key === target)) tab.value = String(target);
+    tab.value = cloudSections.some((s) => s.key === target) ? String(target) : 'output';
   },
   { immediate: true },
 );
@@ -82,9 +82,7 @@ function removeRegion(i: number) {
 }
 </script>
 <template>
-  <PageHeading
-    title="媒体加工与播放设置"
-    subtitle="统一设置识别命名、分类、过滤、洗版、STRM 输出和通知。"
+  <PageHeading :title="section.title" subtitle="仅提交你修改的字段，其他配置保持原值。"
     ><button
       class="button primary"
       :disabled="!changed.length || op.busy.value || op.uncertain.value || !!request.error.value"
@@ -97,24 +95,9 @@ function removeRegion(i: number) {
     :error="request.error.value || op.error.value"
     :uncertain="op.uncertain.value"
   />
-  <div class="settings-layout">
-    <nav class="settings-index">
-      <p class="settings-nav-caption">设置分区</p>
-      <button
-        v-for="s in cloudSections"
-        :key="s.key"
-        :class="{ active: tab === s.key }"
-        @click="tab = s.key"
-      >
-        {{ s.title }}
-      </button>
-    </nav>
+  <div class="module-settings">
     <div class="settings-content">
-      <select v-model="tab" class="section-select" aria-label="设置分区">
-        <option v-for="s in cloudSections" :key="s.key" :value="s.key">{{ s.title }}</option>
-      </select>
       <section v-if="request.data.value" class="panel settings-panel">
-        <h2>{{ section.title }}</h2>
         <p class="muted-text">{{ section.description }}</p>
         <FormFields
           v-model="draft"

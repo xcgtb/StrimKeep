@@ -290,13 +290,6 @@ useVisiblePoll(async () => {
       {{ saving ? '正在保存…' : `保存${changed.length ? ` ${changed.length} 项更改` : '设置'}` }}
     </button></PageHeading
   >
-  <nav class="context-tabs">
-    <RouterLink to="/settings">系统连接</RouterLink
-    ><RouterLink to="/settings/accounts">115 账号与目录</RouterLink
-    ><RouterLink to="/settings/cloud">整理与播放设置</RouterLink
-    ><RouterLink to="/governance/rules">治理规则</RouterLink
-    ><RouterLink to="/settings/external">外部服务</RouterLink>
-  </nav>
   <OperationState :busy="request.loading.value" :error="request.error.value" />
   <p v-if="request.data.value?.env_overridden.length" class="notice-bar">
     部分连接参数由 Docker/YAML 环境变量控制，已锁定相关输入项；界面显示不代表凭据丢失。

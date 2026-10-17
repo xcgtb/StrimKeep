@@ -135,10 +135,6 @@ watch(
     title="整理自动化"
     subtitle="复用已保存接收目录，设置整理与 STRM 同步任务。"
   /><AccountPicker />
-  <nav class="context-tabs">
-    <RouterLink to="/organize/workspace">整理工作区</RouterLink
-    ><RouterLink to="/organize/automation">整理自动化</RouterLink>
-  </nav>
   <OperationState
     :busy="op.busy.value"
     :error="op.error.value || sources.error.value || rules.error.value"

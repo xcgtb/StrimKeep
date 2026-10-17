@@ -1,8 +1,17 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { computed, ref, watch, nextTick } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { request } from '../api/client';
-import { readData, writeData, accountPath, object, records, query, type Data } from '../api/domain';
+import {
+  readData,
+  writeData,
+  accountPath,
+  object,
+  records,
+  query,
+  uuid,
+  type Data,
+} from '../api/domain';
 import { useCloud } from '../stores/cloud';
 import { useRequest } from '../composables/useRequest';
 import { useOperation } from '../composables/useOperation';
@@ -15,13 +24,19 @@ import ConfirmAction from '../components/ConfirmAction.vue';
 import TaskReceipt from '../components/TaskReceipt.vue';
 import MediaOverride from '../components/MediaOverride.vue';
 const route = useRoute(),
+  router = useRouter(),
   cloud = useCloud(),
   op = useOperation(() => cloud.id),
   preview = useRequest<Data>(),
   offline = useRequest<Data>(),
-  receiving = useRequest<Data>();
+  receiving = useRequest<Data>(),
+  directoryConfig = useRequest<Data>();
 const shareOnly = computed(() => route.path === '/resources/share'),
-  tab = ref('batch'),
+  tab = ref(
+    ['batch', 'share', 'offline', 'bot'].includes(String(route.query.tab))
+      ? String(route.query.tab)
+      : 'batch',
+  ),
   input = ref(''),
   link = ref(''),
   password = ref(''),
@@ -37,6 +52,8 @@ const shareOnly = computed(() => route.path === '/resources/share'),
   plan = ref<Data>(),
   job = ref(''),
   confirm = ref(false),
+  directConfirm = ref(false),
+  directRequestId = ref(uuid()),
   offlinePage = ref(1),
   overrides = ref<Record<string, Data>>({}),
   fixing = ref<{ id: string; name: string }>(),
@@ -59,6 +76,8 @@ function invalidate() {
   preview.cancel();
   plan.value = undefined;
   confirm.value = false;
+  directConfirm.value = false;
+  directRequestId.value = uuid();
   op.reconcile();
 }
 watch([() => cloud.id, input, link, password, shareOnly], () => {
@@ -187,6 +206,7 @@ async function loadReceiving() {
       tg_enabled: !!c.tg_enabled,
       organize_after_transfer: !!c.organize_after_transfer,
     };
+    organize.value = !!c.organize_after_transfer;
   }
 }
 async function saveReceiving() {
@@ -198,25 +218,90 @@ async function saveReceiving() {
   );
   if (r) await loadReceiving();
 }
+const destinations = computed(() => {
+  const saved = object(directoryConfig.data.value?.directories);
+  return [
+    ['transfer', '115 分享'],
+    ['magnet', '磁力'],
+    ['ed2k', 'ed2k'],
+    ['instant', '秒传'],
+  ].map(([role, name]) => ({
+    role: role!,
+    name: name!,
+    directory: String(object(saved[role!]).name || '尚未配置'),
+  }));
+});
+async function loadDirectories() {
+  if (!cloud.id) return;
+  const aid = cloud.id;
+  const result = await directoryConfig.run((signal) =>
+    readData(accountPath(aid, 'directories'), signal),
+  );
+  if (result && aid === cloud.id) {
+    const saved = object(result.directories);
+    target.value = String(object(saved.transfer).id || '');
+    targetName.value = String(object(saved.transfer).name || '');
+    archive.value = String(object(saved.target).id || '');
+  }
+}
+async function submitDirect() {
+  const aid = cloud.id;
+  const result = await op.run(() =>
+    writeData('/api/cloud/resources/receive', {
+      account_id: aid,
+      text: input.value,
+      expected_revision: directoryConfig.data.value?.revision,
+      request_id: directRequestId.value,
+      organize: organize.value,
+      confirmed: true,
+    }),
+  );
+  if (result && aid === cloud.id) {
+    directConfirm.value = false;
+    plan.value = undefined;
+    input.value = '';
+    await nextTick();
+    if (aid === cloud.id) job.value = String(result.job_id);
+    directRequestId.value = uuid();
+  }
+}
 watch(
   () => cloud.id,
   () => {
     receiving.cancel();
     offline.cancel();
+    directoryConfig.cancel();
+    offlinePage.value = 1;
+    organize.value = false;
     void loadReceiving();
+    void loadDirectories();
   },
   { immediate: true },
 );
+const validTabs = ['batch', 'share', 'offline', 'bot'];
 function switchTab(value: string) {
-  invalidate();
-  tab.value = value;
-  sharePage.value = undefined;
-  if (value === 'offline') void loadOffline();
+  if (!validTabs.includes(value) || shareOnly.value) return;
+  void router.replace({ path: '/resources/receive', query: { ...route.query, tab: value } });
 }
+watch(
+  () => [cloud.id, route.path, route.query.tab],
+  () => {
+    const next = validTabs.includes(String(route.query.tab)) ? String(route.query.tab) : 'batch';
+    if (tab.value !== next) {
+      invalidate();
+      tab.value = next;
+      sharePage.value = undefined;
+      selected.value = new Set();
+      offlinePage.value = 1;
+    }
+    if (!shareOnly.value && next === 'offline') void loadOffline();
+  },
+  { immediate: true },
+);
 </script>
 <template>
   <PageHeading
-    :title="shareOnly ? '分享免转存' : '资源接收'"
+    :title="shareOnly ? '分享 STRM 生成与整理' : '链接与离线转存'"
     :subtitle="
       shareOnly
         ? '浏览分享，直接生成到分类目录，保留分享源文件。'
@@ -231,12 +316,19 @@ function switchTab(value: string) {
     </div>
     <code>share / 电影 / 作品 / 影片.strm</code>
   </div>
+  <nav v-if="shareOnly" class="module-navigation" aria-label="分享库功能">
+    <RouterLink to="/resources/share" class="current">分享生成</RouterLink>
+    <RouterLink to="/organize/naming">命名模板</RouterLink>
+    <RouterLink to="/settings/cloud?section=classification">分类规则</RouterLink>
+    <RouterLink to="/settings/cloud?section=output">分享输出目录</RouterLink>
+    <RouterLink to="/tasks/ingestion">入库核验</RouterLink>
+  </nav>
   <nav v-if="!shareOnly" class="browse-tabs">
     <button
       v-for="(label, key) in {
         batch: '批量链接',
         share: '分享浏览与选择',
-        offline: '115 离线记录',
+        offline: '离线链接与记录',
         bot: '机器人接收',
       }"
       :key="key"
@@ -258,8 +350,17 @@ function switchTab(value: string) {
     >
   </p>
   <template v-if="cloud.id"
-    ><section v-if="!shareOnly && tab === 'batch'" class="panel">
-      <h2>添加资源链接</h2>
+    ><section v-if="!shareOnly && (tab === 'batch' || tab === 'offline')" class="panel">
+      <h2>{{ tab === 'offline' ? '添加离线链接' : '添加资源链接' }}</h2>
+      <div class="destination-strip" aria-label="已保存的接收目录">
+        <span v-for="destination in destinations" :key="destination.role"
+          ><small>{{ destination.name }}</small
+          ><strong>{{ destination.directory }}</strong></span
+        >
+      </div>
+      <p v-if="directoryConfig.error.value" class="inline-error">
+        {{ directoryConfig.error.value }}
+      </p>
       <form class="form-stack" @submit.prevent="previewBatch">
         <label
           >资源内容<textarea
@@ -271,13 +372,34 @@ function switchTab(value: string) {
           ></textarea></label
         ><label class="checkbox-label"
           ><input v-model="organize" type="checkbox" />接收后按已保存归档配置整理</label
-        ><RouterLink to="/settings/accounts" class="text-link">核对各类接收目录 →</RouterLink
-        ><button
-          class="button primary"
-          :disabled="preview.loading.value || op.busy.value || op.uncertain.value"
-        >
-          识别资源并预览
-        </button>
+        ><RouterLink to="/settings/accounts" class="text-link">核对各类接收目录 →</RouterLink>
+        <div class="action-row">
+          <button
+            class="button"
+            :disabled="preview.loading.value || op.busy.value || op.uncertain.value"
+          >
+            识别资源并预览
+          </button>
+          <button
+            type="button"
+            class="button primary"
+            :disabled="
+              !input.trim() ||
+              !directoryConfig.data.value ||
+              !!directoryConfig.error.value ||
+              preview.loading.value ||
+              op.busy.value ||
+              op.uncertain.value
+            "
+            @click="directConfirm = true"
+          >
+            一键提交到已保存目录
+          </button>
+        </div>
+        <p class="data-caption">
+          115 分享、磁力、ed2k
+          和秒传分别使用上方目录。开启自动整理后按已保存策略执行；离线下载完成后的接续请在自动整理中配置扫描计划。
+        </p>
       </form>
     </section>
     <section v-if="shareOnly || tab === 'share'" class="panel">
@@ -388,6 +510,13 @@ function switchTab(value: string) {
     </section>
     <section v-if="!shareOnly && tab === 'offline'" class="panel">
       <h2>115 离线任务</h2>
+      <p v-if="offline.loading.value" class="muted-text">正在读取离线任务…</p>
+      <p
+        v-else-if="!offline.error.value && !records(offline.data.value?.items).length"
+        class="empty-message"
+      >
+        当前没有离线任务。
+      </p>
       <p v-if="offline.error.value" class="inline-error">{{ offline.error.value }}</p>
       <EvidenceDetails :value="offline.data.value?.items" />
       <div class="pagination">
@@ -466,6 +595,21 @@ function switchTab(value: string) {
     @close="confirm = false"
     @confirm="execute"
     ><EvidenceDetails :value="plan" /></ConfirmAction
+  ><ConfirmAction
+    v-if="directConfirm"
+    title="提交资源接收"
+    :description="`将输入的资源接收到当前账号已保存目录${organize ? '，并按已保存配置整理' : ''}。磁力和 ed2k 需要等待 115 下载完成。`"
+    :busy="op.busy.value"
+    :disabled="op.uncertain.value || !directoryConfig.data.value || !!directoryConfig.error.value"
+    @close="directConfirm = false"
+    @confirm="submitDirect"
+  >
+    <div class="destination-strip">
+      <span v-for="destination in destinations" :key="destination.role"
+        ><small>{{ destination.name }}</small
+        ><strong>{{ destination.directory }}</strong></span
+      >
+    </div> </ConfirmAction
   ><MediaOverride
     v-if="fixing"
     :file-id="fixing.id"

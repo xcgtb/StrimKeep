@@ -268,5 +268,7 @@ test('late account write does not place its receipt or directories into another 
   resolve!();
   await expect(page.getByText('旧账号已保存', { exact: true })).toHaveCount(0);
   await expect(page.getByLabel('当前 115 账号')).toHaveValue('account-b');
-  await expect(page.getByLabel('整理来源')).toHaveValue('目录0');
+  await expect(page.getByRole('textbox', { name: '待整理目录 选择目录', exact: true })).toHaveValue(
+    '目录0',
+  );
 });

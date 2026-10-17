@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { cloudSections } from '../config/cloudFields';
 import { useCloudSettingsDraft } from '../composables/useCloudSettingsDraft';
 import { namingTemplateFields, validateTemplate } from '../config/namingVariables';
 import PageHeading from '../components/PageHeading.vue';
@@ -11,6 +12,9 @@ import EvidenceDetails from '../components/EvidenceDetails.vue';
 import CloudSettingsConfirmation from '../components/CloudSettingsConfirmation.vue';
 const { request, op, draft, confirmation, preview, changed, changes, load, save, previewNaming } =
   useCloudSettingsDraft();
+const namingFields = cloudSections
+  .find((section) => section.key === 'naming')!
+  .fields.filter((field) => !namingTemplateFields.some((template) => template.key === field.key));
 const invalid = computed(() =>
   namingTemplateFields.some((f) => !!validateTemplate(f.key, String(draft.value[f.key] || ''))),
 );
@@ -40,19 +44,7 @@ const invalid = computed(() =>
     ><section class="panel naming-mode-panel">
       <FormFields
         v-model="draft"
-        :fields="[
-          {
-            key: 'naming_style',
-            label: '命名方式',
-            type: 'select',
-            options: [
-              { value: 'standard', label: '标准命名' },
-              { value: 'compact', label: '简洁命名' },
-              { value: 'original', label: '保留原名' },
-              { value: 'template', label: '自定义模板' },
-            ],
-          },
-        ]"
+        :fields="namingFields"
         :disabled="op.busy.value || op.uncertain.value"
       />
       <p class="data-caption">选择「自定义模板」后，后续整理任务会使用下方模板。</p>
