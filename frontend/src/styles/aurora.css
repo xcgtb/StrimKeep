@@ -4,7 +4,24 @@
    classic-overview.css / classic-upstream.css 提供。
    本文件只处理 Vue3 的 .template-shell 前缀（更高 specificity）
    压过 classic 类的场景，让 classic 视觉正确生效。
+   同时保持 1.4.12 的框架（侧边栏/顶栏/背景/底部导航）原样不变：
+   classic 只作用于右侧内容区。
    ═══════════════════════════════════════════════ */
+
+/* ── 框架保护 1：屏蔽 classic 的全屏玻璃背景层（body::before 天空城市图），
+      保持 1.4.12 原有的 body 渐变背景与用户自定义背景 ── */
+html body::before {
+  content: none !important;
+  display: none !important;
+}
+
+/* ── 框架保护 2：还原 1.4.12 的移动端底部导航（glass.css 会改它的表面） ── */
+html .mobile-dock {
+  background: var(--panel);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-color: var(--border);
+}
 
 /* panel：Vue3 用 .template-shell .panel（0,2,0）压过 classic .panel，
    这里补回 classic 的毛玻璃表面。 */
