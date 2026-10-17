@@ -13,7 +13,10 @@ const props = defineProps<{
   priority?: boolean;
 }>();
 defineEmits<{ open: []; select: []; subscribe: [] }>();
-const openLabel = computed(() => `${props.selectable ? props.selected ? '取消选择' : '选择' : '查看'}${titleOf(props.card)}${props.selectable ? '' : '详情'}`);
+const openLabel = computed(
+  () =>
+    `${props.selectable ? (props.selected ? '取消选择' : '选择') : '查看'}${titleOf(props.card)}${props.selectable ? '' : '详情'}`,
+);
 const loaded = ref(false),
   failed = ref(false),
   url = computed(() => posterUrl(props.card));
@@ -25,7 +28,11 @@ watch(url, () => {
 <template>
   <article class="poster-card" :class="{ selected, selectable }">
     <div class="poster-art" :class="{ 'poster-waiting': url && !loaded && !failed }">
-      <button class="poster-open" :aria-label="openLabel" @click="selectable ? $emit('select') : $emit('open')">
+      <button
+        class="poster-open"
+        :aria-label="openLabel"
+        @click="selectable ? $emit('select') : $emit('open')"
+      >
         <img
           v-if="url && !failed"
           :src="url"
@@ -57,7 +64,9 @@ watch(url, () => {
       </button>
     </div>
     <div class="poster-caption">
-      <button class="poster-title" @click="selectable ? $emit('select') : $emit('open')">{{ titleOf(card) }}</button>
+      <button class="poster-title" @click="selectable ? $emit('select') : $emit('open')">
+        {{ titleOf(card) }}
+      </button>
       <div class="poster-meta">
         <span>{{ card.year || '年份未知' }}</span
         ><span v-if="card.type">{{ card.type === 'tv' ? '剧集' : '电影' }}</span

@@ -24,12 +24,29 @@ const strategy = useRequest<Data>(),
   confirmation = ref('');
 const keywords = computed({
   get: () => strings(form.value.exempt_keywords).join('\n'),
-  set: (value: string) => { form.value.exempt_keywords = value.split('\n').map((s) => s.trim()).filter(Boolean); },
+  set: (value: string) => {
+    form.value.exempt_keywords = value
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  },
 });
 const decisionOptions = [
-  { value: 'quality_first', label: '画质优先（默认）', note: '首先比较完整度，完整后按七维顺序择优。' },
-  { value: 'keep_local', label: '优先保留本地', note: '尽量保留本地版，适用于本地片库需要保护的场景。' },
-  { value: 'keep_share', label: '优先保留分享', note: '倾向保留分享版，仍遵守缺集保护与人工确认。' },
+  {
+    value: 'quality_first',
+    label: '画质优先（默认）',
+    note: '首先比较完整度，完整后按七维顺序择优。',
+  },
+  {
+    value: 'keep_local',
+    label: '优先保留本地',
+    note: '尽量保留本地版，适用于本地片库需要保护的场景。',
+  },
+  {
+    value: 'keep_share',
+    label: '优先保留分享',
+    note: '倾向保留分享版，仍遵守缺集保护与人工确认。',
+  },
 ];
 const matchOptions = [
   { value: 'title_year', label: '剧名＋年份', note: '按规范化名称与年份匹配。' },
@@ -103,35 +120,105 @@ onMounted(load);
     <h2>治理决策策略</h2>
     <p class="muted-text">仅作用于双库治理的扫描和计划；修改后必须重新扫描，不会直接删除文件。</p>
     <div class="strategy-selection">
-      <label v-for="option in decisionOptions" :key="option.value" class="strategy-option" :class="{ selected: form.decision === option.value }">
-        <input v-model="form.decision" type="radio" name="governance-decision" :value="option.value" :disabled="op.busy.value || op.uncertain.value" />
-        <span><strong>{{ option.label }}</strong><small>{{ option.note }}</small></span>
+      <label
+        v-for="option in decisionOptions"
+        :key="option.value"
+        class="strategy-option"
+        :class="{ selected: form.decision === option.value }"
+      >
+        <input
+          v-model="form.decision"
+          type="radio"
+          name="governance-decision"
+          :value="option.value"
+          :disabled="op.busy.value || op.uncertain.value"
+        />
+        <span
+          ><strong>{{ option.label }}</strong
+          ><small>{{ option.note }}</small></span
+        >
       </label>
     </div>
     <h3>作品身份匹配</h3>
     <div class="strategy-selection strategy-two">
-      <label v-for="option in matchOptions" :key="option.value" class="strategy-option" :class="{ selected: form.match_strategy === option.value }">
-        <input v-model="form.match_strategy" type="radio" name="governance-match" :value="option.value" :disabled="op.busy.value || op.uncertain.value" />
-        <span><strong>{{ option.label }}</strong><small>{{ option.note }}</small></span>
+      <label
+        v-for="option in matchOptions"
+        :key="option.value"
+        class="strategy-option"
+        :class="{ selected: form.match_strategy === option.value }"
+      >
+        <input
+          v-model="form.match_strategy"
+          type="radio"
+          name="governance-match"
+          :value="option.value"
+          :disabled="op.busy.value || op.uncertain.value"
+        />
+        <span
+          ><strong>{{ option.label }}</strong
+          ><small>{{ option.note }}</small></span
+        >
       </label>
     </div>
     <div class="strategy-controls">
-      <label class="checkbox-label"><input v-model="form.tie_keep_local" type="checkbox" :disabled="op.busy.value || op.uncertain.value" />七维平局保留本地版本</label>
-      <label class="checkbox-label"><input v-model="form.multi_season_protect" type="checkbox" true-value="compare" false-value="off" :disabled="op.busy.value || op.uncertain.value" />多季合集保护（同季必须满足保护策略）</label>
+      <label class="checkbox-label"
+        ><input
+          v-model="form.tie_keep_local"
+          type="checkbox"
+          :disabled="op.busy.value || op.uncertain.value"
+        />七维平局保留本地版本</label
+      >
+      <label class="checkbox-label"
+        ><input
+          v-model="form.multi_season_protect"
+          type="checkbox"
+          true-value="compare"
+          false-value="off"
+          :disabled="op.busy.value || op.uncertain.value"
+        />多季合集保护（同季必须满足保护策略）</label
+      >
       <div class="range-control">
-        <label for="season-share-ratio">剧集分享达标率 <strong>{{ Math.round(Number(form.season_replace_ratio ?? 0.9) * 100) }}%</strong></label>
-        <input id="season-share-ratio" v-model.number="form.season_replace_ratio" type="range" min="0.5" max="1" step="0.01" :disabled="op.busy.value || op.uncertain.value" />
+        <label for="season-share-ratio"
+          >剧集分享达标率
+          <strong>{{ Math.round(Number(form.season_replace_ratio ?? 0.9) * 100) }}%</strong></label
+        >
+        <input
+          id="season-share-ratio"
+          v-model.number="form.season_replace_ratio"
+          type="range"
+          min="0.5"
+          max="1"
+          step="0.01"
+          :disabled="op.busy.value || op.uncertain.value"
+        />
         <div class="range-endpoints"><span>50% 宽松</span><span>100% 严格</span></div>
-        <p class="muted-text">仅当分享版共同集达到设置比例，且分享集数满足完整度保护时，才考虑淘汰本地版本。</p>
+        <p class="muted-text">
+          仅当分享版共同集达到设置比例，且分享集数满足完整度保护时，才考虑淘汰本地版本。
+        </p>
       </div>
     </div>
     <h3>特别篇（S00）策略</h3>
     <div class="strategy-selection">
-      <label v-for="option in specialOptions" :key="option.value" class="strategy-option" :class="{ selected: form.special_action === option.value }">
-        <input v-model="form.special_action" type="radio" name="governance-s00" :value="option.value" :disabled="op.busy.value || op.uncertain.value" />
-        <span><strong>{{ option.label }}</strong><small>{{ option.note }}</small></span>
+      <label
+        v-for="option in specialOptions"
+        :key="option.value"
+        class="strategy-option"
+        :class="{ selected: form.special_action === option.value }"
+      >
+        <input
+          v-model="form.special_action"
+          type="radio"
+          name="governance-s00"
+          :value="option.value"
+          :disabled="op.busy.value || op.uncertain.value"
+        />
+        <span
+          ><strong>{{ option.label }}</strong
+          ><small>{{ option.note }}</small></span
+        >
       </label>
-    </div><button
+    </div>
+    <button
       class="button primary"
       :disabled="
         !strategy.data.value || !!strategy.error.value || op.busy.value || op.uncertain.value
@@ -157,11 +244,23 @@ onMounted(load);
   </section>
   <section id="governance-whitelist" class="panel">
     <h2>白名单（豁免词）</h2>
-    <label class="whitelist-editor">关键词（每行一个，命中作品跳过治理）
-      <textarea v-model="keywords" rows="4" placeholder="百家讲坛" :disabled="op.busy.value || op.uncertain.value"></textarea>
+    <label class="whitelist-editor"
+      >关键词（每行一个，命中作品跳过治理）
+      <textarea
+        v-model="keywords"
+        rows="4"
+        placeholder="百家讲坛"
+        :disabled="op.busy.value || op.uncertain.value"
+      ></textarea>
     </label>
     <div class="action-row">
-      <button class="button primary" :disabled="op.busy.value || op.uncertain.value || !strategy.data.value" @click="confirmation = 'strategy'">保存白名单及治理策略</button>
+      <button
+        class="button primary"
+        :disabled="op.busy.value || op.uncertain.value || !strategy.data.value"
+        @click="confirmation = 'strategy'"
+      >
+        保存白名单及治理策略
+      </button>
     </div>
     <p class="muted-text">保存后重新治理扫描。下方豁免预览只使用已保存规则，不会删除文件。</p>
     <h3>豁免目录核对</h3>
@@ -187,7 +286,9 @@ onMounted(load);
     </form>
     <div v-if="comparison" class="comparison-result">
       <h3>比较结果（按已保存规则）</h3>
-      <p v-if="comparison.winner || comparison.result" class="notice-bar">结果：{{ comparison.winner || comparison.result }}</p>
+      <p v-if="comparison.winner || comparison.result" class="notice-bar">
+        结果：{{ comparison.winner || comparison.result }}
+      </p>
       <EvidenceDetails :value="comparison" />
     </div>
   </section>

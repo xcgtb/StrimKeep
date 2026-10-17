@@ -15,7 +15,9 @@ import ModalDialog from '../components/ModalDialog.vue';
 import ResourceSearch from '../components/ResourceSearch.vue';
 import { readData, records, type Data } from '../api/domain';
 // Page state survives navigation back from another module without duplicating requests.
-let exploreSnapshot: { key: string; cards: MediaCard[]; page: number; total: number; scroll: number; at: number } | undefined;
+let exploreSnapshot:
+  | { key: string; cards: MediaCard[]; page: number; total: number; scroll: number; at: number }
+  | undefined;
 const resourceCard = ref<MediaCard>();
 const catalog = useRequest<Data>();
 const route = useRoute(),
@@ -43,21 +45,35 @@ const search = ref(filters.q),
 let badgeController: AbortController | undefined,
   pageObserver: IntersectionObserver | undefined,
   generation = 0;
-function filterKey() { return JSON.stringify(filters); }
+function filterKey() {
+  return JSON.stringify(filters);
+}
 function rememberPosition() {
-  if (cards.value.length) exploreSnapshot = {
-    key: filterKey(), cards: cards.value.slice(), page: page.value,
-    total: totalPages.value, scroll: window.scrollY, at: Date.now(),
-  };
+  if (cards.value.length)
+    exploreSnapshot = {
+      key: filterKey(),
+      cards: cards.value.slice(),
+      page: page.value,
+      total: totalPages.value,
+      scroll: window.scrollY,
+      at: Date.now(),
+    };
 }
 async function connectObserver() {
   await nextTick();
   pageObserver?.disconnect();
   if (!loadMarker.value || typeof IntersectionObserver === 'undefined') return;
-  pageObserver = new IntersectionObserver((entries) => {
-    if (entries.some((entry) => entry.isIntersecting) &&
-        !request.loading.value && page.value < totalPages.value) void load(true);
-  }, { rootMargin: '850px 0px 850px 0px', threshold: 0 });
+  pageObserver = new IntersectionObserver(
+    (entries) => {
+      if (
+        entries.some((entry) => entry.isIntersecting) &&
+        !request.loading.value &&
+        page.value < totalPages.value
+      )
+        void load(true);
+    },
+    { rootMargin: '850px 0px 850px 0px', threshold: 0 },
+  );
   pageObserver.observe(loadMarker.value);
 }
 async function load(more = false) {
@@ -159,12 +175,19 @@ watch(
   },
 );
 onMounted(() => {
-  if (exploreSnapshot && exploreSnapshot.key === filterKey() && Date.now() - exploreSnapshot.at < 180000) {
+  if (
+    exploreSnapshot &&
+    exploreSnapshot.key === filterKey() &&
+    Date.now() - exploreSnapshot.at < 180000
+  ) {
     cards.value = exploreSnapshot.cards;
     page.value = exploreSnapshot.page;
     totalPages.value = exploreSnapshot.total;
     const previousScroll = exploreSnapshot.scroll;
-    void nextTick(() => { window.scrollTo({ top: previousScroll, behavior: 'instant' }); void connectObserver(); });
+    void nextTick(() => {
+      window.scrollTo({ top: previousScroll, behavior: 'instant' });
+      void connectObserver();
+    });
     void updateBadges();
   } else void load();
   void loadSubscriptions();
@@ -207,8 +230,18 @@ const live = useLibraryUpdates(async () => {
     </button>
   </form>
   <div class="summary-strip explore-filter-summary">
-    <span>地区 {{ filters.region === 'all' ? '全部' : filters.region }} · {{ filters.genre || '全部题材' }} · {{ filters.year || '全部年份' }} · {{ filters.sort === 'rating' ? '评分' : filters.sort === 'release' ? '最新' : '热度' }}</span>
-    <button class="button small push-right" :aria-expanded="showFilters" @click="showFilters = !showFilters">{{ showFilters ? '收起筛选' : '展开筛选' }}</button>
+    <span
+      >地区 {{ filters.region === 'all' ? '全部' : filters.region }} ·
+      {{ filters.genre || '全部题材' }} · {{ filters.year || '全部年份' }} ·
+      {{ filters.sort === 'rating' ? '评分' : filters.sort === 'release' ? '最新' : '热度' }}</span
+    >
+    <button
+      class="button small push-right"
+      :aria-expanded="showFilters"
+      @click="showFilters = !showFilters"
+    >
+      {{ showFilters ? '收起筛选' : '展开筛选' }}
+    </button>
   </div>
   <div class="browse-tabs">
     <button
@@ -288,9 +321,20 @@ const live = useLibraryUpdates(async () => {
       @subscribe="toggle(card)"
     />
   </div>
-  <div v-if="cards.length && page < totalPages" ref="loadMarker" class="load-more" aria-live="polite">
+  <div
+    v-if="cards.length && page < totalPages"
+    ref="loadMarker"
+    class="load-more"
+    aria-live="polite"
+  >
     <button class="button" :disabled="request.loading.value" @click="load(true)">
-      <ArrowDown :size="16" />{{ request.loading.value ? '正在自动加载下一页…' : moreError ? '加载失败，点击重试' : '继续加载更多作品' }}
+      <ArrowDown :size="16" />{{
+        request.loading.value
+          ? '正在自动加载下一页…'
+          : moreError
+            ? '加载失败，点击重试'
+            : '继续加载更多作品'
+      }}
     </button>
   </div>
   <p v-if="moreError" class="notice-bar warning-text">下一页加载失败：{{ moreError }}</p>

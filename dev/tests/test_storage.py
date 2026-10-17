@@ -41,11 +41,14 @@ class TestPlanStorage:
         # 文件不存在 → governance.load_plan 走库兜底
         assert governance.load_plan('aaaa1111')['state'] == 'pending'
 
-    def test_file_wins_over_db(self):
+    def test_retired_file_does_not_override_sqlite(self):
+        # Import-once SQLite storage is authoritative after the state is sealed.
+        # A legacy file reappearing later must never alter a pending plan.
         engine.db_save_plan(_plan('dada2222', state='pending'))
+        assert governance.load_plan('dada2222')['state'] == 'pending'
         f = engine.STATE_DIR / 'plan_dada2222.json'
         f.write_text(json.dumps(_plan('dada2222', state='done')), encoding='utf-8')
-        assert governance.load_plan('dada2222')['state'] == 'done'
+        assert governance.load_plan('dada2222')['state'] == 'pending'
 
     def test_purge_old_plans(self):
         engine.db_save_plan(_plan('cccc3333', ts=time.time() - 30 * 86400))

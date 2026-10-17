@@ -4,7 +4,8 @@ export function deletionOutcome(
   result: { status?: unknown; failed?: unknown } = {},
   requireResult = false,
 ): 'running' | 'success' | 'partial' | 'failed' | 'needs_review' {
-  if (!['success', 'failed', 'cancelled', 'stopped', 'done', 'error'].includes(state)) return 'running';
+  if (!['success', 'failed', 'cancelled', 'stopped', 'done', 'error'].includes(state))
+    return 'running';
   if (['failed', 'cancelled', 'stopped', 'error'].includes(state)) return 'failed';
   const status = String(result.status ?? '');
   if (['error', 'failed', 'busy'].includes(status)) return 'failed';

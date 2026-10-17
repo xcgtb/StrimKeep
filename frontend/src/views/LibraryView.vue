@@ -20,7 +20,7 @@ import OperationState from '../components/OperationState.vue';
 import ConfirmAction from '../components/ConfirmAction.vue';
 import PageHeading from '../components/PageHeading.vue';
 import EvidenceDetails from '../components/EvidenceDetails.vue';
-import { readData, records, type Data } from '../api/domain';
+import { readData, records, object, type Data } from '../api/domain';
 const episodes = useRequest<Data>(),
   comparisonProgress = useRequest<Data>(),
   nasSearch = useRequest<Data>(),
@@ -92,21 +92,35 @@ const selectionMode = ref(false),
   pagingMarker = ref<HTMLElement>();
 let pagingObserver: IntersectionObserver | undefined;
 const statusTabs = [
-  { key: 'all', name: '全部' }, { key: 'aligned', name: '完整' },
-  { key: 'missing', name: '缺集' }, { key: 'extra', name: '超集' },
-  { key: 'ongoing', name: '连载中' }, { key: 'unmatched', name: '待对照' },
+  { key: 'all', name: '全部' },
+  { key: 'aligned', name: '完整' },
+  { key: 'missing', name: '缺集' },
+  { key: 'extra', name: '超集' },
+  { key: 'ongoing', name: '连载中' },
+  { key: 'unmatched', name: '待对照' },
 ];
 async function connectPaging() {
   await nextTick();
   pagingObserver?.disconnect();
   if (!pagingMarker.value || typeof IntersectionObserver === 'undefined') return;
-  pagingObserver = new IntersectionObserver((entries) => {
-    if (entries.some((entry) => entry.isIntersecting) && !request.loading.value &&
-        hasMore.value && !detailOpen.value && !selectionMode.value) void load(true);
-  }, { rootMargin: '700px 0px 700px 0px' });
+  pagingObserver = new IntersectionObserver(
+    (entries) => {
+      if (
+        entries.some((entry) => entry.isIntersecting) &&
+        !request.loading.value &&
+        hasMore.value &&
+        !detailOpen.value &&
+        !selectionMode.value
+      )
+        void load(true);
+    },
+    { rootMargin: '700px 0px 700px 0px' },
+  );
   pagingObserver.observe(pagingMarker.value);
 }
-const selectedCards = computed(() => cards.value.filter((c) => allSelected.value || selectedIds.value.has(c.id!)));
+const selectedCards = computed(() =>
+  cards.value.filter((c) => allSelected.value || selectedIds.value.has(c.id!)),
+);
 const seasons = computed(() => {
   const item = detail.data.value?.item;
   const expected = new Map((item?.tmdb_info?.seasons || []).map((s) => [s.season, s.tmdb]));
@@ -177,9 +191,10 @@ async function afterSingleDelete(receipt: Data) {
   }
   detailOpen.value = false;
   const failed = Number(object(receipt.result).failed || receipt.error_count || 0);
-  deleteNotice.value = failed > 0
-    ? `《${previous?.name || '作品'}》有 ${failed} 个失败项目，片库已刷新，请检查执行记录。`
-    : `已核实删除《${previous?.name || '作品'}》，片库列表已更新。`;
+  deleteNotice.value =
+    failed > 0
+      ? `《${previous?.name || '作品'}》有 ${failed} 个失败项目，片库已刷新，请检查执行记录。`
+      : `已核实删除《${previous?.name || '作品'}》，片库列表已更新。`;
 }
 async function afterBatchDelete(receipt: Data) {
   lastDeletion.value = receipt;
@@ -190,9 +205,10 @@ async function afterBatchDelete(receipt: Data) {
     return;
   }
   const failed = Number(object(receipt.result).failed || receipt.error_count || 0);
-  deleteNotice.value = failed > 0
-    ? `批量处理有 ${failed} 个失败项目；片库已刷新，请展开执行记录逐部核对。`
-    : '批量执行已完成，片库状态已更新；处理记录可在任务回执中展开。';
+  deleteNotice.value =
+    failed > 0
+      ? `批量处理有 ${failed} 个失败项目；片库已刷新，请展开执行记录逐部核对。`
+      : '批量执行已完成，片库状态已更新；处理记录可在任务回执中展开。';
 }
 function submitSearch() {
   const keyword = search.value.trim();
@@ -225,7 +241,10 @@ async function resync() {
 }
 onMounted(() => void load());
 onBeforeUnmount(() => pagingObserver?.disconnect());
-watch([hasMore, pagingMarker, () => selectionMode.value, () => cards.value.length], () => void connectPaging());
+watch(
+  [hasMore, pagingMarker, () => selectionMode.value, () => cards.value.length],
+  () => void connectPaging(),
+);
 async function refreshLoaded() {
   if (request.loading.value || detailOpen.value || operation.busy.value) return false;
   const count = Math.max(cards.value.length, 40),
@@ -328,8 +347,19 @@ const live = useLibraryUpdates(refreshLoaded);
     ><span class="push-right muted-text">{{ total }} 部作品</span>
   </div>
   <nav v-if="filters.media === 'series'" class="mapping-status-tabs" aria-label="剧集完整度筛选">
-    <button v-for="tab in statusTabs" :key="tab.key" type="button" :class="{ active: filters.status === tab.key }" @click="filters.status = tab.key">
-      {{ tab.name }}<span v-if="filters.scope === 'all' && !filters.keyword && !filters.category">{{ tab.key === 'all' ? request.data.value?.stats?.total_series ?? '' : request.data.value?.stats?.[tab.key] ?? '' }}</span>
+    <button
+      v-for="tab in statusTabs"
+      :key="tab.key"
+      type="button"
+      :class="{ active: filters.status === tab.key }"
+      @click="filters.status = tab.key"
+    >
+      {{ tab.name
+      }}<span v-if="filters.scope === 'all' && !filters.keyword && !filters.category">{{
+        tab.key === 'all'
+          ? (request.data.value?.stats?.total_series ?? '')
+          : (request.data.value?.stats?.[tab.key] ?? '')
+      }}</span>
     </button>
   </nav>
   <div class="filter-panel library-filters">
@@ -341,11 +371,29 @@ const live = useLibraryUpdates(refreshLoaded);
       /><button class="button">搜索</button>
     </form>
     <div class="mapping-scope-tabs" aria-label="片库范围">
-      <button type="button" :class="{ active: filters.scope === 'all' }" @click="filters.scope = 'all'">本地＋分享</button>
-      <button type="button" :class="{ active: filters.scope === 'local' }" @click="filters.scope = 'local'">仅本地</button>
-      <button type="button" :class="{ active: filters.scope === 'share' }" @click="filters.scope = 'share'">仅分享</button>
-    </div
-    ><input
+      <button
+        type="button"
+        :class="{ active: filters.scope === 'all' }"
+        @click="filters.scope = 'all'"
+      >
+        本地＋分享
+      </button>
+      <button
+        type="button"
+        :class="{ active: filters.scope === 'local' }"
+        @click="filters.scope = 'local'"
+      >
+        仅本地
+      </button>
+      <button
+        type="button"
+        :class="{ active: filters.scope === 'share' }"
+        @click="filters.scope = 'share'"
+      >
+        仅分享
+      </button>
+    </div>
+    <input
       v-model.lazy="filters.category"
       aria-label="片库分类"
       placeholder="分类目录（可留空）"
@@ -365,14 +413,39 @@ const live = useLibraryUpdates(refreshLoaded);
     </button>
   </div>
   <p v-if="deleteNotice" class="notice-bar" role="status">{{ deleteNotice }}</p>
-  <section v-if="lastDeletion" class="panel mapping-delete-result" aria-label="最近一次删除执行记录">
-    <header class="section-heading"><h2>最近一次删除执行记录</h2><button class="button small" @click="lastDeletion = undefined">收起记录</button></header>
+  <section
+    v-if="lastDeletion"
+    class="panel mapping-delete-result"
+    aria-label="最近一次删除执行记录"
+  >
+    <header class="section-heading">
+      <h2>最近一次删除执行记录</h2>
+      <button class="button small" @click="lastDeletion = undefined">收起记录</button>
+    </header>
     <div class="progress-metrics">
-      <span>STRM 已删除 <strong>{{ object(lastDeletion.result).strm_removed ?? lastDeletion.strm_removed ?? 0 }}</strong></span>
-      <span>源文件已删除 <strong>{{ object(lastDeletion.result).cloud_removed ?? lastDeletion.cloud_removed ?? 0 }}</strong></span>
-      <span>失败项 <strong>{{ object(lastDeletion.result).failed ?? lastDeletion.error_count ?? 0 }}</strong></span>
+      <span
+        >STRM 已删除
+        <strong>{{
+          object(lastDeletion.result).strm_removed ?? lastDeletion.strm_removed ?? 0
+        }}</strong></span
+      >
+      <span
+        >源文件已删除
+        <strong>{{
+          object(lastDeletion.result).cloud_removed ?? lastDeletion.cloud_removed ?? 0
+        }}</strong></span
+      >
+      <span
+        >失败项
+        <strong>{{
+          object(lastDeletion.result).failed ?? lastDeletion.error_count ?? 0
+        }}</strong></span
+      >
     </div>
-    <details><summary>查看后台实际执行明细及错误</summary><EvidenceDetails :value="lastDeletion" /></details>
+    <details>
+      <summary>查看后台实际执行明细及错误</summary>
+      <EvidenceDetails :value="lastDeletion" />
+    </details>
   </section>
   <p class="data-caption">
     事实快照 {{ date(request.data.value?.facts_ts)
@@ -563,7 +636,10 @@ const live = useLibraryUpdates(refreshLoaded);
           /></div></template></template
   ></ModalDialog>
   <ModalDialog v-if="compareOpen" title="所选作品状态" @close="compareOpen = false"
-    ><p v-if="allSelected" class="notice-bar">已选中全部 {{ total }} 部筛选作品。以下仅展示当前已加载的卡片；删除核验以服务端全部筛选结果为准。</p>
+    ><p v-if="allSelected" class="notice-bar">
+      已选中全部
+      {{ total }} 部筛选作品。以下仅展示当前已加载的卡片；删除核验以服务端全部筛选结果为准。
+    </p>
     <div class="comparison-list">
       <div v-for="card in selectedCards" :key="card.id">
         <strong>{{ titleOf(card) }}</strong
