@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
-import { resolve, extname, join } from 'node:path';
+import { dirname, resolve, extname, join, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
 import { routes } from './e2e/routes.ts';
 import { fixtures } from './e2e/fixtures.ts';
-const root = resolve('..');
+// 仓库根按脚本位置推导，而不是依赖 cwd；路径前缀用 path.sep，
+// 否则 Windows 上 resolve() 返回反斜杠，root + '/' 永远匹配不上，全部静态文件 403。
+const here = dirname(fileURLToPath(import.meta.url));
+const root = resolve(here, '..', '..');
+const rootPrefix = root.endsWith(sep) ? root : root + sep;
 const mime = {
   '.html': 'text/html',
   '.js': 'text/javascript',
@@ -14,7 +19,7 @@ const mime = {
 };
 const server = createServer(async (req, res) => {
   const path = resolve(root, '.' + new URL(req.url, 'http://localhost').pathname);
-  if (!path.startsWith(root + '/')) {
+  if (path !== root && !path.startsWith(rootPrefix)) {
     res.writeHead(403).end();
     return;
   }
