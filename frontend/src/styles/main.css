@@ -4459,3 +4459,257 @@ summary {
     margin-left: auto;
   }
 }
+
+/* 芯片式筛选条：对齐 1.2.12 的常驻筛选表达，避免功能被折叠进下拉框 */
+.chip-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 9px 0;
+  border-bottom: 1px dashed var(--border);
+}
+.chip-row:last-child {
+  border-bottom: 0;
+}
+.chip-row-label {
+  flex: 0 0 52px;
+  padding-top: 5px;
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.chip-track {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.chip-track.scrollable {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding-bottom: 3px;
+  scrollbar-width: thin;
+}
+.chip-track.scrollable::-webkit-scrollbar {
+  height: 5px;
+}
+.chip-track.scrollable::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-solid);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+.chip:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.chip b {
+  font-weight: 500;
+  font-size: 11px;
+  opacity: 0.75;
+}
+.chip.active b {
+  opacity: 0.9;
+}
+.chip-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 6px 16px;
+  margin-bottom: 20px;
+}
+.chip-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.chip-panel-head strong {
+  color: var(--text);
+  font-weight: 500;
+}
+@media (max-width: 640px) {
+  .chip-row {
+    flex-direction: column;
+    gap: 6px;
+  }
+  .chip-row-label {
+    flex: none;
+    padding-top: 0;
+  }
+}
+
+/* 双库治理：扫描事实面板（对齐 1.2.12 的常驻状态信息） */
+.stats-grid-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.truth-panel .section-heading {
+  align-items: baseline;
+}
+.truth-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 22px;
+}
+.truth-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 7px 0;
+  border-bottom: 1px dashed var(--border);
+  font-size: 12px;
+}
+.truth-row:last-child,
+.truth-row:nth-last-child(2):nth-child(odd) {
+  border-bottom: 0;
+}
+.truth-key {
+  flex: 0 0 92px;
+  color: var(--muted);
+}
+.truth-value {
+  color: var(--text);
+  font-weight: 500;
+  word-break: break-word;
+}
+.truth-value.ok {
+  color: var(--green);
+}
+.truth-value.warn {
+  color: var(--warning);
+}
+.truth-conflicts {
+  margin-top: 16px;
+  padding: 13px 16px;
+  border: 1px solid var(--warning);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+}
+.truth-conflicts h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warning);
+}
+.truth-conflicts ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.9;
+}
+.lib-tag {
+  display: inline-block;
+  margin: 0 4px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  background: var(--subtle);
+  color: var(--muted);
+}
+.lib-tag.local {
+  color: var(--accent);
+}
+.lib-tag.share {
+  color: var(--green);
+}
+@media (max-width: 1100px) {
+  .stats-grid-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 700px) {
+  .stats-grid-4 {
+    grid-template-columns: 1fr;
+  }
+  .truth-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 批量删除确认摘要：用业务语言替代原始 JSON */
+.batch-summary {
+  font-size: 13px;
+  line-height: 1.9;
+}
+.batch-summary p {
+  margin: 0 0 6px;
+}
+.batch-summary b {
+  color: var(--accent);
+  font-weight: 600;
+}
+.batch-titles {
+  margin: 8px 0;
+  padding-left: 18px;
+  max-height: 190px;
+  overflow: auto;
+  font-size: 12px;
+}
+.batch-titles li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 0;
+}
+.batch-titles span {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.batch-notice {
+  margin-top: 8px !important;
+  padding: 8px 11px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  color: var(--warning);
+  font-size: 12px;
+}
+.task-progress {
+  margin: 10px 0;
+}
+.task-progress-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--subtle);
+  overflow: hidden;
+}
+.task-progress-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+.task-progress-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.task-progress-counts b {
+  color: var(--text);
+  font-weight: 600;
+}

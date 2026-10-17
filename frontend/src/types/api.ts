@@ -64,6 +64,8 @@ export interface LibraryPage extends Envelope {
   facts_ts?: number;
   facts_version?: string;
   stale?: boolean;
+  /** 片库状态计数（total / aligned / missing / extra / ongoing / unmatched / no_tmdb …） */
+  stats?: Record<string, number>;
 }
 export interface Subscription {
   id: string;

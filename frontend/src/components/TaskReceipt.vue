@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, watch } from 'vue';
+import { computed, onMounted, watch } from 'vue';
 import { readData, writeData, object, text, type Data } from '../api/domain';
 import { useRequest } from '../composables/useRequest';
 import { useVisiblePoll } from '../composables/useVisiblePoll';
@@ -8,6 +8,22 @@ import { stateLabel } from '../composables/format';
 const props = defineProps<{ id: string; kind?: 'cloud' | 'task' | 'delete' }>();
 const request = useRequest<Data>();
 const emit = defineEmits<{ done: [value: Data] }>();
+// 批量删除的进度原本只以原始字段呈现，这里换成 1.2.12 的进度条 + 业务计数。
+const deleteProgress = computed(() => {
+  if (props.kind !== 'delete' || !request.data.value) return undefined;
+  const row = object(request.data.value);
+  const total = Number(row.total || 0);
+  const processed = Number(row.processed || 0);
+  return {
+    total,
+    processed,
+    percent: total ? Math.min(100, Math.round((processed / total) * 100)) : 0,
+    strm_removed: Number(row.strm_removed || 0),
+    cloud_removed: Number(row.cloud_removed || 0),
+    retained: Number(row.retained || 0),
+    error_count: Number(row.error_count || 0),
+  };
+});
 let completed = '';
 watch(request.data, (d) => {
   const row = object(d?.job || d);
@@ -91,6 +107,20 @@ useVisiblePoll(() => {
         )
       }}
     </p>
+    <div v-if="deleteProgress" class="task-progress">
+      <div class="task-progress-bar">
+        <i :style="{ width: deleteProgress.percent + '%' }"></i>
+      </div>
+      <div class="task-progress-counts">
+        <span>已处理 <b>{{ deleteProgress.processed }} / {{ deleteProgress.total }}</b></span>
+        <span>STRM 已删除 <b>{{ deleteProgress.strm_removed }}</b></span>
+        <span>115 源文件已删除 <b>{{ deleteProgress.cloud_removed }}</b></span>
+        <span>保留 <b>{{ deleteProgress.retained }}</b></span>
+        <span v-if="deleteProgress.error_count"
+          >失败 <b>{{ deleteProgress.error_count }}</b></span
+        >
+      </div>
+    </div>
     <EvidenceDetails
       v-if="request.data.value"
       :value="request.data.value.job || request.data.value"

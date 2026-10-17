@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, reactive, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, reactive, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { Search, SlidersHorizontal, ArrowDown, Compass } from '@lucide/vue';
+import FilterChips from '../components/FilterChips.vue';
 import { mediaApi } from '../api/media';
 import { useRequest } from '../composables/useRequest';
 import { useLibraryUpdates } from '../composables/useLibraryUpdates';
@@ -29,13 +30,87 @@ const filters = reactive({
   q: String(route.query.q || ''),
 });
 const search = ref(filters.q),
-  showFilters = ref(false),
+  showFilters = ref(true),
   cards = ref<MediaCard[]>([]),
   page = ref(1),
   totalPages = ref(1),
   selected = ref<MediaCard>(),
   libraryNotice = ref(''),
   subscriptionError = ref('');
+
+// 筛选选项与 1.2.12 保持一致：地区 / 类型 / 题材 / 年份 / 排序 全部常驻可见。
+const regionOptions = [
+  { value: 'all', label: '全部' },
+  { value: 'cn', label: '大陆' },
+  { value: 'hk', label: '香港' },
+  { value: 'tw', label: '台湾' },
+  { value: 'jp', label: '日本' },
+  { value: 'kr', label: '韩国' },
+  { value: 'us', label: '欧美' },
+];
+const mediaOptions = [
+  { value: 'all', label: '全部' },
+  { value: 'movie', label: '电影' },
+  { value: 'tv', label: '剧集' },
+];
+const sortOptions = [
+  { value: 'popularity', label: '热度' },
+  { value: 'release', label: '最新' },
+  { value: 'rating', label: 'TMDB 评分' },
+];
+const fallbackGenres = [
+  '动作',
+  '冒险',
+  '喜剧',
+  '犯罪',
+  '纪录',
+  '剧情',
+  '家庭',
+  '奇幻',
+  '历史',
+  '恐怖',
+  '音乐',
+  '悬疑',
+  '爱情',
+  '科幻',
+  '惊悚',
+  '战争',
+  '西部',
+  '动画',
+  '儿童',
+  '新闻',
+  '真人秀',
+  '肥皂剧',
+  '脱口秀',
+  '电视电影',
+];
+const genreOptions = computed(() => {
+  const names = records(catalog.data.value?.genres)
+    .map((g) => String(g.name || ''))
+    .filter(Boolean);
+  const list = names.length ? names : fallbackGenres;
+  return [{ value: '', label: '全部' }, ...list.map((name) => ({ value: name, label: name }))];
+});
+const yearOptions = computed(() => {
+  const top = new Date().getFullYear() + 1;
+  const options = [{ value: '', label: '全部' }];
+  for (let year = top; year >= 1900; year -= 1) {
+    options.push({ value: String(year), label: String(year) });
+  }
+  return options;
+});
+const filterSummary = computed(() => {
+  const parts: string[] = [];
+  const region = regionOptions.find((o) => o.value === filters.region);
+  parts.push(filters.region === 'all' ? '全部地区' : region?.label || '全部地区');
+  const media = mediaOptions.find((o) => o.value === filters.media);
+  if (filters.media !== 'all') parts.push(media?.label || '');
+  if (filters.genre) parts.push(filters.genre);
+  if (filters.year) parts.push(`${filters.year} 年`);
+  const sort = sortOptions.find((o) => o.value === filters.sort);
+  parts.push(sort?.label || '热度');
+  return parts.filter(Boolean).join(' · ');
+});
 let badgeController: AbortController | undefined,
   generation = 0;
 async function load(more = false) {
@@ -152,61 +227,27 @@ const live = useLibraryUpdates(async () => {
         placeholder="搜索电影、剧集名称…"
       /><button class="button primary">搜索</button>
     </div>
-    <button
-      class="button"
-      type="button"
-      :aria-expanded="showFilters"
-      @click="showFilters = !showFilters"
-    >
-      <SlidersHorizontal :size="16" />筛选
-    </button>
   </form>
-  <div class="browse-tabs">
-    <button
-      v-for="(label, key) in { all: '综合搜索', movie: '电影', tv: '剧集' }"
-      :key="key"
-      :class="{ active: filters.media === key }"
-      @click="filters.media = key"
-    >
-      {{ label }}</button
-    ><span class="push-right muted-text">第 {{ page }} / {{ totalPages }} 页</span>
-  </div>
-  <div v-if="showFilters" class="filter-panel">
-    <label
-      >地区<select v-model="filters.region">
-        <option value="all">全部地区</option>
-        <option value="cn">中国大陆</option>
-        <option value="hk">中国香港</option>
-        <option value="tw">中国台湾</option>
-        <option value="jp">日本</option>
-        <option value="kr">韩国</option>
-        <option value="us">欧美</option>
-      </select></label
-    ><label
-      >排序<select v-model="filters.sort">
-        <option value="popularity">热度优先</option>
-        <option value="release">最新上映</option>
-        <option value="rating">评分优先</option>
-      </select></label
-    ><label
-      >年份<input
-        v-model.lazy="filters.year"
-        type="number"
-        min="1900"
-        :max="new Date().getFullYear() + 5"
-        placeholder="全部年份" /></label
-    ><label
-      >题材<select v-model="filters.genre">
-        <option value="">全部题材</option>
-        <option
-          v-for="genre in records(catalog.data.value?.genres)"
-          :key="String(genre.name)"
-          :value="genre.name"
-        >
-          {{ genre.name }}
-        </option>
-      </select></label
-    >
+  <div class="chip-panel">
+    <div class="chip-panel-head">
+      <strong>{{ filterSummary }}</strong>
+      <span class="push-right muted-text">第 {{ page }} / {{ totalPages }} 页</span>
+      <button
+        class="text-link"
+        type="button"
+        :aria-expanded="showFilters"
+        @click="showFilters = !showFilters"
+      >
+        <SlidersHorizontal :size="14" />{{ showFilters ? '收起筛选' : '展开筛选' }}
+      </button>
+    </div>
+    <template v-if="showFilters">
+      <FilterChips v-model="filters.region" label="地区" :options="regionOptions" />
+      <FilterChips v-model="filters.media" label="类型" :options="mediaOptions" />
+      <FilterChips v-model="filters.genre" label="题材" :options="genreOptions" />
+      <FilterChips v-model="filters.year" label="年份" :options="yearOptions" scroll />
+      <FilterChips v-model="filters.sort" label="排序" :options="sortOptions" />
+    </template>
   </div>
   <p v-if="filters.media === 'all' && !filters.q" class="notice-bar">
     输入片名可同时搜索电影与剧集；当前浏览展示热门电影。

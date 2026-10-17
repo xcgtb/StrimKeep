@@ -26,6 +26,50 @@ watch([group, search], () => {
 });
 const scan = computed(() => object(summary.data.value?.scan)),
   result = computed(() => object(scan.value.result));
+// 扫描事实面板：字段与后端 /api/governance/summary 的返回值一一对应，
+// 1.2.12 里这些信息是常驻展示的，Vue 版此前只取了其中 4 个计数。
+const consistency = computed(() => object(summary.data.value?.consistency));
+const strmCounts = computed(() => object(result.value.strm_counts));
+const clock = (value: unknown) => (Number(value) > 0 ? date(Number(value)) : '暂无');
+const truthRows = computed(() => {
+  const scanState = scan.value.usable
+    ? '可执行'
+    : scan.value.found
+      ? scan.value.plan_state === 'done'
+        ? '已执行'
+        : '需重新扫描'
+      : '尚无扫描';
+  const protectedCount = records(result.value.protected_items).length;
+  return [
+    { key: '扫描状态', value: scanState, tone: scan.value.usable ? 'ok' : 'warn' },
+    {
+      key: '身份冲突',
+      value: `${Number(result.value.identity_conflict_count || 0)} 个 TMDB 标识冲突（不自动删除）`,
+    },
+    {
+      key: '待处理',
+      value: `${Number(result.value.total_clean_cnt || 0)} 项 / ${Number(result.value.del_local_files || 0) + Number(result.value.del_share_files || 0)} 文件`,
+    },
+    { key: '保护 / 豁免', value: `${protectedCount} / ${Number(result.value.exempted_count || 0)}` },
+    { key: '静默跳过', value: `${Number(result.value.quiet_skipped || 0)} 项` },
+    {
+      key: 'STRM',
+      value: `本地 ${Number(strmCounts.value.local || 0)} · 分享 ${Number(strmCounts.value.share || 0)} · 合计 ${Number(strmCounts.value.total || 0)}`,
+    },
+    { key: '片库快照', value: clock(object(consistency.value.library).ts) },
+    { key: '24H 入库快照', value: clock(object(consistency.value.ingest).ts) },
+    {
+      key: '规则指纹',
+      value: String(consistency.value.rule_sig || '').slice(0, 16) || '—',
+    },
+    {
+      key: '扫描规则',
+      value: scan.value.rule_aligned === false ? '已变化，请重新扫描' : '与当前规则一致',
+      tone: scan.value.rule_aligned === false ? 'warn' : 'ok',
+    },
+  ];
+});
+const identityConflicts = computed(() => records(result.value.identity_conflicts));
 const items = computed(() =>
   records(result.value[group.value]).filter((r) => JSON.stringify(r).includes(search.value)),
 );
@@ -97,7 +141,7 @@ onMounted(load);
       刷新并核实
     </button>
   </div>
-  <div class="stats-grid">
+  <div class="stats-grid stats-grid-4">
     <article
       v-for="(label, key) in {
         del_local_cnt: '本地待治理',
@@ -112,6 +156,34 @@ onMounted(load);
       ><strong>{{ result[key] ?? '—' }}</strong>
     </article>
   </div>
+  <section class="panel truth-panel">
+    <header class="section-heading">
+      <h2>扫描结果与状态</h2>
+      <span class="muted-text" role="status">{{
+        scan.ts ? `扫描于 ${date(Number(scan.ts))}` : '尚无扫描结果'
+      }}</span>
+    </header>
+    <div class="truth-grid">
+      <div v-for="row in truthRows" :key="row.key" class="truth-row">
+        <span class="truth-key">{{ row.key }}</span>
+        <span class="truth-value" :class="row.tone">{{ row.value }}</span>
+      </div>
+    </div>
+    <div v-if="identityConflicts.length" class="truth-conflicts">
+      <h3>TMDB 标识冲突 · {{ identityConflicts.length }} 组 · 仅提示，不进入自动清理</h3>
+      <ul>
+        <li v-for="(conflict, index) in identityConflicts" :key="index">
+          {{ conflict.kind === 'movie' ? '电影' : '剧集' }}
+          <template v-for="(identity, i) in records(conflict.identities)" :key="i">
+            <span class="lib-tag" :class="identity.lib === 'local' ? 'local' : 'share'">{{
+              identity.lib === 'local' ? '本地' : '分享'
+            }}</span>
+            《{{ identity.title || '—' }}》{{ identity.year ? `(${identity.year})` : '' }}
+          </template>
+        </li>
+      </ul>
+    </div>
+  </section>
   <section class="panel">
     <header class="section-heading">
       <h2>当前诊断明细</h2>

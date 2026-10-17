@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue';
-import { readData, writeData, object, uuid, type Data } from '../api/domain';
+import { readData, writeData, object, records, uuid, type Data } from '../api/domain';
 import { useRequest } from '../composables/useRequest';
 import { useOperation } from '../composables/useOperation';
 import { useVisiblePoll } from '../composables/useVisiblePoll';
@@ -34,6 +34,7 @@ const enabled = computed(
   () => ['local', 'share'].includes(props.target) && (props.all || props.ids.length > 0),
 );
 const phrase = computed(() => (props.target === 'local' ? '删除本地库及源文件' : '删除分享库'));
+const previewSeries = computed(() => records(preview.value?.series).slice(0, 8));
 function invalidate() {
   generation++;
   previewRequest.cancel();
@@ -172,7 +173,22 @@ useVisiblePoll(poll, 2000);
         preview = undefined;
       "
       @confirm="execute"
-      ><EvidenceDetails :value="preview"
-    /></ConfirmAction>
+      ><div class="batch-summary">
+        <p>
+          共 <b>{{ preview.count ?? '—' }}</b> 部 / <b>{{ preview.strm_count ?? '—' }}</b> 个 STRM，分
+          <b>{{ preview.batch_count || 1 }}</b> 批执行（每批上限 {{ preview.batch_size || '—' }} 部）。
+        </p>
+        <p class="muted-text">执行中会再次核验，已变化的文件自动跳过。</p>
+        <ul v-if="previewSeries.length" class="batch-titles">
+          <li v-for="row in previewSeries" :key="String(row.name)">
+            {{ row.name }}<span>{{ row.count }} 个 STRM</span>
+          </li>
+        </ul>
+        <p v-if="preview.notice" class="batch-notice">⚠️ {{ preview.notice }}</p>
+      </div>
+      <details>
+        <summary>核验明细与证据</summary>
+        <EvidenceDetails :value="preview" />
+      </details></ConfirmAction>
   </div>
 </template>

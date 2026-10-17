@@ -12,6 +12,7 @@ import LoadState from '../components/LoadState.vue';
 import ModalDialog from '../components/ModalDialog.vue';
 import SingleDelete from '../components/SingleDelete.vue';
 import MappingDelete from '../components/MappingDelete.vue';
+import FilterChips from '../components/FilterChips.vue';
 import ResourceSearch from '../components/ResourceSearch.vue';
 import { request as sendRequest } from '../api/client';
 import { writeData } from '../api/domain';
@@ -88,6 +89,38 @@ const selectionMode = ref(false),
   detailOpen = ref(false),
   compareOpen = ref(false);
 const selectedCards = computed(() => cards.value.filter((c) => selectedIds.value.has(c.id!)));
+// 状态芯片带上后端 stats 里的真实计数，避免用户必须逐个点开才知道有多少条。
+const libraryStats = computed<Record<string, number>>(() => request.data.value?.stats || {});
+function counted(value: string, label: string, fallback?: number) {
+  const raw = libraryStats.value[value];
+  const count = typeof raw === 'number' ? raw : fallback;
+  return count === undefined ? { value, label } : { value, label, count };
+}
+const statusOptions = computed(() => {
+  if (filters.media === 'movies')
+    return [
+      counted('all', '全部', total.value),
+      counted('aligned', '已入库'),
+      counted('unmatched', '未匹配'),
+      counted('no_tmdb', '未匹配 TMDB'),
+      counted('pending', '待对照'),
+    ];
+  return [
+    counted('all', '全部', total.value),
+    counted('aligned', '完整'),
+    counted('missing', '缺集'),
+    counted('extra', '超集'),
+    counted('ongoing', '在更'),
+    counted('unmatched', '未匹配'),
+    counted('no_tmdb', '未匹配 TMDB'),
+    counted('pending', '待对照'),
+  ];
+});
+const scopeOptions = [
+  { value: 'all', label: '本地+分享' },
+  { value: 'local', label: '仅本地' },
+  { value: 'share', label: '仅分享' },
+];
 const seasons = computed(() => {
   const item = detail.data.value?.item;
   const expected = new Map((item?.tmdb_info?.seasons || []).map((s) => [s.season, s.tmdb]));
@@ -270,6 +303,10 @@ const live = useLibraryUpdates(refreshLoaded);
       电影片库</button
     ><span class="push-right muted-text">{{ total }} 部作品</span>
   </div>
+  <div class="chip-panel">
+    <FilterChips v-model="filters.status" label="状态" :options="statusOptions" />
+    <FilterChips v-model="filters.scope" label="范围" :options="scopeOptions" />
+  </div>
   <div class="filter-panel library-filters">
     <form class="search-field" @submit.prevent="submitSearch()">
       <Search :size="17" /><input
@@ -278,20 +315,7 @@ const live = useLibraryUpdates(refreshLoaded);
         placeholder="搜索片库"
       /><button class="button">搜索</button>
     </form>
-    <select v-model="filters.scope" aria-label="片库范围">
-      <option value="all">全部片库</option>
-      <option value="local">本地库</option>
-      <option value="share">分享库</option></select
-    ><select v-if="filters.media === 'series'" v-model="filters.status" aria-label="剧集状态">
-      <option value="all">全部状态</option>
-      <option value="missing">存在缺集</option>
-      <option value="aligned">已对齐</option>
-      <option value="ongoing">连载中</option>
-      <option value="unmatched">待对照</option>
-      <option value="no_tmdb">未匹配 TMDB</option>
-      <option value="pending">等待对照结果</option>
-      <option value="extra">存在多集</option></select
-    ><input
+    <input
       v-model.lazy="filters.category"
       aria-label="片库分类"
       placeholder="分类目录（可留空）"
