@@ -42,7 +42,9 @@ const items = computed(() => {
   const pool: (Data & { _type: GroupType })[] =
     group.value === 'all'
       ? GROUPS.flatMap((g) =>
-          records(result.value[g.key]).map((r) => ({ ...r, _type: g.type } as Data & { _type: GroupType })),
+          records(result.value[g.key]).map(
+            (r) => ({ ...r, _type: g.type }) as Data & { _type: GroupType },
+          ),
         )
       : records(result.value[group.value]).map(
           (r) =>
@@ -122,9 +124,7 @@ function openPlanAction(a: Data) {
   );
 }
 function planActions(kind?: string) {
-  return records(object(detail.data.value?.plan).actions).filter(
-    (a) => !kind || a.kind === kind,
-  );
+  return records(object(detail.data.value?.plan).actions).filter((a) => !kind || a.kind === kind);
 }
 function planStateOf(p: Data) {
   let st = String(p.state || 'pending');
@@ -191,7 +191,11 @@ onMounted(load);
   >
     <div class="action-row">
       <RouterLink to="/governance/rules" class="btn gray">七维与治理规则</RouterLink>
-      <button class="btn" :disabled="op.busy.value || op.uncertain.value" @click="confirmation = 'scan'">
+      <button
+        class="btn"
+        :disabled="op.busy.value || op.uncertain.value"
+        @click="confirmation = 'scan'"
+      >
         立即扫描双库
       </button>
       <button
@@ -215,7 +219,11 @@ onMounted(load);
     <div class="row-between">
       <h3>扫描与执行</h3>
       <div class="action-row">
-        <button class="btn" :disabled="op.busy.value || op.uncertain.value" @click="confirmation = 'scan'">
+        <button
+          class="btn"
+          :disabled="op.busy.value || op.uncertain.value"
+          @click="confirmation = 'scan'"
+        >
           重新扫描
         </button>
         <button
@@ -284,7 +292,12 @@ onMounted(load);
         {{ g.label }} {{ records(result[g.key]).length }}
       </button>
     </div>
-    <input v-model="search" class="gov-search" aria-label="搜索治理项目" placeholder="搜索作品或原因" />
+    <input
+      v-model="search"
+      class="gov-search"
+      aria-label="搜索治理项目"
+      placeholder="搜索作品或原因"
+    />
     <div>
       <div
         v-for="(item, i) in items.slice(0, visible)"
@@ -308,12 +321,27 @@ onMounted(load);
   </section>
 
   <details class="panel governance-evidence">
-    <summary><b>扫描依据与状态</b><span>规则对齐 {{ scan.rule_aligned ? '是' : '否' }}</span></summary>
+    <summary>
+      <b>扫描依据与状态</b><span>规则对齐 {{ scan.rule_aligned ? '是' : '否' }}</span>
+    </summary>
     <div class="gov-truth">
-      <div class="meta-row"><span class="k">扫描时间</span><span class="v">{{ date(Number(scan.ts)) }}</span></div>
-      <div class="meta-row"><span class="k">计划状态</span><span class="v">{{ text(scan.plan_state) }}</span></div>
-      <div class="meta-row"><span class="k">本地 / 分享 STRM</span><span class="v">{{ object(result.strm_counts).local ?? '—' }} / {{ object(result.strm_counts).share ?? '—' }}</span></div>
-      <div class="meta-row"><span class="k">身份冲突</span><span class="v">{{ result.identity_conflict_count ?? 0 }}</span></div>
+      <div class="meta-row">
+        <span class="k">扫描时间</span><span class="v">{{ date(Number(scan.ts)) }}</span>
+      </div>
+      <div class="meta-row">
+        <span class="k">计划状态</span><span class="v">{{ text(scan.plan_state) }}</span>
+      </div>
+      <div class="meta-row">
+        <span class="k">本地 / 分享 STRM</span
+        ><span class="v"
+          >{{ object(result.strm_counts).local ?? '—' }} /
+          {{ object(result.strm_counts).share ?? '—' }}</span
+        >
+      </div>
+      <div class="meta-row">
+        <span class="k">身份冲突</span
+        ><span class="v">{{ result.identity_conflict_count ?? 0 }}</span>
+      </div>
     </div>
     <EvidenceDetails :value="summary.data.value" />
   </details>
@@ -326,18 +354,29 @@ onMounted(load);
       <button class="btn gray sm" @click="load">刷新</button>
     </div>
     <p class="section-note">
-      治理计划与清理结果集中保存在这里。待执行计划 2 小时内有效；清理结果和已执行计划长期保留，可回看具体明细。
+      治理计划与清理结果集中保存在这里。待执行计划 2
+      小时内有效；清理结果和已执行计划长期保留，可回看具体明细。
     </p>
     <div v-for="p in records(plans.data.value?.plans)" :key="String(p.id)" class="plan-card">
       <div class="plan-head">
-        <span class="plan-time">{{ date(Number(p.ts)) }} <span class="dim">{{ ago(p.ts) }}</span></span>
+        <span class="plan-time"
+          >{{ date(Number(p.ts)) }} <span class="dim">{{ ago(p.ts) }}</span></span
+        >
         <span class="pchip" :class="planStateCls(p)">{{ planStateLabel(p) }}</span>
       </div>
       <div class="pchips">
-        <span class="pchip" :class="Number(object(p.stats).loc) > 0 ? 'amber' : 'gray'">待删本地 {{ object(p.stats).loc ?? 0 }}</span>
-        <span class="pchip" :class="Number(object(p.stats).shr) > 0 ? 'red' : 'gray'">淘汰分享 {{ object(p.stats).shr ?? 0 }}</span>
-        <span class="pchip" :class="Number(object(p.stats).keep) > 0 ? 'green' : 'gray'">受保护 {{ object(p.stats).keep ?? 0 }}</span>
-        <span class="pchip" :class="Number(object(p.stats).exempt) > 0 ? 'blue' : 'gray'">白名单豁免 {{ object(p.stats).exempt ?? 0 }}</span>
+        <span class="pchip" :class="Number(object(p.stats).loc) > 0 ? 'amber' : 'gray'"
+          >待删本地 {{ object(p.stats).loc ?? 0 }}</span
+        >
+        <span class="pchip" :class="Number(object(p.stats).shr) > 0 ? 'red' : 'gray'"
+          >淘汰分享 {{ object(p.stats).shr ?? 0 }}</span
+        >
+        <span class="pchip" :class="Number(object(p.stats).keep) > 0 ? 'green' : 'gray'"
+          >受保护 {{ object(p.stats).keep ?? 0 }}</span
+        >
+        <span class="pchip" :class="Number(object(p.stats).exempt) > 0 ? 'blue' : 'gray'"
+          >白名单豁免 {{ object(p.stats).exempt ?? 0 }}</span
+        >
       </div>
       <div class="plan-foot">
         <span class="dim">plan_{{ p.id }}</span>
@@ -353,14 +392,24 @@ onMounted(load);
 
   <ModalDialog
     v-if="detailOpen"
-    :title="selectedType === 'keep' ? '受保护项详情' : selectedType === 'exempt' ? '规则豁免详情' : '治理依据详情'"
+    :title="
+      selectedType === 'keep'
+        ? '受保护项详情'
+        : selectedType === 'exempt'
+          ? '规则豁免详情'
+          : '治理依据详情'
+    "
     @close="detailOpen = false"
   >
-    <div class="meta-row"><span class="k">标题</span><span class="v">{{ text(selected?.text) }}</span></div>
+    <div class="meta-row">
+      <span class="k">标题</span><span class="v">{{ text(selected?.text) }}</span>
+    </div>
     <div v-if="selected?.reason_label" class="meta-row">
       <span class="k">原因</span><span class="v">{{ text(selected?.reason_label) }}</span>
     </div>
-    <div v-if="meta.title" class="meta-row"><span class="k">剧名</span><span class="v">{{ text(meta.title) }}</span></div>
+    <div v-if="meta.title" class="meta-row">
+      <span class="k">剧名</span><span class="v">{{ text(meta.title) }}</span>
+    </div>
     <div v-if="meta.season != null" class="meta-row">
       <span class="k">季</span><span class="v">S{{ String(meta.season).padStart(2, '0') }}</span>
     </div>
@@ -372,38 +421,65 @@ onMounted(load);
     </div>
     <div v-if="Object.keys(compare).length" class="meta-row stacked">
       <div class="k">
-        画质对比依据<span v-if="compare.episode != null">（代表集 E{{ String(compare.episode).padStart(2, '0') }}）</span>
+        画质对比依据<span v-if="compare.episode != null"
+          >（代表集 E{{ String(compare.episode).padStart(2, '0') }}）</span
+        >
       </div>
       <div class="v compare">
         <div>分享：{{ text(compare.share_name) }}</div>
         <div>本地：{{ text(compare.local_name) }}</div>
       </div>
     </div>
-    <div v-if="libs.length" class="meta-row"><span class="k">所在库</span><span class="v">{{ libs.join(' / ') }}</span></div>
-    <div v-if="meta.match_basis" class="meta-row"><span class="k">匹配来源</span><span class="v">{{ text(meta.match_basis) }}</span></div>
+    <div v-if="libs.length" class="meta-row">
+      <span class="k">所在库</span><span class="v">{{ libs.join(' / ') }}</span>
+    </div>
+    <div v-if="meta.match_basis" class="meta-row">
+      <span class="k">匹配来源</span><span class="v">{{ text(meta.match_basis) }}</span>
+    </div>
     <div v-if="meta.match_basis_detail" class="meta-row">
       <span class="k">匹配依据</span><span class="v">{{ text(meta.match_basis_detail) }}</span>
     </div>
     <details v-if="localPaths.length" class="path-block">
       <summary class="path-hd">
-        <span class="k">本地{{ meta.season != null ? ' · 第 ' + String(meta.season) + ' 季' : '' }} · {{ meta.local_count ?? localPaths.length }} 个文件</span>
-        <span v-if="localTag" class="path-tag" :class="localTag === '将删除' ? 'del' : 'keep'">{{ localTag }}</span>
+        <span class="k"
+          >本地{{ meta.season != null ? ' · 第 ' + String(meta.season) + ' 季' : '' }} ·
+          {{ meta.local_count ?? localPaths.length }} 个文件</span
+        >
+        <span v-if="localTag" class="path-tag" :class="localTag === '将删除' ? 'del' : 'keep'">{{
+          localTag
+        }}</span>
       </summary>
-      <div class="path-list"><div v-for="(p, j) in localPaths" :key="j">{{ p }}</div></div>
+      <div class="path-list">
+        <div v-for="(p, j) in localPaths" :key="j">{{ p }}</div>
+      </div>
     </details>
     <details v-if="sharePaths.length" class="path-block">
       <summary class="path-hd">
-        <span class="k">分享{{ meta.season != null ? ' · 第 ' + String(meta.season) + ' 季' : '' }} · {{ meta.share_count ?? sharePaths.length }} 个文件</span>
-        <span v-if="shareTag" class="path-tag" :class="shareTag === '将删除' ? 'del' : 'keep'">{{ shareTag }}</span>
+        <span class="k"
+          >分享{{ meta.season != null ? ' · 第 ' + String(meta.season) + ' 季' : '' }} ·
+          {{ meta.share_count ?? sharePaths.length }} 个文件</span
+        >
+        <span v-if="shareTag" class="path-tag" :class="shareTag === '将删除' ? 'del' : 'keep'">{{
+          shareTag
+        }}</span>
       </summary>
-      <div class="path-list"><div v-for="(p, j) in sharePaths" :key="j">{{ p }}</div></div>
+      <div class="path-list">
+        <div v-for="(p, j) in sharePaths" :key="j">{{ p }}</div>
+      </div>
     </details>
     <div v-if="tmdb.length" class="meta-row">
       <span class="k">TMDB</span>
-      <span class="v">{{ tmdb.join(' / ') }}<b v-if="!meta.tmdb_consistent" style="color: var(--warn)"> ⚠ 标识不一致</b></span>
+      <span class="v"
+        >{{ tmdb.join(' / ')
+        }}<b v-if="!meta.tmdb_consistent" style="color: var(--warn)"> ⚠ 标识不一致</b></span
+      >
     </div>
-    <div v-if="localTmdb.length" class="meta-row"><span class="k">本地 TMDB</span><span class="v">{{ localTmdb.join(' / ') }}</span></div>
-    <div v-if="shareTmdb.length" class="meta-row"><span class="k">分享 TMDB</span><span class="v">{{ shareTmdb.join(' / ') }}</span></div>
+    <div v-if="localTmdb.length" class="meta-row">
+      <span class="k">本地 TMDB</span><span class="v">{{ localTmdb.join(' / ') }}</span>
+    </div>
+    <div v-if="shareTmdb.length" class="meta-row">
+      <span class="k">分享 TMDB</span><span class="v">{{ shareTmdb.join(' / ') }}</span>
+    </div>
     <div v-if="meta.identity_source" class="meta-row">
       <span class="k">身份来源</span><span class="v">{{ text(meta.identity_source) }}</span>
     </div>
@@ -412,9 +488,13 @@ onMounted(load);
     </div>
     <div v-if="members.length" class="meta-row stacked">
       <div class="k">包含 {{ meta.member_count ?? members.length }} 项</div>
-      <div class="ing-tags"><span v-for="(m, j) in members" :key="j">{{ m }}</span></div>
+      <div class="ing-tags">
+        <span v-for="(m, j) in members" :key="j">{{ m }}</span>
+      </div>
     </div>
-    <div class="meta-row"><span class="k">涉及文件数</span><span class="v">{{ selected?.files_count ?? 0 }}</span></div>
+    <div class="meta-row">
+      <span class="k">涉及文件数</span><span class="v">{{ selected?.files_count ?? 0 }}</span>
+    </div>
   </ModalDialog>
 
   <ModalDialog
@@ -430,13 +510,21 @@ onMounted(load);
       <div class="list-empty">加载中…</div>
     </template>
     <template v-else-if="planDetail.id">
-      <div class="meta-row"><span class="k">状态</span><span class="v">{{ planStateLabel(planDetail) }}</span></div>
-      <div class="meta-row"><span class="k">生成时间</span><span class="v">{{ date(Number(planDetail.ts)) }}（{{ ago(planDetail.ts) }}）</span></div>
+      <div class="meta-row">
+        <span class="k">状态</span><span class="v">{{ planStateLabel(planDetail) }}</span>
+      </div>
+      <div class="meta-row">
+        <span class="k">生成时间</span
+        ><span class="v">{{ date(Number(planDetail.ts)) }}（{{ ago(planDetail.ts) }}）</span>
+      </div>
       <div v-if="planDetail.executed_at" class="meta-row">
-        <span class="k">执行时间</span><span class="v">{{ date(Number(planDetail.executed_at)) }}</span>
+        <span class="k">执行时间</span
+        ><span class="v">{{ date(Number(planDetail.executed_at)) }}</span>
       </div>
       <div class="pchips" style="margin: 10px 0">
-        <span v-for="c in planStatList" :key="c.label" class="pchip" :class="c.cls">{{ c.label }} {{ c.n ?? 0 }}</span>
+        <span v-for="c in planStatList" :key="c.label" class="pchip" :class="c.cls"
+          >{{ c.label }} {{ c.n ?? 0 }}</span
+        >
       </div>
       <div class="plan-actions">
         <template v-for="g in GROUPS" :key="g.key">
@@ -448,7 +536,10 @@ onMounted(load);
               class="plan-row"
               @click="openPlanAction(a)"
             >
-              <div class="t">{{ a.title || a.action_id }}<span v-if="a.season != null" class="dim"> · 第 {{ a.season }} 季</span></div>
+              <div class="t">
+                {{ a.title || a.action_id
+                }}<span v-if="a.season != null" class="dim"> · 第 {{ a.season }} 季</span>
+              </div>
               <div class="d">{{ a.reason_label || a.reason }}</div>
             </div>
           </template>
@@ -482,9 +573,21 @@ onMounted(load);
     @confirm="execute"
   >
     <div v-if="confirmation !== 'scan'">
-      <div class="meta-row"><span class="k">计划编号</span><span class="v">{{ text(scan.plan_id) }}</span></div>
-      <div class="meta-row"><span class="k">本地待治理</span><span class="v">{{ result.del_local_cnt ?? 0 }} 项 / {{ result.del_local_files ?? 0 }} 文件</span></div>
-      <div class="meta-row"><span class="k">分享待治理</span><span class="v">{{ result.del_share_cnt ?? 0 }} 项 / {{ result.del_share_files ?? 0 }} 文件</span></div>
+      <div class="meta-row">
+        <span class="k">计划编号</span><span class="v">{{ text(scan.plan_id) }}</span>
+      </div>
+      <div class="meta-row">
+        <span class="k">本地待治理</span
+        ><span class="v"
+          >{{ result.del_local_cnt ?? 0 }} 项 / {{ result.del_local_files ?? 0 }} 文件</span
+        >
+      </div>
+      <div class="meta-row">
+        <span class="k">分享待治理</span
+        ><span class="v"
+          >{{ result.del_share_cnt ?? 0 }} 项 / {{ result.del_share_files ?? 0 }} 文件</span
+        >
+      </div>
     </div>
   </ConfirmAction>
 </template>

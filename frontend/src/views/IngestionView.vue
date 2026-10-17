@@ -19,7 +19,9 @@ const hook = computed(() => object((settings.data.value as Record<string, unknow
 const hasToken = computed(() => !!cfg.value.webhook_token);
 const webhookUrl = computed(() =>
   cfg.value.webhook_token
-    ? window.location.origin + '/api/emby/webhook?token=' + encodeURIComponent(text(cfg.value.webhook_token))
+    ? window.location.origin +
+      '/api/emby/webhook?token=' +
+      encodeURIComponent(text(cfg.value.webhook_token))
     : '',
 );
 const webhookStatus = computed(() => {
@@ -38,7 +40,11 @@ const cacheStatus = computed(() => {
   const age = Number(object(st).age_sec || 0);
   const stats = object(object(st).stats);
   const ageStr =
-    age < 60 ? age + ' 秒前' : age < 3600 ? Math.floor(age / 60) + ' 分钟前' : Math.floor(age / 3600) + ' 小时前';
+    age < 60
+      ? age + ' 秒前'
+      : age < 3600
+        ? Math.floor(age / 60) + ' 分钟前'
+        : Math.floor(age / 3600) + ' 小时前';
   return (
     '📦 缓存于 ' +
     ageStr +
@@ -145,8 +151,9 @@ onMounted(load);
         </button>
       </div>
       <p class="hint">
-        在 Emby Webhooks 中填写地址并选择媒体新增、删除事件；这里根据当前网页访问域名显示地址，不会自动修改
-        Emby 已填写的局域网地址。重置令牌会让旧回调地址立即失效，必须同步更新 Emby。
+        在 Emby Webhooks
+        中填写地址并选择媒体新增、删除事件；这里根据当前网页访问域名显示地址，不会自动修改 Emby
+        已填写的局域网地址。重置令牌会让旧回调地址立即失效，必须同步更新 Emby。
       </p>
       <p class="hint" role="status">{{ webhookStatus }}</p>
     </div>

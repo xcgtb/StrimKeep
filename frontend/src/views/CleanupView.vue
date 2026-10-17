@@ -93,7 +93,11 @@ async function scanEmpty() {
       method: 'POST',
       signal,
       timeoutMs: 120000,
-      body: { path: scope.value === 'all' ? '' : path.value, scope: scope.value, limit: limit.value },
+      body: {
+        path: scope.value === 'all' ? '' : path.value,
+        scope: scope.value,
+        limit: limit.value,
+      },
     }),
   );
 }
@@ -182,7 +186,8 @@ function emptyDirFileSummary(x: Data) {
     <p class="section-note">
       只扫描选中目录及其子目录，找出为空或只含 NFO、图片、字幕等已知附属文件的媒体目录（{tmdb-xxx}
       命名）。含 STRM、视频、未知文件或软链接的目录会保留；读取失败时扫描会报错。执行清理会一起删除
-      NAS 和对应 115 的残留，不产生备份，并通知 Emby 刷新；115 有视频或清理失败时，跳过该项并显示原因。
+      NAS 和对应 115 的残留，不产生备份，并通知 Emby 刷新；115
+      有视频或清理失败时，跳过该项并显示原因。
     </p>
     <div class="action-row" style="margin-bottom: 10px">
       <button class="btn gray" :disabled="op.busy.value || scan.loading.value" @click="openPicker">
@@ -213,10 +218,18 @@ function emptyDirFileSummary(x: Data) {
     </div>
 
     <div v-if="scan.data.value" class="ing-sum">
-      <span class="ing-chip">扫描文件夹 <b>{{ scan.data.value.folders ?? 0 }}</b></span>
-      <span class="ing-chip">命中总数 <b>{{ hits }}</b></span>
-      <span class="ing-chip">残留目录命中 <b>{{ scan.data.value.empty_dirs ?? 0 }}</b></span>
-      <span class="ing-chip">预览上限 <b>{{ scan.data.value.preview_limit ?? 100 }}</b></span>
+      <span class="ing-chip"
+        >扫描文件夹 <b>{{ scan.data.value.folders ?? 0 }}</b></span
+      >
+      <span class="ing-chip"
+        >命中总数 <b>{{ hits }}</b></span
+      >
+      <span class="ing-chip"
+        >残留目录命中 <b>{{ scan.data.value.empty_dirs ?? 0 }}</b></span
+      >
+      <span class="ing-chip"
+        >预览上限 <b>{{ scan.data.value.preview_limit ?? 100 }}</b></span
+      >
     </div>
     <div v-if="scopes.length" class="ing-sum">
       <span v-for="s in scopes" :key="String(s.lib)" class="ing-chip">
@@ -228,15 +241,21 @@ function emptyDirFileSummary(x: Data) {
       <div v-for="(x, i) in preview" :key="i" class="ing-grp">
         <div class="ing-body">
           <div class="ing-head">
-            <b>{{ i + 1 }}</b> · <span class="ing-src">{{ x.lib === 'share' ? '分享库' : '本地库' }}</span>
+            <b>{{ i + 1 }}</b> ·
+            <span class="ing-src">{{ x.lib === 'share' ? '分享库' : '本地库' }}</span>
             <span class="rel">{{ x.rel }}</span>
           </div>
-          <div class="dim">类型：{{ x.type }} · NAS：{{ x.abs_path }}<span v-if="x.local_present === false">（已不存在）</span></div>
+          <div class="dim">
+            类型：{{ x.type }} · NAS：{{ x.abs_path
+            }}<span v-if="x.local_present === false">（已不存在）</span>
+          </div>
           <div v-if="x.cloud_path" class="dim">
             115：{{ x.cloud_path }}<span v-if="x.cloud_present === false">（无对应目录）</span>
           </div>
           <div v-if="x.cloud_reason" class="warn">115 保留原因：{{ x.cloud_reason }}</div>
-          <div v-if="x.nas_file_count != null" class="dim">NAS 附属文件 {{ x.nas_file_count }} 个</div>
+          <div v-if="x.nas_file_count != null" class="dim">
+            NAS 附属文件 {{ x.nas_file_count }} 个
+          </div>
           <div class="dim">内容：{{ emptyDirFileSummary(x) }}</div>
           <div class="dim">规则：{{ x.rule }}</div>
           <button
@@ -282,10 +301,16 @@ function emptyDirFileSummary(x: Data) {
     <template v-if="object(browse.data.value).path">
       <div class="crumbs">
         <span class="dim">当前位置：</span>
-        <button class="btn sm gray" @click="loadBrowse(String(records(browse.data.value?.breadcrumbs)[0]?.path || ''))">
+        <button
+          class="btn sm gray"
+          @click="loadBrowse(String(records(browse.data.value?.breadcrumbs)[0]?.path || ''))"
+        >
           库根目录
         </button>
-        <template v-for="(c, i) in records(browse.data.value?.breadcrumbs).slice(1)" :key="String(c.path)">
+        <template
+          v-for="(c, i) in records(browse.data.value?.breadcrumbs).slice(1)"
+          :key="String(c.path)"
+        >
           <span aria-hidden="true">›</span>
           <button
             v-if="i < records(browse.data.value?.breadcrumbs).length - 2"
@@ -297,7 +322,9 @@ function emptyDirFileSummary(x: Data) {
           <span v-else class="dim">{{ c.name }}</span>
         </template>
       </div>
-      <div class="dim" style="overflow-wrap: anywhere">目录路径：{{ object(browse.data.value).path }}</div>
+      <div class="dim" style="overflow-wrap: anywhere">
+        目录路径：{{ object(browse.data.value).path }}
+      </div>
       <div class="dir-picker-row">
         <input
           v-model="browseSearch"
@@ -313,19 +340,29 @@ function emptyDirFileSummary(x: Data) {
           class="dir-picker-item"
           @click="loadBrowse(String(item.path))"
         >
-          <span>📁 {{ item.name }}</span><span aria-hidden="true">›</span>
+          <span>📁 {{ item.name }}</span
+          ><span aria-hidden="true">›</span>
         </button>
         <div v-if="!records(browse.data.value?.items).length" class="list-empty">
           {{ browseSearch ? '没有匹配的子目录，可清空筛选' : '没有子目录，可选择当前目录' }}
         </div>
       </div>
       <div v-if="Number(browse.data.value?.total)" class="dim" style="margin-top: 10px">
-        显示 {{ Number(browse.data.value?.offset || 0) + 1 }}–{{ Number(browse.data.value?.offset || 0) + records(browse.data.value?.items).length }} /
-        {{ browse.data.value?.total }} 个文件夹
+        显示 {{ Number(browse.data.value?.offset || 0) + 1 }}–{{
+          Number(browse.data.value?.offset || 0) + records(browse.data.value?.items).length
+        }}
+        / {{ browse.data.value?.total }} 个文件夹
       </div>
-      <div v-if="Number(browse.data.value?.offset) || browse.data.value?.has_more" class="dir-picker-row">
-        <button class="btn gray" :disabled="!Number(browse.data.value?.offset)" @click="browsePrev">上一页</button>
-        <button class="btn gray" :disabled="!browse.data.value?.has_more" @click="browseNext">下一页</button>
+      <div
+        v-if="Number(browse.data.value?.offset) || browse.data.value?.has_more"
+        class="dir-picker-row"
+      >
+        <button class="btn gray" :disabled="!Number(browse.data.value?.offset)" @click="browsePrev">
+          上一页
+        </button>
+        <button class="btn gray" :disabled="!browse.data.value?.has_more" @click="browseNext">
+          下一页
+        </button>
       </div>
     </template>
     <p class="dim" style="margin: 10px 0">确认后返回页面，再点击「预览扫描」。</p>
@@ -345,29 +382,42 @@ function emptyDirFileSummary(x: Data) {
     <p v-if="residue.error.value" class="inline-error">{{ residue.error.value }}</p>
     <template v-else-if="residueResult">
       <p>
-        {{ residueResult.status === 'partial' ? '已删除部分附属文件，以下项目未完成：' : '115 残留已清理，无备份。' }}
+        {{
+          residueResult.status === 'partial'
+            ? '已删除部分附属文件，以下项目未完成：'
+            : '115 残留已清理，无备份。'
+        }}
         共删除 {{ residueResult.files_removed ?? 0 }} 个附属文件。
       </p>
       <div v-if="residueResultErrors.length" class="err-list">
         <div v-for="(e, i) in residueResultErrors" :key="i">{{ e }}</div>
       </div>
       <p class="dim" style="margin-top: 10px">返回当前列表后，可继续执行本地残留清理。</p>
-      <div class="dir-picker-footer"><button class="btn" @click="residueOpen = false">返回本地残留列表</button></div>
+      <div class="dir-picker-footer">
+        <button class="btn" @click="residueOpen = false">返回本地残留列表</button>
+      </div>
     </template>
     <template v-else-if="residue.data.value">
       <p class="dim">NAS 对应目录：{{ residue.data.value.local_path }}</p>
       <p class="dim">115 待清理目录：{{ residue.data.value.cloud_path }}</p>
-      <p><b>{{ emptyDirFileSummary(residue.data.value) }}</b></p>
+      <p>
+        <b>{{ emptyDirFileSummary(residue.data.value) }}</b>
+      </p>
       <p class="dim">
-        确认后直接删除此 115 残留，不产生备份；失败项目会跳过并显示原因。NAS 字幕保留。预览有效期 10 分钟。
+        确认后直接删除此 115 残留，不产生备份；失败项目会跳过并显示原因。NAS 字幕保留。预览有效期 10
+        分钟。
       </p>
       <div class="path-list">
         <div v-for="(f, i) in residueFiles" :key="i">{{ f }}</div>
-        <p v-if="residue.data.value.files_truncated" class="dim">仅显示前 50 个文件；上方数量包含全部文件。</p>
+        <p v-if="residue.data.value.files_truncated" class="dim">
+          仅显示前 50 个文件；上方数量包含全部文件。
+        </p>
       </div>
       <div class="dir-picker-footer">
         <button class="btn gray" @click="residueOpen = false">关闭</button>
-        <button class="btn red" :disabled="op.busy.value" @click="cleanResidue">清理此 115 残留</button>
+        <button class="btn red" :disabled="op.busy.value" @click="cleanResidue">
+          清理此 115 残留
+        </button>
       </div>
     </template>
     <div v-else class="list-empty">正在核对云端目录与附属文件内容…</div>
@@ -380,8 +430,13 @@ function emptyDirFileSummary(x: Data) {
   >
     <p v-if="cleanResult?.completed_at" class="dim">{{ cleanResult.completed_at }}</p>
     <p>
-      NAS：{{ cleanResult?.nas_count ?? 0 }} 个目录、{{ cleanResult?.files_removed ?? 0 }} 个文件；115：{{ cleanResult?.cloud_count ?? 0 }}
-      个目录、{{ cleanResult?.cloud_files_removed ?? 0 }} 个文件
+      NAS：{{ cleanResult?.nas_count ?? 0 }} 个目录、{{
+        cleanResult?.files_removed ?? 0
+      }}
+      个文件；115：{{ cleanResult?.cloud_count ?? 0 }} 个目录、{{
+        cleanResult?.cloud_files_removed ?? 0
+      }}
+      个文件
     </p>
     <p>
       未完成 {{ cleanResult?.failed_count ?? 0 }} 项<span v-if="cleanResult?.already_absent">
@@ -393,7 +448,9 @@ function emptyDirFileSummary(x: Data) {
     </div>
     <p v-if="cleanResult?.audit_error" class="warn">{{ cleanResult.audit_error }}</p>
     <p class="dim" style="margin-top: 10px">详情已保存到计划存档。</p>
-    <div class="dir-picker-footer"><button class="btn gray" @click="cleanResultOpen = false">关闭</button></div>
+    <div class="dir-picker-footer">
+      <button class="btn gray" @click="cleanResultOpen = false">关闭</button>
+    </div>
   </ModalDialog>
 </template>
 

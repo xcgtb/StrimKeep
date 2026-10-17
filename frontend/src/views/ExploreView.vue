@@ -244,7 +244,8 @@ const live = useLibraryUpdates(async () => {
       :aria-expanded="showFilters"
       @click="showFilters = !showFilters"
     >
-      <span>{{ showFilters ? '收起筛选' : '展开筛选' }}</span><ChevronDown :size="14" />
+      <span>{{ showFilters ? '收起筛选' : '展开筛选' }}</span
+      ><ChevronDown :size="14" />
     </button>
   </div>
 
@@ -259,8 +260,8 @@ const live = useLibraryUpdates(async () => {
           :class="{ active: filters.region === opt.v }"
           @click="selectFilter('region', opt.v)"
         >
-          {{ opt.label }}</button
-        >
+          {{ opt.label }}
+        </button>
       </div>
     </div>
     <div class="filter-row">
@@ -273,8 +274,8 @@ const live = useLibraryUpdates(async () => {
           :class="{ active: filters.media === opt.v }"
           @click="selectFilter('media', opt.v)"
         >
-          {{ opt.label }}</button
-        >
+          {{ opt.label }}
+        </button>
       </div>
     </div>
     <div class="filter-row">
@@ -287,8 +288,8 @@ const live = useLibraryUpdates(async () => {
           :class="{ active: filters.genre === opt.v }"
           @click="selectFilter('genre', opt.v)"
         >
-          {{ opt.label }}</button
-        >
+          {{ opt.label }}
+        </button>
       </div>
     </div>
     <div class="filter-row">
@@ -299,8 +300,8 @@ const live = useLibraryUpdates(async () => {
           :class="{ active: filters.year === '' }"
           @click="selectFilter('year', '')"
         >
-          全部</button
-        >
+          全部
+        </button>
         <button
           v-for="year in yearOptions"
           :key="year"
@@ -308,8 +309,8 @@ const live = useLibraryUpdates(async () => {
           :class="{ active: filters.year === String(year) }"
           @click="selectFilter('year', String(year))"
         >
-          {{ year }}</button
-        >
+          {{ year }}
+        </button>
       </div>
     </div>
     <div class="filter-row">
@@ -322,8 +323,8 @@ const live = useLibraryUpdates(async () => {
           :class="{ active: filters.sort === opt.v }"
           @click="selectFilter('sort', opt.v)"
         >
-          {{ opt.label }}</button
-        >
+          {{ opt.label }}
+        </button>
       </div>
     </div>
   </div>
@@ -427,11 +428,15 @@ const live = useLibraryUpdates(async () => {
   align-items: center;
   color: var(--text-dim);
   box-shadow: var(--shadow-sm);
-  transition: box-shadow 0.2s var(--ease), border-color 0.2s var(--ease);
+  transition:
+    box-shadow 0.2s var(--ease),
+    border-color 0.2s var(--ease);
 }
 .search-hero:focus-within {
   border-color: rgba(0, 122, 255, 0.4);
-  box-shadow: 0 0 0 4px rgba(0, 122, 255, 0.08), var(--shadow-md);
+  box-shadow:
+    0 0 0 4px rgba(0, 122, 255, 0.08),
+    var(--shadow-md);
 }
 .search-hero input {
   flex: 1;

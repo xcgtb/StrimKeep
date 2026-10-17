@@ -48,7 +48,8 @@ const checkResultText = computed(() => {
       (failed ? ' · ' + text(failed) + ' 部失败/不完整' : '')
     );
   }
-  const checked = checkData.value.checked != null ? checkData.value.checked : checkData.value.total || 0;
+  const checked =
+    checkData.value.checked != null ? checkData.value.checked : checkData.value.total || 0;
   return (
     '结果：检查 ' +
     text(checked) +
@@ -70,15 +71,25 @@ const triggerHint = computed(() => {
         ' 批通知' +
         (q.last_error ? '：' + text(q.last_error) : '，后台处理中。'),
     );
-  if (q.reconcile_required)
-    parts.push('有未确认的入库变化；队列恢复后自动校准补报，原通知保留。');
-  if (q.status === 'unavailable') parts.push('通知队列状态不可用：' + text(q.error || '请查看日志'));
+  if (q.reconcile_required) parts.push('有未确认的入库变化；队列恢复后自动校准补报，原通知保留。');
+  if (q.status === 'unavailable')
+    parts.push('通知队列状态不可用：' + text(q.error || '请查看日志'));
   return parts.join(' ');
 });
 
 const checkUpdates = computed(() => {
   const r = checkResult.value;
-  if (!r) return { updates: [] as { name: string; refilled: string[]; new_eps: string[]; newly_missing: string[] }[], failed: [] as { name: string; error: string }[], count: 0 };
+  if (!r)
+    return {
+      updates: [] as {
+        name: string;
+        refilled: string[];
+        new_eps: string[];
+        newly_missing: string[];
+      }[],
+      failed: [] as { name: string; error: string }[],
+      count: 0,
+    };
   const updates = records(r.updates).map((u) => ({
     name: text(u.name),
     refilled: records(u.refilled).map(text),
@@ -182,12 +193,12 @@ onMounted(() => {
     <div class="toggle-row">
       <div>
         <div class="lbl">启用追更通知</div>
-        <div class="desc">新集由入库事实更新触发；实时模式使用 Emby 回调，只有已订阅作品才发送通知</div>
+        <div class="desc">
+          新集由入库事实更新触发；实时模式使用 Emby 回调，只有已订阅作品才发送通知
+        </div>
       </div>
       <label class="switch"
-        ><input v-model="form.enabled" type="checkbox" @change="save" /><span
-          class="slider"
-        ></span
+        ><input v-model="form.enabled" type="checkbox" @change="save" /><span class="slider"></span
       ></label>
     </div>
     <div class="toggle-row">
@@ -204,7 +215,9 @@ onMounted(() => {
     <div class="toggle-row">
       <div>
         <div class="lbl">异常校准间隔（小时）</div>
-        <div class="desc">日常通知由增量事件触发；校准用于 TMDB 已播事实和遗漏修复，建议 6 小时</div>
+        <div class="desc">
+          日常通知由增量事件触发；校准用于 TMDB 已播事实和遗漏修复，建议 6 小时
+        </div>
       </div>
       <input
         v-model.number="form.calibration_interval_hours"
@@ -225,7 +238,9 @@ onMounted(() => {
 
   <div class="panel">
     <div class="row-between">
-      <h3>订阅列表 <span class="sub-count">{{ store.items.length }} 部</span></h3>
+      <h3>
+        订阅列表 <span class="sub-count">{{ store.items.length }} 部</span>
+      </h3>
       <div class="desc">从「影视探索」点卡片上的「+ 订阅」</div>
     </div>
     <LoadState
@@ -254,7 +269,9 @@ onMounted(() => {
             · TMDB {{ sub.tmdb_declared ?? sub.tmdb_total ?? '待同步'
             }}{{ sub.tmdb_status ? ' · ' + sub.tmdb_status : '' }}
           </div>
-          <div class="meta">已通知至: <code>{{ sub.latest_ep || '尚无记录' }}</code></div>
+          <div class="meta">
+            已通知至: <code>{{ sub.latest_ep || '尚无记录' }}</code>
+          </div>
           <div class="meta">{{ factsLabel(sub) }}</div>
           <div v-if="sub.check_error" class="meta warn">检查失败/不完整：{{ sub.check_error }}</div>
           <div v-if="!sub.enabled" class="meta warn">⏸ 已暂停：不会检查新集，也不会推送</div>

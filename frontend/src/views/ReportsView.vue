@@ -313,11 +313,12 @@ function groupDetails(details: string[]): { dets: DetVM[]; plain: string[] } {
     }
     if (m[3]) g.seasons = (g.seasons ? g.seasons + ',' : '') + m[3];
   }
-  return { dets: groups.map((g) => ({ ...g, seasons: seasonRange(g.seasons.split(',').filter(Boolean)) })), plain };
+  return {
+    dets: groups.map((g) => ({ ...g, seasons: seasonRange(g.seasons.split(',').filter(Boolean)) })),
+    plain,
+  };
 }
-function recSummary(
-  title: string,
-): { lead: string; chips: ChipVM[]; emby: boolean | null } | null {
+function recSummary(title: string): { lead: string; chips: ChipVM[]; emby: boolean | null } | null {
   let rest = title,
     lead = '';
   const m = rest.match(/^(.{1,14}?)[：:]\s*(.+)$/);
@@ -326,13 +327,10 @@ function recSummary(
     rest = m[2];
   }
   let emby: boolean | null = null;
-  rest = rest.replace(
-    /\s*[（(]\s*Emby\s*刷新\s*[:：]\s*(True|False)\s*[）)]\s*$/i,
-    (_, v) => {
-      emby = /true/i.test(v);
-      return '';
-    },
-  );
+  rest = rest.replace(/\s*[（(]\s*Emby\s*刷新\s*[:：]\s*(True|False)\s*[）)]\s*$/i, (_, v) => {
+    emby = /true/i.test(v);
+    return '';
+  });
   const chips: ChipVM[] = [];
   let ok = true;
   rest.split(/[,，]\s*/).forEach((p) => {
@@ -358,19 +356,25 @@ function subRows(ex: Data): SubGroupVM[] {
     const info: string[] = [];
     if (x.latest_ep) info.push('已通知至 ' + text(x.latest_ep));
     const tot = x.tmdb_declared || x.tmdb_total;
-    if (x.have != null) info.push('本次读取 ' + text(x.have) + (tot != null ? ' / ' + text(tot) : '') + ' 集');
+    if (x.have != null)
+      info.push('本次读取 ' + text(x.have) + (tot != null ? ' / ' + text(tot) : '') + ' 集');
     if (x.error) info.push('失败/不完整：' + text(x.error));
     if (x.fallback_reason) info.push('Emby 失败，改用完整磁盘事实：' + text(x.fallback_reason));
-    if (!x.changed && x.missing) info.push('仍缺 ' + text(x.missing) + ' 集' + (x.missing_eps ? '：' + text(x.missing_eps) : ''));
+    if (!x.changed && x.missing)
+      info.push(
+        '仍缺 ' + text(x.missing) + ' 集' + (x.missing_eps ? '：' + text(x.missing_eps) : ''),
+      );
     return { name: text(x.name || ''), tags, info: info.join(' · ') };
   }
   function grp(tag: string, label: string, list: Data[]): SubGroupVM | null {
     if (!list.length) return null;
     return { tag, label, count: list.length, shows: list.map(toSub) };
   }
-  return [grp('检查', '失败/不完整', bad), grp('更新', '有变化', ch), grp('订阅', '无变化', keep)].filter(
-    (g): g is SubGroupVM => !!g,
-  );
+  return [
+    grp('检查', '失败/不完整', bad),
+    grp('更新', '有变化', ch),
+    grp('订阅', '无变化', keep),
+  ].filter((g): g is SubGroupVM => !!g);
 }
 function buildCard(rec: Data): RecCardVM {
   let category = text(rec.category || '').trim();
@@ -409,15 +413,18 @@ function buildCard(rec: Data): RecCardVM {
   };
 
   if (items.length) {
-    const nl = extra.n_loc != null ? Number(extra.n_loc) : items.filter((x) => x.kind === 'loc').length;
-    const ns = extra.n_shr != null ? Number(extra.n_shr) : items.filter((x) => x.kind === 'shr').length;
+    const nl =
+      extra.n_loc != null ? Number(extra.n_loc) : items.filter((x) => x.kind === 'loc').length;
+    const ns =
+      extra.n_shr != null ? Number(extra.n_shr) : items.filter((x) => x.kind === 'shr').length;
     card.sumChips = [
       { b: String(nl), label: '项释放本地' },
       { b: String(ns), label: '项淘汰分享' },
       { b: '', label: 'Emby 刷新 ' + (extra.refreshed ? '✅' : '❌') },
     ];
     if (extra.skipped) card.sumChips.push({ b: String(extra.skipped), label: '跳过' });
-    if (extra.warnings) card.sumChips.push({ b: String(extra.warnings), label: '⚠ 警告', warn: true });
+    if (extra.warnings)
+      card.sumChips.push({ b: String(extra.warnings), label: '⚠ 警告', warn: true });
     const byKind: Record<string, { items: ItemVM[] }> = { loc: { items: [] }, shr: { items: [] } };
     items.forEach((it) => {
       const kind = it.kind === 'loc' ? 'loc' : 'shr';
@@ -503,8 +510,19 @@ function detailBadge(res: Data): { tone: string; text: string } {
 </script>
 
 <template>
-  <PageHeading title="入库汇报与晨报" subtitle="查看近 24 小时实际入库、治理执行记录，以及可预览的每日晨报。">
-    <button class="btn" @click="load(); op.reconcile()">刷新汇报</button>
+  <PageHeading
+    title="入库汇报与晨报"
+    subtitle="查看近 24 小时实际入库、治理执行记录，以及可预览的每日晨报。"
+  >
+    <button
+      class="btn"
+      @click="
+        load();
+        op.reconcile();
+      "
+    >
+      刷新汇报
+    </button>
   </PageHeading>
   <nav class="browse-tabs">
     <button :class="{ active: tab === 'ingest' }" @click="tab = 'ingest'">近期入库</button
@@ -513,7 +531,9 @@ function detailBadge(res: Data): { tone: string; text: string } {
   </nav>
   <OperationState
     :busy="op.busy.value"
-    :error="op.error.value || ingest.error.value || recordsRequest.error.value || morning.error.value"
+    :error="
+      op.error.value || ingest.error.value || recordsRequest.error.value || morning.error.value
+    "
     :uncertain="op.uncertain.value"
     :receipt="op.receipt.value"
   />
@@ -533,9 +553,13 @@ function detailBadge(res: Data): { tone: string; text: string } {
     <div v-else-if="ingestText" class="ing-plain">{{ ingestText }}</div>
     <template v-else-if="ingest.data.value">
       <div class="ing-sum">
-        <span class="ing-chip"><b>+{{ text(ingStats.movies || 0) }}</b> 单片</span
-        ><span class="ing-chip"><b>+{{ text(ingStats.series || 0) }}</b> 部连载</span
-        ><span class="ing-chip"><b>+{{ text(ingStats.episodes || 0) }}</b> 集</span>
+        <span class="ing-chip"
+          ><b>+{{ text(ingStats.movies || 0) }}</b> 单片</span
+        ><span class="ing-chip"
+          ><b>+{{ text(ingStats.series || 0) }}</b> 部连载</span
+        ><span class="ing-chip"
+          ><b>+{{ text(ingStats.episodes || 0) }}</b> 集</span
+        >
       </div>
       <div class="ing-h">连载剧集 · {{ text(ingStats.series || 0) }} 部</div>
       <details
@@ -544,16 +568,16 @@ function detailBadge(res: Data): { tone: string; text: string } {
         class="ing-grp"
         :open="g.count <= 8"
       >
-        <summary
-          ><span class="ing-src">{{ shortSrc(g.source) }}</span
+        <summary>
+          <span class="ing-src">{{ shortSrc(g.source) }}</span
           ><span class="ing-cat">{{ g.category }}</span
-          ><span class="ing-cnt">{{ g.count }}部</span></summary
-        >
+          ><span class="ing-cnt">{{ g.count }}部</span>
+        </summary>
         <ul class="ing-list">
-          <li v-for="s in g.shows" :key="s.name"
-            ><span class="n">《{{ s.name }}》</span><span class="b">+{{ s.count }}集</span
-            ><span class="ing-season">{{ s.seasons }}</span></li
-          >
+          <li v-for="s in g.shows" :key="s.name">
+            <span class="n">《{{ s.name }}》</span><span class="b">+{{ s.count }}集</span
+            ><span class="ing-season">{{ s.seasons }}</span>
+          </li>
         </ul>
       </details>
       <div v-if="!ingestGroups.tv.length" class="ing-empty">暂无新增剧集</div>
@@ -564,12 +588,14 @@ function detailBadge(res: Data): { tone: string; text: string } {
         class="ing-grp"
         :open="g.count <= 8"
       >
-        <summary
-          ><span class="ing-src">{{ shortSrc(g.source) }}</span
+        <summary>
+          <span class="ing-src">{{ shortSrc(g.source) }}</span
           ><span class="ing-cat">{{ g.category }}</span
-          ><span class="ing-cnt">{{ g.count }}部</span></summary
-        >
-        <div class="ing-tags"><span v-for="n in g.movies" :key="n">《{{ n }}》</span></div>
+          ><span class="ing-cnt">{{ g.count }}部</span>
+        </summary>
+        <div class="ing-tags">
+          <span v-for="n in g.movies" :key="n">《{{ n }}》</span>
+        </div>
       </details>
       <div v-if="!ingestGroups.mov.length" class="ing-empty">暂无新增电影</div>
     </template>
@@ -591,68 +617,71 @@ function detailBadge(res: Data): { tone: string; text: string } {
     </div>
     <p v-if="recordsRequest.loading.value" class="muted-text">读取执行记录中…</p>
     <p v-if="recordsRequest.error.value" class="inline-error">{{ recordsRequest.error.value }}</p>
-    <div v-for="card in recordCards" :key="card.id || card.time" class="rc" :class="'rc-' + card.tone">
-      <div class="rc-top"
-        ><span class="rc-tag">{{ card.category }}</span
-        ><span class="rc-time">{{ card.time }}{{ card.rule ? ' · 规则 ' + card.rule : '' }}</span></div
-      >
+    <div
+      v-for="card in recordCards"
+      :key="card.id || card.time"
+      class="rc"
+      :class="'rc-' + card.tone"
+    >
+      <div class="rc-top">
+        <span class="rc-tag">{{ card.category }}</span
+        ><span class="rc-time">{{ card.time }}{{ card.rule ? ' · 规则 ' + card.rule : '' }}</span>
+      </div>
       <div v-if="card.sumChips.length" class="ing-sum rc-ing-sum">
         <span v-for="(c, i) in card.sumChips" :key="i" class="ing-chip" :class="{ warn: c.warn }"
           ><b v-if="c.b">{{ c.b }}</b> {{ c.label }}</span
         >
       </div>
-      <details
-        v-for="(g, i) in card.groups"
-        :key="i"
-        class="ing-grp"
-        :open="g.count <= 5"
-      >
-        <summary
-          ><span class="ing-src">{{ g.src }}</span
+      <details v-for="(g, i) in card.groups" :key="i" class="ing-grp" :open="g.count <= 5">
+        <summary>
+          <span class="ing-src">{{ g.src }}</span
           ><span class="ing-cat">{{ g.cat }}</span
-          ><span class="ing-cnt">{{ g.count }} 项</span></summary
-        >
+          ><span class="ing-cnt">{{ g.count }} 项</span>
+        </summary>
         <ul class="ing-list">
-          <li v-for="(it, j) in g.items" :key="j" class="stk"
-            ><span class="n"
+          <li v-for="(it, j) in g.items" :key="j" class="stk">
+            <span class="n"
               >《{{ it.title }}》<span v-if="it.season" class="rd-s">{{ it.season }}</span
               ><span v-if="it.resultText" class="rs" :class="it.resultTone">{{
                 it.resultText
               }}</span></span
-            ><span class="ing-season">{{ it.reason }}</span></li
-          >
+            ><span class="ing-season">{{ it.reason }}</span>
+          </li>
         </ul>
       </details>
       <div v-if="card.truncated" class="rd-plain">清单较长，仅保留前部分明细。</div>
       <div v-if="card.hints.length" class="rc-det">
-        <details><summary>执行提示 · {{ card.hints.length }} 条</summary
-          ><div class="rd-plain" v-for="(h, i) in card.hints" :key="i">{{ h }}</div></details
-        >
+        <details>
+          <summary>执行提示 · {{ card.hints.length }} 条</summary>
+          <div class="rd-plain" v-for="(h, i) in card.hints" :key="i">{{ h }}</div>
+        </details>
       </div>
-      <div v-if="card.chips.length || card.emby !== null" class="rc-sum"
-        ><span v-if="card.lead" class="rc-lead">{{ card.lead }}</span
+      <div v-if="card.chips.length || card.emby !== null" class="rc-sum">
+        <span v-if="card.lead" class="rc-lead">{{ card.lead }}</span
         ><span v-for="(c, i) in card.chips" :key="i" class="rc-chip" :class="{ on: c.on }"
           >{{ c.k }} <b>{{ c.v }}</b></span
-        ><span v-if="card.emby !== null" class="rc-chip">Emby 刷新 {{ card.emby ? '✅' : '❌' }}</span></div
-      >
+        ><span v-if="card.emby !== null" class="rc-chip"
+          >Emby 刷新 {{ card.emby ? '✅' : '❌' }}</span
+        >
+      </div>
       <div v-else-if="card.title" class="rc-title">{{ card.title }}</div>
       <div v-if="card.subs.length" class="rc-subs">
         <details v-for="(g, i) in card.subs" :key="i" class="ing-grp" :open="g.tag !== '订阅'">
-          <summary
-            ><span class="ing-src">{{ g.tag }}</span
+          <summary>
+            <span class="ing-src">{{ g.tag }}</span
             ><span class="ing-cat">{{ g.label }}</span
-            ><span class="ing-cnt">{{ g.count }} 部</span></summary
-          >
+            ><span class="ing-cnt">{{ g.count }} 部</span>
+          </summary>
           <ul class="ing-list">
-            <li v-for="s in g.shows" :key="s.name" class="stk"
-              ><span class="n"
+            <li v-for="s in g.shows" :key="s.name" class="stk">
+              <span class="n"
                 >《{{ s.name }}》<span class="rc-tags"
                   ><span v-for="(t, j) in s.tags" :key="j" class="rs" :class="t.tone">{{
                     t.text
                   }}</span></span
                 ></span
-              ><span class="ing-season">{{ s.info }}</span></li
-            >
+              ><span class="ing-season">{{ s.info }}</span>
+            </li>
           </ul>
         </details>
       </div>
@@ -668,41 +697,46 @@ function detailBadge(res: Data): { tone: string; text: string } {
       <div v-if="card.dets.length || card.detPlain.length" class="rc-det">
         <details>
           <summary>{{ card.detLabel }}</summary>
-          <div v-for="(d, i) in card.dets" :key="i" class="rd-row"
-            ><div class="rd-main"
-              ><span class="rd-t">《{{ d.title }}》</span
-              ><span v-if="d.seasons" class="rd-s">{{ d.seasons }}</span></div
-            ><div class="rd-why">{{ d.why }} → {{ d.act }}</div></div
-          >
+          <div v-for="(d, i) in card.dets" :key="i" class="rd-row">
+            <div class="rd-main">
+              <span class="rd-t">《{{ d.title }}》</span
+              ><span v-if="d.seasons" class="rd-s">{{ d.seasons }}</span>
+            </div>
+            <div class="rd-why">{{ d.why }} → {{ d.act }}</div>
+          </div>
           <div v-for="(p, i) in card.detPlain" :key="'p' + i" class="rd-plain">{{ p }}</div>
         </details>
       </div>
-      <div class="rc-act"
-        ><button
-          v-if="card.id"
-          class="btn sm gray"
-          @click="showRecord(card.id)"
-        >
+      <div class="rc-act">
+        <button v-if="card.id" class="btn sm gray" @click="showRecord(card.id)">
           查看完整依据
-        </button></div
-      >
+        </button>
+      </div>
     </div>
-    <p v-if="!recordsRequest.loading.value && !recordCards.length" class="list-empty"
-      >暂无执行记录</p
-    >
+    <p v-if="!recordsRequest.loading.value && !recordCards.length" class="list-empty">
+      暂无执行记录
+    </p>
   </section>
 
   <section v-if="tab === 'morning'" class="panel">
     <div class="row-between">
       <h3>每日晨报</h3>
       <div class="btn-row">
-        <button class="btn gray" :disabled="op.busy.value || op.uncertain.value" @click="preview()"
-          >预览(缓存)</button
-        ><button class="btn gray" :disabled="op.busy.value || op.uncertain.value" @click="preview(true)"
-          >预览(现场扫)</button
-        ><button class="btn" :disabled="op.busy.value || op.uncertain.value" @click="confirmation = 'send'"
-          >立即发送</button
+        <button class="btn gray" :disabled="op.busy.value || op.uncertain.value" @click="preview()">
+          预览(缓存)</button
+        ><button
+          class="btn gray"
+          :disabled="op.busy.value || op.uncertain.value"
+          @click="preview(true)"
         >
+          预览(现场扫)</button
+        ><button
+          class="btn"
+          :disabled="op.busy.value || op.uncertain.value"
+          @click="confirmation = 'send'"
+        >
+          立即发送
+        </button>
       </div>
     </div>
     <div class="toggle-row">
@@ -722,8 +756,13 @@ function detailBadge(res: Data): { tone: string; text: string } {
         <div class="desc">{{ tzHint }}</div>
       </div>
       <div class="time-inputs">
-        <input v-model.number="form.hour" type="number" min="0" max="23" @change="saveMorning" /><span
-          >:</span
+        <input
+          v-model.number="form.hour"
+          type="number"
+          min="0"
+          max="23"
+          @change="saveMorning"
+        /><span>:</span
         ><input v-model.number="form.minute" type="number" min="0" max="59" @change="saveMorning" />
       </div>
     </div>
@@ -746,7 +785,8 @@ function detailBadge(res: Data): { tone: string; text: string } {
   <section v-if="tab === 'morning'" class="panel">
     <h3>晨报内容</h3>
     <label v-for="m in MORNING_ITEMS" :key="m.key" class="check-item"
-      ><input v-model="items" type="checkbox" :value="m.key" @change="saveMorning" /> {{ m.label }}</label
+      ><input v-model="items" type="checkbox" :value="m.key" @change="saveMorning" />
+      {{ m.label }}</label
     >
     <div v-if="morning.loading.value" class="muted-text">读取晨报设置中…</div>
     <p v-if="morning.error.value" class="inline-error">{{ morning.error.value }}</p>
@@ -767,25 +807,31 @@ function detailBadge(res: Data): { tone: string; text: string } {
   >
     <p v-if="detail.error.value" class="inline-error">{{ detail.error.value }}</p>
     <template v-else-if="detailRecord">
-      <div class="rc"
-        ><div class="rc-top"
-          ><span class="rc-tag">{{ text(detailRecord.category || detailRecord.title) }}</span
-          ><span class="rc-time">{{ text(detailRecord.ts) }}</span></div
-        ><div v-if="detailRecord.title" class="rc-title">{{ text(detailRecord.title) }}</div></div
-      >
+      <div class="rc">
+        <div class="rc-top">
+          <span class="rc-tag">{{ text(detailRecord.category || detailRecord.title) }}</span
+          ><span class="rc-time">{{ text(detailRecord.ts) }}</span>
+        </div>
+        <div v-if="detailRecord.title" class="rc-title">{{ text(detailRecord.title) }}</div>
+      </div>
       <div v-if="!detailItems.length" class="muted-text">该记录没有逐项明细。</div>
       <div v-for="(it, i) in detailItems" :key="i" class="list-item keep">
         <div class="t">
           《{{ text(it.title || it.text || '') }}》<span v-if="it.season != null" class="rd-s"
             >S{{ pad2(it.season) }}</span
-          ><span v-if="detailBadge(object(it.result)).text" class="rs" :class="detailBadge(object(it.result)).tone"
+          ><span
+            v-if="detailBadge(object(it.result)).text"
+            class="rs"
+            :class="detailBadge(object(it.result)).tone"
             >{{ detailBadge(object(it.result)).text }}</span
           >
         </div>
         <div class="d">{{ text(it.reason_label || it.detail || '') }}</div>
         <details v-if="it.text || it.detail" class="rc-det">
           <summary>完整明细</summary>
-          <pre class="preview-box">{{ text(it.text || '') }}{{ it.detail ? '\n' + text(it.detail) : '' }}</pre>
+          <pre class="preview-box"
+            >{{ text(it.text || '') }}{{ it.detail ? '\n' + text(it.detail) : '' }}</pre
+          >
         </details>
       </div>
     </template>

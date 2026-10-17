@@ -433,7 +433,11 @@ const live = useLibraryUpdates(refreshLoaded);
           <p class="eyebrow">LIBRARY DETAILS · {{ detail.data.value.item.year }}</p>
           <h3>{{ detail.data.value.item.name }}</h3>
           <div class="emby-badges">
-            <span v-if="detail.data.value.item.in_local && detail.data.value.item.in_share" class="emby-badge loc">本地+分享</span>
+            <span
+              v-if="detail.data.value.item.in_local && detail.data.value.item.in_share"
+              class="emby-badge loc"
+              >本地+分享</span
+            >
             <span v-else-if="detail.data.value.item.in_local" class="emby-badge loc">本地</span>
             <span v-else-if="detail.data.value.item.in_share" class="emby-badge shr">分享</span>
             <span v-if="detail.data.value.item._md" class="emby-badge ok">✓ 完整</span>
@@ -443,8 +447,9 @@ const live = useLibraryUpdates(refreshLoaded);
             <span v-if="detail.data.value.item.year" class="emby-badge gen">{{
               detail.data.value.item.year
             }}</span>
-            <span v-if="detail.data.value.item.tmdb_id" class="emby-badge gen">TMDB
-              {{ detail.data.value.item.tmdb_id }}</span>
+            <span v-if="detail.data.value.item.tmdb_id" class="emby-badge gen"
+              >TMDB {{ detail.data.value.item.tmdb_id }}</span
+            >
           </div>
           <div class="detail-stats">
             <div>

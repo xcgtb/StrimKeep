@@ -75,7 +75,13 @@ const groups: {
     fields: [
       { key: 'tmdb_key', label: 'TMDB API Key', type: 'secret' },
       { key: 'tmdb_scan_enabled', label: '定期 TMDB 对照', type: 'select', options: switchOptions },
-      { key: 'tmdb_scan_interval_hours', label: 'TMDB 对照间隔（小时）', type: 'number', min: 1, max: 168 },
+      {
+        key: 'tmdb_scan_interval_hours',
+        label: 'TMDB 对照间隔（小时）',
+        type: 'number',
+        min: 1,
+        max: 168,
+      },
     ],
   },
   {
@@ -86,7 +92,11 @@ const groups: {
     fields: [
       { key: 'telegram_bot_token', label: 'Telegram Bot Token', type: 'secret' },
       { key: 'telegram_chat_id', label: 'Telegram Chat ID' },
-      { key: 'telegram_allowed_users', label: 'Telegram 允许用户（白名单）', hint: '逗号分隔的 User ID' },
+      {
+        key: 'telegram_allowed_users',
+        label: 'Telegram 允许用户（白名单）',
+        hint: '逗号分隔的 User ID',
+      },
     ],
   },
   {
@@ -95,8 +105,17 @@ const groups: {
     description: '用于外部服务请求，Emby 保持使用本地网络',
     test: 'proxy',
     fields: [
-      { key: 'http_proxy_enabled', label: '启用 HTTP 代理', type: 'select', options: switchOptions },
-      { key: 'http_proxy_url', label: '代理地址', hint: '填写 NAS 能访问的 HTTP / 混合代理端口，不是 SOCKS5 端口。' },
+      {
+        key: 'http_proxy_enabled',
+        label: '启用 HTTP 代理',
+        type: 'select',
+        options: switchOptions,
+      },
+      {
+        key: 'http_proxy_url',
+        label: '代理地址',
+        hint: '填写 NAS 能访问的 HTTP / 混合代理端口，不是 SOCKS5 端口。',
+      },
       { key: 'http_proxy_username', label: '用户名（可选）' },
       { key: 'http_proxy_password', label: '密码（可选）', type: 'secret' },
     ],
@@ -106,7 +125,13 @@ const groups: {
     title: '治理静默期',
     description: '入库后一定时间内先不进入治理计划',
     fields: [
-      { key: 'ingest_quiet_minutes', label: '入库静默期（分钟，0 为关闭）', type: 'number', min: 0, max: 1440 },
+      {
+        key: 'ingest_quiet_minutes',
+        label: '入库静默期（分钟，0 为关闭）',
+        type: 'number',
+        min: 0,
+        max: 1440,
+      },
     ],
   },
   {
@@ -114,7 +139,11 @@ const groups: {
     title: '外观背景',
     description: '图片直链留空使用默认天空蓝磨砂背景',
     fields: [
-      { key: 'background_light_url', label: '浅色主题背景图片 URL', hint: '填写图床的图片直链，留空使用内置背景' },
+      {
+        key: 'background_light_url',
+        label: '浅色主题背景图片 URL',
+        hint: '填写图床的图片直链，留空使用内置背景',
+      },
       { key: 'background_dark_url', label: '深色主题背景图片 URL' },
     ],
   },
@@ -173,10 +202,13 @@ function visibleFields(fields: Field[]): Field[] {
   });
 }
 const isSwitchField = (f: Field) =>
-  f.type === 'select' && f.options?.length === 2 && f.options.every((o) => o.value === '0' || o.value === '1');
+  f.type === 'select' &&
+  f.options?.length === 2 &&
+  f.options.every((o) => o.value === '0' || o.value === '1');
 const isSwitchOn = (f: Field) => String(form.value[f.key] ?? '0') === '1';
 function inputValue(field: Field): string {
-  if (field.type === 'number') return form.value[field.key] == null ? '' : String(form.value[field.key]);
+  if (field.type === 'number')
+    return form.value[field.key] == null ? '' : String(form.value[field.key]);
   return String(form.value[field.key] ?? '');
 }
 function onFieldInput(field: Field, event: Event) {
@@ -376,8 +408,7 @@ useVisiblePoll(async () => {
                   type="checkbox"
                   :checked="isSwitchOn(field)"
                   :disabled="disabled || field.disabled"
-                  @change="onSwitchField(field, $event)"
-                /><span class="slider"></span
+                  @change="onSwitchField(field, $event)" /><span class="slider"></span
               ></label>
             </div>
             <div v-else class="form-row">
@@ -451,9 +482,10 @@ useVisiblePoll(async () => {
           <span class="dot" :class="botView.dot"></span><span>{{ botView.label }}</span>
         </div>
         <p class="hint">
-          上次轮询: {{ botView.last_poll_ago != null ? botView.last_poll_ago + ' 秒前' : '—' }}<template
-            v-if="botView.last_error"
-            > · ⚠️ {{ botView.last_error }}<template v-if="Number(botView.fail_count) > 1"
+          上次轮询: {{ botView.last_poll_ago != null ? botView.last_poll_ago + ' 秒前' : '—'
+          }}<template v-if="botView.last_error">
+            · ⚠️ {{ botView.last_error
+            }}<template v-if="Number(botView.fail_count) > 1"
               >（连续 {{ botView.fail_count }} 次）</template
             ></template
           >
@@ -476,8 +508,7 @@ useVisiblePoll(async () => {
             ><input
               v-model="ingestForm.enabled"
               type="checkbox"
-              :disabled="op.busy.value || op.uncertain.value"
-            /><span class="slider"></span
+              :disabled="op.busy.value || op.uncertain.value" /><span class="slider"></span
           ></label>
         </div>
         <div class="toggle-row">
@@ -496,7 +527,13 @@ useVisiblePoll(async () => {
             <div class="desc">建议 5 分钟</div>
           </div>
           <div class="num-field">
-            <input v-model.number="ingestForm.interval_min" type="number" min="1" max="1440" :disabled="op.busy.value || op.uncertain.value" />
+            <input
+              v-model.number="ingestForm.interval_min"
+              type="number"
+              min="1"
+              max="1440"
+              :disabled="op.busy.value || op.uncertain.value"
+            />
           </div>
         </div>
         <div class="toggle-row">
@@ -505,7 +542,13 @@ useVisiblePoll(async () => {
             <div class="desc">实时模式默认 24 小时，校准 STRM 数量、Emby 事实及 TMDB 对照</div>
           </div>
           <div class="num-field">
-            <input v-model.number="ingestForm.reconcile_hours" type="number" min="1" max="168" :disabled="op.busy.value || op.uncertain.value" />
+            <input
+              v-model.number="ingestForm.reconcile_hours"
+              type="number"
+              min="1"
+              max="168"
+              :disabled="op.busy.value || op.uncertain.value"
+            />
           </div>
         </div>
 
@@ -514,7 +557,12 @@ useVisiblePoll(async () => {
           <input v-if="callback" :value="callback" type="password" readonly />
           <p v-else class="hint">尚未生成回调令牌</p>
           <div class="btn-row">
-            <button v-if="!callback" class="btn gray" :disabled="op.busy.value || op.uncertain.value" @click="confirmation = 'generate'">
+            <button
+              v-if="!callback"
+              class="btn gray"
+              :disabled="op.busy.value || op.uncertain.value"
+              @click="confirmation = 'generate'"
+            >
               首次生成回调地址
             </button>
             <template v-else>
@@ -524,7 +572,11 @@ useVisiblePoll(async () => {
           </div>
         </div>
 
-        <OperationState :error="ingest.error.value || op.error.value" :uncertain="op.uncertain.value" :receipt="op.receipt.value" />
+        <OperationState
+          :error="ingest.error.value || op.error.value"
+          :uncertain="op.uncertain.value"
+          :receipt="op.receipt.value"
+        />
         <section class="ingest-monitor-status">
           <h3 class="detail-section-title">监控状态与最近入库缓存</h3>
           <p v-if="ingestStatus.error.value" class="inline-error">{{ ingestStatus.error.value }}</p>
@@ -540,12 +592,22 @@ useVisiblePoll(async () => {
         <div class="btn-row">
           <button
             class="btn"
-            :disabled="!ingest.data.value || !!ingest.error.value || op.busy.value || op.uncertain.value"
+            :disabled="
+              !ingest.data.value || !!ingest.error.value || op.busy.value || op.uncertain.value
+            "
             @click="confirmation = 'save'"
           >
             保存入库监控
           </button>
-          <button class="btn gray" @click="load(); op.reconcile()">重新读取监控状态</button>
+          <button
+            class="btn gray"
+            @click="
+              load();
+              op.reconcile();
+            "
+          >
+            重新读取监控状态
+          </button>
         </div>
       </section>
     </div>

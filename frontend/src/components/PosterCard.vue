@@ -84,9 +84,9 @@ const epInfo = computed(() => {
         >
       </button>
       <span class="badge-type">{{ typeLabel }}</span>
-      <span v-if="card.rating" class="badge-rate"><Star :size="10" fill="currentColor" />{{
-        card.rating.toFixed(1)
-      }}</span>
+      <span v-if="card.rating" class="badge-rate"
+        ><Star :size="10" fill="currentColor" />{{ card.rating.toFixed(1) }}</span
+      >
       <span v-if="status.text" class="badge-status" :class="status.cls">{{ status.text }}</span>
       <button
         v-if="selectable"
@@ -102,10 +102,14 @@ const epInfo = computed(() => {
     <div class="info">
       <button class="poster-title t" @click="$emit('open')">{{ titleOf(card) }}</button>
       <div class="meta">
-        <span>{{ card.year || '—' }}<template v-if="libTag"> · {{ libTag }}</template></span>
+        <span
+          >{{ card.year || '—' }}<template v-if="libTag"> · {{ libTag }}</template></span
+        >
         <span v-if="card.type">{{ typeLabel }}</span>
       </div>
-      <div v-if="epInfo" class="meta"><span style="color: var(--text-dim)">{{ epInfo }}</span></div>
+      <div v-if="epInfo" class="meta">
+        <span style="color: var(--text-dim)">{{ epInfo }}</span>
+      </div>
       <button
         v-if="subscribable"
         class="sub-btn"
