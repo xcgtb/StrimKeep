@@ -89,31 +89,32 @@ const selectionMode = ref(false),
   detailOpen = ref(false),
   compareOpen = ref(false);
 const selectedCards = computed(() => cards.value.filter((c) => selectedIds.value.has(c.id!)));
-// 状态芯片带上后端 stats 里的真实计数，避免用户必须逐个点开才知道有多少条。
+// 状态芯片带上后端 stats 的真实计数。注意：stats 的 aligned/missing/extra/… 只统计
+// 剧集（app/morning.py 的 _health_snapshot 只遍历 series），电影只能用 total_movies，
+// 因此电影状态下不给计数，避免把剧集数字错挂到电影上。
 const libraryStats = computed<Record<string, number>>(() => request.data.value?.stats || {});
-function counted(value: string, label: string, fallback?: number) {
-  const raw = libraryStats.value[value];
-  const count = typeof raw === 'number' ? raw : fallback;
-  return count === undefined ? { value, label } : { value, label, count };
+function counted(value: string, label: string, sourceKey: string) {
+  const raw = libraryStats.value[sourceKey];
+  return typeof raw === 'number' ? { value, label, count: raw } : { value, label };
 }
 const statusOptions = computed(() => {
   if (filters.media === 'movies')
     return [
-      counted('all', '全部', total.value),
-      counted('aligned', '已入库'),
-      counted('unmatched', '未匹配'),
-      counted('no_tmdb', '未匹配 TMDB'),
-      counted('pending', '待对照'),
+      counted('all', '全部', 'total_movies'),
+      { value: 'aligned', label: '已入库' },
+      { value: 'unmatched', label: '未匹配' },
+      { value: 'no_tmdb', label: '未匹配 TMDB' },
+      { value: 'pending', label: '待对照' },
     ];
   return [
-    counted('all', '全部', total.value),
-    counted('aligned', '完整'),
-    counted('missing', '缺集'),
-    counted('extra', '超集'),
-    counted('ongoing', '在更'),
-    counted('unmatched', '未匹配'),
-    counted('no_tmdb', '未匹配 TMDB'),
-    counted('pending', '待对照'),
+    counted('all', '全部', 'total_series'),
+    counted('aligned', '完整', 'aligned'),
+    counted('missing', '缺集', 'missing'),
+    counted('extra', '超集', 'extra'),
+    counted('ongoing', '在更', 'ongoing'),
+    counted('unmatched', '未匹配', 'unmatched'),
+    counted('no_tmdb', '未匹配 TMDB', 'no_tmdb'),
+    { value: 'pending', label: '待对照' },
   ];
 });
 const scopeOptions = [
