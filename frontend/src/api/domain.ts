@@ -26,3 +26,20 @@ export const uuid = () => {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 };
 export { query };
+
+// —— 供重做的三个板块（影视探索/片库映射/双库治理）使用 ——
+export function number(value: unknown, fallback = 0): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+export function compact(value: unknown): string {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return '—';
+  return parsed.toLocaleString('zh-CN');
+}
+export function date(ts?: number | string): string {
+  const seconds = Number(ts);
+  if (!seconds) return '—';
+  const ms = seconds > 1e12 ? seconds : seconds * 1000;
+  return new Date(ms).toLocaleString('zh-CN', { hour12: false });
+}
