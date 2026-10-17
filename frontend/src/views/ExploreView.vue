@@ -91,14 +91,26 @@ const genreOptions = computed(() => {
   const list = names.length ? names : fallbackGenres;
   return [{ value: '', label: '全部' }, ...list.map((name) => ({ value: name, label: name }))];
 });
+// 年份档位对齐 1.2.12 explore.js：初始 30 个，滚到尾部再追加 20 个，下限 1900。
+const YEAR_FLOOR = 1900;
+const yearCount = ref(30);
+const yearTop = new Date().getFullYear() + 1;
 const yearOptions = computed(() => {
-  const top = new Date().getFullYear() + 1;
   const options = [{ value: '', label: '全部' }];
-  for (let year = top; year >= 1900; year -= 1) {
+  for (let index = 0; index < yearCount.value; index += 1) {
+    const year = yearTop - index;
+    if (year < YEAR_FLOOR) break;
     options.push({ value: String(year), label: String(year) });
   }
+  // 已选年份若在已加载区间之外，补一个，避免回显丢失
+  if (filters.year && !options.some((option) => option.value === filters.year))
+    options.push({ value: filters.year, label: filters.year });
   return options;
 });
+function loadMoreYears() {
+  if (yearTop - yearCount.value < YEAR_FLOOR) return;
+  yearCount.value += 20;
+}
 const filterSummary = computed(() => {
   const parts: string[] = [];
   const region = regionOptions.find((o) => o.value === filters.region);
@@ -245,7 +257,13 @@ const live = useLibraryUpdates(async () => {
       <FilterChips v-model="filters.region" label="地区" :options="regionOptions" />
       <FilterChips v-model="filters.media" label="类型" :options="mediaOptions" />
       <FilterChips v-model="filters.genre" label="题材" :options="genreOptions" />
-      <FilterChips v-model="filters.year" label="年份" :options="yearOptions" scroll />
+      <FilterChips
+        v-model="filters.year"
+        label="年份"
+        :options="yearOptions"
+        scroll
+        @load-more="loadMoreYears"
+      />
       <FilterChips v-model="filters.sort" label="排序" :options="sortOptions" />
     </template>
   </div>

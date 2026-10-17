@@ -13,5 +13,16 @@ export const writeData = (path: string, body?: unknown) => post<Data>(path, body
 export const removeData = (path: string) => request<Data>(path, { method: 'DELETE' });
 export const accountPath = (id: string, domain: string) =>
   `/api/cloud/accounts/${encodeURIComponent(id)}/${domain}`;
-export const uuid = () => crypto.randomUUID().replaceAll('-', '');
+// crypto.randomUUID 只在安全上下文（HTTPS / localhost）存在；
+// 局域网用 http://<NAS-IP>:8321 访问时为 undefined，直接调用会抛异常。
+// 删除接口要求 32 位十六进制操作号，这里回退到 getRandomValues 生成同格式。
+export const uuid = () => {
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi?.randomUUID === 'function')
+    return cryptoApi.randomUUID().replaceAll('-', '');
+  const bytes = new Uint8Array(16);
+  if (typeof cryptoApi?.getRandomValues === 'function') cryptoApi.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+};
 export { query };

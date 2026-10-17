@@ -101,8 +101,20 @@ async function execute() {
       :disabled="op.uncertain.value"
       @close="preview = undefined"
       @confirm="execute"
-      ><p>作品：{{ item.name }} · 已核实 {{ preview.count }} 个文件</p>
-      <EvidenceDetails :value="preview"
-    /></ConfirmAction>
+      ><div class="batch-summary">
+        <p>
+          作品：<b>{{ item.name }}</b> · 已核验 <b>{{ preview.count }}</b> 个 STRM，目标：<b>{{
+            target === 'local' ? '本地库（联动删除源文件）' : '分享库（仅删 NAS STRM）'
+          }}</b>
+        </p>
+        <p class="muted-text">
+          以上为预览核验结果，确认后才会真正删除；执行中会再次核验，已变化的文件自动跳过。
+        </p>
+      </div>
+      <details>
+        <summary>核验明细与证据</summary>
+        <EvidenceDetails :value="preview" />
+      </details>
+    </ConfirmAction>
   </div>
 </template>

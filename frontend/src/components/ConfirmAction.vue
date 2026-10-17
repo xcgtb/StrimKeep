@@ -25,7 +25,13 @@ const checked = ref(false),
     ><label v-if="phrase"
       >输入“{{ phrase }}”确认<input v-model="input" autocomplete="off" :disabled="busy" /></label
     ><template #footer
-      ><button class="button" :disabled="busy" @click="$emit('close')">返回核对</button
+      ><p v-if="!checked" class="confirm-hint" role="status">
+        请先勾选上面的核对项，确认按钮才会启用
+      </p>
+      <p v-else-if="phrase && input !== phrase" class="confirm-hint" role="status">
+        请完整输入「{{ phrase }}」后再执行
+      </p>
+      <button class="button" :disabled="busy" @click="$emit('close')">返回核对</button
       ><button
         class="button"
         :class="danger ? 'danger' : 'primary'"

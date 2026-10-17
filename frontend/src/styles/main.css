@@ -4488,7 +4488,14 @@ summary {
   flex-wrap: nowrap;
   overflow-x: auto;
   padding-bottom: 3px;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
   scrollbar-width: thin;
+}
+/* 1.2.12 的 .filter-chips.year-scroll .chip { flex-shrink: 0 }：
+  缺了这条，几十个年份芯片会被压扁成细条。 */
+.chip-track.scrollable .chip {
+  flex: 0 0 auto;
 }
 .chip-track.scrollable::-webkit-scrollbar {
   height: 5px;
@@ -4501,19 +4508,22 @@ summary {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 4px 11px;
+  /* 尺寸对齐 1.2.12 的 .chip：13px / 上下 8px / 最小高度 36px */
+  padding: 7px 14px;
+  min-height: 34px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--panel-solid);
   color: var(--muted);
-  font-size: 12px;
-  line-height: 1.6;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
   white-space: nowrap;
   cursor: pointer;
   transition:
-    color 0.15s ease,
-    border-color 0.15s ease,
-    background 0.15s ease;
+    color 0.18s ease,
+    border-color 0.18s ease,
+    background 0.18s ease;
 }
 .chip:hover {
   color: var(--accent);
@@ -4895,4 +4905,22 @@ summary {
 .chip-track {
   min-width: 0;
   max-width: 100%;
+}
+
+/* 确认框禁用原因提示：避免按钮变灰后"点了没反应"的观感 */
+.confirm-hint {
+  margin: 0 auto 0 0;
+  align-self: center;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--warning);
+}
+@media (max-width: 640px) {
+  .modal-panel > footer {
+    flex-wrap: wrap;
+  }
+  .confirm-hint {
+    flex: 1 0 100%;
+    margin: 0 0 4px;
+  }
 }
