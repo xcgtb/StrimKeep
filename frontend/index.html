@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#e4f2fc" />
+    <title>StrimKeep</title>
+    <link rel="icon" href="/static/icons/favicon.ico" />
+    <script>
+      // 与 1.4.7 一致：尽早套用主题，避免刷新闪烁
+      (function () {
+        try {
+          var saved = localStorage.getItem('strimkeep-theme');
+          if (saved === 'dark' || saved === 'light')
+            document.documentElement.setAttribute('data-theme', saved);
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
