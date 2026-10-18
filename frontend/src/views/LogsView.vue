@@ -14,6 +14,10 @@ const request = useRequest<Data>(),
   cursor = ref(0),
   stream = ref<HTMLElement>();
 let applied = { ...filters };
+function quickLevel(value: string) {
+  filters.level = value;
+  apply();
+}
 function apply() {
   applied = { ...filters };
   cursor.value = 0;
@@ -72,30 +76,46 @@ useVisiblePoll(() => (follow.value ? load(true) : undefined), 2000);
       </button>
       <button class="button small" @click="clearVisible">清空屏幕</button>
     </div>
-    <form class="log-filter-grid" @submit.prevent="apply">
-      <label>模块来源<input v-model="filters.source" placeholder="全部 / cloud / bot 等" /></label>
-      <label
-        >日志级别<select v-model="filters.level">
-          <option value="">全部</option>
-          <option>DEBUG</option>
-          <option>INFO</option>
-          <option>WARNING</option>
-          <option>ERROR</option>
-          <option>CRITICAL</option>
-        </select></label
+    <div class="filterbar log-level-chips">
+      <button
+        v-for="(label, level) in { '': '全部', INFO: '信息', WARNING: '警告', ERROR: '异常' }"
+        :key="level"
+        class="chip"
+        :class="{ active: filters.level === level }"
+        @click="quickLevel(level)"
       >
-      <label
-        >关键词<input v-model="filters.query" maxlength="200" placeholder="搜索文件名或异常原因"
-      /></label>
-      <label
-        >任务编号<input
-          v-model="filters.task"
-          maxlength="32"
-          pattern="[a-f0-9]*"
-          placeholder="可选"
-      /></label>
-      <button class="button primary">应用筛选</button>
-    </form>
+        {{ label }}
+      </button>
+    </div>
+    <details class="log-advanced-filters">
+      <summary>按模块、关键词与任务筛选</summary>
+      <form class="log-filter-grid" @submit.prevent="apply">
+        <label
+          >模块来源<input v-model="filters.source" placeholder="全部 / cloud / bot 等"
+        /></label>
+        <label
+          >日志级别<select v-model="filters.level">
+            <option value="">全部</option>
+            <option>DEBUG</option>
+            <option>INFO</option>
+            <option>WARNING</option>
+            <option>ERROR</option>
+            <option>CRITICAL</option>
+          </select></label
+        >
+        <label
+          >关键词<input v-model="filters.query" maxlength="200" placeholder="搜索文件名或异常原因"
+        /></label>
+        <label
+          >任务编号<input
+            v-model="filters.task"
+            maxlength="32"
+            pattern="[a-f0-9]*"
+            placeholder="可选"
+        /></label>
+        <button class="button primary">应用筛选</button>
+      </form>
+    </details>
     <label class="checkbox-label"
       ><input v-model="autoScroll" type="checkbox" />自动滚动到最新日志</label
     >

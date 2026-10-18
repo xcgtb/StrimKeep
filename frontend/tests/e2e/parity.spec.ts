@@ -135,6 +135,8 @@ test('channel Chinese filters save exact backend country and paired genre IDs', 
   await page.getByRole('button', { name: '中国大陆', exact: true }).click();
   await page.getByRole('button', { name: '动作', exact: true }).click();
   await page
+    .locator('.panel')
+    .filter({ has: page.getByRole('heading', { name: '编辑频道规则', exact: true }) })
     .locator('.directory-field')
     .getByRole('button', { name: '选择目录', exact: true })
     .click();

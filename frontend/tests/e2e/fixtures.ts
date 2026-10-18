@@ -89,7 +89,7 @@ export async function fixtures(page: Page, initialAuth = true) {
       if (path === '/api/runtime/status')
         return fulfill(route, {
           status: 'success',
-          version: '1.4.10',
+          version: '1.5.12',
           readiness: { ready: true },
           memory: { rss_mib: 162 },
         });
@@ -263,6 +263,16 @@ export async function fixtures(page: Page, initialAuth = true) {
         return fulfill(route, { status: 'success', running: false });
       if (path === '/api/subscriptions/check')
         return fulfill(route, { status: 'success', started: true });
+      if (path === '/api/cloud/output-directories') {
+        const location = url.searchParams.get('path') || '';
+        return fulfill(route, {
+          status: 'success',
+          roots: [{ path: '/strm', name: '/strm', available: true }],
+          path: location,
+          parent: location === '/strm/local' ? '/strm' : '',
+          items: location === '/strm' ? [{ path: '/strm/local', name: 'local' }] : [],
+        });
+      }
       if (path === '/api/cloud/settings')
         return fulfill(route, { status: 'success', settings: defaults.cloud });
       if (path.endsWith('/directories') && path.startsWith('/api/cloud/accounts/'))

@@ -8,7 +8,7 @@ const route = useRoute(),
 <template>
   <RouterView v-if="route.path === '/login'" />
   <AppShell v-else />
-  <div v-if="ui.notice" role="status" class="toast" :class="ui.noticeKind">
+  <div v-if="ui.notice" role="status" class="toast app-notice" :class="ui.noticeKind">
     <span>{{ ui.notice }}</span
     ><button class="icon-button" aria-label="关闭提示" @click="ui.notice = ''">×</button>
   </div>

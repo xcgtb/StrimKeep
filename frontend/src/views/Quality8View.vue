@@ -92,11 +92,14 @@ function resetQuality() {
     </section>
     <aside class="panel stage-guide">
       <h2>整理链路的配置关系</h2>
+      <RouterLink to="/settings/cloud?section=quality"
+        ><strong>源文件治理授权</strong><span>核查删除权限与源文件登记 →</span></RouterLink
+      >
       <RouterLink to="/organize/naming"
         ><strong>自定义命名模板</strong><span>目录、文件名与季集格式 →</span></RouterLink
       ><RouterLink to="/governance/rules"
         ><strong>七维治理策略</strong><span>本地与分享 STRM 的独立规则 →</span></RouterLink
-      ><RouterLink to="/settings/accounts"
+      ><RouterLink to="/organize/workspace"
         ><strong>来源与归档目录</strong><span>核对当前账号及 115 目录 →</span></RouterLink
       ><RouterLink :to="{ path: '/settings/cloud', query: { section: 'output' } }"
         ><strong>STRM 输出映射</strong><span>NAS 与 Emby 看到的实际位置 →</span></RouterLink

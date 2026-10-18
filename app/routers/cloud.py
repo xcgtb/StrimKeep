@@ -567,6 +567,12 @@ def stop_organizing(job_id: str, body: dict):
     return {"status": "success", **call(jobs.request_stop, job_id)}
 
 
+@router.get("/output-directories")
+def browse_output_directories(path: str = Query('', max_length=4096)):
+    from app.cloud import local_paths
+    return {"status": "success", **call(local_paths.browse, path)}
+
+
 @router.get("/settings")
 def get_settings():
     from app.cloud import media_probe

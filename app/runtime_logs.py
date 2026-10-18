@@ -47,11 +47,20 @@ class RuntimeHandler(logging.Handler):
         _LOCAL.writing = True
         try:
             message = record.getMessage()
-            if record.exc_info: message += '\n' + type(record.exc_info[1]).__name__
+            details = {}
+            if record.exc_info:
+                error = record.exc_info[1]
+                kind = type(error).__name__
+                if kind == 'LibraryScanError':
+                    message += '\n' + kind + ': ' + str(error)
+                    details = {'exception_type': kind, 'path': redact(getattr(error, 'path', '')),
+                               'reason': redact(str(error))}
+                else:
+                    message += '\n' + kind
             row = {'ts': datetime.fromtimestamp(record.created).isoformat(timespec='seconds'),
                    'level': record.levelname,
                    'source': record.module if record.name == 'strimkeep' else record.name.rsplit('.', 1)[-1],
-                   'message': redact(message)}
+                   'message': redact(message), 'details': details}
             with _LOCK:
                 try:
                     with storage._transaction() as con:

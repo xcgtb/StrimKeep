@@ -14,7 +14,7 @@ onMounted(() => cloud.load());
         </option>
       </select></label
     ><button class="button small" :disabled="cloud.loading" @click="cloud.load()">刷新账号</button
-    ><RouterLink to="/settings/accounts" class="text-link">账号与目录配置</RouterLink>
+    ><RouterLink to="/settings/accounts" class="text-link">管理账号</RouterLink>
     <p v-if="cloud.error" class="inline-error" role="alert">{{ cloud.error }}</p>
     <p v-else-if="!cloud.loading && !cloud.accounts.length" class="muted-text">
       请先连接一个 115 账号。

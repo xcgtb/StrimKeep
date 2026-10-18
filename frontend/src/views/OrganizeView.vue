@@ -55,6 +55,20 @@ async function defaults() {
     unknownName.value = String(object(d.unknown).name || '');
   }
 }
+async function saveDirectories() {
+  if (!config.data.value) return;
+  const r = await op.run(() =>
+    writeData(accountPath(cloud.id, 'directories'), {
+      directories: {
+        source: source.value || null,
+        target: target.value || null,
+        unknown: unknown.value || null,
+      },
+      expected_revision: config.data.value?.revision,
+    }),
+  );
+  if (r) await defaults();
+}
 async function load() {
   plan.value = undefined;
   const r = await preview.run((signal) =>
@@ -113,6 +127,10 @@ watch(
     title="媒体整理"
     subtitle="识别、纠正、命名与归档先预览，核对本批范围后执行。"
   /><AccountPicker />
+  <div class="flow-scope">
+    <span class="badge blue">个人库</span
+    ><strong>识别 → 八维洗版 → 命名归档 → STRM → Emby 入库</strong>
+  </div>
   <OperationState
     :busy="preview.loading.value || op.busy.value"
     :error="preview.error.value || op.error.value"
@@ -173,6 +191,20 @@ watch(
       <div class="action-row">
         <button class="button" @click="defaults">读取已保存目录</button
         ><button
+          class="button"
+          :disabled="
+            !config.data.value ||
+            !!config.error.value ||
+            !source ||
+            !target ||
+            source === target ||
+            op.busy.value ||
+            op.uncertain.value
+          "
+          @click="saveDirectories"
+        >
+          保存整理目录</button
+        ><button
           class="button primary"
           :disabled="
             !source ||
@@ -198,7 +230,7 @@ watch(
       <div class="panel">
         <span class="eyebrow">整理前核对</span>
         <h2>让归档符合你的习惯</h2>
-        <p>命名、分类和输出位置统一配置，当前任务使用已保存的规则。</p>
+        <p>目录在本页独立保存；先核对版本与命名，再确认归档。</p>
         <RouterLink :to="'/organize/naming'"
           ><span>命名模板<small>目录与文件如何命名</small></span
           ><span>↗</span></RouterLink

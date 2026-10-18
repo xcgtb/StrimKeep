@@ -27,7 +27,7 @@ import {
   Workflow,
 } from '@lucide/vue';
 
-// 1.4.11 为功能与 API 基线；V6 HTML 仅作为交互参考，不能连接演示 API。
+// 1.5.12 为功能与 API 基线；10 模块 HTML 提供布局，所有数据使用实际 API。
 // 只保留用户确认的 10 个顶级菜单，其中只有「我的网盘」需要展开子栏。
 export const navigation = [
   {

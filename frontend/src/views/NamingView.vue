@@ -40,6 +40,11 @@ const invalid = computed(() =>
     :error="request.error.value || op.error.value"
     :uncertain="op.uncertain.value"
   />
+  <div class="flow-scope">
+    <RouterLink to="/settings/cloud?section=classification" class="text-link"
+      >地区分类与归档规则 →</RouterLink
+    ><RouterLink to="/organize/workspace" class="text-link">来源与归档目录 →</RouterLink>
+  </div>
   <template v-if="request.data.value"
     ><section class="panel naming-mode-panel">
       <FormFields

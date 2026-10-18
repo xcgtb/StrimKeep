@@ -14,6 +14,7 @@ import { useRequest } from '../composables/useRequest';
 import { useOperation } from '../composables/useOperation';
 import PageHeading from '../components/PageHeading.vue';
 import AccountPicker from '../components/AccountPicker.vue';
+import DirectoryRoles from '../components/DirectoryRoles.vue';
 import DirectoryPicker from '../components/DirectoryPicker.vue';
 import FormFields, { type Field } from '../components/FormFields.vue';
 import ConfirmAction from '../components/ConfirmAction.vue';
@@ -221,7 +222,7 @@ watch(
   <PageHeading
     title="频道与机器人"
     subtitle="管理 Telegram 频道筛选、接收目录与用户会话。"
-  /><AccountPicker />
+  /><AccountPicker /><DirectoryRoles :roles="['channel']" title="频道默认接收目录" />
   <nav class="browse-tabs">
     <button
       v-for="(label, key) in { channels: '频道规则', reader: '用户会话', history: '接收历史' }"

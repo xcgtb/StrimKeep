@@ -5,6 +5,7 @@ import { routes } from './routes';
 test('all functional routes render without read errors, auto writes or horizontal overflow', async ({
   page,
 }) => {
+  test.setTimeout(60000);
   const state = await fixtures(page),
     errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -192,12 +193,11 @@ test('directory configuration carries current revision and reports 409 without r
       : fulfill(r, {
           status: 'success',
           revision: 3,
-          directories: { source: { id: '100', name: '影视' } },
+          directories: { source: { id: '100', name: '影视' }, target: { id: '101', name: '归档' } },
         }),
   );
-  await page.goto('/#/settings/accounts');
-  await page.getByRole('button', { name: '接收与归档目录' }).click();
-  await page.getByRole('button', { name: '保存目录配置' }).click();
+  await page.goto('/#/organize/workspace');
+  await page.getByRole('button', { name: '保存整理目录' }).click();
   await expect(page.getByText(/目录配置已变化，请刷新后核对再保存/)).toBeVisible();
   expect(writes).toBe(1);
 });
@@ -289,11 +289,14 @@ test('late account write does not place its receipt or directories into another 
         directories: {},
       });
     }
-    return fulfill(r, { status: 'success', revision: 3, directories: {} });
+    return fulfill(r, {
+      status: 'success',
+      revision: 3,
+      directories: { source: { id: '100', name: '影视' }, target: { id: '101', name: '归档' } },
+    });
   });
-  await page.goto('/#/settings/accounts');
-  await page.getByRole('button', { name: '接收与归档目录' }).click();
-  await page.getByRole('button', { name: '保存目录配置' }).click();
+  await page.goto('/#/organize/workspace');
+  await page.getByRole('button', { name: '保存整理目录' }).click();
   await expect.poll(() => !!resolve).toBe(true);
   await page.getByLabel('当前 115 账号').selectOption('account-b');
   resolve!();

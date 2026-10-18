@@ -15,7 +15,6 @@ import { useOperation } from '../composables/useOperation';
 import { useVisiblePoll } from '../composables/useVisiblePoll';
 import AccountPicker from '../components/AccountPicker.vue';
 import PageHeading from '../components/PageHeading.vue';
-import DirectoryPicker from '../components/DirectoryPicker.vue';
 import FormFields, { type Field } from '../components/FormFields.vue';
 import EvidenceDetails from '../components/EvidenceDetails.vue';
 import ConfirmAction from '../components/ConfirmAction.vue';
@@ -23,8 +22,6 @@ import OperationState from '../components/OperationState.vue';
 import TaskReceipt from '../components/TaskReceipt.vue';
 const cloud = useCloud(),
   op = useOperation(() => cloud.id),
-  directories = useRequest<Data>(),
-  health = useRequest<Data>(),
   maintenance = useRequest<Data>();
 const tab = ref('accounts'),
   cookie = ref(''),
@@ -33,25 +30,9 @@ const tab = ref('accounts'),
   targetExisting = ref(false),
   flow = ref(''),
   phase = ref(''),
-  draft = ref<Data>({}),
-  directoryNames = ref<Record<string, string>>({}),
-  pendingDirectory = ref(''),
-  pendingName = ref(''),
   maintenanceForm = ref<Data>({}),
   confirmation = ref(''),
   job = ref('');
-const roles: Record<string, string> = {
-  source: '待整理目录',
-  target: '整理后目录',
-  transfer: '分享转存',
-  unknown: '未识别资源',
-  strm: 'STRM 同步来源',
-  magnet: '磁力下载',
-  ed2k: 'ed2k 下载',
-  instant: '秒传接收',
-  bot: '机器人接收',
-  channel: '频道默认接收',
-};
 const maintenanceFields: Field[] = [
   { key: 'signin_enabled', label: '定时签到', type: 'check' },
   { key: 'signin_cron', label: '签到 Cron' },
@@ -66,19 +47,6 @@ async function load() {
   if (!cloud.id) return;
   op.reconcile();
   const aid = cloud.id;
-  const d = await directories.run((signal) => readData(accountPath(aid, 'directories'), signal));
-  if (d && aid === cloud.id) {
-    draft.value = Object.fromEntries(
-      Object.entries(object(d.directories)).map(([k, v]) => [k, v ? String(object(v).id) : null]),
-    );
-    directoryNames.value = Object.fromEntries(
-      Object.entries(object(d.directories)).map(([k, v]) => [
-        k,
-        v ? String(object(v).name) : '尚未选择',
-      ]),
-    );
-  }
-  if (aid !== cloud.id) return;
   const m = await maintenance.run((signal) => readData(accountPath(aid, 'maintenance'), signal));
   if (m && aid === cloud.id) {
     const c = object(m.config);
@@ -154,22 +122,6 @@ async function importCookie() {
     cloud.id = String(r.account_id);
   }
 }
-function useUnifiedPending() {
-  if (!pendingDirectory.value) return;
-  for (const role of ['source', 'transfer', 'magnet', 'ed2k', 'instant', 'bot']) {
-    draft.value[role] = pendingDirectory.value;
-    directoryNames.value[role] = pendingName.value;
-  }
-}
-async function saveDirectories() {
-  const r = await op.run(() =>
-    writeData(accountPath(cloud.id, 'directories'), {
-      directories: draft.value,
-      expected_revision: directories.data.value?.revision,
-    }),
-  );
-  if (r) await load();
-}
 async function execute() {
   const action = confirmation.value;
   let r: Data | undefined;
@@ -198,12 +150,7 @@ watch(
   () => cloud.id,
   () => {
     void cancelQR();
-    directories.cancel();
     maintenance.cancel();
-    health.cancel();
-    draft.value = {};
-    pendingDirectory.value = '';
-    pendingName.value = '';
     cookie.value = '';
     maintenanceForm.value = {};
     confirmation.value = '';
@@ -218,13 +165,12 @@ onBeforeUnmount(() => void cancelQR());
 <template>
   <PageHeading
     title="115 网盘配置"
-    subtitle="连接 115、设置各类接收目录，集中管理账号维护。"
+    subtitle="连接 115 账号，管理扫码授权、签到与回收站维护。"
   /><AccountPicker />
   <nav class="browse-tabs">
     <button
       v-for="(label, key) in {
         accounts: '授权与健康',
-        directories: '接收与归档目录',
         maintenance: '账号维护',
       }"
       :key="key"
@@ -314,74 +260,6 @@ onBeforeUnmount(() => void cancelQR());
       </section>
     </div></template
   >
-  <section v-if="tab === 'directories' && cloud.id" class="panel">
-    <p class="muted-text">目录选择仅更新草稿，点击保存才生效。保存会校验配置版本与账号。</p>
-    <div class="intake-preset">
-      <div>
-        <h2>统一接收与待整理目录</h2>
-        <p class="muted-text">
-          让 Web、机器人、115 分享、磁力与 ed2k 使用同一个待整理目录。下方仍可分别调整。
-        </p>
-      </div>
-      <DirectoryPicker
-        v-model="pendingDirectory"
-        :account-id="cloud.id"
-        :name="pendingName"
-        label="统一待整理目录"
-        @selected="(v) => (pendingName = v.name)"
-      />
-      <button
-        class="button"
-        :disabled="!pendingDirectory || op.busy.value || op.uncertain.value"
-        @click="useUnifiedPending"
-      >
-        应用到所有接收与待整理目录
-      </button>
-      <p class="data-caption">
-        仅修改目录草稿，点击底部“保存目录配置”才生效；频道单独指定的目录保持其已有配置。
-      </p>
-    </div>
-    <div class="form-grid">
-      <div v-for="(label, key) in roles" :key="key">
-        <DirectoryPicker
-          :label="label"
-          :account-id="cloud.id"
-          :model-value="draft[key] as string | null"
-          :name="directoryNames[key]"
-          @selected="
-            (v) => {
-              draft[key] = v.id;
-              directoryNames[key] = v.name;
-            }
-          "
-        /><button
-          class="text-link"
-          @click="
-            draft[key] = null;
-            directoryNames[key] = '尚未选择';
-          "
-        >
-          清空选择
-        </button>
-      </div>
-    </div>
-    <p v-if="directories.error.value" class="inline-error">{{ directories.error.value }}</p>
-    <div class="action-row">
-      <button class="button" @click="load">重新读取</button
-      ><button
-        class="button primary"
-        :disabled="
-          op.busy.value ||
-          op.uncertain.value ||
-          !directories.data.value ||
-          !!directories.error.value
-        "
-        @click="saveDirectories"
-      >
-        保存目录配置
-      </button>
-    </div>
-  </section>
   <section v-if="tab === 'maintenance' && cloud.id" class="panel">
     <h2>签到与回收站维护</h2>
     <FormFields

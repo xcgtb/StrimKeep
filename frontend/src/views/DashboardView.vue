@@ -22,8 +22,9 @@ import { mediaApi } from '../api/media';
 import { useRequest } from '../composables/useRequest';
 import { useVisiblePoll } from '../composables/useVisiblePoll';
 import { useLibraryUpdates } from '../composables/useLibraryUpdates';
-import { number, date, titleOf, posterUrl } from '../composables/format';
+import { number, date, titleOf, stateLabel } from '../composables/format';
 import { useUi } from '../stores/ui';
+import { readData, records, type Data } from '../api/domain';
 import PosterCard from '../components/PosterCard.vue';
 import LoadState from '../components/LoadState.vue';
 import type { MediaCard, Overview, ExploreResponse } from '../types/api';
@@ -32,7 +33,8 @@ const overview = useRequest<Overview>(),
   router = useRouter(),
   ui = useUi(),
   refreshing = ref(false),
-  recType = ref('movie');
+  recType = ref('movie'),
+  jobs = useRequest<Data>();
 const workflows = [
   { to: '/resources/receive', name: '接收资源', note: '分享 · 磁力 · 秒传', icon: CloudDownload },
   { to: '/organize/workspace', name: '识别整理', note: '命名 · 分类 · 归档', icon: ArrowDownUp },
@@ -94,8 +96,25 @@ const stats = computed(() => [
 const ingest = computed(() => dashboard.value.ingest || {});
 const recent = computed(() => overview.data.value?.activity?.recent || []);
 function load() {
+  void jobs.run((signal) => readData('/api/cloud/jobs', signal));
   return overview.run(mediaApi.overview);
 }
+const jobLabels: Record<string, string> = {
+  transfer: '链接转存',
+  organize: '影视整理',
+  workflow: '整理流程',
+  sync: 'STRM 同步',
+  intake: '资源接收',
+  share_strm: '分享 STRM',
+  maintenance: '账号维护',
+};
+const latestJobs = computed(() => records(jobs.data.value?.items).slice(0, 5));
+const libraryCounts = computed(() => {
+  const parse = (value: unknown) => Number(String(value || '0').replaceAll(',', ''));
+  const local = parse(dashboard.value.localCount),
+    share = parse(dashboard.value.shareCount);
+  return { local, share, localRatio: local + share ? (local / (local + share)) * 100 : 0 };
+});
 function loadRecs() {
   return recommendations.run((signal) => mediaApi.recommendations(recType.value, signal));
 }
@@ -128,40 +147,45 @@ useLibraryUpdates(async () => {
 });
 </script>
 <template>
-  <section class="page-heading dashboard-heading">
+  <section class="page-heading pageheading dashboard-heading">
     <div>
-      <span class="eyebrow">媒体工作台</span>
+      <span class="eyebrow">MEDIA OPERATIONS</span>
       <h1>运行总览</h1>
-      <p>资源有序流转，片库一目了然。</p>
+      <p>媒体资产、最近入库与运行动态。</p>
     </div>
-    <button
-      class="button"
-      :disabled="refreshing || overview.data.value?.refresh?.running"
-      @click="refresh"
-    >
-      <RefreshCw
-        :size="16"
-        :class="{ spin: refreshing || overview.data.value?.refresh?.running }"
-      />刷新总览
-    </button>
+    <div class="actions">
+      <button
+        class="button"
+        :disabled="refreshing || overview.data.value?.refresh?.running"
+        @click="refresh"
+      >
+        <RefreshCw
+          :size="15"
+          :class="{ spin: refreshing || overview.data.value?.refresh?.running }"
+        />刷新总览</button
+      ><RouterLink to="/organize/workspace" class="button primary"
+        >打开整理工作台<ArrowUpRight :size="15"
+      /></RouterLink>
+    </div>
   </section>
-  <nav class="workflow-launcher" aria-label="媒体处理工作流">
-    <RouterLink v-for="(flow, i) in workflows" :key="flow.to" :to="flow.to"
-      ><span class="workflow-launch-icon"><component :is="flow.icon" :size="20" /></span>
-      <div>
-        <strong>{{ flow.name }}</strong
-        ><small>{{ flow.note }}</small>
-      </div>
-      <ArrowRight v-if="i < workflows.length - 1" :size="15" class="workflow-arrow"
-    /></RouterLink>
-  </nav>
+  <section class="hero">
+    <div class="hero-copy">
+      <div class="eyebrow" style="color: #adc1ff">MEDIA OPERATIONS CONSOLE</div>
+      <h2>每一份影视资源，都有清晰去处。</h2>
+      <p>从资源接收、库内洗版到 STRM 入库，处理结果全程可追溯。</p>
+    </div>
+    <div class="hero-actions">
+      <RouterLink to="/governance" class="btn">查看治理结果</RouterLink
+      ><RouterLink to="/tasks" class="btn outline">全链路任务</RouterLink>
+    </div>
+  </section>
   <LoadState
     :loading="overview.loading.value && !overview.data.value"
     :error="overview.error.value"
     @retry="load"
   />
-  <template v-if="overview.data.value"
-    ><div
+  <template v-if="overview.data.value">
+    <div
       v-if="
         overview.data.value.refresh?.running ||
         overview.data.value.refresh?.error ||
@@ -170,128 +194,182 @@ useLibraryUpdates(async () => {
       class="notice-bar"
       role="status"
     >
-      <span class="status-dot muted"></span
-      >{{
+      {{
         overview.data.value.refresh?.error ||
         overview.data.value.refresh?.phase ||
-        '正在显示缓存快照，等待后台更新'
+        '正在显示上次快照，等待后台更新'
       }}<span class="push-right">快照 {{ date(overview.data.value.ts) }}</span>
     </div>
     <div v-for="warning in overview.data.value.refresh?.warnings" :key="warning" class="notice-bar">
       {{ warning }}
     </div>
-    <div class="stats-grid">
-      <RouterLink v-for="stat in stats" :key="stat.label" :to="stat.to" class="stat-card">
-        <div class="stat-label">
+    <div class="stats-grid metricrow">
+      <RouterLink v-for="stat in stats" :key="stat.label" :to="stat.to" class="stat-card metric"
+        ><div class="stat-label metrichead">
           {{ stat.label
-          }}<span class="stat-icon" :class="stat.tone"
-            ><component :is="stat.icon" :size="18"
+          }}<span class="stat-icon metricicon" :class="stat.tone"
+            ><component :is="stat.icon" :size="16"
           /></span>
         </div>
-        <strong>{{ number(stat.value) }}</strong
-        ><span>{{ stat.note }}</span>
-      </RouterLink>
-    </div>
-    <div class="dashboard-ingest-note" role="status">
-      <span>近 24 小时 Emby 入库</span>
-      <strong>{{ number(ingest.movies) }} 部电影</strong
-      ><strong>{{ number(ingest.series) }} 部剧集</strong
-      ><strong>{{ number(ingest.episodes) }} 集</strong>
-      <RouterLink class="text-link push-right" to="/tasks/reports">查看分类清单 →</RouterLink>
+        <strong class="metricnum">{{ number(stat.value) }}</strong
+        ><span class="metricsmall">{{ stat.note }}</span></RouterLink
+      >
     </div>
     <p v-if="dashboard.libraryHealth?.stale" class="data-caption">
-      片库统计来自过期快照，等待服务端更新，不应将当前数字当作实时总量。
+      片库统计正在重新核验，当前显示上次快照。
     </p>
-    <div class="dashboard-middle">
-      <section class="panel activity-panel">
-        <header class="section-heading">
-          <div>
-            <span class="eyebrow">片库动态</span>
-            <h2>近期入库</h2>
-          </div>
-          <RouterLink class="text-link" to="/media/library"
-            >查看片库<ArrowUpRight :size="15"
-          /></RouterLink>
-        </header>
-        <p v-if="overview.data.value.activity?.ingest_error" class="inline-error">
-          近期入库同步失败，保留上次快照。
-        </p>
-        <div v-if="recent.length" class="recent-ingest-list">
-          <button
-            v-for="(card, i) in recent"
-            :key="`${card.media_type}:${card.tmdb_id}:${card.title}:${i}`"
-            :aria-label="`查看${titleOf(card)}详情`"
-            class="recent-ingest-row"
-            @click="explore({ ...card, type: card.media_type })"
-          >
-            <img
-              v-if="posterUrl({ ...card, type: card.media_type })"
-              :src="posterUrl({ ...card, type: card.media_type })"
-              :loading="i < 2 ? 'eager' : 'lazy'"
-              decoding="async"
-              alt=""
-            />
-            <div class="recent-ingest-main">
-              <strong>{{ titleOf(card) }}</strong
-              ><small
-                >{{ card.media_type === 'tv' ? '剧集' : '电影' }} · {{ card.library || 'Emby' }} ·
-                {{ date(card.ts) }}</small
-              ><span v-if="card.episodes" class="ingest-episode-pill"
-                >新增 {{ card.episodes }}</span
-              >
+    <div class="grid cols2 dashboard-workspace">
+      <div class="grid dashboard-primary">
+        <section class="card cardpad">
+          <header class="ctop">
+            <div>
+              <h2 class="ctitle">媒体生产链路</h2>
+              <p class="cdesc">接收、整理、生成与实际入库分别确认。</p>
             </div>
-            <ArrowUpRight :size="16" />
-          </button>
-        </div>
-        <div v-else class="activity-empty">
-          <Clapperboard :size="26" />
-          <p>暂无近期入库记录</p>
-          <small>Emby 确认入库后，这里会展示真实记录。</small>
-        </div>
-      </section>
-      <section class="panel service-panel">
-        <header class="section-heading">
-          <div>
-            <span class="eyebrow">运行状态</span>
-            <h2>服务连接</h2>
+            <RouterLink to="/tasks" class="btn small">打开任务</RouterLink>
+          </header>
+          <nav class="flowline" aria-label="媒体处理工作流">
+            <RouterLink v-for="(flow, i) in workflows" :key="flow.to" :to="flow.to" class="flowstep"
+              ><span class="num"><component :is="flow.icon" :size="17" /></span
+              ><span
+                ><strong>{{ flow.name }}</strong
+                ><small>{{ flow.note }}</small></span
+              ><ArrowRight v-if="i < workflows.length - 1" :size="13" class="flowarr"
+            /></RouterLink>
+          </nav>
+        </section>
+        <section class="card cardpad">
+          <header class="ctop">
+            <div>
+              <h2 class="ctitle">最近入库</h2>
+              <p class="cdesc">Emby 已确认的媒体记录，点击海报查看作品。</p>
+            </div>
+            <RouterLink to="/tasks/reports" class="text-link"
+              >查看全部<ArrowUpRight :size="14"
+            /></RouterLink>
+          </header>
+          <p v-if="overview.data.value.activity?.ingest_error" class="inline-error">
+            近期入库同步失败，保留上次记录。
+          </p>
+          <div v-if="recent.length" class="posters recent-poster-grid">
+            <div
+              v-for="(card, i) in recent.slice(0, 5)"
+              :key="`${card.media_type}:${card.tmdb_id}:${i}`"
+              class="recent-media-item"
+            >
+              <PosterCard
+                :card="{ ...card, type: card.media_type }"
+                priority
+                compact
+                hide-status
+                @open="explore({ ...card, type: card.media_type })"
+              />
+              <p class="recent-media-fact">
+                {{ card.episodes || '已入库'
+                }}<span v-if="card.library"> · {{ card.library }}</span>
+              </p>
+            </div>
           </div>
-          <RouterLink to="/settings" class="text-link">管理<ArrowUpRight :size="15" /></RouterLink>
-        </header>
-        <div v-for="(service, name) in dashboard.services" :key="name" class="service-row">
-          <div class="service-symbol">{{ String(name).slice(0, 1).toUpperCase() }}</div>
-          <div>
-            <strong>{{
-              { emby: 'Emby 媒体服务', tmdb: 'TMDB 元数据', telegram: 'Telegram 通知' }[
-                String(name)
-              ] || name
-            }}</strong
-            ><small>{{
-              service.host || (name === 'telegram' ? '入库与追更消息' : '影视识别与海报')
-            }}</small>
+          <div v-else class="empty">
+            <Clapperboard :size="26" />
+            <p>暂无已确认入库记录</p>
           </div>
-          <CheckCircle2 v-if="service.ok" :size="18" class="success-text" /><CircleAlert
-            v-else
-            :size="18"
-            class="warning-text"
-          /><span class="sr-only">{{ service.ok ? '配置可用' : '未就绪' }}</span>
-        </div>
-        <p v-if="!dashboard.services" class="muted-text">服务状态尚未同步</p>
-        <div class="service-footnote">
-          上次治理 <strong>{{ dashboard.lastScan?.time || '尚无记录' }}</strong
-          ><small v-if="dashboard.lastScan"
-            >待处理 {{ number(dashboard.lastScan.total) }} 项 · 受保护
-            {{ number(dashboard.lastScan.protected) }} 项</small
+          <div class="dashboard-ingest-note">
+            <span>近 24 小时</span><strong>{{ number(ingest.movies) }} 部电影</strong
+            ><strong>{{ number(ingest.series) }} 部剧集</strong
+            ><strong>{{ number(ingest.episodes) }} 集</strong>
+          </div>
+        </section>
+        <section class="card cardpad library-distribution">
+          <header class="ctop">
+            <div>
+              <h2 class="ctitle">双库播放引用</h2>
+              <p class="cdesc">来自已核验的 NAS STRM 统计。</p>
+            </div>
+            <RouterLink to="/media/library" class="text-link">片库映射 →</RouterLink>
+          </header>
+          <div class="between">
+            <span><i class="distribution-dot"></i>本地 {{ dashboard.localCount || '—' }}</span
+            ><span
+              ><i class="distribution-dot share"></i>分享 {{ dashboard.shareCount || '—' }}</span
+            >
+          </div>
+          <div class="distribution-track">
+            <span :style="{ width: `${libraryCounts.localRatio}%` }"></span>
+          </div>
+        </section>
+      </div>
+      <div class="grid dashboard-secondary">
+        <section class="card cardpad">
+          <header class="ctop">
+            <div>
+              <h2 class="ctitle">运行动态</h2>
+              <p class="cdesc">最近网盘任务与实际执行状态。</p>
+            </div>
+            <RouterLink to="/logs" class="text-link">日志 →</RouterLink>
+          </header>
+          <p v-if="jobs.error.value" class="inline-error">{{ jobs.error.value }}</p>
+          <RouterLink
+            v-for="job in latestJobs"
+            :key="String(job.id)"
+            :to="{ path: '/tasks', query: { job: String(job.id) } }"
+            class="event"
+            ><span
+              class="eventicon"
+              :class="{
+                green: job.state === 'success',
+                orange: ['failed', 'uncertain', 'needs_review'].includes(String(job.state)),
+              }"
+              ><CheckCircle2 v-if="job.state === 'success'" :size="17" /><CircleAlert
+                v-else
+                :size="17" /></span
+            ><span class="eventinfo"
+              ><b>{{ jobLabels[String(job.kind)] || job.kind }}</b>
+              <p>{{ job.message || stateLabel(String(job.state)) }}</p></span
+            ><time>{{ date(Number(job.updated || job.created)) }}</time></RouterLink
           >
-        </div>
-      </section>
-    </div></template
-  >
+          <div v-if="!latestJobs.length && !jobs.error.value" class="empty">暂无任务动态</div>
+        </section>
+        <section class="card cardpad">
+          <header class="ctop">
+            <div>
+              <h2 class="ctitle">服务状态</h2>
+              <p class="cdesc">配置与服务回执，失败原因可继续核查。</p>
+            </div>
+            <RouterLink to="/system" class="text-link">详情 →</RouterLink>
+          </header>
+          <div v-for="(service, name) in dashboard.services" :key="name" class="event">
+            <span class="eventicon" :class="service.ok ? 'green' : 'orange'"
+              ><CheckCircle2 v-if="service.ok" :size="17" /><CircleAlert v-else :size="17" /></span
+            ><span class="eventinfo"
+              ><b>{{
+                { emby: 'Emby 媒体服务', tmdb: 'TMDB 元数据', telegram: 'Telegram 通知' }[
+                  String(name)
+                ] || name
+              }}</b>
+              <p>{{ service.host || (service.ok ? '配置可用' : '等待配置或核验') }}</p></span
+            >
+          </div>
+          <p v-if="!dashboard.services" class="muted-text">服务状态尚未同步</p>
+        </section>
+        <section class="card cardpad">
+          <h2 class="ctitle">快捷操作</h2>
+          <div class="quick-action-grid">
+            <RouterLink to="/resources/receive?tab=batch"
+              ><CloudDownload :size="18" />链接转存</RouterLink
+            ><RouterLink to="/organize/workspace"><ArrowDownUp :size="18" />影视整理</RouterLink
+            ><RouterLink to="/media/strm"><FileVideo :size="18" />生成 STRM</RouterLink
+            ><RouterLink to="/governance"><ShieldCheck :size="18" />双库治理</RouterLink>
+          </div>
+        </section>
+      </div>
+    </div>
+  </template>
   <section class="panel recommendation-panel">
     <header class="section-heading">
       <div>
-        <span class="eyebrow">发现灵感</span>
         <h2>值得发现</h2>
-        <p>为下一次观影，留一点期待。</p>
+        <p>发现下一部想看的作品。</p>
       </div>
       <div class="segmented">
         <button

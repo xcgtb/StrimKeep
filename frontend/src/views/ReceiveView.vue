@@ -22,7 +22,16 @@ import EvidenceDetails from '../components/EvidenceDetails.vue';
 import OperationState from '../components/OperationState.vue';
 import ConfirmAction from '../components/ConfirmAction.vue';
 import TaskReceipt from '../components/TaskReceipt.vue';
+import DirectoryRoles from '../components/DirectoryRoles.vue';
+import OutputSettings from '../components/OutputSettings.vue';
 import MediaOverride from '../components/MediaOverride.vue';
+function showOutput() {
+  const section = document.querySelector<HTMLDetailsElement>('.share-output-config');
+  if (section) {
+    section.open = true;
+    section.scrollIntoView({ behavior: 'smooth' });
+  }
+}
 const route = useRoute(),
   router = useRouter(),
   cloud = useCloud(),
@@ -301,7 +310,15 @@ watch(
 </script>
 <template>
   <PageHeading
-    :title="shareOnly ? '分享 STRM 生成与整理' : '链接与离线转存'"
+    :title="
+      shareOnly
+        ? '分享 STRM 生成与整理'
+        : tab === 'offline'
+          ? '离线转存'
+          : tab === 'bot'
+            ? '机器人接收'
+            : '链接转存'
+    "
     :subtitle="
       shareOnly
         ? '浏览分享，直接生成到分类目录，保留分享源文件。'
@@ -320,7 +337,7 @@ watch(
     <RouterLink to="/resources/share" class="current">分享生成</RouterLink>
     <RouterLink to="/organize/naming">命名模板</RouterLink>
     <RouterLink to="/settings/cloud?section=classification">分类规则</RouterLink>
-    <RouterLink to="/settings/cloud?section=output">分享输出目录</RouterLink>
+    <a href="#" @click.prevent="showOutput()">输出与播放设置</a>
     <RouterLink to="/tasks/ingestion">入库核验</RouterLink>
   </nav>
   <nav v-if="!shareOnly" class="browse-tabs">
@@ -349,6 +366,24 @@ watch(
       >查看任务</RouterLink
     >
   </p>
+  <details v-if="shareOnly" class="module-config share-output-config">
+    <summary>输出与播放设置 <small>分享库目录、302 地址和生成时机</small></summary>
+    <OutputSettings kind="share" />
+  </details>
+  <details v-if="!shareOnly" class="module-config">
+    <summary>接收目录设置 <small>在本页选择并保存</small></summary>
+    <DirectoryRoles
+      :roles="
+        tab === 'offline'
+          ? ['magnet', 'ed2k']
+          : tab === 'bot'
+            ? ['bot']
+            : ['transfer', 'instant', 'magnet', 'ed2k']
+      "
+      title="接收目录设置"
+      @saved="loadDirectories"
+    />
+  </details>
   <template v-if="cloud.id"
     ><section v-if="!shareOnly && (tab === 'batch' || tab === 'offline')" class="panel">
       <h2>{{ tab === 'offline' ? '添加离线链接' : '添加资源链接' }}</h2>
@@ -372,7 +407,7 @@ watch(
           ></textarea></label
         ><label class="checkbox-label"
           ><input v-model="organize" type="checkbox" />接收后按已保存归档配置整理</label
-        ><RouterLink to="/settings/accounts" class="text-link">核对各类接收目录 →</RouterLink>
+        ><span class="muted-text">接收目录在本页保存；整理归档目标在影视整理模块保存。</span>
         <div class="action-row">
           <button
             class="button"

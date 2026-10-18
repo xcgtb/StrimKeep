@@ -218,13 +218,16 @@ test('settings deep link opens the requested naming section', async ({ page }) =
   expect(state.writes).toHaveLength(0);
 });
 
-test('mobile shortcut dock opens resources and the full navigation', async ({ page, isMobile }) => {
-  test.skip(!isMobile, 'Mobile shortcut navigation');
+test('mobile drawer opens receive and share modules', async ({ page, isMobile }) => {
+  test.skip(!isMobile, 'Mobile drawer navigation');
   await fixtures(page);
   await page.goto('/#/dashboard');
-  const dock = page.getByRole('navigation', { name: '快捷导航' });
-  await dock.getByRole('link', { name: '转存', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '链接与离线转存', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '展开导航' }).click();
+  await page
+    .getByRole('navigation', { name: '主导航' })
+    .getByRole('link', { name: '链接转存', exact: true })
+    .click();
+  await expect(page.getByRole('heading', { name: '链接转存', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '展开导航' }).click();
   await page
     .getByRole('navigation', { name: '主导航' })

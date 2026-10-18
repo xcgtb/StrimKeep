@@ -1,6 +1,6 @@
 # StrimKeep Vue 3 前端
 
-正式首页使用 Vue 3 + TypeScript + Vite + Pinia + Vue Router（Hash 路由），共 27 个业务页面。当前界面以用户提供的 `StrimKeep-UI-Naming-Variables-v2(2).html` 为布局参考：默认白色侧栏、统一深浅主题、七大业务分组、五段工作流、独立命名模板与整理八维工作区。页面数据及写入来自现有 Python API。
+正式首页使用 Vue 3 + TypeScript + Vite + Pinia + Vue Router（Hash 路由），共 27 个业务页面。本轮以用户确认的「StrimKeep 10 模块交互原型·目录流程修正版」HTML 为视觉和交互基线：252px 侧栏、双栏工作台、统一深浅主题、手机抽屉导航。原型中的演示数据和演示按钮改接现有 Python API；功能补齐记录见 [本轮实现与验证](../docs/vue3-prototype-replica-20261018.md)。
 
 ## 使用完整源码包
 
@@ -8,7 +8,7 @@
 
 包内 `static/` 已编译，可直接随现有 Python 应用运行。Dockerfile 会在 Node 构建阶段重新编译 Vue，运行阶段仅使用 Python；NAS 无需安装 Node。访问 `http://NAS地址:8321/`，使用原管理账号登录。
 
-在现有源码目录更新时，用包中的 `frontend/`、`static/`、相关文档和 CI 文件替换对应源码。**整个替换 `static/` 目录**，清除旧的 `static/js/`、`static/css/` 和临时 `static/vue3/`，避免保留无用旧文件。原有部署配置、数据目录、数据库、密码和媒体挂载保持使用原值。预编译文件不是可双击运行的离线网页，需要当前 StrimKeep 后端。
+本轮源码包同时包含只读容器目录浏览接口和扫描错误日志明细，需要前后端一起更新。建议将完整源码放在独立目录构建，沿用现有部署配置与数据。**整个替换 `static/` 目录**，清除旧的 `static/js/`、`static/css/` 和临时 `static/vue3/`，避免保留无用旧文件。原有部署配置、数据目录、数据库、密码和媒体挂载保持使用原值。预编译文件不是可双击运行的离线网页，需要当前 StrimKeep 后端。
 
 使用现有 Docker 部署时，在完整源码根目录重建镜像，并沿用原部署目录、环境变量、挂载和端口。直接拉取现有远程镜像不会带上这份尚未发布的源码修改。
 

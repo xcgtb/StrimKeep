@@ -244,3 +244,16 @@ for stream in (runtime_logs, cli_logs):
                             cwd=Path(__file__).resolve().parents[2],
                             capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr[-1000:]
+
+
+def test_runtime_library_scan_error_keeps_actionable_path_and_reason(state):
+    from app.lib import LibraryScanError
+    try:
+        raise LibraryScanError('/media/local', '/media/local/films', '根目录挂载身份已变化')
+    except LibraryScanError:
+        logging.getLogger('strimkeep').exception('媒体总览刷新失败')
+    row = runtime_logs.read(query='媒体总览刷新失败')['logs'][-1]
+    assert '/media/local/films' in row['message']
+    assert '根目录挂载身份已变化' in row['message']
+    assert row['details']['path'] == '/media/local/films'
+    assert row['details']['exception_type'] == 'LibraryScanError'

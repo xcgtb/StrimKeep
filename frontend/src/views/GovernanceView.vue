@@ -358,7 +358,7 @@ onMounted(() => {
       当前剩余项需重新扫描核实，不能将原数量继续作为待清理项。
     </p>
     <details class="governance-scan-items" :open="!scanArchived">
-      <summary v-if="scanArchived">查看执行前扫描明细（历史快照）</summary>
+      <summary>{{ scanArchived ? '查看执行前扫描明细（历史快照）' : '查看当前扫描明细' }}</summary>
       <nav class="browse-tabs">
         <button :class="{ active: group === 'all' }" @click="group = 'all'">
           全部 {{ Object.keys(groupLabels).reduce((n, key) => n + records(result[key]).length, 0) }}

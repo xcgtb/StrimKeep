@@ -9,6 +9,7 @@ const props = defineProps<{
   selected?: boolean;
   priority?: boolean;
   compact?: boolean;
+  hideStatus?: boolean;
 }>();
 defineEmits<{ open: []; select: [] }>();
 const status = computed(() => badge(props.card));
@@ -59,7 +60,7 @@ watch(url, () => {
       ><span v-if="card.type" class="poster-type">{{ card.type === 'tv' ? '剧集' : '电影' }}</span
       ><span v-if="card.rating && !selectable" class="rating">★ {{ card.rating.toFixed(1) }}</span
       ><span
-        v-if="status"
+        v-if="status && !hideStatus"
         class="poster-status"
         :class="statusTone"
         :title="card.facts_stale ? '片库缓存中的集数，TMDB 对照已过期，等待同步' : status"

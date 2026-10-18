@@ -6,7 +6,7 @@ export const routes = [
   ['media/library', '片库映射'],
   ['media/subscriptions', '追更订阅'],
   ['media/strm', 'STRM 资源'],
-  ['resources/receive', '链接与离线转存'],
+  ['resources/receive', '链接转存'],
   ['resources/share', '分享 STRM 生成与整理'],
   ['resources/files', '115 文件管理'],
   ['organize/workspace', '媒体整理'],

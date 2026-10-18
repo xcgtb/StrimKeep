@@ -2,20 +2,16 @@
 import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
-  Diamond,
+  Clapperboard,
+  ChevronRight,
+  CheckCircle2,
+  CircleAlert,
   Sun,
   Moon,
   Menu,
-  X,
   LogOut,
-  ChevronDown,
   Search,
-  LayoutDashboard,
-  Settings2,
-  ArrowDownUp,
-  CloudDownload,
-  Compass,
-  ScrollText,
+  X,
 } from '@lucide/vue';
 import { useSession } from '../stores/session';
 import { useUi } from '../stores/ui';
@@ -25,7 +21,6 @@ import {
   matchesNavigation,
   searchFunctions,
   moduleName,
-  moduleNavigation,
 } from '../config/navigation';
 import { readData, object } from '../api/domain';
 import ModalDialog from '../components/ModalDialog.vue';
@@ -36,7 +31,7 @@ const route = useRoute(),
   open = ref(false),
   searchOpen = ref(false),
   search = ref('');
-const expandedGroups = ref<Set<string>>(new Set());
+const expandedGroups = ref<Set<string>>(new Set(['我的网盘']));
 function expandMobileMenu() {
   expandedGroups.value = new Set(['我的网盘']);
   open.value = true;
@@ -58,13 +53,6 @@ watch(
   },
   { immediate: true },
 );
-const dock = [
-  { to: '/dashboard', name: '总览', icon: LayoutDashboard },
-  { to: '/resources/receive?tab=batch', name: '转存', icon: CloudDownload },
-  { to: '/organize/workspace', name: '整理', icon: ArrowDownUp },
-  { to: '/media/explore', name: '发现', icon: Compass },
-  { to: '/logs', name: '日志', icon: ScrollText },
-];
 const activePageTitle = computed(() => {
   const exact = allNavigation.find(
     (item) => item.to.includes('?') && matchesNavigation(item.to, route.path, route.query),
@@ -77,7 +65,6 @@ function isChildActive(to: string) {
   return matchesNavigation(to, route.path, route.query);
 }
 const workspaceModule = computed(() => moduleName(route.path, route.query.section));
-const moduleTabs = computed(() => moduleNavigation[workspaceModule.value] || []);
 function isGroupActive(group: (typeof navigation)[number]) {
   if (group.group === '我的网盘')
     return (
@@ -102,7 +89,17 @@ async function logout() {
     ui.notify((e as Error).message, 'error');
   }
 }
+watch(
+  () => route.fullPath,
+  () => {
+    open.value = false;
+  },
+);
 function keys(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    open.value = false;
+    searchOpen.value = false;
+  }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
     event.preventDefault();
     searchOpen.value = !searchOpen.value;
@@ -123,145 +120,154 @@ onMounted(() => {
 onBeforeUnmount(() => document.removeEventListener('keydown', keys));
 </script>
 <template>
-  <div class="app-shell template-shell">
-    <button v-if="open" class="nav-scrim" aria-label="关闭导航" @click="open = false"></button>
-    <aside class="sidebar" :class="{ expanded: open }">
-      <RouterLink to="/dashboard" class="brand" @click="open = false"
-        ><span class="brand-mark"><Diamond :size="24" /></span
-        ><span>StrimKeep<small>NAS · MEDIA WORKSPACE</small></span></RouterLink
-      ><button class="icon-button mobile-close" aria-label="关闭导航" @click="open = false">
-        <X :size="20" />
+  <div class="layout prototype-shell">
+    <button v-if="open" class="veil show" aria-label="关闭导航" @click="open = false"></button>
+    <aside class="sidebar" :class="{ 'mobile-open': open }">
+      <RouterLink to="/dashboard" class="brand" aria-label="StrimKeep 媒体总览">
+        <span class="brandmark"><Clapperboard :size="23" /></span>
+        <span
+          ><span class="brandname">StrimKeep</span
+          ><span class="brandmeta">MEDIA WORKSPACE</span></span
+        >
+      </RouterLink>
+      <button
+        v-if="open"
+        class="squarebtn sidebar-close"
+        aria-label="关闭导航"
+        @click="open = false"
+      >
+        <X :size="18" />
       </button>
-      <nav aria-label="主导航">
+      <nav class="navscroll" aria-label="主导航">
+        <div class="navgroup">工作空间 / WORKSPACE</div>
         <div v-for="group in navigation" :key="group.group" class="nav-group">
           <RouterLink
             v-if="group.directTo"
             :to="group.directTo"
-            class="nav-direct"
-            :class="{ current: isGroupActive(group) }"
-            @click="open = false"
+            class="navitem nav-direct"
+            :class="{ active: isGroupActive(group), current: isGroupActive(group) }"
           >
-            <component :is="group.icon" :size="18" />
-            <span>{{ group.group }}</span>
+            <component :is="group.icon" :size="18" /><span class="grow">{{ group.group }}</span>
           </RouterLink>
           <template v-else>
             <button
-              type="button"
-              class="nav-group-toggle nav-cloud-toggle"
-              :class="{ current: isGroupActive(group) }"
+              class="navitem nav-group-toggle"
+              :class="{ active: isGroupActive(group), open: expandedGroups.has(group.group) }"
               :aria-expanded="expandedGroups.has(group.group)"
               @click="toggleGroup(group.group)"
             >
-              <component :is="group.icon" :size="18" />
-              <span>{{ group.group }}</span>
-              <ChevronDown :size="15" :class="{ expanded: expandedGroups.has(group.group) }" />
+              <component :is="group.icon" :size="18" /><span class="grow">{{ group.group }}</span
+              ><ChevronRight :size="14" class="navchev" />
             </button>
-            <div v-if="expandedGroups.has(group.group)" class="nav-children">
+            <div class="children nav-children" :class="{ open: expandedGroups.has(group.group) }">
               <RouterLink
                 v-for="item in group.items"
                 :key="item.to"
                 :to="item.to"
+                class="child"
                 :class="{
-                  current:
+                  active:
                     isChildActive(item.to) ||
                     (item.to === '/organize/workspace' && workspaceModule === 'organize'),
+                  current: isChildActive(item.to),
                 }"
-                @click="open = false"
               >
-                <component :is="item.icon" :size="16" />
-                <span>{{ item.name }}</span>
+                <span class="dot"></span>{{ item.name }}
               </RouterLink>
             </div>
           </template>
         </div>
       </nav>
-      <div class="sidebar-bottom">
-        <span
-          class="status-dot"
-          :class="{ muted: session.runtime.readiness?.ready === false }"
-        ></span
-        ><span
-          >{{ session.runtime.readiness?.ready === false ? '服务初始化中' : '已连接服务'
-          }}<small>{{ version }}</small></span
-        ><button class="icon-button" title="退出登录" aria-label="退出登录" @click="logout">
-          <LogOut :size="16" />
-        </button>
+      <div class="sidefoot">
+        <RouterLink to="/system" class="device">
+          <span class="nicon"
+            ><CheckCircle2
+              v-if="session.runtime.readiness?.ready === true"
+              :size="18" /><CircleAlert v-else :size="18"
+          /></span>
+          <span
+            ><b>NAS 服务</b
+            ><small
+              ><span
+                class="statusdot"
+                :class="{ pending: session.runtime.readiness?.ready !== true }"
+              ></span
+              >{{
+                session.runtime.readiness?.ready === true ? '服务已就绪' : '等待服务就绪'
+              }}</small
+            ></span
+          >
+        </RouterLink>
+        <div class="version">
+          {{ version }}
+          <button class="text-link logout" aria-label="退出登录" @click="logout">
+            <LogOut :size="13" />退出
+          </button>
+        </div>
       </div>
     </aside>
-    <div class="workspace">
+    <div class="mainwrap">
       <header class="topbar">
-        <div class="breadcrumb">
-          <button class="icon-button mobile-menu" aria-label="展开导航" @click="expandMobileMenu">
-            <Menu :size="21" /></button
-          ><strong>{{ activePageTitle }}</strong>
-        </div>
-        <div class="topbar-actions">
-          <span
-            class="topbar-readiness"
-            :class="{ pending: session.runtime.readiness?.ready !== true }"
-            ><span
-              class="status-dot"
-              :class="{ muted: session.runtime.readiness?.ready !== true }"
-            ></span
-            >{{ session.runtime.readiness?.ready === true ? '服务就绪' : '等待服务就绪' }}</span
+        <div class="crumb">
+          <button
+            class="squarebtn hamb mobile-menu"
+            aria-label="展开导航"
+            @click="expandMobileMenu"
           >
-          <button class="global-search-button" aria-label="全局搜索功能" @click="searchOpen = true">
-            <Search :size="15" /><span>搜索功能</span><kbd>⌘ / Ctrl K</kbd></button
-          ><button
-            class="icon-button"
+            <Menu :size="19" />
+          </button>
+          <span class="workspace-crumb">工作空间</span
+          ><ChevronRight class="workspace-crumb" :size="13" /><b>{{ activePageTitle }}</b>
+        </div>
+        <div class="topright">
+          <button
+            class="searchbox global-search-button"
+            aria-label="全局搜索功能"
+            @click="searchOpen = true"
+          >
+            <Search :size="16" /><span>快速查找页面</span><kbd>Ctrl K</kbd>
+          </button>
+          <button
+            class="squarebtn"
             :aria-label="ui.theme === 'light' ? '切换深色主题' : '切换浅色主题'"
             @click="ui.toggleTheme"
           >
-            <Moon v-if="ui.theme === 'light'" :size="18" /><Sun v-else :size="18" /></button
-          ><RouterLink to="/settings" class="icon-button topbar-settings" aria-label="打开系统设置"
-            ><Settings2 :size="18"
-          /></RouterLink>
+            <Moon v-if="ui.theme === 'light'" :size="18" /><Sun v-else :size="18" />
+          </button>
+          <RouterLink to="/settings/accounts" class="avatar" aria-label="账号设置">S</RouterLink>
         </div>
       </header>
-      <main id="main-content" class="page">
-        <nav v-if="moduleTabs.length" class="module-navigation" aria-label="模块功能">
-          <RouterLink
-            v-for="item in moduleTabs"
-            :key="item.to"
-            :to="item.to"
-            :class="{ current: isChildActive(item.to) }"
-            >{{ item.name }}</RouterLink
-          >
-        </nav>
+      <main id="main-content" class="content">
         <RouterView v-slot="{ Component }"
-          ><component :is="Component" :key="route.path"
-        /></RouterView>
+          ><Transition name="workspace-page" mode="out-in"
+            ><div :key="route.path" class="page-body">
+              <component :is="Component" /></div></Transition
+        ></RouterView>
+        <footer class="footerhint">StrimKeep · 一体化媒体资产工作台</footer>
       </main>
-      <footer class="page-footer">StrimKeep <span>接收 · 整理 · 入库 · 治理</span></footer>
     </div>
+    <ModalDialog v-if="searchOpen" title="搜索功能" @close="searchOpen = false">
+      <label class="search-dialog-input"
+        >搜索页面与功能<input
+          v-model="search"
+          autofocus
+          aria-label="搜索功能名称"
+          placeholder="搜索治理、目录、播放、整理…"
+      /></label>
+      <div class="search-results">
+        <RouterLink
+          v-for="item in searchResults"
+          :key="item.to"
+          :to="item.to"
+          class="searchresult"
+          @click="searchOpen = false"
+          ><component :is="item.icon" :size="17" /><span
+            ><b>{{ item.name }}</b
+            ><small>{{ item.group }}</small></span
+          ><ChevronRight :size="15"
+        /></RouterLink>
+      </div>
+      <p v-if="!searchResults.length" class="muted-text">没有找到匹配功能。</p>
+    </ModalDialog>
   </div>
-  <nav v-if="!open" class="mobile-dock" aria-label="快捷导航">
-    <RouterLink
-      v-for="item in dock"
-      :key="item.to"
-      :to="item.to"
-      :class="{ current: route.path === item.to.split('?')[0] }"
-      ><component :is="item.icon" :size="20" /><span>{{ item.name }}</span></RouterLink
-    >
-  </nav>
-  <ModalDialog v-if="searchOpen" title="搜索功能" @close="searchOpen = false"
-    ><input
-      v-model="search"
-      aria-label="搜索功能名称"
-      placeholder="输入接收、整理、日志等功能名称"
-    />
-    <div class="directory-list">
-      <RouterLink
-        v-for="item in searchResults"
-        :key="item.to"
-        :to="item.to"
-        @click="
-          searchOpen = false;
-          open = false;
-        "
-        ><span>{{ item.name }}</span
-        ><small>{{ item.group }}</small></RouterLink
-      >
-    </div></ModalDialog
-  >
 </template>

@@ -104,35 +104,27 @@ test('one-click intake submits saved directory revision and idempotency key only
   await expect(page.locator('.task-receipt')).toContainText('accepted-intake');
 });
 
-test('unified intake directory only changes a draft until its revision-checked save', async ({
+test('module directory changes only its selected role after revision-checked save', async ({
   page,
 }) => {
   const state = await fixtures(page);
-  await page.goto('/#/settings/accounts');
-  await page.getByRole('button', { name: '接收与归档目录', exact: true }).click();
-  await page
-    .locator('.intake-preset')
-    .getByRole('button', { name: '选择目录', exact: true })
-    .click();
+  await page.goto('/#/resources/receive');
+  await page.locator('.module-config > summary').click();
+  const field = page.locator('.directory-role-card .dirfield').first();
+  await field.getByRole('button', { name: '选择目录', exact: true }).click();
   await page
     .getByRole('dialog')
     .getByRole('button', { name: /影视归档/ })
     .click();
   await page.getByRole('button', { name: '使用当前目录', exact: true }).click();
-  await page.getByRole('button', { name: '应用到所有接收与待整理目录' }).click();
   expect(state.writes).toEqual([]);
-  await page.getByRole('button', { name: '保存目录配置', exact: true }).click();
+  await page.getByRole('button', { name: '保存本模块目录', exact: true }).click();
   await expect.poll(() => state.writes.length).toBe(1);
   const body = state.writes[0]!.body as {
     directories: Record<string, string>;
     expected_revision: number;
   };
-  expect(body.expected_revision).toBe(3);
-  for (const role of ['source', 'transfer', 'magnet', 'ed2k', 'instant', 'bot'])
-    expect(body.directories[role]).toBe('100');
-  expect(body.directories.target).toBe('101');
-  expect(body.directories.unknown).toBe('103');
-  expect(body.directories.channel).toBe('109');
+  expect(body).toEqual({ expected_revision: 3, directories: { transfer: '100' } });
 });
 
 test('technical fingerprints remain available without overwhelming normal results', async ({
@@ -183,7 +175,10 @@ test('STRM generator loads its configured source without overwriting a manual se
     page.getByRole('textbox', { name: '手动同步的 115 来源目录 选择目录', exact: true }),
   ).toHaveValue('目录4');
   await expect(page.getByRole('button', { name: '核对并同步 STRM', exact: true })).toBeEnabled();
-  await page.getByRole('button', { name: '选择目录', exact: true }).click();
+  await page
+    .locator('.strm-sync-source')
+    .getByRole('button', { name: '选择目录', exact: true })
+    .click();
   await page
     .getByRole('dialog')
     .getByRole('button', { name: /影视归档/ })

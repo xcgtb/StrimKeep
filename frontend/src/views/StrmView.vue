@@ -12,6 +12,8 @@ import ConfirmAction from '../components/ConfirmAction.vue';
 import EvidenceDetails from '../components/EvidenceDetails.vue';
 import OperationState from '../components/OperationState.vue';
 import TaskReceipt from '../components/TaskReceipt.vue';
+import OutputSettings from '../components/OutputSettings.vue';
+import DirectoryRoles from '../components/DirectoryRoles.vue';
 import ModalDialog from '../components/ModalDialog.vue';
 const cloud = useCloud(),
   op = useOperation(() => cloud.id),
@@ -106,93 +108,106 @@ useVisiblePoll(() => {
   <PageHeading
     title="STRM 资源"
     subtitle="管理已生成的播放引用、源文件关系与同步任务。"
-  /><AccountPicker /><OperationState
-    :busy="op.busy.value"
-    :error="op.error.value || assets.error.value || directoryConfig.error.value"
-    :uncertain="op.uncertain.value"
-    :receipt="op.receipt.value"
-  /><template v-if="cloud.id"
-    ><section class="panel">
-      <header class="section-heading">
-        <h2>输出与播放配置检查</h2>
-        <RouterLink class="text-link" to="/settings/cloud">设置输出与播放地址 →</RouterLink>
-      </header>
-      <div class="readiness-grid">
-        <article
-          v-for="check in records(pipeline.data.value?.checks)"
-          :key="String(check.key)"
-          :class="{ ready: check.ready }"
-        >
-          <strong>{{ check.ready ? '✓' : '! ' }} {{ check.label }}</strong>
-          <p>{{ check.detail }}</p>
-        </article>
-      </div>
-      <div class="form-grid">
-        <DirectoryPicker
-          v-model="cid"
-          :name="cidName"
-          :account-id="cloud.id"
-          label="手动同步的 115 来源目录"
-          @selected="(v) => (cidName = v.name)"
-        />
-        <div class="action-row">
-          <button
-            class="button primary"
-            :disabled="!cid || op.busy.value || op.uncertain.value"
-            @click="confirmation = 'sync'"
-          >
-            核对并同步 STRM</button
-          ><button
-            class="button"
-            @click="
-              load();
-              op.reconcile();
-            "
-          >
-            刷新并核实
-          </button>
-        </div>
-      </div>
-    </section>
-    <section class="panel">
-      <h2>播放引用</h2>
-      <div class="asset-list">
-        <article v-for="row in records(assets.data.value?.items)" :key="String(row.id)">
-          <div>
-            <strong>{{ String(row.path).split('/').pop() }}</strong>
-            <p class="path-text">{{ row.path }}</p>
-            <small>{{ row.state }}</small>
+  /><AccountPicker />
+  <div class="grid cols2 strm-workspace">
+    <div>
+      <OutputSettings /><DirectoryRoles
+        :roles="['strm']"
+        title="手动同步来源设置"
+        @saved="loadDefaultSource"
+      />
+    </div>
+    <div>
+      <OperationState
+        :busy="op.busy.value"
+        :error="op.error.value || assets.error.value || directoryConfig.error.value"
+        :uncertain="op.uncertain.value"
+        :receipt="op.receipt.value"
+      /><template v-if="cloud.id"
+        ><section class="panel">
+          <header class="section-heading">
+            <h2>输出与播放配置检查</h2>
+            <span class="muted-text">使用已保存的输出配置核验</span>
+          </header>
+          <div class="readiness-grid">
+            <article
+              v-for="check in records(pipeline.data.value?.checks)"
+              :key="String(check.key)"
+              :class="{ ready: check.ready }"
+            >
+              <strong>{{ check.ready ? '✓' : '! ' }} {{ check.label }}</strong>
+              <p>{{ check.detail }}</p>
+            </article>
           </div>
-          <button class="button small" @click="inspect(row)">源关系与回执</button>
-        </article>
-        <p v-if="!records(assets.data.value?.items).length" class="muted-text">
-          当前账号暂无播放引用。
-        </p>
-      </div>
-      <div class="pagination">
-        <button
-          class="button"
-          :disabled="offset === 0 || assets.loading.value"
-          @click="
-            offset -= 50;
-            load();
-          "
-        >
-          上一页</button
-        ><span>{{ offset + 1 }} 起</span
-        ><button
-          class="button"
-          :disabled="records(assets.data.value?.items).length < 50 || assets.loading.value"
-          @click="
-            offset += 50;
-            load();
-          "
-        >
-          下一页
-        </button>
-      </div>
-    </section></template
-  ><TaskReceipt v-if="job" :id="job" /><ModalDialog
+          <div class="form-grid strm-sync-source">
+            <DirectoryPicker
+              v-model="cid"
+              :name="cidName"
+              :account-id="cloud.id"
+              label="手动同步的 115 来源目录"
+              @selected="(v) => (cidName = v.name)"
+            />
+            <div class="action-row">
+              <button
+                class="button primary"
+                :disabled="!cid || op.busy.value || op.uncertain.value"
+                @click="confirmation = 'sync'"
+              >
+                核对并同步 STRM</button
+              ><button
+                class="button"
+                @click="
+                  load();
+                  op.reconcile();
+                "
+              >
+                刷新并核实
+              </button>
+            </div>
+          </div>
+        </section>
+        <section class="panel">
+          <h2>播放引用</h2>
+          <div class="asset-list">
+            <article v-for="row in records(assets.data.value?.items)" :key="String(row.id)">
+              <div>
+                <strong>{{ String(row.path).split('/').pop() }}</strong>
+                <p class="path-text">{{ row.path }}</p>
+                <small>{{ row.state }}</small>
+              </div>
+              <button class="button small" @click="inspect(row)">源关系与回执</button>
+            </article>
+            <p v-if="!records(assets.data.value?.items).length" class="muted-text">
+              当前账号暂无播放引用。
+            </p>
+          </div>
+          <div class="pagination">
+            <button
+              class="button"
+              :disabled="offset === 0 || assets.loading.value"
+              @click="
+                offset -= 50;
+                load();
+              "
+            >
+              上一页</button
+            ><span>{{ offset + 1 }} 起</span
+            ><button
+              class="button"
+              :disabled="records(assets.data.value?.items).length < 50 || assets.loading.value"
+              @click="
+                offset += 50;
+                load();
+              "
+            >
+              下一页
+            </button>
+          </div>
+        </section></template
+      ><TaskReceipt v-if="job" :id="job" />
+    </div>
+  </div>
+  <ModalDialog
     v-if="sourceOpen"
     title="播放引用与源文件关系"
     @close="
