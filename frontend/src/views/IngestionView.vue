@@ -4,6 +4,7 @@ import { useCloud } from '../stores/cloud';
 import { readData, writeData, accountPath, records, type Data } from '../api/domain';
 import { useRequest } from '../composables/useRequest';
 import { useOperation } from '../composables/useOperation';
+import { useActivityUpdates } from '../composables/useActivityUpdates';
 import { useVisiblePoll } from '../composables/useVisiblePoll';
 import { date } from '../composables/format';
 import PageHeading from '../components/PageHeading.vue';
@@ -112,6 +113,9 @@ watch(
   },
   { immediate: true },
 );
+useActivityUpdates(() => {
+  if (!form.value && !op.busy.value) return load();
+});
 useVisiblePoll(() => {
   if (cloud.id && !form.value && !op.busy.value)
     return history.run((signal) => readData(accountPath(cloud.id, 'ingestion'), signal));

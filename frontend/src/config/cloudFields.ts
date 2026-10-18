@@ -13,6 +13,11 @@ export const cloudSections: { key: string; title: string; description: string; f
           label: '播放器可访问的 StrimKeep 地址',
           hint: 'http(s)://地址:端口，可带部署子路径',
         },
+        {
+          key: 'external_url',
+          label: '外网播放地址（可选）',
+          hint: '外部播放器使用；不改写现有 STRM 内网地址',
+        },
         { key: 'output_root', label: '个人库 NAS STRM 输出目录' },
         { key: 'share_output_root', label: '分享库 NAS STRM 输出目录' },
         { key: 'emby_output_root', label: 'Emby 看到的个人库输出目录' },
@@ -135,6 +140,14 @@ export const cloudSections: { key: string; title: string; description: string; f
       description: '任务完成与 Emby 实际确认分开记录，按模块控制通知。',
       fields: [
         { key: 'emby_refresh_enabled', label: '启用 Emby 入库联动', type: 'check' },
+        {
+          key: 'ingest_retry_seconds',
+          label: '入库核验间隔（秒）',
+          type: 'number',
+          min: 10,
+          max: 600,
+        },
+        { key: 'ingest_max_attempts', label: '入库核验最大次数', type: 'number', min: 1, max: 720 },
         { key: 'notify_enabled', label: '网盘任务通知总开关', type: 'check' },
         { key: 'notify_transfer', label: '分享转存通知', type: 'check' },
         { key: 'notify_organize', label: '整理归档通知', type: 'check' },

@@ -26,6 +26,35 @@ def api_overview_refresh():
     return {'status': 'success', 'refresh': overview.request_refresh(force=True)}
 
 
+@router.get('/api/overview/playback', dependencies=[Depends(auth)])
+def api_playback_overview():
+    from app import playback_snapshot
+    return {'status': 'success', **playback_snapshot.snapshot()}
+
+
+@router.post('/api/overview/playback/refresh', dependencies=[Depends(auth)])
+def api_playback_overview_refresh():
+    from app import playback_snapshot
+    return {'status': 'success', **playback_snapshot.snapshot(force=True)}
+
+
+@router.get('/api/overview/playback/metrics', dependencies=[Depends(auth)])
+def api_playback_metrics(days: int = 7):
+    from app import playback_metrics
+    return {'status':'success', **playback_metrics.summary(days)}
+
+
+@router.post('/api/overview/playback/collection', dependencies=[Depends(auth)])
+def api_playback_collection(body: dict):
+    from app import playback_metrics
+    if set(body)!={'enabled'}:
+        raise HTTPException(400, '仅接受采集开关')
+    try:
+        return {'status':'success', **playback_metrics.configure(body['enabled'])}
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from None
+
+
 @router.get('/api/overview/recommendations', dependencies=[Depends(auth)])
 def api_overview_recommendations(media: str = 'movie', retry: int = 0):
     try:
@@ -194,10 +223,20 @@ def dashboard():
                 'lastScan': None, 'error': str(e), 'storage': storage.storage_health()}
 
 
+@router.get('/api/tasks/recent', dependencies=[Depends(auth)])
+def api_tasks_recent():
+    return {'status': 'success', 'items': tasks.manager.recent()}
+
+
 @router.get('/api/task/{tid}', dependencies=[Depends(auth)])
 def get_task(tid: str):
     t = tasks.manager.get(tid)
-    if not t: raise HTTPException(404, '任务不存在或已过期')
+    if not t:
+        from app import task_history
+        archived = task_history.archived(tid)
+        if archived is None:
+            raise HTTPException(404, '任务不存在或已过期')
+        return archived
     return t.to_dict()
 
 

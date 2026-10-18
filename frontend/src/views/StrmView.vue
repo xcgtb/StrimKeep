@@ -14,6 +14,8 @@ import OperationState from '../components/OperationState.vue';
 import TaskReceipt from '../components/TaskReceipt.vue';
 import OutputSettings from '../components/OutputSettings.vue';
 import DirectoryRoles from '../components/DirectoryRoles.vue';
+import PlaybackCheck from '../components/PlaybackCheck.vue';
+import { useActivityUpdates } from '../composables/useActivityUpdates';
 import ModalDialog from '../components/ModalDialog.vue';
 const cloud = useCloud(),
   op = useOperation(() => cloud.id),
@@ -100,6 +102,9 @@ watch(
   },
   { immediate: true },
 );
+useActivityUpdates(() => {
+  if (!op.busy.value && !sourceOpen.value) return load();
+});
 useVisiblePoll(() => {
   if (!op.busy.value && !sourceOpen.value) return load();
 }, 20000);
@@ -124,7 +129,8 @@ useVisiblePoll(() => {
         :uncertain="op.uncertain.value"
         :receipt="op.receipt.value"
       /><template v-if="cloud.id"
-        ><section class="panel">
+        ><PlaybackCheck :key="cloud.id" :assets="records(assets.data.value?.items)" />
+        <section class="panel">
           <header class="section-heading">
             <h2>输出与播放配置检查</h2>
             <span class="muted-text">使用已保存的输出配置核验</span>

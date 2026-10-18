@@ -21,7 +21,7 @@ def defer(job_id, account_id, revision, scope, row, media, companions, seconds, 
         due = time.time()+seconds
         payload = {'account_id': account_id, 'account_revision': revision, 'scope_cid': scope,
                    'source': row, 'media': media, 'companions': companions, 'output_snapshot': output_snapshot(), 'upgrades': upgrades or []}
-        jid = jobs.enqueue('publish', payload, con)
+        jid = jobs.enqueue('publish', payload, con, parent_id=job_id)
         con.execute('INSERT INTO cloud_job_due VALUES(?,?,?,?,?)', (jid, due, job_id, row['id'], time.time()))
     return {'job_id': jid, 'due': due, 'file_id': row['id']}
 

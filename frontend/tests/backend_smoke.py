@@ -72,7 +72,7 @@ with tempfile.TemporaryDirectory(prefix='strimkeep-vue3-') as folder:
               ('/api/logs','logs'),('/api/bot/status','bot'),('/api/records','records'),
               ('/api/tmdb/progress','progress'),('/api/upstream/config','settings'),
               ('/api/upstream/jobs','items'),('/api/cloud/assets','items'),
-              ('/api/cloud/rules','items'),('/api/wash/empty-dirs/browse','roots'),('/api/cloud/output-directories','roots')]
+              ('/api/cloud/rules','items'),('/api/tasks/recent','items'),('/api/overview/playback','records'),('/api/wash/empty-dirs/browse','roots'),('/api/cloud/output-directories','roots')]
             for endpoint,key in reads:
                 result=json.loads(fetch(endpoint)[0]);assert key in result,(endpoint,result)
             catalog=json.loads(fetch('/api/cloud/resources/catalog')[0])
@@ -107,7 +107,7 @@ with tempfile.TemporaryDirectory(prefix='strimkeep-vue3-') as folder:
                 raise AssertionError('Logout did not revoke browser cookie')
             except urllib.error.HTTPError as error:
                 assert error.code == 401
-            print('PASS real FastAPI: production assets, HTTPOnly login, cookie session, 30 API reads, catalogue parity, library changes, ingest/paths status, configuration round trips, empty-library status and logout')
+            print('PASS real FastAPI: production assets, HTTPOnly login, cookie session, 32 API reads, catalogue parity, library changes, ingest/paths status, configuration round trips, empty-library status and logout')
         finally:
             process.terminate()
             try: process.wait(timeout=5)

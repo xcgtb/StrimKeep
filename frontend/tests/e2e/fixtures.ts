@@ -142,6 +142,41 @@ export async function fixtures(page: Page, initialAuth = true) {
         return route.fulfill({ contentType: 'text/event-stream', body: 'retry: 60000\n\n' });
       if (path === '/api/ingest/status')
         return fulfill(route, { status: 'success', has_cache: false });
+      if (path === '/api/overview/playback/metrics' || path === '/api/overview/playback/collection')
+        return fulfill(route, {
+          status: 'success',
+          configured: true,
+          enabled: false,
+          seconds: 0,
+          plays: 0,
+          viewers: 0,
+          trend: [],
+          rankings: [],
+          users: [],
+          active: [],
+          coverage: '仅统计连续观测到的有效播放段。',
+          source: 'Emby 播放会话 · 每15秒观测',
+        });
+      if (path.endsWith('/chain'))
+        return fulfill(route, {
+          status: 'success',
+          root_id: 'job-a',
+          state: 'needs_review',
+          jobs: [
+            { id: 'job-a', label: '整理归档', state: 'needs_review', message: '部分文件需要核对' },
+          ],
+          ingestion: {},
+          notifications: {},
+        });
+      if (path === '/api/overview/playback')
+        return fulfill(route, {
+          status: 'success',
+          records: [],
+          alerts: [],
+          configured: false,
+          refreshing: false,
+          error: '',
+        });
       if (path === '/api/played')
         return fulfill(route, { status: 'success', records: [], alerts: [] });
       if (path === '/api/library_stats')
@@ -212,6 +247,10 @@ export async function fixtures(page: Page, initialAuth = true) {
           offset: 0,
           has_more: false,
         });
+      if (path === '/api/activity/events')
+        return route.fulfill({ contentType: 'text/event-stream', body: 'retry: 60000\n\n' });
+      if (path === '/api/tasks/recent') return fulfill(route, { status: 'success', items: [] });
+      if (path.endsWith('/timeline')) return fulfill(route, { status: 'success', items: [] });
       if (path === '/api/cloud/jobs')
         return fulfill(route, {
           status: 'success',

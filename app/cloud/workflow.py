@@ -485,6 +485,10 @@ def relocate(provider, job_id, source, target, name):
 
 
 def organize(job_id, payload):
+    if payload.get('recovery_output_snapshot'):
+        from app.cloud.automation import output_snapshot
+        if payload['recovery_output_snapshot'] != output_snapshot():
+            raise CloudError('恢复排队期间输出配置变化，请重新核对', 409)
     with store.db() as con:
         row = con.execute(
             "SELECT payload,state FROM cloud_plans WHERE id=?", (payload["plan_id"],)
@@ -492,6 +496,8 @@ def organize(job_id, payload):
     if not row or row[1] != "queued":
         raise CloudError("整理计划状态无效", 409)
     data = json.loads(row[0])
+    with store.db() as con:
+        con.execute("UPDATE cloud_jobs SET payload=json_set(payload,'$.recovery_plan_id',?,'$.recovery_generate',?) WHERE id=?", (payload['plan_id'], int(payload.get('generate', True)), job_id))
     if "naming_snapshot" in data and data["naming_snapshot"] != naming_snapshot(settings.get()):
         raise CloudError("命名或分类配置已变化，请重新预览", 409)
     from app.cloud import pipeline

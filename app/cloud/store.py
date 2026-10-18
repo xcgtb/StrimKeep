@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS cloud_steps (
  job_id TEXT NOT NULL, step_key TEXT NOT NULL, state TEXT NOT NULL,
  payload TEXT NOT NULL, result TEXT NOT NULL DEFAULT '{}', updated REAL NOT NULL,
  PRIMARY KEY(job_id,step_key));
+CREATE INDEX IF NOT EXISTS cloud_steps_child ON cloud_steps(json_extract(result,'$.job_id'));
 CREATE TABLE IF NOT EXISTS cloud_job_controls (
  job_id TEXT PRIMARY KEY, stop_requested INTEGER NOT NULL, updated REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS cloud_job_due (
@@ -36,6 +37,11 @@ CREATE TABLE IF NOT EXISTS cloud_job_due (
  file_id TEXT NOT NULL, created REAL NOT NULL, UNIQUE(origin_job,file_id));
 CREATE INDEX IF NOT EXISTS cloud_job_due_origin ON cloud_job_due(origin_job);
 CREATE INDEX IF NOT EXISTS cloud_jobs_created ON cloud_jobs(created DESC);
+CREATE TABLE IF NOT EXISTS cloud_job_links (
+ job_id TEXT PRIMARY KEY, parent_id TEXT NOT NULL, created REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS cloud_job_links_parent ON cloud_job_links(parent_id);
+CREATE TABLE IF NOT EXISTS cloud_recovery_requests (
+ origin_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, created REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS cloud_upgrades (
  id TEXT PRIMARY KEY, job_id TEXT NOT NULL, new_asset TEXT NOT NULL,
  old_asset TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL,
@@ -77,6 +83,7 @@ CREATE TABLE IF NOT EXISTS cloud_ingestion (
 CREATE TABLE IF NOT EXISTS cloud_ingestion_notifications (
  id TEXT PRIMARY KEY, state TEXT NOT NULL, updated REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS cloud_ingestion_asset ON cloud_ingestion(asset_id,connection_id,revision);
+CREATE INDEX IF NOT EXISTS cloud_ingestion_origin ON cloud_ingestion(json_extract(payload,'$.origin_job'));
 CREATE TABLE IF NOT EXISTS cloud_transfer_requests (
  account_id TEXT NOT NULL, request_id TEXT NOT NULL, sealed TEXT NOT NULL,
  job_id TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY(account_id,request_id));

@@ -73,6 +73,21 @@ def caption(items, source_kind='personal', expected=None):
     return text
 
 
+def poster_owner(job_id):
+    """Recovery keeps the original work/season claim, including unknown sends."""
+    seen = set()
+    with store.db() as con:
+        while job_id not in seen and len(seen) < 64:
+            seen.add(job_id)
+            row = con.execute('SELECT payload FROM cloud_jobs WHERE id=?',(job_id,)).fetchone()
+            parent = json.loads(row[0]).get('recovery_of') if row else None
+            if not parent:
+                return job_id
+            job_id = parent
+    from app.cloud.errors import CloudError
+    raise CloudError('恢复通知关联异常，保留原通知回执',409)
+
+
 class BatchPosters:
     """One card per work/season, containing only verified operations.
 
@@ -123,7 +138,7 @@ class BatchPosters:
         poster = items[0]['media'].get('backdrop_path') or items[0]['media'].get('poster_path')
         image = 'https://image.tmdb.org/t/p/w500' + poster if poster else ''
         claim = 'poster:' + hashlib.sha256(store.encode([self.source_kind, *key]).encode()).hexdigest()
-        deliver(self.job_id, claim, lambda: notify_telegram_card(caption(items, self.source_kind, self.expected[key]), image))
+        deliver(poster_owner(self.job_id), claim, lambda: notify_telegram_card(caption(items, self.source_kind, self.expected[key]), image))
 
 
 def result_files(generated):

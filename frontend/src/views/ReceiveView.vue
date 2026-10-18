@@ -23,6 +23,7 @@ import OperationState from '../components/OperationState.vue';
 import ConfirmAction from '../components/ConfirmAction.vue';
 import TaskReceipt from '../components/TaskReceipt.vue';
 import DirectoryRoles from '../components/DirectoryRoles.vue';
+import ResourceRoute from '../components/ResourceRoute.vue';
 import OutputSettings from '../components/OutputSettings.vue';
 import MediaOverride from '../components/MediaOverride.vue';
 function showOutput() {
@@ -32,6 +33,7 @@ function showOutput() {
     section.scrollIntoView({ behavior: 'smooth' });
   }
 }
+const outputRevision = ref(0);
 const route = useRoute(),
   router = useRouter(),
   cloud = useCloud(),
@@ -54,6 +56,7 @@ const shareOnly = computed(() => route.path === '/resources/share'),
   target = ref(''),
   targetName = ref(''),
   archive = ref(''),
+  archiveName = ref(''),
   cid = ref('0'),
   crumbs = ref([{ id: '0', name: '分享根目录' }]),
   sharePage = ref<Data>(),
@@ -73,6 +76,7 @@ watch(
     target.value = '';
     targetName.value = '';
     archive.value = '';
+    archiveName.value = '';
     password.value = '';
     link.value = '';
     input.value = '';
@@ -251,6 +255,7 @@ async function loadDirectories() {
     target.value = String(object(saved.transfer).id || '');
     targetName.value = String(object(saved.transfer).name || '');
     archive.value = String(object(saved.target).id || '');
+    archiveName.value = String(object(saved.target).name || '');
   }
 }
 async function submitDirect() {
@@ -325,14 +330,6 @@ watch(
         : '接收 115 分享、磁力、ed2k 与秒传资源，核对目标后提交。'
     "
   /><AccountPicker />
-  <div v-if="shareOnly" class="share-path-banner">
-    <span class="path-banner-icon">↳</span>
-    <div>
-      <strong>直接归档到分享库</strong>
-      <p>使用已保存的分类与命名规则，不再创建“分享-ID”外层目录。</p>
-    </div>
-    <code>share / 电影 / 作品 / 影片.strm</code>
-  </div>
   <nav v-if="shareOnly" class="module-navigation" aria-label="分享库功能">
     <RouterLink to="/resources/share" class="current">分享生成</RouterLink>
     <RouterLink to="/organize/naming">命名模板</RouterLink>
@@ -368,7 +365,7 @@ watch(
   </p>
   <details v-if="shareOnly" class="module-config share-output-config">
     <summary>输出与播放设置 <small>分享库目录、302 地址和生成时机</small></summary>
-    <OutputSettings kind="share" />
+    <OutputSettings kind="share" @saved="outputRevision++" />
   </details>
   <details v-if="!shareOnly" class="module-config">
     <summary>接收目录设置 <small>在本页选择并保存</small></summary>
@@ -378,12 +375,22 @@ watch(
           ? ['magnet', 'ed2k']
           : tab === 'bot'
             ? ['bot']
-            : ['transfer', 'instant', 'magnet', 'ed2k']
+            : ['transfer', 'instant', 'magnet', 'ed2k', ...(organize ? ['target'] : [])]
       "
       title="接收目录设置"
       @saved="loadDirectories"
     />
   </details>
+  <ResourceRoute
+    v-if="cloud.id && (shareOnly || (tab !== 'offline' && tab !== 'bot'))"
+    :share="shareOnly"
+    :organize="organize"
+    :generate="generate"
+    :target="tab === 'share' ? targetName : ''"
+    :archive="archiveName || archive"
+    :count="selected.size"
+    :revision="outputRevision"
+  />
   <template v-if="cloud.id"
     ><section v-if="!shareOnly && (tab === 'batch' || tab === 'offline')" class="panel">
       <h2>{{ tab === 'offline' ? '添加离线链接' : '添加资源链接' }}</h2>
@@ -522,6 +529,8 @@ watch(
             v-model="archive"
             :account-id="cloud.id"
             label="整理归档目录"
+            :name="archiveName"
+            @selected="(v) => (archiveName = v.name)"
           /><label v-if="organize" class="checkbox-label"
             ><input v-model="generate" type="checkbox" />整理后生成 STRM</label
           >

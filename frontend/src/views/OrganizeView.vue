@@ -5,6 +5,7 @@ import { useCloud } from '../stores/cloud';
 import { readData, writeData, accountPath, object, records, type Data } from '../api/domain';
 import { useRequest } from '../composables/useRequest';
 import { useOperation } from '../composables/useOperation';
+import { FolderInput, FolderCheck, FolderSearch, RotateCcw } from '@lucide/vue';
 import PageHeading from '../components/PageHeading.vue';
 import AccountPicker from '../components/AccountPicker.vue';
 import DirectoryPicker from '../components/DirectoryPicker.vue';
@@ -28,7 +29,48 @@ const source = ref(''),
   fixing = ref<{ id: string; name: string }>(),
   plan = ref<Data>(),
   confirm = ref(''),
-  job = ref('');
+  job = ref(''),
+  jobState = ref<Data>();
+const directoryCards = [
+  {
+    key: 'source',
+    title: '待整理目录',
+    role: '扫描入口',
+    description: '扫描此目录及子目录，识别其中的视频和随行文件。',
+    icon: FolderInput,
+  },
+  {
+    key: 'unknown',
+    title: '未识别目录（可选）',
+    role: '人工核对',
+    description: '启用未识别隔离后，识别失败的资源移入这里，便于修正后重试。',
+    icon: FolderSearch,
+  },
+  {
+    key: 'target',
+    title: '整理归档目录',
+    role: '归档目标',
+    description: '按已保存的电影、剧集和地区规则生成子目录，归档后联动 STRM。',
+    icon: FolderCheck,
+  },
+];
+const directoryValues = computed(() => ({ source, target, unknown }));
+const directoryNames = computed(() => ({
+  source: sourceName,
+  target: targetName,
+  unknown: unknownName,
+}));
+const directoriesChanged = computed(() =>
+  ['source', 'target', 'unknown'].some(
+    (key) =>
+      (directoryValues.value[key as keyof typeof directoryValues.value].value || '') !==
+      String(object(object(config.data.value?.directories)[key]).id || ''),
+  ),
+);
+function selectDirectory(key: string, value: { id: string; name: string }) {
+  directoryValues.value[key as keyof typeof directoryValues.value].value = value.id;
+  directoryNames.value[key as keyof typeof directoryNames.value].value = value.name;
+}
 const candidates = computed(() => [
   ...records(plan.value?.items),
   ...records(plan.value?.skipped),
@@ -89,6 +131,13 @@ async function load() {
 }
 async function execute() {
   const action = confirm.value;
+  if (action === 'stop') {
+    const result = await op.run(() =>
+      writeData(`/api/cloud/jobs/${job.value}/stop`, { confirmed: true }),
+    );
+    if (result) confirm.value = '';
+    return;
+  }
   const r = await op.run(() =>
     writeData(
       action === 'categories' ? '/api/cloud/categories/create' : '/api/cloud/plans/apply',
@@ -164,35 +213,60 @@ watch(
           </div>
         </li>
       </ol>
-      <div class="form-grid">
-        <DirectoryPicker
-          v-model="source"
-          :name="sourceName"
-          :account-id="cloud.id"
-          label="待整理目录"
-          @selected="(v) => (sourceName = v.name)"
-        /><DirectoryPicker
-          v-model="target"
-          :name="targetName"
-          :account-id="cloud.id"
-          label="整理归档目录"
-          @selected="(v) => (targetName = v.name)"
-        /><DirectoryPicker
-          v-model="unknown"
-          :account-id="cloud.id"
-          :name="unknownName"
-          @selected="(v) => (unknownName = v.name)"
-          label="未识别目录（可选）"
-        /><label class="checkbox-label"
-          ><input v-model="generate" type="checkbox" />整理后生成 STRM</label
+      <div class="organize-directory-cards">
+        <article
+          v-for="(card, index) in directoryCards"
+          :key="card.key"
+          class="directory-purpose-card"
         >
+          <header>
+            <span class="directory-purpose-icon"><component :is="card.icon" :size="20" /></span>
+            <h3>{{ index + 1 }} · {{ card.title }}</h3>
+            <span class="module-tag">{{ card.role }}</span>
+          </header>
+          <DirectoryPicker
+            :model-value="directoryValues[card.key as keyof typeof directoryValues].value"
+            :name="directoryNames[card.key as keyof typeof directoryNames].value"
+            :account-id="cloud.id"
+            :label="card.title"
+            hide-label
+            :disabled="op.busy.value || op.uncertain.value || preview.loading.value"
+            @selected="(value) => selectDirectory(card.key, value)"
+          />
+          <p>{{ card.description }}</p>
+          <button
+            v-if="card.key === 'unknown' && unknown"
+            class="text-link"
+            :disabled="op.busy.value || op.uncertain.value"
+            @click="
+              unknown = '';
+              unknownName = '';
+            "
+          >
+            清空可选目录
+          </button>
+        </article>
       </div>
+      <label class="checkbox-label"
+        ><input
+          v-model="generate"
+          type="checkbox"
+          :disabled="op.busy.value || op.uncertain.value"
+        />整理归档后生成 STRM</label
+      >
+      <p class="muted-text">目录仅在影视整理模块保存；未保存的选择不会改变定时任务。</p>
       <p v-if="config.error.value" class="inline-error">{{ config.error.value }}</p>
       <div class="action-row">
-        <button class="button" @click="defaults">读取已保存目录</button
+        <button
+          class="button"
+          :disabled="op.busy.value || op.uncertain.value || preview.loading.value"
+          @click="defaults"
+        >
+          <RotateCcw :size="14" />撤销目录修改</button
         ><button
           class="button"
           :disabled="
+            !directoriesChanged ||
             !config.data.value ||
             !!config.error.value ||
             !source ||
@@ -296,13 +370,33 @@ watch(
       />
     </details>
   </section>
-  <TaskReceipt v-if="job" :id="job" /><ConfirmAction
+  <section v-if="job" class="organize-current-job">
+    <div v-if="['queued', 'running'].includes(String(jobState?.state))" class="action-row">
+      <button
+        class="button"
+        :disabled="op.busy.value || op.uncertain.value"
+        @click="confirm = 'stop'"
+      >
+        安全停止本次整理</button
+      ><span class="muted-text">当前文件组完成后停止，已完成的归档保留。</span>
+    </div>
+    <TaskReceipt :id="job" @update="(value) => (jobState = value)" />
+  </section>
+  <ConfirmAction
     v-if="confirm"
-    :title="confirm === 'categories' ? '创建分类目录' : '执行整理归档'"
+    :title="
+      confirm === 'stop'
+        ? '安全停止整理'
+        : confirm === 'categories'
+          ? '创建分类目录'
+          : '执行整理归档'
+    "
     :description="
-      confirm === 'categories'
-        ? '在当前归档目录下按已保存分类配置创建文件夹。'
-        : '按本次预览对已识别资源改名并移动到归档目录，依据已保存洗版策略处理版本；生成 STRM 不等于 Emby 已确认入库。'
+      confirm === 'stop'
+        ? '当前文件组完成后停止，关联定时规则同时暂停；请在任务中心核实最终结果。'
+        : confirm === 'categories'
+          ? '在当前归档目录下按已保存分类配置创建文件夹。'
+          : '按本次预览对已识别资源改名并移动到归档目录，依据已保存洗版策略处理版本；生成 STRM 不等于 Emby 已确认入库。'
     "
     :busy="op.busy.value"
     :disabled="op.uncertain.value"

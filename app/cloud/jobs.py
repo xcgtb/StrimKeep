@@ -58,7 +58,7 @@ def request_stop(job_id):
     return {"stop_requested": True, "rule_paused": bool(rule_id), "message": "停止请求已保存；当前视频及关联文件完成后停止，已发出的转存请求先核实结果"}
 
 
-def enqueue(kind, payload, con=None):
+def enqueue(kind, payload, con=None, *, parent_id=None):
     if kind not in ("transfer", "organize", "sync", "workflow", "categories", "publish", "share_strm", "intake", "channel", "maintenance"):
         raise CloudError("任务类型不受支持")
     job_id = store.ident()
@@ -69,6 +69,9 @@ def enqueue(kind, payload, con=None):
             "INSERT INTO cloud_jobs(id,kind,state,payload,created,updated) VALUES(?,?,?,?,?,?)",
             (job_id, kind, "queued", store.encode(payload), now, now),
         )
+        parent = parent_id or events._JOB.get()
+        if parent and db.execute('SELECT 1 FROM cloud_jobs WHERE id=?', (parent,)).fetchone():
+            db.execute('INSERT INTO cloud_job_links VALUES(?,?,?)', (job_id, parent, now))
         events.emit('queue', '任务已排队：'+kind, job_id, con=db)
 
     if con is None:
@@ -356,7 +359,7 @@ def continue_transfer(job_id, confirmed=False):
         next_id = enqueue(
             "organize",
             {"plan_id": planned["id"], "generate": data.get("generate", True)},
-            con,
+            con, parent_id=job_id,
         )
         result = {"job_id": next_id, "message": "继续整理已入队，转存请求没有重发"}
         con.execute(
@@ -506,3 +509,20 @@ def stop():
     if _THREAD:
         _THREAD.join(3)
     _THREAD = None
+
+
+def timeline(job_id, limit=150):
+    """Bounded business events for a job and its delayed publication children."""
+    from app.cloud.events import SOURCES
+    reverse = {v: k for k, v in SOURCES.items()}
+    from app.cloud.task_chain import family
+    with store.db() as con:
+        root, ids, _, truncated = family(con, job_id)
+        marks = ','.join('?' for _ in ids)
+        rows = con.execute(
+            "SELECT id,ts,level,source,message,details FROM runtime_logs "
+            f"WHERE json_extract(details,'$.job_id') IN ({marks}) "
+            "ORDER BY id DESC LIMIT ?", (*ids, max(1,min(300,int(limit))))).fetchall()
+    return {'items': [{'id':r[0], 'ts':r[1], 'level':r[2], 'stage':reverse.get(r[3],r[3]),
+                       'message':r[4], 'details':json.loads(r[5])} for r in reversed(rows)],
+            'limit': max(1,min(300,int(limit))), 'root_id':root, 'truncated':truncated or len(rows)>=max(1,min(300,int(limit)))}

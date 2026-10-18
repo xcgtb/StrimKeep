@@ -66,6 +66,7 @@ export const stateLabel = (value: string) =>
     submitted: '已提交，等待核实',
     confirmed: '已核实',
     pending: '待执行',
+    waiting: '等待回执',
     executing: '执行中',
     expired: '已过期',
     missing: '计划不存在',

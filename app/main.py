@@ -115,6 +115,11 @@ def _startup():
         except Exception:
             _log.warning('后台初始化失败后 Bot 停止失败', exc_info=True)
         return
+    from app import playback_metrics
+    try:
+        playback_metrics.start()
+    except Exception:
+        _log.warning('播放统计采集启动失败，媒体任务仍可运行；请核对数据存储')
     readiness.set_state('ready')
     if WEB_PASSWORD:
         try:
@@ -128,6 +133,8 @@ def _startup():
 
 def _shutdown():
     from app.cloud import jobs as cloud_jobs, emby_proxy as cloud_proxy
+    from app import playback_metrics
+    playback_metrics.stop()
     cloud_jobs.stop()
     cloud_proxy.stop()
     readiness.set_state('stopping', '后台服务正在停止')

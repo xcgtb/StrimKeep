@@ -40,7 +40,7 @@ def safe_url(value):
     return urlunsplit(("https", host, parsed.path, parsed.query, ""))
 
 
-def resolve(asset_id, sig, ua):
+def resolve(asset_id, sig, ua, *, refresh=False):
     asset = store.asset(asset_id)
     if not asset or asset["state"] != "active":
         raise CloudError("播放引用不存在或已撤销", 404)
@@ -58,7 +58,7 @@ def resolve(asset_id, sig, ua):
     with gate:
         with _LOCK:
             found = _CACHE.get(cache_key)
-            if not is_share and found and found["expires"] > time.time():
+            if not refresh and not is_share and found and found["expires"] > time.time():
                 return found
         provider = for_account(account["id"])
         if is_share:
@@ -161,3 +161,28 @@ async def serve(request, asset_id, sig):
             await client.aclose()
 
     return StreamingResponse(relay(), status_code=response.status_code, headers=output)
+
+
+def check(asset_id):
+    """Read-only end-to-end source resolution; never return CDN credentials."""
+    from pathlib import Path
+    asset = store.asset(asset_id)
+    if not asset or asset['state'] != 'active':
+        raise CloudError('播放引用不存在或已撤销', 404)
+    base = Path(asset['payload']['output_root'])
+    path = Path(asset['local_path'])
+    try:
+        strm.target(base, str(path.relative_to(base)))
+        with path.open('rb') as handle:
+            content = handle.read(8193)
+        if len(content) > 8192 or strm.digest(content) != asset['payload']['digest']:
+            raise CloudError('STRM 文件已变化，请重新同步后核验', 409)
+    except (OSError, ValueError):
+        raise CloudError('STRM 文件不可读或已离开原输出目录', 409) from None
+    value = resolve(asset_id, strm.signature(asset_id, asset['nonce']), 'StrimKeep-Player', refresh=True)
+    from app.cloud import settings
+    return {'checked': True, 'mode': 'proxy' if value['requires_proxy'] else '302',
+            'message': 'STRM 文件、播放签名与 115 源文件解析已核验；播放器网络可达性需在实际设备验证。',
+            'internal_link': strm.link(asset_id, asset['nonce']),
+            'external_link': strm.link(asset_id, asset['nonce'], external=True) if settings.get()['external_url'] else '',
+            'cdn_host': urlsplit(value['url']).hostname}

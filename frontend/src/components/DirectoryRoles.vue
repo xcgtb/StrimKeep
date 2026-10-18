@@ -26,6 +26,18 @@ const labels: Record<string, string> = {
   channel: '频道默认接收目录',
   strm: 'STRM 手动同步来源',
 };
+const descriptions: Record<string, string> = {
+  source: '扫描待整理视频及子目录。',
+  target: '识别后按分类归档到此目录。',
+  unknown: '识别失败的资源供人工核对。',
+  transfer: '接收分享链接中的资源。',
+  magnet: '115 云下载的磁力任务保存位置。',
+  ed2k: '115 云下载的 ed2k 资源保存位置。',
+  instant: '秒传资源的接收位置。',
+  bot: '机器人接收资源使用此目录。',
+  channel: '频道未单独指定目录时使用此位置。',
+  strm: '只生成播放引用，不移动或重命名网盘源文件。',
+};
 const changed = computed(() =>
   props.roles.filter(
     (role) =>
@@ -92,21 +104,24 @@ watch(
       :uncertain="op.uncertain.value"
     />
     <div class="directory-role-grid">
-      <div v-for="role in roles" :key="role" class="dirfield">
+      <div v-for="role in roles" :key="role" class="dirfield directory-purpose-card">
         <DirectoryPicker
           :model-value="draft[role]"
           :account-id="cloud.id"
           :name="names[role]"
           :label="labels[role] || role"
+          :disabled="op.busy.value || op.uncertain.value"
           @selected="
             (value) => {
               draft[role] = value.id;
               names[role] = value.name;
             }
           "
-        /><button
+        />
+        <p>{{ descriptions[role] }}</p>
+        <button
           class="text-link tiny"
-          :disabled="op.busy.value"
+          :disabled="op.busy.value || op.uncertain.value"
           @click="
             draft[role] = null;
             names[role] = '';

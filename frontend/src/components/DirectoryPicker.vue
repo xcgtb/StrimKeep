@@ -10,6 +10,8 @@ const props = defineProps<{
   modelValue?: string | null;
   label?: string;
   name?: string;
+  disabled?: boolean;
+  hideLabel?: boolean;
 }>();
 const emit = defineEmits<{
   'update:modelValue': [value: string];
@@ -38,6 +40,7 @@ async function load(more = false) {
   }
 }
 function show() {
+  if (props.disabled) return;
   open.value = true;
   cid.value = '0';
   crumbs.value = [{ id: '0', name: '根目录' }];
@@ -75,12 +78,12 @@ watch(
 <template>
   <div class="directory-field">
     <label
-      >{{ label || '115 目录' }}
+      ><span :class="{ 'sr-only': hideLabel }">{{ label || '115 目录' }}</span>
       <div class="directory-selection">
         <input
           :value="name || (modelValue ? `已选目录 · ${modelValue}` : '尚未选择目录')"
           readonly
-        /><button class="button" type="button" :disabled="!accountId" @click="show">
+        /><button class="button" type="button" :disabled="!accountId || disabled" @click="show">
           选择目录
         </button>
       </div></label

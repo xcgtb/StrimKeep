@@ -144,6 +144,14 @@ def api_logs(n: int = 200, after: int = 0, source: str = '', query: str = '', le
     return {'status': 'success', **runtime_logs.read(after=after, limit=n, source=source[:80], query=query[:200], level=level, task=task)}
 
 
+@router.get('/api/activity/events', dependencies=[Depends(auth)])
+async def api_activity_events(request: Request):
+    from app.activity_stream import updates
+    return StreamingResponse(updates(request), media_type='text/event-stream', headers={
+        'Cache-Control': 'private, no-cache, no-transform',
+        'X-Accel-Buffering': 'no', 'Vary': 'Cookie, Authorization'})
+
+
 @router.get('/api/logs/download', dependencies=[Depends(auth)])
 def api_logs_download():
     try:

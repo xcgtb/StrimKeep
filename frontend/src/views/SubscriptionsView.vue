@@ -9,6 +9,7 @@ import type { Subscription, SubscriptionsResponse } from '../types/api';
 import LoadState from '../components/LoadState.vue';
 import ModalDialog from '../components/ModalDialog.vue';
 import { useOperation } from '../composables/useOperation';
+import { useLibraryUpdates } from '../composables/useLibraryUpdates';
 import { useVisiblePoll } from '../composables/useVisiblePoll';
 import { readData, writeData, type Data } from '../api/domain';
 import OperationState from '../components/OperationState.vue';
@@ -72,6 +73,11 @@ async function save() {
     await load();
   }
 }
+useLibraryUpdates(async () => {
+  if (store.busy || settingsOpen.value) return false;
+  await Promise.allSettled([load(), loadStatus()]);
+  return request.error.value ? false : undefined;
+});
 onMounted(() => {
   void load();
   void loadStatus();

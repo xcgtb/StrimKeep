@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { Search, RefreshCw, ChevronRight, ListTodo } from '@lucide/vue';
 import { get, query } from '../api/client';
 import { useRequest } from '../composables/useRequest';
-import { useVisiblePoll } from '../composables/useVisiblePoll';
+import { useActivityUpdates } from '../composables/useActivityUpdates';
+import TaskRecovery from '../components/TaskRecovery.vue';
+import TaskTimeline from '../components/TaskTimeline.vue';
 import { date, stateLabel } from '../composables/format';
 import type { Job, DiagnosticPage } from '../types/api';
 import LoadState from '../components/LoadState.vue';
@@ -39,7 +41,8 @@ async function act() {
   }
 }
 
-const request = useRequest<{ items: Job[] }>(),
+const governance = useRequest<{ items: Data[] }>(),
+  request = useRequest<{ items: Job[] }>(),
   detail = useRequest<{ job: Job }>(),
   diagnostics = useRequest<{ diagnostics: DiagnosticPage }>();
 const search = ref(''),
@@ -72,7 +75,32 @@ const kinds: Record<string, string> = {
   share_strm: '分享 STRM',
   maintenance: '目录维护',
 };
+const governanceKinds: Record<string, string> = {
+  inter_check: '双库治理扫描',
+  clean: '治理清理',
+  tmdb: '片库对照',
+  stats: '媒体统计',
+  ingest: '入库扫描',
+};
+const governanceRows = computed(() =>
+  (governance.data.value?.items || [])
+    .filter((row) => {
+      const state = String(row.status);
+      const matches =
+        filter.value === 'all' ||
+        (filter.value === 'active'
+          ? ['queued', 'running'].includes(state)
+          : filter.value === 'review'
+            ? ['error', 'failed', 'uncertain', 'needs_review'].includes(state)
+            : ['success', 'stopped', 'cancelled'].includes(state));
+      return (
+        matches && (!appliedSearch.value || `${row.id} ${row.kind}`.includes(appliedSearch.value))
+      );
+    })
+    .slice(0, 10),
+);
 function load() {
+  void governance.run((signal) => get<{ items: Data[] }>('/api/tasks/recent', signal));
   return request.run((signal) =>
     get<{ items: Job[] }>(query('/api/cloud/jobs', { query: appliedSearch.value }), signal),
   );
@@ -120,10 +148,17 @@ onMounted(async () => {
   const id = String(route.query.job || '');
   if (id) await open({ id, kind: '', state: 'uncertain' });
 });
-useVisiblePoll(async () => {
+watch(
+  () => route.query.job,
+  async (value) => {
+    const id = String(value || '');
+    if (id && id !== jobId.value) await open({ id, kind: '', state: 'uncertain' });
+  },
+);
+useActivityUpdates(async () => {
   await load();
-  if (modalOpen.value && detail.data.value?.job.state === 'running') await loadDetail();
-}, 10000);
+  if (modalOpen.value) await Promise.allSettled([loadDetail(), loadDiagnostics()]);
+});
 </script>
 <template>
   <section class="page-heading">
@@ -189,8 +224,37 @@ useVisiblePoll(async () => {
       <span>{{ item.id }} · {{ item.path }}</span
       ><button class="text-link" @click="trackedOpen = item">核实进度</button>
     </div>
-    <TaskReceipt v-if="trackedOpen" :id="trackedOpen.id" :kind="trackedOpen.kind" />
   </details>
+  <TaskReceipt
+    v-if="trackedOpen"
+    :id="trackedOpen.id"
+    :kind="trackedOpen.kind"
+    @close="trackedOpen = undefined"
+  />
+  <section v-if="governanceRows.length" class="panel">
+    <header class="section-heading">
+      <div>
+        <h2>治理与扫描任务</h2>
+        <p>Web、机器人和定时任务统一记录；重启后保留最近 200 条状态摘要。</p>
+      </div>
+    </header>
+    <button
+      v-for="row in governanceRows"
+      :key="String(row.id)"
+      class="task-row"
+      @click="trackedOpen = { id: String(row.id), kind: 'task' }"
+    >
+      <span class="task-icon"><ListTodo :size="20" /></span>
+      <div class="task-description">
+        <strong>{{ governanceKinds[String(row.kind)] || row.kind }}</strong
+        ><small>{{ date(Number(row.ts)) }} · {{ row.source }}</small>
+      </div>
+      <span class="state-pill" :class="String(row.status)">{{
+        stateLabel(String(row.status))
+      }}</span
+      ><ChevronRight :size="17" />
+    </button>
+  </section>
   <section class="task-list">
     <button v-for="job in rows" :key="job.id" class="task-row" @click="open(job)">
       <span class="task-icon"><ListTodo :size="20" /></span>
@@ -233,6 +297,15 @@ useVisiblePoll(async () => {
       />
       <p v-if="detail.data.value.job.activity?.label">{{ detail.data.value.job.activity.label }}</p>
     </section>
+    <TaskRecovery
+      v-if="
+        detail.data.value?.job &&
+        ['failed', 'uncertain', 'needs_review', 'stopped'].includes(detail.data.value.job.state) &&
+        ['organize', 'workflow', 'transfer'].includes(detail.data.value.job.kind)
+      "
+      :id="jobId"
+    />
+    <TaskTimeline v-if="detail.data.value?.job" :id="jobId" />
     <details v-if="detail.data.value?.job.steps?.length">
       <summary>执行步骤与逐步回执</summary>
       <EvidenceDetails :value="detail.data.value.job.steps" />

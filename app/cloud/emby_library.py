@@ -130,7 +130,7 @@ def watch(asset, *, backfill=False, config=None):
         with store.db() as con:
             changed = con.execute("INSERT OR IGNORE INTO cloud_ingestion VALUES(?,?,?,?,?,'pending',?,0,'{}',?)", (key,asset["id"],c["id"],cfg["revision"],store.encode(payload),time.time(),time.time())).rowcount
             if changed:
-                events.emit('emby','等待 Emby 入库确认：'+asset['payload']['media']['title']+' · '+c['name'],con=con)
+                events.emit('emby','等待 Emby 入库确认：'+asset['payload']['media']['title']+' · '+c['name'],origin,con=con)
 
 
 def confirmed_item(connection, asset, path):
@@ -222,9 +222,9 @@ def poll_one():
             result = {"message":"Emby 已确认入库" if item else "等待 Emby 扫描与刮削", "emby_item_id":item["Id"] if item else ""}
     except CloudError as error:
         result = {"message":str(error)}
-    if state == "pending" and attempts >= 119:
+    if state == "pending" and attempts >= settings.get()["ingest_max_attempts"] - 1:
         state = "timeout"
-        result["message"] = "入库确认超时（约2小时）；请核对路径与刮削结果后重新检查"
+        result["message"] = "入库核验达到已配置的最大次数；请核对路径与刮削结果后重新检查"
     # A configuration change during HTTP reads invalidates the evidence as well.
     with store.db() as con:
         current = con.execute("SELECT revision FROM cloud_service_settings WHERE account_id=? AND kind='emby_library'", (payload["account_id"],)).fetchone()
@@ -233,11 +233,11 @@ def poll_one():
             state, item, result = "stale", None, {"message":"读取期间连接或资产变化，请重新检查"}
     # Confirmation is a web receipt only; never send another arrival poster.
     with store.db() as con:
-        changed = con.execute("UPDATE cloud_ingestion SET state=?,next_check=?,attempts=?,result=?,updated=? WHERE id=? AND state='pending'", (state,now+60,attempts+1,store.encode(result),now,iid)).rowcount
+        changed = con.execute("UPDATE cloud_ingestion SET state=?,next_check=?,attempts=?,result=?,updated=? WHERE id=? AND state='pending'", (state,now+settings.get()["ingest_retry_seconds"],attempts+1,store.encode(result),now,iid)).rowcount
     if not changed:
         return False
     if state != 'pending' or attempts in (0,9,29,59):
-        events.emit('emby',result.get('message','')+' · '+str(asset_id)[:12],level='WARNING' if state in ('timeout','stale') else 'INFO')
+        events.emit('emby',result.get('message','')+' · '+str(asset_id)[:12],payload.get('origin_job'),level='WARNING' if state in ('timeout','stale') else 'INFO')
     return True
 
 

@@ -152,7 +152,7 @@ async function load(more = false) {
       ? '片库状态后台同步中'
       : '';
 }
-async function updateBadges() {
+async function updateBadges(changedCards = cards.value) {
   if (!cards.value.length || request.loading.value) return;
   const version = generation;
   badgeController?.abort();
@@ -160,9 +160,9 @@ async function updateBadges() {
   try {
     const updates = new Map<string, MediaCard>();
     let response: ExploreResponse = {};
-    for (let offset = 0; offset < cards.value.length; offset += 200) {
+    for (let offset = 0; offset < changedCards.length; offset += 200) {
       response = await mediaApi.badges(
-        cards.value.slice(offset, offset + 200),
+        changedCards.slice(offset, offset + 200),
         badgeController.signal,
       );
       if (version !== generation) return false;
@@ -217,9 +217,13 @@ onMounted(() => {
   void catalog.run((signal) => readData('/api/cloud/resources/catalog', signal));
 });
 onBeforeUnmount(() => badgeController?.abort());
-const live = useLibraryUpdates(async () => {
+const live = useLibraryUpdates(async (change) => {
   if (request.loading.value || !cards.value.length) return false;
-  return updateBadges();
+  const rows = [...records(change.series), ...records(change.movies)];
+  if (change.full || rows.some((row) => !row.tmdb_id)) return updateBadges();
+  const affected = new Set(rows.map((row) => String(row.tmdb_id)));
+  const visible = cards.value.filter((card) => affected.has(String(card.tmdb_id)));
+  return visible.length ? updateBadges(visible) : undefined;
 });
 </script>
 <template>

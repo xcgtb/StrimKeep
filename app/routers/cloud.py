@@ -525,6 +525,37 @@ def job_details(job_id: str):
     return {"status": "success", "job": call(jobs.details, job_id)}
 
 
+@router.get("/jobs/{job_id}/timeline")
+def job_timeline(job_id: str, response: Response):
+    response.headers["Cache-Control"] = "private, no-store"
+    return {"status": "success", **call(jobs.timeline, job_id)}
+
+
+@router.get("/jobs/{job_id}/chain")
+def job_chain(job_id: str, response: Response):
+    from app.cloud import task_chain
+    response.headers["Cache-Control"] = "private, no-store"
+    return {"status":"success", **call(task_chain.read, job_id)}
+
+
+@router.post("/jobs/{job_id}/recovery/preview")
+def recovery_preview(job_id: str):
+    from app.cloud import recovery
+    return {"status":"success", **call(recovery.preview, job_id)}
+
+
+@router.post("/jobs/{job_id}/recovery/apply", status_code=202)
+def recovery_apply(job_id: str, body: dict):
+    from app.cloud import recovery
+    return {"status":"success", **call(recovery.apply, job_id, body.get('preview_id',''), body.get('confirmed',False))}
+
+
+@router.post("/assets/{asset_id}/playback/check")
+def check_playback(asset_id: str):
+    from app.cloud import playback
+    return {"status": "success", **call(playback.check, asset_id)}
+
+
 @router.get("/jobs/{job_id}/diagnostics")
 def job_diagnostics(job_id: str, offset: int = Query(0, ge=0), limit: int = Query(30, ge=1, le=100),
                     category: str = Query('', max_length=30), query: str = Query('', max_length=200)):

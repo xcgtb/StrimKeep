@@ -21,10 +21,12 @@ import {
 import { mediaApi } from '../api/media';
 import { useRequest } from '../composables/useRequest';
 import { useVisiblePoll } from '../composables/useVisiblePoll';
+import { useActivityUpdates } from '../composables/useActivityUpdates';
 import { useLibraryUpdates } from '../composables/useLibraryUpdates';
 import { number, date, titleOf, stateLabel } from '../composables/format';
 import { useUi } from '../stores/ui';
-import { readData, records, type Data } from '../api/domain';
+import { readData, writeData, records, type Data } from '../api/domain';
+import PlaybackMetrics from '../components/PlaybackMetrics.vue';
 import PosterCard from '../components/PosterCard.vue';
 import LoadState from '../components/LoadState.vue';
 import type { MediaCard, Overview, ExploreResponse } from '../types/api';
@@ -34,7 +36,19 @@ const overview = useRequest<Overview>(),
   ui = useUi(),
   refreshing = ref(false),
   recType = ref('movie'),
-  jobs = useRequest<Data>();
+  jobs = useRequest<Data>(),
+  playback = useRequest<Data>();
+function loadPlayback() {
+  return playback.run((signal) => readData('/api/overview/playback', signal));
+}
+async function refreshPlayback() {
+  try {
+    await writeData('/api/overview/playback/refresh');
+    await loadPlayback();
+  } catch (e) {
+    ui.notify((e as Error).message, 'error');
+  }
+}
 const workflows = [
   { to: '/resources/receive', name: '接收资源', note: '分享 · 磁力 · 秒传', icon: CloudDownload },
   { to: '/organize/workspace', name: '识别整理', note: '命名 · 分类 · 归档', icon: ArrowDownUp },
@@ -139,7 +153,10 @@ function explore(card: MediaCard) {
 onMounted(() => {
   void load();
   void loadRecs();
+  void loadPlayback();
 });
+useVisiblePoll(loadPlayback, 15000);
+useActivityUpdates(() => jobs.run((signal) => readData('/api/cloud/jobs', signal)));
 useVisiblePoll(load, 15000);
 useLibraryUpdates(async () => {
   if (overview.loading.value) return false;
@@ -220,25 +237,7 @@ useLibraryUpdates(async () => {
     </p>
     <div class="grid cols2 dashboard-workspace">
       <div class="grid dashboard-primary">
-        <section class="card cardpad">
-          <header class="ctop">
-            <div>
-              <h2 class="ctitle">媒体生产链路</h2>
-              <p class="cdesc">接收、整理、生成与实际入库分别确认。</p>
-            </div>
-            <RouterLink to="/tasks" class="btn small">打开任务</RouterLink>
-          </header>
-          <nav class="flowline" aria-label="媒体处理工作流">
-            <RouterLink v-for="(flow, i) in workflows" :key="flow.to" :to="flow.to" class="flowstep"
-              ><span class="num"><component :is="flow.icon" :size="17" /></span
-              ><span
-                ><strong>{{ flow.name }}</strong
-                ><small>{{ flow.note }}</small></span
-              ><ArrowRight v-if="i < workflows.length - 1" :size="13" class="flowarr"
-            /></RouterLink>
-          </nav>
-        </section>
-        <section class="card cardpad">
+        <section class="card cardpad" aria-label="最近入库">
           <header class="ctop">
             <div>
               <h2 class="ctitle">最近入库</h2>
@@ -279,6 +278,70 @@ useLibraryUpdates(async () => {
             ><strong>{{ number(ingest.series) }} 部剧集</strong
             ><strong>{{ number(ingest.episodes) }} 集</strong>
           </div>
+        </section>
+        <section class="card cardpad">
+          <header class="ctop">
+            <div>
+              <h2 class="ctitle">续播与播放提醒</h2>
+              <p class="cdesc">Emby 续播记录与已更新剧集。</p>
+            </div>
+            <button
+              class="button small"
+              :disabled="playback.loading.value || !!playback.data.value?.refreshing"
+              @click="refreshPlayback"
+            >
+              {{ playback.data.value?.refreshing ? '同步中…' : '更新记录' }}
+            </button>
+          </header>
+          <p v-if="playback.error.value || playback.data.value?.error" class="inline-error">
+            {{ playback.error.value || playback.data.value?.error }}
+          </p>
+          <p v-if="playback.data.value?.ts" class="data-caption">
+            快照 {{ date(Number(playback.data.value.ts)) }}
+          </p>
+          <div class="continue-watching-list">
+            <article
+              v-for="(row, index) in records(playback.data.value?.records).slice(0, 6)"
+              :key="index"
+            >
+              <span class="eventicon"
+                ><Film v-if="row.type === 'movie'" :size="20" /><Tv2 v-else :size="20"
+              /></span>
+              <div>
+                <strong>{{ row.name }}</strong>
+                <p>
+                  {{ row.user
+                  }}<span v-if="row.s">
+                    · S{{ String(row.s).padStart(2, '0') }}E{{
+                      String(row.e).padStart(2, '0')
+                    }}</span
+                  >
+                </p>
+                <progress
+                  :value="Number(row.pct || 0)"
+                  max="100"
+                  :aria-label="`${row.name} 观看进度`"
+                /><small>已观看 {{ row.pct }}%</small>
+              </div>
+            </article>
+          </div>
+          <p
+            v-for="(row, index) in records(playback.data.value?.alerts).slice(0, 3)"
+            :key="index"
+            class="rule-note"
+          >
+            {{ row.text }}
+          </p>
+          <p
+            v-if="
+              !records(playback.data.value?.records).length &&
+              !playback.data.value?.refreshing &&
+              !playback.data.value?.error
+            "
+            class="muted-text"
+          >
+            暂无可续播记录。
+          </p>
         </section>
         <section class="card cardpad library-distribution">
           <header class="ctop">
@@ -353,6 +416,24 @@ useLibraryUpdates(async () => {
           <p v-if="!dashboard.services" class="muted-text">服务状态尚未同步</p>
         </section>
         <section class="card cardpad">
+          <header class="ctop">
+            <div>
+              <h2 class="ctitle">媒体生产链路</h2>
+              <p class="cdesc">接收、整理、生成与实际入库分别确认。</p>
+            </div>
+            <RouterLink to="/tasks" class="btn small">打开任务</RouterLink>
+          </header>
+          <nav class="flowline" aria-label="媒体处理工作流">
+            <RouterLink v-for="(flow, i) in workflows" :key="flow.to" :to="flow.to" class="flowstep"
+              ><span class="num"><component :is="flow.icon" :size="17" /></span
+              ><span
+                ><strong>{{ flow.name }}</strong
+                ><small>{{ flow.note }}</small></span
+              ><ArrowRight v-if="i < workflows.length - 1" :size="13" class="flowarr"
+            /></RouterLink>
+          </nav>
+        </section>
+        <section class="card cardpad">
           <h2 class="ctitle">快捷操作</h2>
           <div class="quick-action-grid">
             <RouterLink to="/resources/receive?tab=batch"
@@ -410,4 +491,5 @@ useLibraryUpdates(async () => {
       />
     </div>
   </section>
+  <PlaybackMetrics v-if="overview.data.value" />
 </template>

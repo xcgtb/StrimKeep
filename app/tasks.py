@@ -139,6 +139,32 @@ class TaskManager:
             t.cancel_event.set()
             return t, True
 
+    def _record(self, task):
+        try:
+            if __package__:
+                from . import task_history
+            else:
+                import task_history
+            task_history.record(task)
+        except Exception:
+            log.warning('任务历史摘要保存失败，内存任务记录仍可查询')
+
+    def recent(self):
+        if __package__:
+            from . import task_history
+        else:
+            import task_history
+        try:
+            rows = task_history.recent()
+            saved = {r['id']: task_history.archived(r['id'], rows) for r in rows}
+        except Exception:
+            saved = {}
+        with self.lock:
+            for value in self.tasks.values():
+                saved[value.id] = {'id':value.id, 'kind':value.kind, 'source':value.source,
+                                  'status':value.status, 'ts':value.ts, 'finished_at':value.finished_at}
+        return sorted(saved.values(), key=lambda r:r['ts'], reverse=True)[:200]
+
     def spawn(self, kind, fn, *fargs, exclusive=True, source='web', on_done=None, cancellable=False):
         """后台线程执行 fn(*fargs)。exclusive 任务在已有重任务运行时抛 TaskBusy。
         on_done(task) 在任务结束后于同一线程回调（Bot 用它回消息）。"""
@@ -152,6 +178,7 @@ class TaskManager:
             if exclusive:
                 self.current = t
         self.prune()
+        self._record(t)
         try:
             threading.Thread(target=self._run, args=(t, fn, fargs, on_done),
                              daemon=True, name=f'task-{kind}').start()
@@ -161,6 +188,9 @@ class TaskManager:
                 self.tasks.pop(t.id, None)
                 if self.current is t:
                     self.current = None
+            t.status = 'error'
+            t.finished_at = time.time()
+            self._record(t)
             raise
         return t
 
@@ -198,6 +228,7 @@ class TaskManager:
             with self.lock:
                 if self.current is t:
                     self.current = None
+            self._record(t)
             t.done.set()
         if on_done is not None:
             try:

@@ -4,6 +4,8 @@ import { readData, writeData, object, text, strings, type Data } from '../api/do
 import { useRequest } from '../composables/useRequest';
 import { useVisiblePoll } from '../composables/useVisiblePoll';
 import EvidenceDetails from './EvidenceDetails.vue';
+import TaskTimeline from './TaskTimeline.vue';
+import { useActivityUpdates } from '../composables/useActivityUpdates';
 import { stateLabel } from '../composables/format';
 const props = defineProps<{ id: string; kind?: 'cloud' | 'task' | 'delete'; target?: string }>();
 const request = useRequest<Data>();
@@ -11,9 +13,16 @@ const emit = defineEmits<{ done: [value: Data]; update: [value: Data]; close: []
 const hidden = ref(false);
 const terminal = computed(() => {
   const row = object(request.data.value?.job || request.data.value);
-  return ['success', 'failed', 'cancelled', 'stopped', 'done', 'error'].includes(
-    String(row.state || row.status),
-  );
+  return [
+    'success',
+    'failed',
+    'cancelled',
+    'stopped',
+    'done',
+    'error',
+    'uncertain',
+    'needs_review',
+  ].includes(String(row.state || row.status));
 });
 // 批量删除的进度原本只以原始字段呈现，这里换成 1.2.12 的进度条 + 业务计数。
 const deleteProgress = computed(() => {
@@ -55,7 +64,16 @@ watch(request.data, (d) => {
   const status = String(row.state || row.status);
   if (d) emit('update', row);
   if (
-    ['success', 'failed', 'cancelled', 'stopped', 'done', 'error'].includes(status) &&
+    [
+      'success',
+      'failed',
+      'cancelled',
+      'stopped',
+      'done',
+      'error',
+      'uncertain',
+      'needs_review',
+    ].includes(status) &&
     completed !== props.id
   ) {
     completed = props.id;
@@ -84,6 +102,7 @@ function load() {
   );
 }
 onMounted(load);
+useActivityUpdates(() => (props.kind === undefined || props.kind === 'cloud' ? load() : undefined));
 watch(
   () => props.id,
   () => {
@@ -95,9 +114,16 @@ watch(
 useVisiblePoll(() => {
   const d = object(request.data.value?.job || request.data.value);
   if (
-    !['success', 'failed', 'cancelled', 'stopped', 'done', 'error'].includes(
-      String(d.state || d.status),
-    )
+    ![
+      'success',
+      'failed',
+      'cancelled',
+      'stopped',
+      'done',
+      'error',
+      'uncertain',
+      'needs_review',
+    ].includes(String(d.state || d.status))
   )
     return load();
 }, 2500);
@@ -188,6 +214,9 @@ useVisiblePoll(() => {
       </div>
     </div>
     <template v-if="kind === 'task' && request.data.value">
+      <p v-if="request.data.value.archive_note" class="muted-text">
+        {{ request.data.value.archive_note }}
+      </p>
       <p v-if="request.data.value.error" class="inline-error">{{ request.data.value.error }}</p>
       <div
         v-if="strings(request.data.value.logs).length"
@@ -207,6 +236,18 @@ useVisiblePoll(() => {
           {{ object(request.data.value.result).sh_cnt ?? 0 }}
         </p>
       </div>
+    </template>
+    <template v-if="!kind || kind === 'cloud'">
+      <p>{{ object(request.data.value?.job).message }}</p>
+      <p v-if="object(object(request.data.value?.job).progress).phase">
+        {{ object(object(request.data.value?.job).progress).phase }} ·
+        {{ object(object(request.data.value?.job).progress).processed ?? 0 }} /
+        {{ object(object(request.data.value?.job).progress).total ?? '待统计' }}
+      </p>
+      <TaskTimeline :id="id" />
+      <RouterLink :to="{ path: '/tasks', query: { job: id } }" class="text-link"
+        >打开任务详情与处理入口 →</RouterLink
+      >
     </template>
     <details v-if="request.data.value" class="technical-details">
       <summary>任务回执与核验明细</summary>

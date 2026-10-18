@@ -197,6 +197,13 @@ test('directory configuration carries current revision and reports 409 without r
         }),
   );
   await page.goto('/#/organize/workspace');
+  await expect(page.getByRole('button', { name: '保存整理目录' })).toBeDisabled();
+  await page
+    .locator('.organize-directory-cards .directory-purpose-card')
+    .first()
+    .getByRole('button', { name: '选择目录', exact: true })
+    .click();
+  await page.getByRole('button', { name: '使用当前目录', exact: true }).click();
   await page.getByRole('button', { name: '保存整理目录' }).click();
   await expect(page.getByText(/目录配置已变化，请刷新后核对再保存/)).toBeVisible();
   expect(writes).toBe(1);
@@ -296,6 +303,13 @@ test('late account write does not place its receipt or directories into another 
     });
   });
   await page.goto('/#/organize/workspace');
+  await expect(page.getByRole('button', { name: '保存整理目录' })).toBeDisabled();
+  await page
+    .locator('.organize-directory-cards .directory-purpose-card')
+    .first()
+    .getByRole('button', { name: '选择目录', exact: true })
+    .click();
+  await page.getByRole('button', { name: '使用当前目录', exact: true }).click();
   await page.getByRole('button', { name: '保存整理目录' }).click();
   await expect.poll(() => !!resolve).toBe(true);
   await page.getByLabel('当前 115 账号').selectOption('account-b');

@@ -13,6 +13,7 @@ from app.cloud.quality8 import DEFAULT as QUALITY8_DEFAULT
 
 DEFAULTS = {
     "public_url": "",
+    "external_url": "",
     "output_root": "/strm/local",
     "emby_output_root": "",
     "share_output_root": "/strm/share",
@@ -29,6 +30,8 @@ DEFAULTS = {
     "notify_channel": True,
     "notify_maintenance": True,
     "emby_refresh_enabled": True,
+    "ingest_retry_seconds": 60,
+    "ingest_max_attempts": 120,
     "open_app_id": "",
     "naming_style": "standard",
     "movie_folder": "电影",
@@ -106,23 +109,24 @@ def validate(result):
             or len(text.encode()) > 80
         ):
             raise CloudError("归档分类应为一个有效的目录名")
-    raw_url = str(result["public_url"])
-    try:
-        parsed = urlsplit(raw_url)
-        parsed.port
-    except ValueError:
-        raise CloudError("播放地址中的主机或端口无效") from None
-    if len(raw_url) > 2048 or any(ord(c) <= 32 for c in raw_url):
-        raise CloudError("播放地址包含空白或无效字符")
-    if result["public_url"] and (
-        parsed.scheme not in ("http", "https")
-        or not parsed.hostname
-        or parsed.username
-        or parsed.password
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise CloudError("播放地址应为 http(s)://主机:端口，可带部署子路径")
+    for url_key in ("public_url", "external_url"):
+        raw_url = str(result[url_key])
+        try:
+            parsed = urlsplit(raw_url)
+            parsed.port
+        except ValueError:
+            raise CloudError("播放地址中的主机或端口无效") from None
+        if len(raw_url) > 2048 or any(ord(c) <= 32 for c in raw_url):
+            raise CloudError("播放地址包含空白或无效字符")
+        if result[url_key] and (
+            parsed.scheme not in ("http", "https")
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise CloudError("播放地址应为 http(s)://主机:端口，可带部署子路径")
     for key in ("output_root", "emby_output_root", "share_output_root", "share_emby_output_root"):
         raw = str(result[key])
         if raw and (
@@ -172,6 +176,9 @@ def validate(result):
         raise CloudError("STRM 联动延时应为 0 至 86400 秒")
     if type(result["operation_delay_seconds"]) not in (int,float) or not 0 <= result["operation_delay_seconds"] <= 60:
         raise CloudError("操作间隔应为 0 至 60 秒")
+    for key, low, high in (("ingest_retry_seconds", 10, 600), ("ingest_max_attempts", 1, 720)):
+        if type(result[key]) is not int or not low <= result[key] <= high:
+            raise CloudError("入库核验间隔或次数超出允许范围")
     from app.cloud import naming, categories
     naming.validate(result)
     categories.validate(result)

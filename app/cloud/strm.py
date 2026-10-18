@@ -28,8 +28,9 @@ def signature(asset_id, nonce):
     ).hexdigest()
 
 
-def link(asset_id, nonce):
-    base = settings.get()["public_url"].rstrip("/")
+def link(asset_id, nonce, external=False):
+    config = settings.get()
+    base = (config["external_url"] if external else config["public_url"]).rstrip("/")
     if not base:
         raise CloudError("请在「STRM 生成 → 输出与播放地址」保存客户端可访问的服务地址", 409)
     return (

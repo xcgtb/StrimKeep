@@ -205,7 +205,7 @@ test('resource search opens the matching workspace without any write', async ({ 
   await expect(
     page.getByRole('heading', { name: '分享 STRM 生成与整理', exact: true }),
   ).toBeVisible();
-  await expect(page.locator('.share-path-banner')).toContainText('share');
+  await expect(page.getByRole('region', { name: '本次资源去向' })).toContainText('/strm/share');
   expect(state.writes).toHaveLength(0);
 });
 

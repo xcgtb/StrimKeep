@@ -2,12 +2,18 @@
 import { ref, reactive, onMounted, nextTick, watch } from 'vue';
 import { readData, query, records, object, type Data } from '../api/domain';
 import { useRequest } from '../composables/useRequest';
-import { useVisiblePoll } from '../composables/useVisiblePoll';
+import { useActivityUpdates } from '../composables/useActivityUpdates';
+import { useRoute } from 'vue-router';
 import PageHeading from '../components/PageHeading.vue';
 import EvidenceDetails from '../components/EvidenceDetails.vue';
 const request = useRequest<Data>(),
   bot = useRequest<Data>(),
-  filters = reactive({ source: '', query: '', level: '', task: '' }),
+  filters = reactive({
+    source: '',
+    query: '',
+    level: '',
+    task: String(useRoute().query.task || '').slice(0, 32),
+  }),
   rows = ref<Data[]>([]),
   follow = ref(true),
   autoScroll = ref(true),
@@ -56,12 +62,12 @@ onMounted(() => {
 watch(follow, (enabled) => {
   if (enabled) void load(true);
 });
-useVisiblePoll(() => (follow.value ? load(true) : undefined), 2000);
+const live = useActivityUpdates(() => (follow.value ? load(true) : undefined));
 </script>
 <template>
   <PageHeading
     title="实时日志中心"
-    subtitle="直接读取服务器日志；每 2 秒增量更新，暂停仅影响显示，不停止后台任务。"
+    subtitle="任务事件实时推送；断线自动补读，暂停跟随不影响后台执行。"
   >
     <a href="/api/logs/download" class="button" download="strimkeep-logs.txt">导出日志</a>
   </PageHeading>
@@ -69,7 +75,10 @@ useVisiblePoll(() => (follow.value ? load(true) : undefined), 2000);
     <div class="log-console-status">
       <span class="status-dot" :class="{ muted: !follow }"></span>
       <strong>{{ follow ? '实时跟随中' : '已暂停跟随' }}</strong>
-      <small>{{ rows.length }} 条 · 每 2 秒刷新</small>
+      <small
+        >{{ rows.length }} 条 ·
+        {{ live.connected.value ? '事件推送已连接' : '自动重连 · 15 秒补读' }}</small
+      >
       <button class="button small" @click="follow = !follow">{{ follow ? '暂停' : '继续' }}</button>
       <button class="button small" :disabled="request.loading.value" @click="load(true)">
         立即更新
