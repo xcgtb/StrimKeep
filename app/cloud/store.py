@@ -6,6 +6,7 @@ import uuid
 from contextlib import contextmanager
 from app import storage
 from app.cloud import states
+from app.cloud.errors import CloudError
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS cloud_accounts (
@@ -295,22 +296,28 @@ def account_has_active_jobs(account_id):
     除了 payload.account_id，还要按 plan_id 反查：一个任务可能是用该账号创建的计划发起的。
     """
     with db() as con:
-        row = con.execute(
-            "SELECT 1 FROM cloud_jobs j WHERE state IN ('queued','running') AND "
-            "(json_extract(payload,'$.account_id')=? OR EXISTS (SELECT 1 FROM cloud_plans p "
-            "WHERE p.id=json_extract(j.payload,'$.plan_id') AND p.account_id=?)) LIMIT 1",
-            (account_id, account_id),
-        ).fetchone()
+        return _account_has_active_jobs(con, account_id)
+
+
+def _account_has_active_jobs(con, account_id):
+    row = con.execute(
+        "SELECT 1 FROM cloud_jobs j WHERE state IN ('queued','running') AND "
+        "(json_extract(payload,'$.account_id')=? OR EXISTS (SELECT 1 FROM cloud_plans p "
+        "WHERE p.id=json_extract(j.payload,'$.plan_id') AND p.account_id=?)) LIMIT 1",
+        (account_id, account_id),
+    ).fetchone()
     return row is not None
 
 
 def disconnect_account(account_id):
     """断开账号：删除账号及其目录设置与探测缓存，资产标记 disconnected，规则停用。
 
-    调用方必须先确认没有未完成任务（见 account_has_active_jobs）。
+    检查未完成任务与删除在同一写事务内完成，避免检查后有任务插入。
     保留 cloud_jobs / cloud_steps 等历史记录，便于事后追溯。
     """
     with db() as con:
+        if _account_has_active_jobs(con, account_id):
+            raise CloudError("账号有未完成任务，请先处理任务", 409)
         con.execute("DELETE FROM cloud_accounts WHERE id=?", (account_id,))
         con.execute("DELETE FROM cloud_directory_settings WHERE account_id=?", (account_id,))
         con.execute("DELETE FROM cloud_media_probes WHERE account_id=?", (account_id,))
@@ -353,7 +360,7 @@ def cancel_queued_job(job_id, now=None):
     """取消尚未开始的任务；返回受影响行数（0 表示已经开始，不能中断）。"""
     with db() as con:
         return con.execute(
-            "UPDATE cloud_jobs SET state='cancelled',updated=? WHERE id=? AND state='queued'",
+            "UPDATE cloud_jobs SET state='stopped',updated=? WHERE id=? AND state='queued'",
             (time.time() if now is None else now, job_id),
         ).rowcount
 
@@ -403,6 +410,18 @@ def account_revision(account_id):
 
 def update_rule_enabled(rule_id, enabled, due, payload, now=None):
     with db() as con:
+        current = con.execute("SELECT payload FROM cloud_rules WHERE id=?", (rule_id,)).fetchone()
+        if not current:
+            raise CloudError("规则不存在", 404)
+        original = json.loads(current[0])
+        original.pop("schedule_error", None)
+        if original != payload:
+            raise CloudError("规则已变化，请重新读取后操作", 409)
+        if enabled:
+            account = con.execute("SELECT revision FROM cloud_accounts WHERE id=?",
+                                  (payload["account_id"],)).fetchone()
+            if not account or account[0] != payload["account_revision"]:
+                raise CloudError("账号授权已变化，请重新创建规则", 409)
         con.execute(
             "UPDATE cloud_rules SET enabled=?,next_run=?,updated=?,payload=? WHERE id=?",
             (int(enabled), due, time.time() if now is None else now, encode(payload), rule_id))

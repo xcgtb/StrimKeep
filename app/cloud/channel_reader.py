@@ -182,9 +182,10 @@ def poll_one():
             if backlog:
                 events.emit('channel','频道仍有积压，立即继续：'+rule['name'],con=con)
             delay = next_poll_delay(default_seconds=rule.get("poll_seconds", 300), backlog=backlog)
-            con.execute("INSERT INTO cloud_channel_cursors VALUES(?,?,1,?, '') ON CONFLICT(id) DO UPDATE SET cursor=excluded.cursor,initialized=1,next_poll=excluded.next_poll,last_error=''", (rid, tip, now+delay))
+            con.execute("INSERT INTO cloud_channel_cursors VALUES(?,?,1,?, '') ON CONFLICT(id) DO UPDATE SET cursor=excluded.cursor,initialized=1,next_poll=excluded.next_poll,last_error=''", (rid, tip, time.time()+delay))
         return True
     except Exception as exc:
+        failed_at = time.time()
         # 限流必须按服务端秒数退避；提前重试会把等待时间罚得更长。
         seconds = exc.seconds if isinstance(exc, ChannelFloodWait) else flood_wait_seconds(exc)
         if seconds:
@@ -196,7 +197,7 @@ def poll_one():
             delay = next_poll_delay()
             events.emit('channel',rule['name']+' · '+error,level='WARNING')
     with store.db() as con:
-        con.execute("INSERT INTO cloud_channel_cursors VALUES(?,0,0,?,?) ON CONFLICT(id) DO UPDATE SET next_poll=excluded.next_poll,last_error=excluded.last_error", (rid, now+delay, error))
+        con.execute("INSERT INTO cloud_channel_cursors VALUES(?,0,0,?,?) ON CONFLICT(id) DO UPDATE SET next_poll=excluded.next_poll,last_error=excluded.last_error", (rid, failed_at+delay, error))
     return True
 
 

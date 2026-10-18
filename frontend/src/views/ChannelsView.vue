@@ -284,9 +284,9 @@ watch(
           <button class="text-link" @click="draft = undefined">取消编辑</button>
         </header>
         <p class="muted-text">
-          先填四项就能跑：<strong>频道名称</strong>、<strong>频道地址</strong>（粘
-          https://t.me/xxx 即可）、<strong>频道保存目录</strong>、<strong>读取模式</strong>。
-          关键词、正则、TMDB 筛选都可以留空，跑通后再加。
+          先填四项就能跑：<strong>频道名称</strong>、<strong>频道地址</strong>（粘 https://t.me/xxx
+          即可）、<strong>频道保存目录</strong>、<strong>读取模式</strong>。 关键词、正则、TMDB
+          筛选都可以留空，跑通后再加。
         </p>
         <FormFields
           v-model="draft"

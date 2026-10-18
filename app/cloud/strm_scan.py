@@ -38,8 +38,7 @@ def targets(account_id):
 
 def next_run(cron, timezone, now=None):
     """下次执行时间戳；Cron 为空或非法返回 0（不排期）。"""
-    cron = (cron or '').strip()
-    if not cron:
+    if not isinstance(cron, str) or not cron.strip():
         return 0
     try:
         return schedules.cron_next(cron, timezone or DEFAULT_TZ,
@@ -51,12 +50,17 @@ def next_run(cron, timezone, now=None):
 def due(cron, timezone, last_run, now=None):
     """是否到点。从未跑过时视为到点（首次开启立即执行一次）。"""
     now = time.time() if now is None else now
-    if not (cron or '').strip():
+    try:
+        last = float(last_run or 0)
+    except (TypeError, ValueError):
         return False
-    last = float(last_run or 0)
+    # Validate even on the first run; an invalid schedule must never enqueue work.
+    scheduled = next_run(cron, timezone, now if last <= 0 else last)
+    if scheduled <= 0:
+        return False
     if last <= 0:
         return True
-    return next_run(cron, timezone, last) <= now
+    return scheduled <= now
 
 
 def start(account_id=None):

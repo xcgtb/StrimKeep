@@ -41,7 +41,7 @@ export const cloudSections: { key: string; title: string; description: string; f
           key: 'strm_block_feiniu_ua',
           label: '拦截飞牛媒体探测',
           type: 'check',
-          hint: '命中 Lavf/60.3.100 的直连播放请求直接返回 403，避免刮削时反复拉流；Emby 反代不受影响。',
+          hint: '默认关闭。开启后仅拦截 UA 完整等于 Lavf/60.3.100 的直连请求；该 UA 也可能来自普通播放器，请按需开启。',
         },
         {
           key: 'strm_scan_timezone',

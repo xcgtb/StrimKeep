@@ -260,7 +260,7 @@ def test_delayed_cancel_preserves_source_and_explicit_no_generate_creates_no_lin
     _, link = organized_delay(cloud)
     assert client.post(f"/api/cloud/jobs/{link['job_id']}/cancel", json={}).status_code == 200
     make_due(link['job_id']);jobs.execute(link['job_id'])
-    assert store.job(link['job_id'])['state'] == 'cancelled' and not list(cloud.root.rglob('*.strm'))
+    assert store.job(link['job_id'])['state'] == 'stopped' and not list(cloud.root.rglob('*.strm'))
     assert cloud.remote.info('4')['parent_id'] != '1'
     cloud.remote.files['6'] = {**cloud.remote.info('4'), 'id': '6', 'parent_id': '1', 'name': 'Movie.2024.720p.mkv'}
     plan = workflow.plan(cloud.id, '1', '2');jid = workflow.apply(plan['id'], True, generate=False);jobs.execute(jid)

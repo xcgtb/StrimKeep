@@ -219,9 +219,7 @@ def check_open(account_id: str):
 
 @router.delete("/accounts/{account_id}")
 def disconnect(account_id: str):
-    if store.account_has_active_jobs(account_id):
-        raise HTTPException(409, "账号有未完成任务，请先处理任务")
-    store.disconnect_account(account_id)
+    call(store.disconnect_account, account_id)
     return {"status": "success"}
 
 
@@ -720,17 +718,17 @@ def enable_rule(rule_id: str, body: dict):
         raise HTTPException(409, "账号授权已变化，请重新创建规则")
     due = call(schedules.next_run, payload, time.time()) if body["enabled"] else time.time()
     payload.pop("schedule_error", None)
-    store.update_rule_enabled(rule_id, body["enabled"], due, payload)
+    call(store.update_rule_enabled, rule_id, body["enabled"], due, payload)
     return {"status": "success", "enabled": body["enabled"]}
 
 
-# 飞牛 OS 的媒体信息探测：版本号精确匹配，避免把普通 ffmpeg 播放器一起挡掉。
+# 可选 UA 拦截；该 UA 不是客户端身份凭证，默认关闭并仅完整匹配。
 FEINIU_PROBE_UA = 'Lavf/60.3.100'
 
 
 def is_probe_request(user_agent, enabled=True):
-    """是否为飞牛媒体探测请求（纯函数，便于单测）。"""
-    return bool(enabled) and FEINIU_PROBE_UA.lower() in (user_agent or '').lower()
+    """是否命中用户开启的探测 UA 规则；不推断客户端身份。"""
+    return enabled is True and FEINIU_PROBE_UA.casefold() == (user_agent or '').strip().casefold()
 
 
 @play_router.api_route("/play/{asset_id}", methods=["GET", "HEAD"])
@@ -741,7 +739,7 @@ async def play(
 
     # 只拦这一个直连播放端点；Emby 反代不经过这里，不受影响。
     if is_probe_request(request.headers.get('user-agent'),
-                        cloud_settings.get().get('strm_block_feiniu_ua', True)):
+                        cloud_settings.get().get('strm_block_feiniu_ua', False)):
         raise HTTPException(403, '探测请求已拦截')
     try:
         return await playback.serve(request, asset_id, sig)

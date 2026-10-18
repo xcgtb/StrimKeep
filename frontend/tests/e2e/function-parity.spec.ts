@@ -15,11 +15,13 @@ test('sidebar has ten primary entries and related controls remain inside their m
   if (await page.getByRole('button', { name: '关闭导航' }).last().isVisible())
     await page.getByRole('button', { name: '关闭导航' }).last().click();
   const module = page.getByRole('navigation', { name: '模块功能' });
-  await module.getByRole('link', { name: '八维洗版', exact: true }).click();
+  await module.getByRole('link', { name: '八维与洗版', exact: true }).click();
   await expect(page.getByRole('heading', { name: '整理八维与洗版', exact: true })).toBeVisible();
-  await module.getByRole('link', { name: '文件过滤', exact: true }).click();
+  await module.getByRole('link', { name: '需要处理的文件类型', exact: true }).click();
   await expect(page.getByLabel('最小视频体积（MB）', { exact: true })).toBeVisible();
-  await expect(module.getByRole('link', { name: '文件过滤', exact: true })).toHaveClass(/current/);
+  await expect(module.getByRole('link', { name: '需要处理的文件类型', exact: true })).toHaveClass(
+    /current/,
+  );
   expect(state.writes).toEqual([]);
 });
 
@@ -160,7 +162,7 @@ test('naming and source-governance controls remain reachable inside organize', a
   await expect(page.getByLabel('整理后清理空目录', { exact: true })).toBeVisible();
   await page
     .getByRole('navigation', { name: '模块功能' })
-    .getByRole('link', { name: '源文件治理', exact: true })
+    .getByRole('link', { name: '删除与源文件处理', exact: true })
     .click();
   await expect(page.getByLabel('允许通过官方授权删除源文件', { exact: true })).toBeVisible();
   expect(state.writes).toEqual([]);
