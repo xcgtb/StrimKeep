@@ -195,7 +195,8 @@ const moduleTools = [
 ];
 const aliases: Record<string, string> = {
   '/resources/share': '免转存 分享STRM 分享 strm 生成 整理',
-  '/resources/receive': '资源接收 链接转存 离线转存 批量链接 115 转存 秒传 磁力 magnet ed2k 下载 离线任务',
+  '/resources/receive':
+    '资源接收 链接转存 离线转存 批量链接 115 转存 秒传 磁力 magnet ed2k 下载 离线任务',
   '/governance/rules': '七维 画质 规则 治理 巡检',
   '/tasks/ingestion': 'Emby 入库 路径 核验 连接',
   '/tasks': '任务 进度 回执 失败 重试 继续 停止',
@@ -225,6 +226,7 @@ export function searchFunctions(keyword: string) {
 }
 export function moduleName(path: string, section?: unknown) {
   if (
+    path === '/organize' ||
     path.startsWith('/organize/') ||
     (path === '/settings/cloud' &&
       ['classification', 'filters', 'naming', 'quality', 'notifications'].includes(String(section)))

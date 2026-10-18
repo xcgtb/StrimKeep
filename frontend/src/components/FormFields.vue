@@ -76,8 +76,7 @@ function value(field: Field) {
           v-else-if="field.type === 'chips'"
           :model-value="chipValue(field)"
           :disabled="disabled || field.disabled"
-          @update:model-value="setChips(field, $event)"
-        /><textarea
+          @update:model-value="setChips(field, $event)" /><textarea
           v-else-if="field.type === 'area' || field.type === 'lines'"
           :id="`${prefix}-${field.key}`"
           :aria-label="field.label"

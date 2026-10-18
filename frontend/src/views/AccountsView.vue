@@ -35,15 +35,37 @@ const cookie = ref(''),
   job = ref('');
 // 每条都回答「现在能不能用」，不暴露内部字段名。
 const signinFields: Field[] = [
-  { key: 'signin_enabled', label: '每日自动签到', type: 'check', hint: '开启后按下面的时间自动签到，攒空间用。' },
+  {
+    key: 'signin_enabled',
+    label: '每日自动签到',
+    type: 'check',
+    hint: '开启后按下面的时间自动签到，攒空间用。',
+  },
   { key: 'signin_cron', label: '签到时间（Cron，五段）', hint: '例如 0 8 * * * 表示每天 08:00。' },
   { key: 'timezone', label: '时区', hint: '按这个时区解释上面的 Cron。' },
 ];
 const recycleFields: Field[] = [
-  { key: 'recycle_enabled', label: '自动清理回收站', type: 'check', hint: '按保留天数永久删除回收站里的条目，无法恢复。' },
+  {
+    key: 'recycle_enabled',
+    label: '自动清理回收站',
+    type: 'check',
+    hint: '按保留天数永久删除回收站里的条目，无法恢复。',
+  },
   { key: 'recycle_cron', label: '清理时间（Cron，五段）', hint: '例如 0 4 * * * 表示每天 04:00。' },
-  { key: 'retention_days', label: '回收站保留天数', type: 'number', min: 0, max: 3650, hint: '超过这个天数的条目会被清理。' },
-  { key: 'password', label: '回收站安全密钥（留空保留已保存值）', type: 'secret', hint: '115 侧清理前需要校验的安全密钥。' },
+  {
+    key: 'retention_days',
+    label: '回收站保留天数',
+    type: 'number',
+    min: 0,
+    max: 3650,
+    hint: '超过这个天数的条目会被清理。',
+  },
+  {
+    key: 'password',
+    label: '回收站安全密钥（留空保留已保存值）',
+    type: 'secret',
+    hint: '115 侧清理前需要校验的安全密钥。',
+  },
 ];
 const maintenanceFields: Field[] = [...signinFields, ...recycleFields];
 const auth = computed(() => object(cloud.accounts.find((a) => a.id === cloud.id)?.authorization));
@@ -55,21 +77,25 @@ const statusItems = computed(() => {
     {
       label: 'Cookie 登录',
       ok: yes(a.cookie),
-      text: yes(a.cookie) ? '有效，可以转存、整理、播放' : '未登录或已失效',
+      text: yes(a.cookie) ? '已保存凭证，可点击“检查 Cookie”核实当前状态' : '未保存登录凭证',
     },
     {
       label: '官方 OpenAPI',
-      ok: yes(a.open),
-      text: yes(a.open) ? '已连接，可用官方文件接口' : '未连接，官方接口与按 ID 删源不可用',
+      ok: yes(a.open) && a.open_state === 'ready' && Number(a.expires_at) > Date.now() / 1000,
+      text: yes(a.open)
+        ? '已保存授权，请检查官方授权以核实接口是否可用'
+        : '未连接，官方接口与按 ID 删源不可用',
     },
     {
       label: '官方删除',
       ok: yes(a.official_delete),
-      text: yes(a.official_delete) ? '已开通，可按文件 ID 删除网盘源文件' : '未开通，删源走挂载或只清 NAS',
+      text: yes(a.official_delete)
+        ? '已记录官方删除能力，实际操作仍需核验授权与删除配置'
+        : '未记录可用的官方删除能力',
     },
     {
       label: '登录客户端',
-      ok: true,
+      ok: !!a.device,
       text: String(a.device || '未识别'),
     },
   ];
@@ -233,11 +259,14 @@ onBeforeUnmount(() => void cancelQR());
           </select></label
         >
         <p class="muted-text">
-          这里选的是「用哪个客户端的身份去换 Cookie」，不是你在哪台设备扫码。签到与
-          STRM 生成推荐 iPad 端，部分客户端类型可能不可用。
+          这里选的是「用哪个客户端的身份去换 Cookie」，不是你在哪台设备扫码。签到与 STRM 生成推荐
+          iPad 端，部分客户端类型可能不可用。
         </p>
         <label v-if="cloud.id" class="checkbox-label"
-          ><input v-model="targetExisting" type="checkbox" />更新当前账号授权（否则连接一个新账号）</label
+          ><input
+            v-model="targetExisting"
+            type="checkbox"
+          />更新当前账号授权（否则连接一个新账号）</label
         ><button
           class="button primary"
           :disabled="op.busy.value || op.uncertain.value"
@@ -255,10 +284,11 @@ onBeforeUnmount(() => void cancelQR());
       </div>
       <form class="form-stack" @submit.prevent="importCookie">
         <label
-          >已有 Cookie<input v-model="cookie" type="password" autocomplete="off" required /></label
-        >
+          >已有 Cookie<input v-model="cookie" type="password" autocomplete="off" required
+        /></label>
         <p class="muted-text">
-          从浏览器开发者工具复制完整 Cookie 字符串（含 UID、CID、SEID、KID），只提交给当前 StrimKeep 服务。
+          从浏览器开发者工具复制完整 Cookie 字符串（含 UID、CID、SEID、KID），只提交给当前 StrimKeep
+          服务。
         </p>
         <button class="button" :disabled="op.busy.value || op.uncertain.value">
           验证并保存 Cookie
@@ -287,9 +317,7 @@ onBeforeUnmount(() => void cancelQR());
           @click="op.run(() => writeData(accountPath(cloud.id, 'open/check')))"
         >
           检查官方授权</button
-        ><button class="button danger-text" @click="confirmation = 'disconnect'">
-          断开账号
-        </button>
+        ><button class="button danger-text" @click="confirmation = 'disconnect'">断开账号</button>
       </div>
     </SectionCard>
 
@@ -336,7 +364,7 @@ onBeforeUnmount(() => void cancelQR());
     </div>
     <p v-if="maintenance.error.value" class="inline-error">{{ maintenance.error.value }}</p>
   </div>
-    <TaskReceipt v-if="job" :id="job" /><ConfirmAction
+  <TaskReceipt v-if="job" :id="job" /><ConfirmAction
     v-if="confirmation"
     :title="confirmation === 'disconnect' ? '断开账号' : '确认维护操作'"
     :description="
@@ -425,4 +453,3 @@ onBeforeUnmount(() => void cancelQR());
   }
 }
 </style>
-

@@ -150,6 +150,10 @@ enqueue
 | `app/config.py` | 配置读写、环境变量覆盖 |
 | `app/engine.py` / `compat.py` | **兼容导出层**（207 个旧名字），见第七节 |
 | `app/morning.py` `governance.py` `subscribe.py` `wash.py` `bot.py` `ingest.py` `stats.py` `tmdb.py` `emby.py` `lib.py` `core.py` | 根目录业务模块：片库健康、治理执行、追更、洗版、Bot、入库、报表、外部服务 |
+
+账号断开的未完成任务检查与删除在 `store.disconnect_account()` 的同一写事务内完成；规则启停在写事务内重新核对账号修订和规则内容。取消未启动任务写入 `stopped`，历史 `cancelled` 仍可读取。
+
+STRM 全量扫描由 `scheduler` 调用 `cloud/strm_scan.tick()`，仅有效排期可投递持久化同步任务。Cron 与时区在配置保存时校验；无效历史排期不执行。直连播放的可选 UA 拦截默认关闭，仅完整匹配指定 UA；UA 本身不能证明客户端身份。
 | `app/emby_events.py` `overview.py` `activity_stream.py` `runtime_logs.py` | 事件、总览、活动流、运行日志 |
 
 ### 前端

@@ -323,7 +323,8 @@ watch(
     "
   /><AccountPicker />
   <p v-if="shareOnly" class="muted-text">
-    命名模板、分类规则、输出与播放、入库核验都在「影视整理」里统一维护，这里只负责选分享、生成 STRM。点下面的入口会跳到对应设置。
+    命名模板、分类规则、输出与播放、入库核验都在「影视整理」里统一维护，这里只负责选分享、生成
+    STRM。点下面的入口会跳到对应设置。
   </p>
   <nav v-if="shareOnly" class="module-navigation" aria-label="分享库相关设置">
     <RouterLink to="/resources/share" class="current">分享生成</RouterLink>

@@ -96,7 +96,9 @@ const expanded = ref(props.open);
   border: 1px solid var(--border);
   border-radius: 8px;
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
 }
 .sc-toggle:hover {
   color: var(--accent);

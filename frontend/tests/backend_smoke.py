@@ -86,7 +86,11 @@ with tempfile.TemporaryDirectory(prefix='strimkeep-vue3-') as folder:
             cloud=json.loads(fetch('/api/cloud/settings')[0])['settings']
             fields=(ROOT/'frontend/src/config/cloudFields.ts').read_text()
             special=(ROOT/'frontend/src/views/CloudSettingsView.vue').read_text()
-            assert all(key in fields+special for key in cloud),set(cloud)-set(re.findall(r"key: '([^']+)'",fields))
+            # Scheduler-owned metadata is returned for status, never edited as a form field.
+            internal = {'strm_scan_last_run'}
+            assert all(key in fields+special or key in internal for key in cloud), {
+                key for key in cloud if key not in fields+special and key not in internal}
+            assert isinstance(cloud['strm_scan_last_run'], (int, float))
             for endpoint,key in [('/api/strategy','strategy'),('/api/governance/auto','settings')]:
                 original=json.loads(fetch(endpoint)[0])[key]
                 saved=json.loads(fetch(endpoint,original)[0]);assert saved[key]==original,(endpoint,saved)

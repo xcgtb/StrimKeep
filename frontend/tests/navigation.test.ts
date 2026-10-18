@@ -43,6 +43,7 @@ describe('workspace navigation contracts', () => {
     },
   );
   it('maps settings back to the owning workspace', () => {
+    expect(moduleName('/organize')).toBe('organize');
     expect(moduleName('/settings/cloud', 'filters')).toBe('organize');
     expect(moduleName('/governance/rules')).toBe('governance');
     expect(moduleName('/tasks/ingestion')).toBe('ingestion');

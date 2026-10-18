@@ -15,12 +15,13 @@ import AccountPicker from '../components/AccountPicker.vue';
 import SectionCard from '../components/SectionCard.vue';
 import FormFields from '../components/FormFields.vue';
 import OperationState from '../components/OperationState.vue';
+import CloudSettingsConfirmation from '../components/CloudSettingsConfirmation.vue';
 import { useCloudSettingsDraft } from '../composables/useCloudSettingsDraft';
 import { cloudSections } from '../config/cloudFields';
 import { useCloud } from '../stores/cloud';
 
 const cloud = useCloud();
-const { op, draft, changed, load, save, confirmation } = useCloudSettingsDraft();
+const { op, draft, changed, changes, load, save, confirmation } = useCloudSettingsDraft();
 
 /** 配置类区块（原先散落在 /settings/cloud?section=*）按整理流程排序 */
 const ORDER: { key: string; icon: unknown; required?: boolean }[] = [
@@ -123,10 +124,14 @@ const actions = [
       核对并保存
     </button>
   </div>
-  <p v-if="confirmation" class="muted-text">
-    保存后在「扫描与整理」里重新预览一次，才会用上新规则。
-    <button class="button" @click="save">确认保存</button>
-  </p>
+  <CloudSettingsConfirmation
+    v-if="confirmation"
+    :changes="changes"
+    :busy="op.busy.value"
+    :uncertain="op.uncertain.value"
+    @close="confirmation = false"
+    @confirm="save"
+  />
 </template>
 
 <style scoped>
@@ -151,7 +156,9 @@ const actions = [
   background: var(--subtle);
   color: var(--text);
   text-decoration: none;
-  transition: border-color 0.15s, transform 0.15s;
+  transition:
+    border-color 0.15s,
+    transform 0.15s;
 }
 .action-card:hover {
   border-color: var(--accent);

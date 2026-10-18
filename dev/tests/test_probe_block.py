@@ -9,7 +9,9 @@ from app.routers.cloud import FEINIU_PROBE_UA, is_probe_request
 
 def test_matches_exact_version():
     assert is_probe_request('Lavf/60.3.100') is True
-    assert is_probe_request('Mozilla/5.0 Lavf/60.3.100 (compatible)') is True
+    assert is_probe_request('Mozilla/5.0 Lavf/60.3.100 (compatible)') is False
+    assert is_probe_request('Lavf/60.3.1000') is False
+    assert is_probe_request('Lavf/60.3.100', 'false') is False
 
 
 def test_match_is_case_insensitive():

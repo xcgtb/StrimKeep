@@ -202,9 +202,7 @@ test('resource search opens the matching workspace without any write', async ({ 
   await page.getByRole('textbox', { name: '筛选功能卡片' }).fill('免转存');
   await expect(page.locator('.tool-card')).toHaveCount(1);
   await page.locator('.tool-card').click();
-  await expect(
-    page.getByRole('heading', { name: '分享 STRM 生成与整理', exact: true }),
-  ).toBeVisible();
+  await expect(page.getByRole('heading', { name: '分享 STRM', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: '本次资源去向' })).toContainText('/strm/share');
   expect(state.writes).toHaveLength(0);
 });
@@ -243,9 +241,9 @@ test('initial navigation waits for the session before exposing the workspace men
   if (isMobile) await page.getByRole('button', { name: '展开导航' }).click();
   await page
     .getByRole('navigation', { name: '主导航' })
-    .getByRole('link', { name: '链接转存', exact: true })
+    .getByRole('link', { name: '资源接收', exact: true })
     .click();
-  await expect(page.getByRole('heading', { name: '链接转存', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '资源接收', exact: true })).toBeVisible();
   expect(state.writes).toHaveLength(0);
 });
 
@@ -256,17 +254,15 @@ test('mobile drawer opens receive and share modules', async ({ page, isMobile })
   await page.getByRole('button', { name: '展开导航' }).click();
   await page
     .getByRole('navigation', { name: '主导航' })
-    .getByRole('link', { name: '链接转存', exact: true })
+    .getByRole('link', { name: '资源接收', exact: true })
     .click();
-  await expect(page.getByRole('heading', { name: '链接转存', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '资源接收', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '展开导航' }).click();
   await page
     .getByRole('navigation', { name: '主导航' })
-    .getByRole('link', { name: '分享 STRM 生成与整理', exact: true })
+    .getByRole('link', { name: '分享 STRM', exact: true })
     .click();
-  await expect(
-    page.getByRole('heading', { name: '分享 STRM 生成与整理', exact: true }),
-  ).toBeVisible();
+  await expect(page.getByRole('heading', { name: '分享 STRM', exact: true })).toBeVisible();
 });
 
 test('compact tablet navigation stays above its backdrop', async ({ page }) => {
@@ -278,7 +274,7 @@ test('compact tablet navigation stays above its backdrop', async ({ page }) => {
     .getByRole('navigation', { name: '主导航' })
     .getByRole('link', { name: '影视整理', exact: true })
     .click();
-  await expect(page.getByRole('heading', { name: '媒体整理', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '影视整理', exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 

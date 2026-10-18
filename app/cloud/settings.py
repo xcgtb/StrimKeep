@@ -62,7 +62,7 @@ DEFAULTS = {
     "strm_scan_timezone": "Asia/Shanghai",
     "strm_scan_last_run": 0,
     # 飞牛媒体探测拦截：命中 Lavf/60.3.100 的直连播放请求返回 403（不含 Emby 反代）
-    "strm_block_feiniu_ua": True,
+    "strm_block_feiniu_ua": False,
     "ignore_keywords": [],
     "ignore_regex": [],
     "quality8_enabled": False,
@@ -97,6 +97,17 @@ def save(value):
 
 def validate(result):
     from app.cloud.provider115 import numeric
+    from app.cloud import schedules
+
+    cron = result["strm_scan_cron"]
+    if not isinstance(cron, str):
+        raise CloudError("STRM 全量同步 Cron 应为字符串")
+    schedules.zone(result["strm_scan_timezone"])
+    if cron.strip():
+        schedules.cron_next(cron, result["strm_scan_timezone"], 0)
+    result["strm_scan_cron"] = cron.strip()
+    if type(result["strm_scan_last_run"]) not in (int, float) or not 0 <= result["strm_scan_last_run"] < float('inf'):
+        raise CloudError("STRM 上次同步时间无效")
 
     if result["open_app_id"]:
         result["open_app_id"] = numeric(result["open_app_id"])
@@ -157,6 +168,7 @@ def validate(result):
     result["proxy_port"] = port
     for key in (
         "proxy_enabled",
+        "strm_block_feiniu_ua",
         "nfo_enabled",
         "artwork_enabled",
         "notify_enabled",

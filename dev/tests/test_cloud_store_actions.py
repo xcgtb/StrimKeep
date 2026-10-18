@@ -13,6 +13,7 @@ import pytest
 
 from app import storage
 from app.cloud import store
+from app.cloud.errors import CloudError
 
 
 @pytest.fixture
@@ -79,6 +80,42 @@ def test_disconnect_account_keeps_job_history(db):
 
     with store.db() as con:
         assert row(con, "SELECT COUNT(*) FROM cloud_jobs WHERE id='j1'")[0] == 1
+
+
+@pytest.mark.parametrize('state', ['queued', 'running'])
+def test_disconnect_itself_rejects_active_work_and_keeps_account(db, state):
+    with store.db() as con:
+        seed_account(con)
+        con.execute("INSERT INTO cloud_jobs VALUES(?,?,?,?,?,?,?,?)",
+                    ('j1', 'transfer', state, store.encode({'account_id': 'a1'}), '{}', '', 1., 1.))
+    with pytest.raises(CloudError) as error:
+        store.disconnect_account('a1')
+    assert error.value.status == 409
+    with store.db() as con:
+        assert row(con, "SELECT id FROM cloud_accounts WHERE id='a1'")
+        assert row(con, "SELECT enabled FROM cloud_rules WHERE id='r-a1'")[0] == 1
+
+
+def test_enable_rechecks_account_revision_in_write_transaction(db):
+    payload = {'account_id': 'a1', 'account_revision': 1}
+    with store.db() as con:
+        seed_account(con)
+        con.execute("UPDATE cloud_rules SET payload=?,enabled=0 WHERE id='r-a1'", (store.encode(payload),))
+        con.execute("UPDATE cloud_accounts SET revision=2 WHERE id='a1'")
+    with pytest.raises(CloudError) as error:
+        store.update_rule_enabled('r-a1', True, 100, payload)
+    assert error.value.status == 409
+    with store.db() as con:
+        assert row(con, "SELECT enabled FROM cloud_rules WHERE id='r-a1'")[0] == 0
+
+
+def test_stale_rule_payload_cannot_overwrite_concurrent_edit(db):
+    with store.db() as con:
+        seed_account(con)
+    with pytest.raises(CloudError) as error:
+        store.update_rule_enabled('r-a1', False, 100, {'account_id': 'a1', 'stale': True})
+    assert error.value.status == 409
+    assert store.rule_payload('r-a1') == {'account_id': 'a1'}
 
 
 @pytest.mark.parametrize('state,expected', [

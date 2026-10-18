@@ -91,6 +91,21 @@ def test_reader_failure_keeps_cursor_and_is_visible(receiving,monkeypatch):
     assert not intake.inbox(receiving.id)
 
 
+def test_flood_wait_starts_when_remote_failure_arrives(receiving, monkeypatch):
+    login_session(receiving, monkeypatch)
+    channel(receiving, mode='user', history_limit=1)
+    clock = [1_700_000_000.0]
+    monkeypatch.setattr(reader.time, 'time', lambda: clock[0])
+    async def messages(*args):
+        clock[0] += 30
+        raise reader.ChannelFloodWait(60)
+    monkeypatch.setattr(reader, '_messages', messages)
+    reader.poll_one()
+    with store.db() as con:
+        scheduled = con.execute('SELECT next_poll FROM cloud_channel_cursors').fetchone()[0]
+    assert scheduled == clock[0] + 60 + reader.FLOOD_MARGIN_SEC
+
+
 def test_normal_bot_share_uses_web_transfer_not_legacy_bot_directory(receiving):
     directories.save(receiving.id,{'bot':'1'},directories.get(receiving.id)['revision'])
     data=intake.make_payload(receiving.id,[intake.parse('https://115.com/s/abcdef123')],'telegram')

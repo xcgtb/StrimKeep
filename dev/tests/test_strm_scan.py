@@ -5,6 +5,7 @@
 或每拍都跑（重复扫描、打满 115 接口）。这两条都在这里钉死。
 """
 import time
+import pytest
 
 from app.cloud import strm_scan
 
@@ -17,6 +18,15 @@ def test_empty_cron_never_schedules():
 def test_invalid_cron_never_schedules():
     assert strm_scan.next_run('not a cron', 'Asia/Shanghai') == 0
     assert strm_scan.next_run('0 0 * *', 'Asia/Shanghai') == 0
+
+
+@pytest.mark.parametrize('cron,timezone', [
+    ('not a cron', 'Asia/Shanghai'), ('0 0 * *', 'Asia/Shanghai'),
+    ('0 0 * * *', 'invalid/timezone'), (123, 'Asia/Shanghai'),
+])
+@pytest.mark.parametrize('last', [0, 1_700_000_000.0])
+def test_invalid_schedule_is_never_due(cron, timezone, last):
+    assert not strm_scan.due(cron, timezone, last, 1_700_100_000.0)
 
 
 def test_daily_cron_lands_in_the_future():
