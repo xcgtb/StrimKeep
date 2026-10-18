@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { readData, writeData, object, text, strings, type Data } from '../api/domain';
 import { useRequest } from '../composables/useRequest';
 import { useVisiblePoll } from '../composables/useVisiblePoll';
@@ -7,7 +7,14 @@ import EvidenceDetails from './EvidenceDetails.vue';
 import { stateLabel } from '../composables/format';
 const props = defineProps<{ id: string; kind?: 'cloud' | 'task' | 'delete'; target?: string }>();
 const request = useRequest<Data>();
-const emit = defineEmits<{ done: [value: Data]; update: [value: Data] }>();
+const emit = defineEmits<{ done: [value: Data]; update: [value: Data]; close: [] }>();
+const hidden = ref(false);
+const terminal = computed(() => {
+  const row = object(request.data.value?.job || request.data.value);
+  return ['success', 'failed', 'cancelled', 'stopped', 'done', 'error'].includes(
+    String(row.state || row.status),
+  );
+});
 // 批量删除的进度原本只以原始字段呈现，这里换成 1.2.12 的进度条 + 业务计数。
 const deleteProgress = computed(() => {
   if (props.kind !== 'delete' || !request.data.value) return undefined;
@@ -36,7 +43,6 @@ const deleteProgress = computed(() => {
     done: row.state === 'done',
     message: String(outcome.message || ''),
     failed: outcome.status === 'error' || outcome.status === 'failed',
-    percent: total ? Math.min(100, Math.round((processed / total) * 100)) : 0,
     strm_removed: Number(outcome.strm_removed ?? row.strm_removed ?? 0),
     cloud_removed: Number(outcome.cloud_removed ?? row.cloud_removed ?? 0),
     retained: Number(outcome.retained ?? row.retained ?? 0),
@@ -81,6 +87,7 @@ onMounted(load);
 watch(
   () => props.id,
   () => {
+    hidden.value = false;
     request.data.value = undefined;
     void load();
   },
@@ -96,15 +103,29 @@ useVisiblePoll(() => {
 }, 2500);
 </script>
 <template>
-  <section class="panel task-receipt" role="status">
+  <div v-if="kind === 'delete' && hidden" class="task-receipt-collapsed" role="status">
+    <span>{{
+      terminal ? '删除任务已结束，可查看结果。' : '进度已隐藏，后台删除任务不受影响。'
+    }}</span>
+    <button class="button small" @click="hidden = false">
+      {{ terminal ? '查看删除结果' : '查看删除进度' }}
+    </button>
+    <button v-if="terminal" class="button small" @click="emit('close')">关闭结果</button>
+  </div>
+  <section v-else class="panel task-receipt" role="status">
     <header class="section-heading">
       <div>
         <h2>{{ kind === 'delete' ? '片库删除进度与结果' : '后台任务' }}</h2>
         <p>请求已接受，实际结果以后台回执为准。</p>
       </div>
-      <button class="button small" :disabled="request.loading.value" @click="load()">
-        核实状态
-      </button>
+      <div class="task-receipt-actions">
+        <button class="button small" :disabled="request.loading.value" @click="load()">
+          核实状态
+        </button>
+        <button v-if="kind === 'delete' && !terminal" class="button small" @click="hidden = true">
+          隐藏进度（删除继续）
+        </button>
+      </div>
     </header>
     <button
       v-if="kind === 'task' && request.data.value?.cancellable"
@@ -148,9 +169,6 @@ useVisiblePoll(() => {
         :value="deleteProgress.processed"
         :max="deleteProgress.total || 1"
       ></progress>
-      <div class="task-progress-bar" aria-hidden="true">
-        <i :style="{ width: deleteProgress.percent + '%' }"></i>
-      </div>
       <div class="task-progress-counts">
         <span
           >已处理 <b>{{ deleteProgress.processed }} / {{ deleteProgress.total }}</b></span
@@ -194,5 +212,8 @@ useVisiblePoll(() => {
       <summary>任务回执与核验明细</summary>
       <EvidenceDetails :value="request.data.value.job || request.data.value" />
     </details>
+    <div v-if="kind === 'delete' && terminal" class="task-receipt-footer">
+      <button class="button" @click="emit('close')">关闭结果</button>
+    </div>
   </section>
 </template>

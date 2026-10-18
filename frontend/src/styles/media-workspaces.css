@@ -220,3 +220,38 @@
   margin-bottom: 20px;
   border-bottom: 1px solid var(--border);
 }
+.task-receipt .section-heading {
+  flex-wrap: wrap;
+}
+.task-receipt-actions,
+.task-receipt-collapsed {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.task-receipt-collapsed {
+  margin: 16px 0;
+  padding: 12px 14px;
+  background: var(--subtle);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.task-receipt-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+/* 单片删除回执位于详情页脚，内容变长后仍可在弹窗内滚动操作。 */
+.modal-panel > footer:has(.single-delete-actions) {
+  min-height: 0;
+  max-height: 65dvh;
+  overflow: auto;
+  flex-shrink: 0;
+  overscroll-behavior: contain;
+}

@@ -1314,6 +1314,7 @@ label small {
   margin-top: 5px;
 }
 .modal-content {
+  min-height: 0;
   padding: 26px;
   overflow: auto;
   overscroll-behavior: contain;
@@ -4681,18 +4682,6 @@ summary {
 .task-progress {
   margin: 10px 0;
 }
-.task-progress-bar {
-  height: 6px;
-  border-radius: 3px;
-  background: var(--subtle);
-  overflow: hidden;
-}
-.task-progress-bar > i {
-  display: block;
-  height: 100%;
-  background: var(--accent);
-  transition: width 0.3s ease;
-}
 .task-progress-counts {
   display: flex;
   flex-wrap: wrap;
@@ -4761,7 +4750,58 @@ summary {
 }
 .ratio-row input[type='range'] {
   flex: 1;
-  accent-color: var(--accent);
+  min-width: 0;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+.ratio-row input[type='range']:focus {
+  box-shadow: none;
+}
+.ratio-row input[type='range']:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.ratio-row input[type='range']::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0 var(--ratio-fill),
+    var(--border) var(--ratio-fill) 100%
+  );
+}
+.ratio-row input[type='range']::-webkit-slider-thumb {
+  width: 20px;
+  height: 20px;
+  margin-top: -7px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: var(--panel-solid);
+  appearance: none;
+  -webkit-appearance: none;
+}
+.ratio-row input[type='range']::-moz-range-track {
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0 var(--ratio-fill),
+    var(--border) var(--ratio-fill) 100%
+  );
+}
+.ratio-row input[type='range']::-moz-range-thumb {
+  box-sizing: border-box;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: var(--panel-solid);
 }
 .ratio-row output {
   flex: 0 0 52px;

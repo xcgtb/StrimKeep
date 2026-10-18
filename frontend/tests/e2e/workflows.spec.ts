@@ -91,6 +91,7 @@ test('share STRM uses the independent preview and apply contract', async ({ page
 test('single movie delete requires preview, exact phrase and an operation id', async ({ page }) => {
   await fixtures(page);
   const writes: any[] = [];
+  let finished = false;
   await page.route('**/api/emby/movie/delete_by_tmdb', (r) => {
     const body = r.request().postDataJSON();
     writes.push(body);
@@ -103,7 +104,23 @@ test('single movie delete requires preview, exact phrase and an operation id', a
     );
   });
   await page.route('**/api/emby/delete/progress/*', (r) =>
-    fulfill(r, { status: 'success', state: 'running', processed: 0, total: 3 }),
+    fulfill(r, {
+      status: 'success',
+      state: finished ? 'done' : 'running',
+      processed: finished ? 3 : 0,
+      total: 3,
+      ...(finished
+        ? {
+            result: {
+              status: 'partial',
+              strm_removed: 2,
+              retained: 1,
+              failed: 1,
+              message: '部分文件已保留，请核对结果',
+            },
+          }
+        : {}),
+    }),
   );
   await page.goto('/#/media/library');
   await page.getByRole('button', { name: '电影片库', exact: true }).click();
@@ -122,6 +139,19 @@ test('single movie delete requires preview, exact phrase and an operation id', a
     source_preview_id: 'source-seal',
   });
   expect(writes[1].operation_id).toMatch(/^[\da-f]{32}$/);
+  await expect(
+    page.getByRole('button', { name: '隐藏进度（删除继续）', exact: true }),
+  ).toBeVisible();
+  finished = true;
+  await page.getByRole('dialog').getByRole('button', { name: '核实状态', exact: true }).click();
+  await expect(page.getByRole('dialog').locator('.task-progress-counts')).toContainText('保留 1');
+  await expect(page.getByRole('dialog').locator('.task-progress-counts')).toContainText('失败 1');
+  await page.getByRole('dialog').getByRole('button', { name: '关闭结果', exact: true }).click();
+  await expect(page.getByRole('dialog').locator('.task-receipt')).toHaveCount(0);
+  await expect(
+    page.getByRole('dialog').getByRole('button', { name: '预览删除本地库', exact: true }),
+  ).toBeEnabled();
+  expect(writes).toHaveLength(2);
 });
 
 test('interrupted mutation stays locked after editing inputs and never retries automatically', async ({

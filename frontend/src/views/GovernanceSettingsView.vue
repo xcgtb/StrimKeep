@@ -181,6 +181,7 @@ onMounted(load);
         <div class="ratio-row">
           <input
             :value="ratio"
+            :style="{ '--ratio-fill': `${((ratio - 0.5) / 0.5) * 100}%` }"
             type="range"
             min="0.5"
             max="1"

@@ -188,6 +188,7 @@ for (const target of ['local', 'share']) {
     page,
   }, info) => {
     await fixtures(page);
+    let executeCount = 0;
     let executeBody: Record<string, unknown> | undefined;
     await page.route('**/api/emby/series/batch-delete/preview/start', (r) =>
       fulfill(r, { status: 'accepted', job_id: 'preview' }),
@@ -206,6 +207,7 @@ for (const target of ['local', 'share']) {
       }),
     );
     await page.route('**/api/emby/series/batch-delete/execute', (r) => {
+      executeCount++;
       executeBody = r.request().postDataJSON();
       return fulfill(r, { status: 'accepted', operation_id: executeBody!.operation_id }, 202);
     });
@@ -267,14 +269,39 @@ for (const target of ['local', 'share']) {
     await expect(page.locator('.task-progress-counts')).toContainText('STRM 已删除 7');
     await expect(page.getByRole('button', { name: '退出多选' })).toBeDisabled();
     await screenshot(page, `delete-${target}`, info.project.name);
+    await expect(page.locator('.task-progress-bar')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '关闭结果', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: '隐藏进度（删除继续）', exact: true }).click();
+    await expect(page.locator('.task-receipt')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '查看删除进度', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '退出多选', exact: true })).toBeDisabled();
     done = true;
-    await page.getByRole('button', { name: '核实状态', exact: true }).click();
+    await expect(page.getByRole('button', { name: '查看删除结果', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '退出多选', exact: true })).toBeEnabled();
+    await page.getByRole('button', { name: '查看删除结果', exact: true }).click();
     await expect(page.locator('.task-progress-counts')).toContainText('STRM 已删除 18');
     await expect(
       page.locator('.task-progress').getByText('删除已完成', { exact: true }),
     ).toBeVisible();
     if (target === 'share')
       await expect(page.locator('.task-progress-counts')).not.toContainText('115');
+    await expect(page.getByRole('progressbar', { name: '片库删除进度' })).toHaveCount(1);
+    await expect(page.getByRole('button', { name: '关闭结果', exact: true })).toBeVisible();
+    await screenshot(page, `delete-${target}-complete`, info.project.name);
+    await page.getByRole('button', { name: '关闭结果', exact: true }).click();
+    await expect(page.locator('.task-receipt')).toHaveCount(0);
+    await expect(page.locator('.task-receipt-collapsed')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '多选清理', exact: true })).toBeEnabled();
+    await expect(page.locator('.selection-button')).toHaveCount(0);
+    expect(executeCount).toBe(1);
+    await page.getByRole('button', { name: '多选清理', exact: true }).click();
+    await page.getByRole('button', { name: '选择星际穿越海报', exact: true }).click();
+    await expect(
+      page.getByRole('button', {
+        name: `预览批量删除 · ${target === 'local' ? '本地库' : '分享库'}`,
+        exact: true,
+      }),
+    ).toBeEnabled();
   });
 }
 
@@ -283,17 +310,25 @@ test('governance restores comparison, deletion/retention paths and scan-clean li
 }, info) => {
   await fixtures(page);
   let scanned = false,
+    scans = 0,
     finished = false,
     clean: unknown;
   await page.route('**/api/governance/summary', (r) =>
     fulfill(
       r,
       scanned
-        ? governance()
+        ? scans > 1
+          ? governance({
+              plan_id: '',
+              plan_state: 'none',
+              result: { del_local_cnt: 0, del_share_cnt: 0, total_clean_cnt: 0 },
+            })
+          : governance(finished ? { plan_state: 'done', usable: false } : {})
         : { status: 'success', scan: { found: false, usable: false, result: {} } },
     ),
   );
   await page.route('**/api/check', (r) => {
+    scans++;
     scanned = true;
     return fulfill(r, { status: 'success', task_id: 'scan-task' });
   });
@@ -346,6 +381,17 @@ test('governance restores comparison, deletion/retention paths and scan-clean li
   await expect(
     page.locator('.task-result-summary').getByText('已删除本地 STRM 18 个', { exact: true }),
   ).toBeVisible();
+  const localCount = page.locator('.stat-card').filter({ hasText: '本地待清理' }).locator('strong');
+  await expect(localCount).toHaveText('—');
+  await expect(page.locator('.governance-scan-items')).not.toHaveAttribute('open');
+  await expect(page.getByRole('button', { name: '核对并执行计划' })).toBeDisabled();
+  await screenshot(page, 'governance-completed', info.project.name);
+  await page.getByRole('button', { name: '立即治理扫描', exact: true }).click();
+  await page.getByLabel('我已核对上面的操作范围和影响').check();
+  await page.getByRole('button', { name: '确认执行' }).click();
+  await expect(localCount).toHaveText('0');
+  await expect(page.getByRole('heading', { name: '当前诊断明细', exact: true })).toBeVisible();
+  await expect(page.locator('.governance-scan-items')).toHaveAttribute('open', '');
 });
 
 for (const [name, override, message] of [
@@ -463,4 +509,91 @@ test('historical plan distinguishes its original delete list from actual executi
   await expect(dialog.locator('.governance-paths').last()).toContainText('计划删除');
   await expect(dialog.locator('.governance-detail')).not.toContainText('已删除');
   expect(state.writes).toEqual([]);
+});
+
+for (const planState of ['done', 'failed']) {
+  test(`archived ${planState} scan is historical on reload and never claims pending or zero`, async ({
+    page,
+  }, info) => {
+    await page.addInitScript(() => localStorage.setItem('strimkeep-vue-theme', 'dark'));
+    const state = await fixtures(page);
+    await page.route('**/api/governance/summary', (r) =>
+      fulfill(r, governance({ plan_state: planState, usable: false })),
+    );
+    await page.goto('/#/governance');
+    await expect(
+      page.locator('.stat-card').filter({ hasText: '本地待清理' }).locator('strong'),
+    ).toHaveText('—');
+    await expect(
+      page.locator('.stat-card').filter({ hasText: '分享待清理' }).locator('strong'),
+    ).toHaveText('—');
+    await expect(page.locator('.truth-row').filter({ hasText: '待处理' })).toContainText(
+      '待重新扫描核实',
+    );
+    await expect(page.getByRole('heading', { name: '当前诊断明细', exact: true })).toHaveCount(0);
+    await expect(page.locator('.governance-scan-items')).not.toHaveAttribute('open');
+    await expect(page.getByRole('button', { name: '依据与路径', exact: true })).not.toBeVisible();
+    if (planState === 'done' && process.env.STRIMKEEP_SCREENSHOT_DIR) {
+      await page.locator('.stats-grid').scrollIntoViewIfNeeded();
+      await page.screenshot({
+        path: path.join(
+          process.env.STRIMKEEP_SCREENSHOT_DIR,
+          `governance-archived-${info.project.name}.png`,
+        ),
+        fullPage: !info.project.use.isMobile,
+      });
+    }
+    await page.getByText('查看执行前扫描明细（历史快照）', { exact: true }).click();
+    await page.getByRole('button', { name: '依据与路径', exact: true }).first().click();
+    await page.getByRole('dialog').locator('.governance-paths').first().locator('summary').click();
+    await expect(page.getByRole('dialog').locator('.governance-paths').first()).toContainText(
+      '计划删除',
+    );
+    await expect(page.getByRole('button', { name: '核对并执行计划' })).toBeDisabled();
+    expect(state.writes).toEqual([]);
+  });
+}
+
+test('replacement ratio fills the track at 100 percent and saves the original fraction', async ({
+  page,
+}, info) => {
+  await page.addInitScript(() => localStorage.setItem('strimkeep-vue-theme', 'dark'));
+  await fixtures(page);
+  let saved: Record<string, unknown> | undefined;
+  await page.route('**/api/strategy', async (r) => {
+    if (r.request().method() === 'GET') return r.fallback();
+    saved = r.request().postDataJSON();
+    return fulfill(r, { status: 'success', strategy: saved });
+  });
+  await page.goto('/#/governance/rules');
+  const slider = page.getByRole('slider', { name: '分享达标比例', exact: true });
+  await expect(slider).toHaveValue('0.9');
+  await slider.focus();
+  await slider.press('Home');
+  await expect(page.locator('.ratio-row output')).toHaveText('50%');
+  await expect(slider).toHaveCSS('--ratio-fill', '0%');
+  await slider.press('ArrowRight');
+  await expect(page.locator('.ratio-row output')).toHaveText('51%');
+  await slider.press('End');
+  await expect(slider).toHaveValue('1');
+  await expect(page.locator('.ratio-row output')).toHaveText('100%');
+  await expect(slider).toHaveCSS('--ratio-fill', '100%');
+  await expect(slider).toHaveCSS('padding-right', '0px');
+  await expect(slider).toHaveCSS('padding-left', '0px');
+  await expect(slider).toHaveCSS('border-right-width', '0px');
+  await slider.scrollIntoViewIfNeeded();
+  await slider.evaluate((el) => el.blur());
+  if (process.env.STRIMKEEP_SCREENSHOT_DIR) {
+    await page.screenshot({
+      path: path.join(
+        process.env.STRIMKEEP_SCREENSHOT_DIR,
+        `governance-ratio-full-${info.project.name}.png`,
+      ),
+      fullPage: !info.project.use.isMobile,
+    });
+  }
+  await page.getByRole('button', { name: '保存治理策略', exact: true }).click();
+  await page.getByLabel('我已核对上面的操作范围和影响').check();
+  await page.getByRole('button', { name: '确认执行', exact: true }).click();
+  await expect.poll(() => saved?.season_replace_ratio).toBe(1);
 });

@@ -53,6 +53,7 @@ const scan = computed(() => object(summary.data.value?.scan)),
 // 扫描事实面板：字段与后端 /api/governance/summary 的返回值一一对应，
 // 1.2.12 里这些信息是常驻展示的，Vue 版此前只取了其中 4 个计数。
 const attempt = computed(() => object(scan.value.scan_attempt));
+const scanArchived = computed(() => ['done', 'failed'].includes(String(scan.value.plan_state)));
 const expired = computed(
   () =>
     Number(scan.value.ts) > 0 &&
@@ -62,6 +63,8 @@ const expired = computed(
 const canExecute = computed(
   () =>
     !!scan.value.usable &&
+    !summary.loading.value &&
+    !summary.error.value &&
     !expired.value &&
     scan.value.rule_aligned !== false &&
     scan.value.file_guard_ready !== false &&
@@ -111,15 +114,17 @@ const truthRows = computed(() => {
     },
     {
       key: '待处理',
-      value: `${Number(result.value.total_clean_cnt || 0)} 项 / ${Number(result.value.del_local_files || 0) + Number(result.value.del_share_files || 0)} 文件`,
+      value: scanArchived.value
+        ? '待重新扫描核实'
+        : `${Number(result.value.total_clean_cnt || 0)} 项 / ${Number(result.value.del_local_files || 0) + Number(result.value.del_share_files || 0)} 文件`,
     },
     {
-      key: '保护 / 豁免',
+      key: scanArchived.value ? '上次扫描保护 / 豁免' : '保护 / 豁免',
       value: `${protectedCount} / ${Number(result.value.exempted_count || 0)}`,
     },
     { key: '静默跳过', value: `${Number(result.value.quiet_skipped || 0)} 项` },
     {
-      key: 'STRM',
+      key: 'STRM（扫描时）',
       value: `本地 ${Number(strmCounts.value.local || 0)} · 分享 ${Number(strmCounts.value.share || 0)} · 合计 ${Number(strmCounts.value.total || 0)}`,
     },
     { key: '片库快照', value: clock(object(consistency.value.library).ts) },
@@ -270,7 +275,11 @@ onMounted(() => {
   <div class="summary-strip">
     <span>最近诊断 {{ date(Number(scan.ts)) }}</span
     ><span class="state-pill" :class="{ success: scan.usable, needs_review: !scan.usable }">{{
-      scan.usable ? '计划可核对执行' : '计划尚未生成或不可用'
+      scanArchived
+        ? '计划已归档，待重新扫描'
+        : scan.usable
+          ? '计划可核对执行'
+          : '计划尚未生成或不可用'
     }}</span
     ><button
       class="text-link push-right"
@@ -293,10 +302,23 @@ onMounted(() => {
       :key="key"
       class="stat-card"
     >
-      <span class="stat-label">{{ label }}</span
+      <span class="stat-label">{{
+        scanArchived && ['protected_count', 'exempted_count'].includes(key)
+          ? `上次扫描 · ${label}`
+          : label
+      }}</span
       ><strong>{{
-        key === 'protected_count' ? records(result.protected_items).length : (result[key] ?? '—')
+        scanArchived && ['del_local_cnt', 'del_share_cnt'].includes(key)
+          ? '—'
+          : key === 'protected_count'
+            ? records(result.protected_items).length
+            : (result[key] ?? '—')
       }}</strong>
+      <small
+        v-if="scanArchived && ['del_local_cnt', 'del_share_cnt'].includes(key)"
+        class="muted-text"
+        >待重新扫描核实</small
+      >
     </article>
   </div>
   <section class="panel truth-panel">
@@ -329,67 +351,76 @@ onMounted(() => {
   </section>
   <section class="panel">
     <header class="section-heading">
-      <h2>当前诊断明细</h2>
+      <h2>{{ scanArchived ? '执行前扫描快照' : '当前诊断明细' }}</h2>
     </header>
-    <nav class="browse-tabs">
-      <button :class="{ active: group === 'all' }" @click="group = 'all'">
-        全部 {{ Object.keys(groupLabels).reduce((n, key) => n + records(result[key]).length, 0) }}
-      </button>
-      <button
-        v-for="(label, key) in {
-          del_local_items: '本地处理',
-          del_share_items: '分享处理',
-          protected_items: '受保护',
-          exempted_items: '豁免项',
-        }"
-        :key="key"
-        :class="{ active: group === key }"
-        @click="group = key"
-      >
-        {{ label }} {{ records(result[key]).length }}
-      </button>
-    </nav>
-    <input v-model="search" aria-label="搜索治理项目" placeholder="搜索作品或原因" />
-    <div class="plan-item-list">
-      <article v-for="(item, i) in items.slice(0, visible)" :key="i">
-        <div>
-          <span
-            class="state-pill"
-            :class="{
-              failed: ['loc', 'shr'].includes(String(item.kind)),
-              success: item.kind === 'keep',
-            }"
-            >{{ kindLabels[String(item.kind)] }}</span
-          ><strong>{{ item.text || item.title || item.name }}</strong>
-          <p>
-            {{ item.reason_label || object(item.meta).reason_label || item.reason || item.detail }}
-          </p>
-          <small class="muted-text"
-            >涉及
-            {{ item.files_count ?? (Array.isArray(item.files) ? item.files.length : 0) }}
-            个文件<span v-if="object(item.meta).match_basis">
-              · {{ object(item.meta).match_basis }}</span
-            ></small
-          >
-        </div>
-        <button
-          class="button small"
-          @click="
-            selected = item;
-            detailOpen = true;
-          "
-        >
-          依据与路径
+    <p v-if="scanArchived" class="notice-bar">
+      该计划已{{ scan.plan_state === 'done' ? '执行' : '结束' }}，原扫描数据已归档。
+      当前剩余项需重新扫描核实，不能将原数量继续作为待清理项。
+    </p>
+    <details class="governance-scan-items" :open="!scanArchived">
+      <summary v-if="scanArchived">查看执行前扫描明细（历史快照）</summary>
+      <nav class="browse-tabs">
+        <button :class="{ active: group === 'all' }" @click="group = 'all'">
+          全部 {{ Object.keys(groupLabels).reduce((n, key) => n + records(result[key]).length, 0) }}
         </button>
-      </article>
-      <p v-if="!items.length" class="muted-text">当前分组暂无项目。</p>
-    </div>
-    <button v-if="items.length > visible" class="button" @click="visible += 200">
-      加载更多治理项目（{{ visible }} / {{ items.length }}）
-    </button>
-    <details>
-      <summary>诊断与一致性证据</summary>
-      <EvidenceDetails :value="summary.data.value" />
+        <button
+          v-for="(label, key) in {
+            del_local_items: '本地处理',
+            del_share_items: '分享处理',
+            protected_items: '受保护',
+            exempted_items: '豁免项',
+          }"
+          :key="key"
+          :class="{ active: group === key }"
+          @click="group = key"
+        >
+          {{ label }} {{ records(result[key]).length }}
+        </button>
+      </nav>
+      <input v-model="search" aria-label="搜索治理项目" placeholder="搜索作品或原因" />
+      <div class="plan-item-list">
+        <article v-for="(item, i) in items.slice(0, visible)" :key="i">
+          <div>
+            <span
+              class="state-pill"
+              :class="{
+                failed: ['loc', 'shr'].includes(String(item.kind)),
+                success: item.kind === 'keep',
+              }"
+              >{{ kindLabels[String(item.kind)] }}</span
+            ><strong>{{ item.text || item.title || item.name }}</strong>
+            <p>
+              {{
+                item.reason_label || object(item.meta).reason_label || item.reason || item.detail
+              }}
+            </p>
+            <small class="muted-text"
+              >涉及
+              {{ item.files_count ?? (Array.isArray(item.files) ? item.files.length : 0) }}
+              个文件<span v-if="object(item.meta).match_basis">
+                · {{ object(item.meta).match_basis }}</span
+              ></small
+            >
+          </div>
+          <button
+            class="button small"
+            @click="
+              selected = item;
+              detailOpen = true;
+            "
+          >
+            依据与路径
+          </button>
+        </article>
+        <p v-if="!items.length" class="muted-text">当前分组暂无项目。</p>
+      </div>
+      <button v-if="items.length > visible" class="button" @click="visible += 200">
+        加载更多治理项目（{{ visible }} / {{ items.length }}）
+      </button>
+      <details>
+        <summary>诊断与一致性证据</summary>
+        <EvidenceDetails :value="summary.data.value" />
+      </details>
     </details>
   </section>
   <section class="panel">
@@ -418,7 +449,7 @@ onMounted(() => {
     "
     ><p v-if="detail.error.value" class="inline-error">{{ detail.error.value }}</p>
     <LoadState :loading="detail.loading.value" />
-    <GovernanceItemDetails v-if="selected" :item="selected" />
+    <GovernanceItemDetails v-if="selected" :item="selected" :archived="scanArchived" />
     <template v-else-if="detail.data.value?.plan"
       ><dl class="business-facts">
         <div>

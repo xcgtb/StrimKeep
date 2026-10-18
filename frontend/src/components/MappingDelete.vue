@@ -21,7 +21,7 @@ const props = withDefaults(
   }>(),
   { filter: 'all', category: '', categoryMode: 'seg', keyword: '' },
 );
-const emit = defineEmits<{ done: []; busy: [value: boolean] }>();
+const emit = defineEmits<{ done: []; busy: [value: boolean]; closed: [] }>();
 const op = useOperation(),
   previewRequest = useRequest<Data>(),
   previewJob = ref(''),
@@ -133,6 +133,13 @@ async function execute() {
     submitted.value = false;
   }
 }
+function closeResult() {
+  if (submitted.value || op.busy.value) return;
+  operationId.value = '';
+  operationTarget.value = '';
+  op.reconcile(true);
+  emit('closed');
+}
 useVisiblePoll(poll, 2000);
 </script>
 <template>
@@ -170,6 +177,7 @@ useVisiblePoll(poll, 2000);
       :target="operationTarget"
       :id="operationId"
       kind="delete"
+      @close="closeResult"
       @done="
         submitted = false;
         op.reconcile(true);

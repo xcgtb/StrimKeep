@@ -263,7 +263,7 @@ body {
   padding: 5px 10px;
   font-size: 11px;
 }
-.template-shell input:not([type='checkbox']),
+.template-shell input:not([type='checkbox']):not([type='range']),
 .template-shell select,
 .template-shell textarea {
   min-height: 41px;

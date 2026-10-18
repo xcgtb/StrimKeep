@@ -254,6 +254,13 @@ function toggleSelection() {
   selectedIds.value.clear();
   allSelected.value = false;
 }
+function closeDeletionResult() {
+  if (deletionBusy.value) return;
+  selectionMode.value = false;
+  selectedIds.value.clear();
+  allSelected.value = false;
+  compareOpen.value = false;
+}
 function submitSearch() {
   const keyword = search.value.trim();
   if (filters.keyword === keyword) void load();
@@ -507,6 +514,7 @@ const live = useLibraryUpdates(refreshLoaded);
     :keyword="filters.keyword"
     @busy="deletionBusy = $event"
     @done="load()"
+    @closed="closeDeletionResult"
   />
   <LoadState
     :loading="request.loading.value && !cards.length"

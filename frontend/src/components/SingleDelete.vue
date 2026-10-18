@@ -57,6 +57,11 @@ async function execute() {
     operationId.value = '';
   }
 }
+function closeResult() {
+  if (submitted.value || op.busy.value) return;
+  operationId.value = '';
+  op.reconcile(true);
+}
 </script>
 <template>
   <div>
@@ -84,6 +89,7 @@ async function execute() {
       :target="target"
       :id="operationId"
       kind="delete"
+      @close="closeResult"
       @done="
         submitted = false;
         op.reconcile(true);
