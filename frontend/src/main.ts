@@ -22,4 +22,5 @@ onUnauthorized(() => {
     });
 });
 app.config.errorHandler = () => useUi().notify('页面出现异常，请刷新页面重试。', 'error');
-app.use(router).mount('#app');
+app.use(router);
+void router.isReady().then(() => app.mount('#app'));

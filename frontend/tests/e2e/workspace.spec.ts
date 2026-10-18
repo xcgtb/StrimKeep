@@ -218,6 +218,37 @@ test('settings deep link opens the requested naming section', async ({ page }) =
   expect(state.writes).toHaveLength(0);
 });
 
+test('initial navigation waits for the session before exposing the workspace menu', async ({
+  page,
+  isMobile,
+}) => {
+  const state = await fixtures(page);
+  let releaseSession!: () => void;
+  let sessionRequested!: () => void;
+  const pendingSession = new Promise<void>((resolve) => (releaseSession = resolve));
+  const requestStarted = new Promise<void>((resolve) => (sessionRequested = resolve));
+  await page.route('**/api/runtime/status', async (route) => {
+    sessionRequested();
+    await pendingSession;
+    await fulfill(route, { status: 'success', readiness: { ready: true } });
+  });
+  await page.goto('/#/dashboard');
+  await requestStarted;
+  try {
+    await expect(page.getByRole('navigation', { name: '主导航' })).toHaveCount(0);
+  } finally {
+    releaseSession();
+  }
+  await expect(page.getByRole('heading', { name: '运行总览', exact: true })).toBeVisible();
+  if (isMobile) await page.getByRole('button', { name: '展开导航' }).click();
+  await page
+    .getByRole('navigation', { name: '主导航' })
+    .getByRole('link', { name: '链接转存', exact: true })
+    .click();
+  await expect(page.getByRole('heading', { name: '链接转存', exact: true })).toBeVisible();
+  expect(state.writes).toHaveLength(0);
+});
+
 test('mobile drawer opens receive and share modules', async ({ page, isMobile }) => {
   test.skip(!isMobile, 'Mobile drawer navigation');
   await fixtures(page);
