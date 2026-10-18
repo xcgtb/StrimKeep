@@ -81,10 +81,12 @@ async function execute() {
     </p>
     <TaskReceipt
       v-if="operationId"
+      :target="target"
       :id="operationId"
       kind="delete"
       @done="
         submitted = false;
+        op.reconcile(true);
         emit('done');
       "
     /><ConfirmAction

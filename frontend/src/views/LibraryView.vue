@@ -85,9 +85,18 @@ const filters = reactive({
   hasMore = ref(false),
   total = ref(0);
 const selectionMode = ref(false),
+  deletionBusy = ref(false),
   selectedIds = ref(new Set<string>()),
   detailOpen = ref(false),
   compareOpen = ref(false);
+const selectionLimit = computed(() => (filters.scope === 'local' ? 20 : 600));
+const targetReady = computed(() => ['local', 'share'].includes(filters.scope));
+function normalizeCards(rows: MediaCard[]) {
+  return rows.map((card) => ({
+    ...card,
+    type: filters.media === 'series' ? ('tv' as const) : ('movie' as const),
+  }));
+}
 const selectedCards = computed(() => cards.value.filter((c) => selectedIds.value.has(c.id!)));
 // 状态芯片带上后端 stats 的真实计数。注意：stats 的 aligned/missing/extra/… 只统计
 // 剧集（app/morning.py 的 _health_snapshot 只遍历 series），电影只能用 total_movies，
@@ -152,7 +161,8 @@ async function load(more = false, background = false) {
     hasMore.value = false;
     return;
   }
-  cards.value = more ? [...cards.value, ...(response.rows || [])] : response.rows || [];
+  const incoming = normalizeCards(response.rows || []);
+  cards.value = more ? [...cards.value, ...incoming] : incoming;
   offset.value = response.next_offset || 0;
   hasMore.value = !!response.has_more;
   total.value = response.total || 0;
@@ -161,17 +171,88 @@ async function load(more = false, background = false) {
   );
 }
 async function open(card: MediaCard) {
+  if (selectionMode.value) {
+    toggle(card.id);
+    return;
+  }
   episodes.data.value = undefined;
   detailOpen.value = true;
   detail.data.value = undefined;
   await detail.run((signal) => mediaApi.detail(filters.media, card.id!, signal));
 }
 function toggle(id?: string) {
+  if (!id || deletionBusy.value || !targetReady.value) return;
+  const next = allSelected.value
+    ? new Set(cards.value.map((c) => c.id!))
+    : new Set(selectedIds.value);
   allSelected.value = false;
-  if (!id) return;
-  const next = new Set(selectedIds.value);
-  next.has(id) ? next.delete(id) : next.add(id);
+  if (next.has(id)) next.delete(id);
+  else if (next.size < selectionLimit.value) next.add(id);
   selectedIds.value = next;
+}
+// Horizontal touch gestures select cards; vertical gestures remain native scrolling.
+let gesture: { x: number; y: number; mode: string; select: boolean; ids: Set<string> } | undefined;
+let suppressClickUntil = 0;
+function touchStart(event: TouchEvent) {
+  if (
+    !selectionMode.value ||
+    !targetReady.value ||
+    deletionBusy.value ||
+    event.touches.length !== 1
+  )
+    return;
+  const target = event.target as HTMLElement;
+  const id = target.closest<HTMLElement>('[data-media-id]')?.dataset.mediaId;
+  const touch = event.touches[0]!;
+  if (id)
+    gesture = {
+      x: touch.clientX,
+      y: touch.clientY,
+      mode: '',
+      select: !allSelected.value && !selectedIds.value.has(id),
+      ids: new Set(),
+    };
+}
+function touchMove(event: TouchEvent) {
+  if (!gesture || event.touches.length !== 1) {
+    gesture = undefined;
+    return;
+  }
+  const touch = event.touches[0]!;
+  const dx = touch.clientX - gesture.x,
+    dy = touch.clientY - gesture.y;
+  if (!gesture.mode && Math.max(Math.abs(dx), Math.abs(dy)) > 12)
+    gesture.mode = Math.abs(dx) > Math.abs(dy) * 1.25 ? 'select' : 'scroll';
+  if (gesture.mode !== 'select') return;
+  event.preventDefault();
+  const apply = (id?: string) => {
+    if (!id || gesture!.ids.has(id)) return;
+    gesture!.ids.add(id);
+    const checked = allSelected.value || selectedIds.value.has(id);
+    if (checked !== gesture!.select) toggle(id);
+  };
+  const steps = Math.max(1, Math.ceil(Math.abs(dx) / 10));
+  for (let index = 0; index <= steps; index++) {
+    const fraction = index / steps;
+    apply(
+      document
+        .elementFromPoint(gesture.x + dx * fraction, gesture.y + dy * fraction)
+        ?.closest<HTMLElement>('[data-media-id]')?.dataset.mediaId,
+    );
+  }
+}
+function touchEnd() {
+  if (gesture?.mode === 'select') suppressClickUntil = Date.now() + 600;
+  gesture = undefined;
+}
+function selectCard(id?: string) {
+  if (Date.now() >= suppressClickUntil) toggle(id);
+}
+function toggleSelection() {
+  if (deletionBusy.value) return;
+  selectionMode.value = !selectionMode.value;
+  selectedIds.value.clear();
+  allSelected.value = false;
 }
 function submitSearch() {
   const keyword = search.value.trim();
@@ -220,7 +301,7 @@ async function refreshLoaded() {
     return { ...result, rows };
   });
   if (!response) return false;
-  cards.value = response.rows || [];
+  cards.value = normalizeCards(response.rows || []);
   total.value = response.total || 0;
   offset.value = response.next_offset || 0;
   hasMore.value = !!response.has_more;
@@ -326,13 +407,10 @@ const live = useLibraryUpdates(refreshLoaded);
     ><button
       class="button"
       :class="{ active: selectionMode }"
-      @click="
-        selectionMode = !selectionMode;
-        selectedIds.clear();
-        allSelected = false;
-      "
+      :disabled="deletionBusy"
+      @click="toggleSelection"
     >
-      <CheckSquare :size="16" />选择对照
+      <CheckSquare :size="16" />{{ selectionMode ? '退出多选' : '多选清理' }}
     </button>
   </div>
   <p class="data-caption">
@@ -343,44 +421,82 @@ const live = useLibraryUpdates(refreshLoaded);
   <p v-if="live.error.value" class="notice-bar">
     {{ live.error.value }}<button class="text-link" @click="live.poll">重新读取变化</button>
   </p>
-  <div v-if="selectionMode" class="selection-toolbar">
-    <span>{{
-      allSelected ? `已选择全部筛选结果 ${total} 部` : `已选择 ${selectedIds.size} 部`
-    }}</span
-    ><button
-      class="text-link"
-      @click="
-        allSelected = false;
-        selectedIds = new Set(cards.map((c) => c.id!));
-      "
-    >
-      选择已加载作品</button
-    ><button
-      class="text-link"
-      @click="
-        allSelected = true;
-        selectedIds.clear();
-      "
-    >
-      选择全部筛选结果</button
-    ><button
-      class="text-link"
-      @click="
-        allSelected = false;
-        selectedIds.clear();
-      "
-    >
-      清空</button
-    ><button
-      class="button primary push-right"
-      :disabled="!selectedIds.size"
-      @click="compareOpen = true"
-    >
-      查看所选状态
-    </button>
-  </div>
+  <section v-if="selectionMode" class="panel mapping-selection">
+    <header class="section-heading">
+      <div>
+        <h2>批量清理</h2>
+        <p>先选择目标库，再勾选海报；确认预览后才删除。</p>
+      </div>
+    </header>
+    <div class="action-row batch-targets">
+      <span class="muted-text">删除目标</span>
+      <button
+        class="button"
+        :class="{ active: filters.scope === 'local' }"
+        :disabled="deletionBusy"
+        @click="filters.scope = 'local'"
+      >
+        本地库（联动源文件）
+      </button>
+      <button
+        class="button"
+        :class="{ active: filters.scope === 'share' }"
+        :disabled="deletionBusy"
+        @click="filters.scope = 'share'"
+      >
+        分享库（仅 STRM）
+      </button>
+    </div>
+    <p class="muted-text batch-help">
+      {{
+        targetReady
+          ? filters.scope === 'local'
+            ? '本地库每次最多 20 部，按后端规则联动删除匹配源视频。'
+            : '分享库每次最多 600 部，后台按每批最多 60 部、3000 个 STRM 核验执行。'
+          : '请选择上面的本地库或分享库，页面将切换到对应筛选范围。'
+      }}
+      手机可横向滑过海报连续选择，纵向滑动仍为滚动。
+    </p>
+    <div v-if="targetReady" class="selection-toolbar">
+      <span>{{
+        allSelected ? `已选择全部筛选结果 ${total} 部` : `已选择 ${selectedIds.size} 部`
+      }}</span
+      ><button
+        class="text-link"
+        @click="
+          allSelected = false;
+          selectedIds = new Set(cards.slice(0, selectionLimit).map((c) => c.id!));
+        "
+      >
+        选择已加载作品</button
+      ><button
+        class="text-link"
+        @click="
+          allSelected = true;
+          selectedIds.clear();
+        "
+        :disabled="total > selectionLimit"
+      >
+        选择全部筛选结果</button
+      ><button
+        class="text-link"
+        @click="
+          allSelected = false;
+          selectedIds.clear();
+        "
+      >
+        清空</button
+      ><button
+        class="button primary push-right"
+        :disabled="!selectedIds.size && !allSelected"
+        @click="compareOpen = true"
+      >
+        查看所选状态
+      </button>
+    </div>
+  </section>
   <MappingDelete
-    v-if="selectionMode"
+    v-show="selectionMode"
     :media="filters.media"
     :target="filters.scope"
     :ids="[...selectedIds]"
@@ -389,6 +505,7 @@ const live = useLibraryUpdates(refreshLoaded);
     :category="filters.category"
     :category-mode="filters.category_mode"
     :keyword="filters.keyword"
+    @busy="deletionBusy = $event"
     @done="load()"
   />
   <LoadState
@@ -402,15 +519,21 @@ const live = useLibraryUpdates(refreshLoaded);
     "
     @retry="load()"
   />
-  <div class="poster-grid">
+  <div
+    class="poster-grid mapping-posters"
+    @touchstart.passive="touchStart"
+    @touchmove="touchMove"
+    @touchend="touchEnd"
+    @touchcancel="touchEnd"
+  >
     <PosterCard
       v-for="(card, index) in cards"
       :key="card.id"
       :card="card"
       :priority="index < 6"
-      :selectable="selectionMode"
+      :selectable="selectionMode && targetReady"
       :selected="allSelected || selectedIds.has(card.id!)"
-      @select="toggle(card.id)"
+      @select="selectCard(card.id)"
       @open="open(card)"
     />
   </div>
@@ -525,7 +648,10 @@ const live = useLibraryUpdates(refreshLoaded);
   ></ModalDialog>
   <ModalDialog v-if="compareOpen" title="所选作品状态" @close="compareOpen = false"
     ><div class="comparison-list">
-      <div v-for="card in selectedCards" :key="card.id">
+      <p v-if="allSelected" class="notice-bar">
+        已选择全部筛选结果 {{ total }} 部；下方仅显示已加载的作品，删除预览由后端核验完整筛选范围。
+      </p>
+      <div v-for="card in allSelected ? cards : selectedCards" :key="card.id">
         <strong>{{ titleOf(card) }}</strong
         ><span>{{ badge(card) || '电影资源' }}</span
         ><small

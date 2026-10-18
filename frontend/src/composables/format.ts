@@ -20,6 +20,7 @@ export function date(value?: number | string) {
 }
 export function badge(card: MediaCard) {
   const info = card.tmdb_info;
+  if (card._md) return '完整';
   if (info?.match_status === 'missing') return `缺 ${Math.abs(info.diff || 0)} 集`;
   const labels: Record<string, string> = {
     aligned: '完整',
@@ -30,10 +31,29 @@ export function badge(card: MediaCard) {
     pending: '对照中',
   };
   if (info?.match_status) return labels[info.match_status] || '待核实';
-  if (card.library_status && card.library_status !== 'available') return '片库待同步';
-  if (card.in_emby === true) return '已入库';
-  if (card.in_local || card.in_share) return '已有 STRM';
-  return '';
+  const stale = card.facts_stale ? '*' : '';
+  if (card.type === 'tv') {
+    if (card.eps_source === 'ambiguous') return '身份冲突';
+    const eps = card.eps;
+    if (eps && typeof eps.have === 'number') {
+      const count = Number(eps.total) > 0 ? `${eps.have}/${eps.total} 集` : `${eps.have} 集`;
+      if (eps.manual_done || eps.match_status === 'aligned') return `完整 · ${count}${stale}`;
+      if (eps.have <= 0) return `未入库${stale}`;
+      if (eps.match_status === 'extra') return `超出对照 · ${count}${stale}`;
+      return `已入库 ${count}${stale}`;
+    }
+    if (card.in_emby || card.in_local || card.in_share) return '集数待同步';
+  }
+  if (['unavailable', 'stale'].includes(card.library_status || '')) return '片库待同步';
+  if (card.in_emby) return '已入库';
+  if (card.in_local || card.in_share) return card.type === 'movie' ? '已完整' : '已有 STRM';
+  return '未入库';
+}
+export function episodeSummary(card: MediaCard) {
+  const have = card.have_eps ?? card.eps?.have ?? card.total_episodes;
+  if (have == null) return '';
+  const total = card.tmdb_info?.declared_total ?? card.tmdb_info?.tmdb_total ?? card.eps?.total;
+  return Number(total) > 0 ? `已入库 ${have}/${total} 集` : `已入库 ${have} 集`;
 }
 export const stateLabel = (value: string) =>
   ({
@@ -45,6 +65,10 @@ export const stateLabel = (value: string) =>
     partial: '部分完成',
     submitted: '已提交，等待核实',
     confirmed: '已核实',
+    pending: '待执行',
+    executing: '执行中',
+    expired: '已过期',
+    missing: '计划不存在',
     failed: '失败',
     uncertain: '结果待核实',
     needs_review: '需人工核实',

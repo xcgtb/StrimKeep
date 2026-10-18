@@ -159,6 +159,33 @@ onMounted(() => loadBrowse());
     :receipt="op.receipt.value"
   />
   <section class="panel">
+    <div v-if="tab === 'directories'" class="cleanup-scope">
+      <h2>扫描范围</h2>
+      <div class="action-row">
+        <button class="button" :class="{ active: scope === 'all' }" @click="scope = 'all'">
+          整个媒体库
+        </button>
+        <button
+          v-for="root in records(browse.data.value?.roots)"
+          :key="String(root.path)"
+          class="button"
+          :class="{ active: scope === 'directory' && path === root.path }"
+          :disabled="root.available === false"
+          @click="
+            path = String(root.path);
+            scope = 'directory';
+            loadBrowse(String(root.path));
+          "
+        >
+          {{ root.name }}
+        </button>
+      </div>
+      <p class="muted-text">
+        {{
+          scope === 'all' ? '整个本地库与分享库' : path || '请选择媒体目录'
+        }}；点击「扫描并预览」后才读取清理候选。
+      </p>
+    </div>
     <div class="two-column">
       <div>
         <h2>选择 NAS 媒体目录</h2>

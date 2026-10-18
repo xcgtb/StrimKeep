@@ -800,24 +800,6 @@ label small {
   padding: 2px 5px;
   border-radius: 3px;
 }
-.subscribe-button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  background: var(--panel);
-  width: 100%;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 7px;
-  font-size: 10px;
-  color: var(--muted);
-  margin-top: 10px;
-}
-.subscribe-button.active {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
 .selection-button {
   position: absolute;
   top: 9px;

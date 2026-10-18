@@ -209,7 +209,7 @@ test('batch all-selection uses a sealed preview and never limits deletion to the
   await page.goto('/#/media/library');
   // 范围改为 1.2.12 式芯片：本地+分享 / 仅本地 / 仅分享
   await page.getByRole('group', { name: '范围' }).getByRole('button', { name: '仅分享' }).click();
-  await page.getByRole('button', { name: '选择对照' }).click();
+  await page.getByRole('button', { name: '多选清理' }).click();
   await page.getByRole('button', { name: '选择全部筛选结果' }).click();
   await page.getByRole('button', { name: '预览批量删除 · 分享库' }).click();
   await expect(page.getByRole('dialog', { name: '确认片库批量删除' })).toBeVisible();

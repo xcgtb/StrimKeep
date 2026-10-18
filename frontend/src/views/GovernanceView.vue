@@ -3,7 +3,10 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { readData, writeData, records, object, type Data } from '../api/domain';
 import { useRequest } from '../composables/useRequest';
 import { useOperation } from '../composables/useOperation';
-import { date } from '../composables/format';
+import { useVisiblePoll } from '../composables/useVisiblePoll';
+import GovernanceItemDetails from '../components/GovernanceItemDetails.vue';
+import LoadState from '../components/LoadState.vue';
+import { date, stateLabel } from '../composables/format';
 import PageHeading from '../components/PageHeading.vue';
 import EvidenceDetails from '../components/EvidenceDetails.vue';
 import OperationState from '../components/OperationState.vue';
@@ -18,21 +21,81 @@ const summary = useRequest<Data>(),
   confirmation = ref(''),
   selected = ref<Data>(),
   detailOpen = ref(false),
-  group = ref('del_local_items'),
+  taskRunning = ref(false),
+  now = ref(Date.now() / 1000),
+  planVisible = ref(100),
+  group = ref('all'),
   search = ref('');
 const visible = ref(200);
 watch([group, search], () => {
   visible.value = 200;
 });
+const groupLabels: Record<string, string> = {
+  del_local_items: '本地处理',
+  del_share_items: '分享处理',
+  protected_items: '受保护',
+  exempted_items: '豁免项',
+};
+const kindLabels: Record<string, string> = {
+  loc: '删本地',
+  shr: '删分享',
+  keep: '受保护',
+  exempt: '白名单豁免',
+};
+const kinds: Record<string, string> = {
+  del_local_items: 'loc',
+  del_share_items: 'shr',
+  protected_items: 'keep',
+  exempted_items: 'exempt',
+};
 const scan = computed(() => object(summary.data.value?.scan)),
   result = computed(() => object(scan.value.result));
 // 扫描事实面板：字段与后端 /api/governance/summary 的返回值一一对应，
 // 1.2.12 里这些信息是常驻展示的，Vue 版此前只取了其中 4 个计数。
+const attempt = computed(() => object(scan.value.scan_attempt));
+const expired = computed(
+  () =>
+    Number(scan.value.ts) > 0 &&
+    Number(scan.value.ttl_sec) > 0 &&
+    now.value >= Number(scan.value.ts) + Number(scan.value.ttl_sec),
+);
+const canExecute = computed(
+  () =>
+    !!scan.value.usable &&
+    !expired.value &&
+    scan.value.rule_aligned !== false &&
+    scan.value.file_guard_ready !== false &&
+    attempt.value.status !== 'failed' &&
+    !['done', 'failed', 'executing', 'missing', 'expired'].includes(
+      String(scan.value.plan_state),
+    ) &&
+    !taskRunning.value,
+);
+const planNotice = computed(() => {
+  if (taskRunning.value) return '任务正在执行，请等待回执；执行期间不能重复提交计划。';
+  if (attempt.value.status === 'failed')
+    return `最近扫描失败：${attempt.value.message || '请检查日志后重新扫描'}。上次成功结果仅供参考，不能执行。`;
+  if (!scan.value.found && !scan.value.ts) return '尚无成功扫描，请先点击「立即治理扫描」。';
+  if (scan.value.rule_aligned === false) return '治理规则已变化，当前计划不可执行，请重新扫描。';
+  if (scan.value.file_guard_ready === false) return '计划缺少文件核验快照，请重新扫描。';
+  if (expired.value) return '计划已超过有效期，请重新扫描生成新计划。';
+  if (['done', 'failed', 'executing', 'missing'].includes(String(scan.value.plan_state)))
+    return {
+      done: '该计划已执行，请重新扫描后再清理。',
+      failed: '该计划执行失败，请核对实际结果并重新扫描。',
+      executing: '该计划正在执行，请等待结果。',
+      missing: '计划文件不可用，请重新扫描。',
+    }[String(scan.value.plan_state)];
+  if (!scan.value.plan_id) return '本次扫描没有待清理项。';
+  if (canExecute.value)
+    return `当前计划可执行，剩余有效期约 ${Math.max(0, Math.ceil(Math.min(Number(scan.value.ttl_sec), Number(scan.value.ts) + Number(scan.value.ttl_sec) - now.value) / 60))} 分钟。`;
+  return '当前计划不可用，请重新扫描。';
+});
 const consistency = computed(() => object(summary.data.value?.consistency));
 const strmCounts = computed(() => object(result.value.strm_counts));
 const clock = (value: unknown) => (Number(value) > 0 ? date(Number(value)) : '暂无');
 const truthRows = computed(() => {
-  const scanState = scan.value.usable
+  const scanState = canExecute.value
     ? '可执行'
     : scan.value.found
       ? scan.value.plan_state === 'done'
@@ -41,7 +104,7 @@ const truthRows = computed(() => {
       : '尚无扫描';
   const protectedCount = records(result.value.protected_items).length;
   return [
-    { key: '扫描状态', value: scanState, tone: scan.value.usable ? 'ok' : 'warn' },
+    { key: '扫描状态', value: scanState, tone: canExecute.value ? 'ok' : 'warn' },
     {
       key: '身份冲突',
       value: `${Number(result.value.identity_conflict_count || 0)} 个 TMDB 标识冲突（不自动删除）`,
@@ -62,19 +125,30 @@ const truthRows = computed(() => {
     { key: '片库快照', value: clock(object(consistency.value.library).ts) },
     { key: '24H 入库快照', value: clock(object(consistency.value.ingest).ts) },
     {
-      key: '规则指纹',
-      value: String(consistency.value.rule_sig || '').slice(0, 16) || '—',
+      key: '最近扫描尝试',
+      value: attempt.value.ts
+        ? `${clock(attempt.value.ts)} · ${attempt.value.status === 'failed' ? '失败' : '成功'}`
+        : '暂无',
     },
     {
       key: '扫描规则',
-      value: scan.value.rule_aligned === false ? '已变化，请重新扫描' : '与当前规则一致',
+      value: !scan.value.found
+        ? '待扫描核验'
+        : scan.value.rule_aligned === false
+          ? '已变化，请重新扫描'
+          : '与当前规则一致',
       tone: scan.value.rule_aligned === false ? 'warn' : 'ok',
     },
   ];
 });
 const identityConflicts = computed(() => records(result.value.identity_conflicts));
-const items = computed(() =>
-  records(result.value[group.value]).filter((r) => JSON.stringify(r).includes(search.value)),
+const items = computed<Data[]>(() =>
+  (group.value === 'all'
+    ? Object.keys(groupLabels).flatMap((key) =>
+        records(result.value[key]).map((r) => ({ ...r, kind: r.kind || kinds[key] })),
+      )
+    : records(result.value[group.value]).map((r) => ({ ...r, kind: r.kind || kinds[group.value] }))
+  ).filter((r) => JSON.stringify(r).toLowerCase().includes(search.value.toLowerCase())),
 );
 const planId = computed(() =>
   String(object(detail.data.value?.plan).id || scan.value.plan_id || ''),
@@ -86,12 +160,14 @@ async function load() {
   ]);
 }
 async function showPlan(id: string) {
+  planVisible.value = 100;
   detailOpen.value = true;
   selected.value = undefined;
   detail.data.value = undefined;
   await detail.run((signal) => readData(`/api/plan/${encodeURIComponent(id)}`, signal));
 }
 async function execute() {
+  if (taskRunning.value || (confirmation.value !== 'scan' && !canExecute.value)) return;
   let path = '/api/check',
     body: Data | undefined;
   if (confirmation.value !== 'scan') {
@@ -100,7 +176,8 @@ async function execute() {
   }
   const r = await op.run(() => writeData(path, body));
   if (r) {
-    task.value = String(r.task_id);
+    task.value = String(r.task_id || '');
+    taskRunning.value = !!r.task_id;
     confirmation.value = '';
     detailOpen.value = false;
   }
@@ -109,7 +186,31 @@ function prepareClean(dry: boolean) {
   detail.data.value = undefined;
   confirmation.value = dry ? 'dry' : 'clean';
 }
-onMounted(load);
+async function recoverTask() {
+  try {
+    const health = await readData('/api/health');
+    const current = object(health.current_task);
+    if (
+      current.id &&
+      ['inter_check', 'inter_clean'].includes(String(current.kind)) &&
+      current.status === 'running'
+    ) {
+      task.value = String(current.id);
+      taskRunning.value = true;
+    }
+  } catch {
+    /* Summary and its own retry remain available if health cannot be read. */
+  }
+}
+useVisiblePoll(() => {
+  now.value = Date.now() / 1000;
+  if (taskRunning.value)
+    return summary.run((signal) => readData('/api/governance/summary', signal));
+}, 3000);
+onMounted(() => {
+  void load();
+  void recoverTask();
+});
 </script>
 <template>
   <PageHeading title="治理总览" subtitle="完整度优先、七维比较；扫描只产生计划，确认后才执行清理。"
@@ -117,10 +218,10 @@ onMounted(load);
       <RouterLink to="/governance/rules" class="button">七维与治理规则</RouterLink
       ><button
         class="button primary"
-        :disabled="op.busy.value || op.uncertain.value"
+        :disabled="op.busy.value || op.uncertain.value || taskRunning"
         @click="confirmation = 'scan'"
       >
-        立即治理扫描
+        {{ taskRunning ? '任务执行中…' : '立即治理扫描' }}
       </button>
     </div></PageHeading
   ><OperationState
@@ -128,6 +229,43 @@ onMounted(load);
     :error="op.error.value || summary.error.value || plans.error.value"
     :uncertain="op.uncertain.value"
     :receipt="op.receipt.value"
+  />
+  <section class="panel governance-controls">
+    <header class="section-heading">
+      <div>
+        <h2>扫描与执行</h2>
+        <p>1 扫描比对 → 2 核对计划 → 3 手动执行清理</p>
+      </div>
+      <RouterLink to="/governance/cleanup" class="button">目录与残留清理</RouterLink>
+    </header>
+    <p class="notice-bar" :class="{ 'warning-text': !canExecute }" role="status">
+      {{ planNotice }}
+    </p>
+    <div class="action-row">
+      <button
+        class="button"
+        :disabled="!scan.plan_id || !canExecute || op.busy.value || op.uncertain.value"
+        @click="prepareClean(true)"
+      >
+        预演计划</button
+      ><button
+        class="button danger-text"
+        :disabled="!scan.plan_id || !canExecute || op.busy.value || op.uncertain.value"
+        @click="prepareClean(false)"
+      >
+        核对并执行计划
+      </button>
+    </div>
+  </section>
+  <TaskReceipt
+    v-if="task"
+    :id="task"
+    kind="task"
+    @update="taskRunning = $event.status === 'running'"
+    @done="
+      taskRunning = false;
+      load();
+    "
   />
   <div class="summary-strip">
     <span>最近诊断 {{ date(Number(scan.ts)) }}</span
@@ -147,16 +285,18 @@ onMounted(load);
   <div class="stats-grid stats-grid-4">
     <article
       v-for="(label, key) in {
-        del_local_cnt: '本地待治理',
-        del_share_cnt: '分享待治理',
+        protected_count: '受保护项',
+        del_local_cnt: '本地待清理',
+        del_share_cnt: '分享待清理',
         exempted_count: '白名单豁免',
-        quiet_skipped: '静默期跳过',
       }"
       :key="key"
       class="stat-card"
     >
       <span class="stat-label">{{ label }}</span
-      ><strong>{{ result[key] ?? '—' }}</strong>
+      ><strong>{{
+        key === 'protected_count' ? records(result.protected_items).length : (result[key] ?? '—')
+      }}</strong>
     </article>
   </div>
   <section class="panel truth-panel">
@@ -190,23 +330,11 @@ onMounted(load);
   <section class="panel">
     <header class="section-heading">
       <h2>当前诊断明细</h2>
-      <div class="action-row">
-        <button
-          class="button"
-          :disabled="!scan.plan_id || !scan.usable || op.busy.value || op.uncertain.value"
-          @click="prepareClean(true)"
-        >
-          预演计划</button
-        ><button
-          class="button danger-text"
-          :disabled="!scan.plan_id || !scan.usable || op.busy.value || op.uncertain.value"
-          @click="prepareClean(false)"
-        >
-          核对并执行计划
-        </button>
-      </div>
     </header>
     <nav class="browse-tabs">
+      <button :class="{ active: group === 'all' }" @click="group = 'all'">
+        全部 {{ Object.keys(groupLabels).reduce((n, key) => n + records(result[key]).length, 0) }}
+      </button>
       <button
         v-for="(label, key) in {
           del_local_items: '本地处理',
@@ -225,8 +353,24 @@ onMounted(load);
     <div class="plan-item-list">
       <article v-for="(item, i) in items.slice(0, visible)" :key="i">
         <div>
-          <strong>{{ item.title || item.name || item.text }}</strong>
-          <p>{{ item.reason_label || item.reason || item.detail }}</p>
+          <span
+            class="state-pill"
+            :class="{
+              failed: ['loc', 'shr'].includes(String(item.kind)),
+              success: item.kind === 'keep',
+            }"
+            >{{ kindLabels[String(item.kind)] }}</span
+          ><strong>{{ item.text || item.title || item.name }}</strong>
+          <p>
+            {{ item.reason_label || object(item.meta).reason_label || item.reason || item.detail }}
+          </p>
+          <small class="muted-text"
+            >涉及
+            {{ item.files_count ?? (Array.isArray(item.files) ? item.files.length : 0) }}
+            个文件<span v-if="object(item.meta).match_basis">
+              · {{ object(item.meta).match_basis }}</span
+            ></small
+          >
         </div>
         <button
           class="button small"
@@ -248,14 +392,13 @@ onMounted(load);
       <EvidenceDetails :value="summary.data.value" />
     </details>
   </section>
-  <TaskReceipt v-if="task" :id="task" kind="task" @done="load" />
   <section class="panel">
     <h2>治理计划与执行归档</h2>
     <div v-for="p in records(plans.data.value?.plans)" :key="String(p.id)" class="automation-rule">
       <div>
         <strong>{{ date(Number(p.ts)) }}</strong>
         <p>
-          {{ p.state }} · 本地 {{ object(p.stats).loc ?? '—' }} / 分享
+          {{ stateLabel(String(p.state)) }} · 本地 {{ object(p.stats).loc ?? '—' }} / 分享
           {{ object(p.stats).shr ?? '—' }}
         </p>
       </div>
@@ -274,7 +417,60 @@ onMounted(load);
       detail.cancel();
     "
     ><p v-if="detail.error.value" class="inline-error">{{ detail.error.value }}</p>
-    <EvidenceDetails :value="selected || detail.data.value?.plan" /></ModalDialog
+    <LoadState :loading="detail.loading.value" />
+    <GovernanceItemDetails v-if="selected" :item="selected" />
+    <template v-else-if="detail.data.value?.plan"
+      ><dl class="business-facts">
+        <div>
+          <dt>生成时间</dt>
+          <dd>{{ clock(object(detail.data.value.plan).ts) }}</dd>
+        </div>
+        <div>
+          <dt>状态</dt>
+          <dd>{{ stateLabel(String(object(detail.data.value.plan).state)) }}</dd>
+        </div>
+      </dl>
+      <section v-if="object(detail.data.value.plan).executed_result" class="batch-summary">
+        <h3>实际执行汇总</h3>
+        <p>
+          本地处理 {{ object(object(detail.data.value.plan).executed_result).loc ?? 0 }} 项 ·
+          分享处理 {{ object(object(detail.data.value.plan).executed_result).shr ?? 0 }} 项 · 跳过
+          {{ object(object(detail.data.value.plan).executed_result).skipped ?? 0 }} 项
+        </p>
+        <p v-if="object(object(detail.data.value.plan).executed_result).error" class="inline-error">
+          {{ object(object(detail.data.value.plan).executed_result).error }}
+        </p>
+        <EvidenceDetails :value="object(object(detail.data.value.plan).executed_result).warnings" />
+        <p class="muted-text">下方路径来自当时的计划快照；实际删除以执行回执和日志为准。</p>
+      </section>
+      <div class="plan-item-list">
+        <details
+          v-for="(action, index) in records(object(detail.data.value.plan).actions).slice(
+            0,
+            planVisible,
+          )"
+          :key="index"
+        >
+          <summary>
+            {{ action.title || action.text || action.action_id }} ·
+            {{ action.reason_label || action.reason }}
+          </summary>
+          <GovernanceItemDetails
+            :item="action"
+            :archived="object(detail.data.value.plan).state !== 'pending'"
+          />
+        </details>
+      </div>
+      <button
+        v-if="records(object(detail.data.value.plan).actions).length > planVisible"
+        class="button"
+        @click="planVisible += 100"
+      >
+        继续显示计划项目
+      </button>
+      <details class="technical-details">
+        <summary>完整计划回执</summary>
+        <EvidenceDetails :value="detail.data.value.plan" /></details></template></ModalDialog
   ><ConfirmAction
     v-if="confirmation"
     :title="
@@ -294,17 +490,20 @@ onMounted(load);
     :phrase="confirmation === 'clean' ? '执行治理计划' : undefined"
     :danger="confirmation === 'clean'"
     :busy="op.busy.value"
-    :disabled="op.uncertain.value || (confirmation !== 'scan' && !scan.usable)"
+    :disabled="op.uncertain.value || taskRunning || (confirmation !== 'scan' && !canExecute)"
     @close="confirmation = ''"
     @confirm="execute"
-    ><EvidenceDetails
-      v-if="confirmation !== 'scan'"
-      :value="{
-        plan_id: scan.plan_id,
-        del_local_cnt: result.del_local_cnt,
-        del_share_cnt: result.del_share_cnt,
-        del_local_files: result.del_local_files,
-        del_share_files: result.del_share_files,
-      }"
-  /></ConfirmAction>
+    ><div v-if="confirmation !== 'scan'" class="batch-summary">
+      <p>
+        本地库：{{ result.del_local_cnt ?? 0 }} 项 /
+        {{ result.del_local_files ?? 0 }} 个文件；分享库：{{ result.del_share_cnt ?? 0 }} 项 /
+        {{ result.del_share_files ?? 0 }} 个文件。
+      </p>
+      <p>
+        受保护 {{ records(result.protected_items).length }} 项，白名单豁免
+        {{ result.exempted_count ?? 0 }} 项，不进入清理。
+      </p>
+      <p>{{ planNotice }}</p>
+    </div>
+  </ConfirmAction>
 </template>

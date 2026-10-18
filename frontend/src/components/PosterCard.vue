@@ -1,18 +1,29 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { Film, Check, Plus } from '@lucide/vue';
+import { Film, Check } from '@lucide/vue';
 import type { MediaCard } from '../types/api';
-import { posterUrl, titleOf, badge } from '../composables/format';
+import { posterUrl, titleOf, badge, episodeSummary } from '../composables/format';
 const props = defineProps<{
   card: MediaCard;
   selectable?: boolean;
   selected?: boolean;
-  subscribable?: boolean;
-  subscribed?: boolean;
-  busy?: boolean;
   priority?: boolean;
+  compact?: boolean;
 }>();
-defineEmits<{ open: []; select: []; subscribe: [] }>();
+defineEmits<{ open: []; select: [] }>();
+const status = computed(() => badge(props.card));
+const statusTone = computed(() => {
+  if (props.card.tmdb_info?.match_status === 'missing' || status.value.startsWith('已入库 '))
+    return 'warning';
+  if (status.value.startsWith('超')) return 'extra';
+  if (
+    ['未入库', '片库待同步', '集数待同步', '身份冲突', '待对照', '未匹配', '对照中'].some((s) =>
+      status.value.startsWith(s),
+    )
+  )
+    return 'unknown';
+  return 'complete';
+});
 const loaded = ref(false),
   failed = ref(false),
   url = computed(() => posterUrl(props.card));
@@ -22,9 +33,17 @@ watch(url, () => {
 });
 </script>
 <template>
-  <article class="poster-card" :class="{ selected }">
+  <article
+    class="poster-card"
+    :class="{ selected, selectable, 'media-compact': compact }"
+    :data-media-id="card.id"
+  >
     <div class="poster-art" :class="{ 'poster-waiting': url && !loaded && !failed }">
-      <button class="poster-open" :aria-label="`查看${titleOf(card)}详情`" @click="$emit('open')">
+      <button
+        class="poster-open"
+        :aria-label="`${selectable ? (selected ? '取消选择' : '选择') : '查看'}${titleOf(card)}${selectable ? '海报' : '详情'}`"
+        @click="selectable ? $emit('select') : $emit('open')"
+      >
         <img
           v-if="url && !failed"
           :src="url"
@@ -37,12 +56,14 @@ watch(url, () => {
         /><span v-else class="poster-fallback"
           ><Film :size="32" /><span>{{ titleOf(card) }}</span></span
         ></button
-      ><span v-if="card.rating" class="rating">★ {{ card.rating.toFixed(1) }}</span
+      ><span v-if="card.type" class="poster-type">{{ card.type === 'tv' ? '剧集' : '电影' }}</span
+      ><span v-if="card.rating && !selectable" class="rating">★ {{ card.rating.toFixed(1) }}</span
       ><span
-        v-if="badge(card)"
+        v-if="status"
         class="poster-status"
-        :class="{ warning: card.tmdb_info?.match_status === 'missing' }"
-        >{{ badge(card) }}</span
+        :class="statusTone"
+        :title="card.facts_stale ? '片库缓存中的集数，TMDB 对照已过期，等待同步' : status"
+        >{{ status }}</span
       ><button
         v-if="selectable"
         class="selection-button"
@@ -55,26 +76,28 @@ watch(url, () => {
       </button>
     </div>
     <div class="poster-caption">
-      <button class="poster-title" @click="$emit('open')">{{ titleOf(card) }}</button>
+      <button class="poster-title" @click="selectable ? $emit('select') : $emit('open')">
+        {{ titleOf(card) }}
+      </button>
       <div class="poster-meta">
         <span>{{ card.year || '年份未知' }}</span
-        ><span v-if="card.type">{{ card.type === 'tv' ? '剧集' : '电影' }}</span
-        ><span v-if="card.have_eps != null">{{ card.have_eps }} 集</span>
+        ><span v-if="card.type">{{ card.type === 'tv' ? '剧集' : '电影' }}</span>
       </div>
-      <div v-if="card.in_local || card.in_share" class="library-tags">
+      <p
+        v-if="!compact && episodeSummary(card)"
+        class="poster-episodes"
+        :title="episodeSummary(card)"
+        :aria-hidden="!episodeSummary(card)"
+      >
+        {{ episodeSummary(card) }}
+      </p>
+      <div
+        v-if="card.in_local || card.in_share"
+        class="library-tags"
+        :aria-hidden="!card.in_local && !card.in_share"
+      >
         <span v-if="card.in_local">本地库</span><span v-if="card.in_share">分享库</span>
       </div>
-      <button
-        v-if="subscribable"
-        class="subscribe-button"
-        :class="{ active: subscribed }"
-        :disabled="busy"
-        @click.stop="$emit('subscribe')"
-      >
-        <Check v-if="subscribed" :size="13" /><Plus v-else :size="13" />{{
-          subscribed ? '已订阅' : '追更订阅'
-        }}
-      </button>
     </div>
   </article>
 </template>

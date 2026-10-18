@@ -1,0 +1,222 @@
+/* Shared media cards: preserve the pre-Vue type, library and episode facts. */
+.poster-type {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  border-radius: 4px;
+  padding: 3px 6px;
+  color: #fff;
+  background: #172738d9;
+  font-size: 11px;
+  line-height: 1.4;
+  pointer-events: none;
+}
+.poster-card.selectable .selection-button {
+  left: auto;
+  right: 8px;
+  top: 8px;
+  width: 30px;
+  height: 30px;
+}
+.poster-card .poster-status {
+  max-width: calc(100% - 12px);
+  left: auto;
+  right: 6px;
+  bottom: 6px;
+  padding: 4px 6px;
+  line-height: 1.5;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.poster-status.unknown {
+  background: #334155ed;
+  color: #fff;
+}
+.poster-status.extra {
+  background: #5546a5ed;
+  color: #fff;
+}
+.poster-status.complete {
+  background: #176c51ed;
+  color: #fff;
+}
+.poster-episodes {
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+/* Discovery keeps compact title/year captions and confirmed library labels.
+   Subscription actions live in the details dialog. */
+.poster-card.media-compact .poster-caption {
+  display: grid;
+  grid-template-rows: 22px 18px;
+  gap: 2px;
+  padding-top: 8px;
+}
+.poster-card.media-compact .poster-meta {
+  margin: 0;
+  flex-wrap: nowrap;
+}
+.mapping-selection .selection-toolbar {
+  margin-bottom: 0;
+  border: 0;
+  padding: 14px 0 0;
+}
+.batch-help {
+  margin-top: 12px;
+  line-height: 1.8;
+}
+.mapping-posters .selectable .poster-open {
+  cursor: crosshair;
+}
+.governance-controls .notice-bar {
+  margin-bottom: 16px;
+}
+.plan-item-list article > div > .state-pill {
+  display: inline-flex;
+  margin-right: 10px;
+}
+.governance-detail {
+  display: grid;
+  gap: 18px;
+}
+.governance-detail h3 {
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+.governance-detail .notice-bar,
+.governance-detail .path-box {
+  margin: 0;
+}
+.business-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 24px;
+  margin: 16px 0;
+}
+.business-facts > div {
+  min-width: 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.business-facts dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+.business-facts dd {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+}
+.governance-comparison {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.comparison-table {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.comparison-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.comparison-table th,
+.comparison-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  min-width: 90px;
+}
+.comparison-table th {
+  background: var(--subtle);
+}
+.comparison-table td small {
+  display: block;
+  color: var(--muted);
+  white-space: normal;
+}
+.comparison-table tr.decisive td,
+.comparison-table tr.decisive th {
+  background: var(--accent-soft);
+}
+.governance-paths {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.governance-paths summary {
+  cursor: pointer;
+}
+.governance-paths summary span,
+.governance-paths summary b {
+  margin-left: 12px;
+  font-size: 12px;
+}
+.governance-paths .path-box {
+  margin-top: 10px;
+}
+.task-log {
+  max-height: 240px;
+  overflow: auto;
+  margin: 14px 0;
+  padding: 12px;
+  background: var(--subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+.task-result-summary {
+  margin-top: 16px;
+  font-size: 13px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 700px) {
+  .poster-card .poster-status {
+    font-size: 10px;
+    padding: 3px 5px;
+  }
+  .poster-type {
+    font-size: 10px;
+    top: 5px;
+    left: 5px;
+  }
+  .poster-card .poster-meta {
+    flex-wrap: wrap;
+    gap: 3px 5px;
+  }
+  .mapping-selection .selection-toolbar {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .mapping-selection .selection-toolbar > span {
+    width: 100%;
+  }
+  .mapping-selection .push-right {
+    margin-left: 0;
+  }
+  .batch-targets .button {
+    white-space: normal;
+    flex: 1 1 120px;
+  }
+  .business-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .governance-controls .section-heading {
+    flex-wrap: wrap;
+  }
+}
+
+.cleanup-scope {
+  display: grid;
+  gap: 12px;
+  padding-bottom: 20px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}

@@ -29,6 +29,10 @@ export interface MediaCard {
   in_local?: boolean | null;
   in_share?: boolean | null;
   library_status?: string;
+  eps_source?: string;
+  facts_stale?: boolean;
+  facts_ts?: number;
+  _md?: boolean;
   eps?: { have?: number; total?: number; [key: string]: unknown } | null;
   tmdb_info?: TmdbInfo;
   have_eps?: number | null;

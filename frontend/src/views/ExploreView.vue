@@ -291,11 +291,8 @@ const live = useLibraryUpdates(async () => {
       :key="`${card.type}:${card.tmdb_id}`"
       :card="card"
       :priority="index < 6"
-      :subscribable="card.type === 'tv'"
-      :subscribed="subscriptions.has(card.tmdb_id)"
-      :busy="subscriptions.busy || !!subscriptionError || subscriptions.uncertain"
+      compact
       @open="selected = card"
-      @subscribe="toggle(card)"
     />
   </div>
   <div v-if="cards.length && page < totalPages" class="load-more">
@@ -331,6 +328,7 @@ const live = useLibraryUpdates(async () => {
           v-if="selected.type === 'tv'"
           class="button primary"
           :disabled="subscriptions.busy || !!subscriptionError || subscriptions.uncertain"
+          :aria-pressed="subscriptions.has(selected.tmdb_id)"
           @click="toggle(selected)"
         >
           {{ subscriptions.has(selected.tmdb_id) ? '取消追更' : '添加追更订阅' }}

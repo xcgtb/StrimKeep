@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue';
+import { ref, watch, computed, watchEffect } from 'vue';
 import { readData, writeData, object, records, uuid, type Data } from '../api/domain';
 import { useRequest } from '../composables/useRequest';
 import { useOperation } from '../composables/useOperation';
@@ -21,17 +21,22 @@ const props = withDefaults(
   }>(),
   { filter: 'all', category: '', categoryMode: 'seg', keyword: '' },
 );
-const emit = defineEmits<{ done: [] }>();
+const emit = defineEmits<{ done: []; busy: [value: boolean] }>();
 const op = useOperation(),
   previewRequest = useRequest<Data>(),
   previewJob = ref(''),
   preview = ref<Data>(),
   confirmation = ref(false),
+  operationTarget = ref(''),
   operationId = ref(''),
   submitted = ref(false);
 let generation = 0;
+watchEffect(() => emit('busy', submitted.value || op.busy.value || !!previewJob.value));
 const enabled = computed(
-  () => ['local', 'share'].includes(props.target) && (props.all || props.ids.length > 0),
+  () =>
+    ['local', 'share'].includes(props.target) &&
+    (props.all || props.ids.length > 0) &&
+    (props.all || props.ids.length <= (props.target === 'local' ? 20 : 600)),
 );
 const phrase = computed(() => (props.target === 'local' ? '删除本地库及源文件' : '删除分享库'));
 const previewSeries = computed(() => records(preview.value?.series).slice(0, 8));
@@ -41,7 +46,6 @@ function invalidate() {
   previewJob.value = '';
   preview.value = undefined;
   confirmation.value = false;
-  if (!submitted.value) operationId.value = '';
 }
 watch(
   () =>
@@ -58,6 +62,8 @@ watch(
   invalidate,
 );
 async function start() {
+  if (submitted.value) return;
+  operationId.value = '';
   invalidate();
   const gen = generation;
   const body = {
@@ -89,6 +95,11 @@ async function poll() {
     ),
   );
   if (!r || gen !== generation) return;
+  if (r.status === 'error') {
+    previewJob.value = '';
+    previewRequest.error.value = String(r.message || '预览核验失败，尚未提交删除');
+    return;
+  }
   if (r.status === 'done') {
     const result = object(r.result);
     previewJob.value = '';
@@ -102,6 +113,7 @@ async function poll() {
 }
 async function execute() {
   if (!preview.value || !enabled.value) return;
+  operationTarget.value = props.target;
   operationId.value = uuid();
   submitted.value = true;
   const result = await op.run(() =>
@@ -144,16 +156,23 @@ useVisiblePoll(poll, 2000);
       :error="op.error.value || previewRequest.error.value"
       :uncertain="op.uncertain.value"
     />
+    <p v-if="previewRequest.error.value && previewJob" class="notice-bar">
+      预览核验未完成，请重新核实；尚未提交删除。<button class="button small" @click="poll">
+        重试核验
+      </button>
+    </p>
     <p v-if="previewJob" class="notice-bar">
       只读核验 {{ previewRequest.data.value?.processed ?? 0 }} /
       {{ previewRequest.data.value?.total ?? '—' }} 项，尚未执行删除。
     </p>
     <TaskReceipt
       v-if="operationId"
+      :target="operationTarget"
       :id="operationId"
       kind="delete"
       @done="
         submitted = false;
+        op.reconcile(true);
         emit('done');
       "
     /><ConfirmAction

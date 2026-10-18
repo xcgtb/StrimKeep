@@ -55,18 +55,26 @@ test('theme and responsive navigation work without horizontal overflow', async (
   await expect(page.getByRole('heading', { name: '追更订阅', exact: true })).toBeVisible();
 });
 
-test('explore loads another page and subscription buttons do not open details', async ({
-  page,
-}) => {
+test('explore loads another page and manages subscriptions in details', async ({ page }) => {
   const state = await fixtures(page);
   await page.goto('/#/media/explore');
   await expect(page.locator('.poster-card')).toHaveCount(12);
+  await expect(page.locator('.poster-card').first().locator('.poster-meta span')).toHaveText([
+    '2026',
+    '剧集',
+  ]);
+  await expect(page.locator('.poster-card').nth(1).locator('.poster-meta span')).toHaveText([
+    '2025',
+    '电影',
+  ]);
   await page.getByRole('button', { name: '加载更多作品' }).click();
   await expect(page.locator('.poster-card')).toHaveCount(13);
-  await page.locator('.poster-card').first().getByRole('button', { name: '已订阅' }).click();
-  await expect(
-    page.locator('.poster-card').first().getByRole('button', { name: '追更订阅' }),
-  ).toBeVisible();
+  await expect(page.locator('.subscribe-button')).toHaveCount(0);
+  await page.locator('.poster-card').first().locator('.poster-open').click();
+  const detail = page.getByRole('dialog');
+  await detail.getByRole('button', { name: '取消追更', exact: true }).click();
+  await expect(detail.getByRole('button', { name: '添加追更订阅', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '关闭详情', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(state.writes.filter((c) => c.path === '/api/subscriptions')).toHaveLength(1);
 });
@@ -74,13 +82,15 @@ test('explore loads another page and subscription buttons do not open details', 
 test('library selection is separate from details and uses bounded pagination', async ({ page }) => {
   const state = await fixtures(page);
   await page.goto('/#/media/library');
-  await page.getByRole('button', { name: '选择对照' }).click();
+  await page.getByRole('button', { name: '多选清理' }).click();
+  await page.getByRole('button', { name: '本地库（联动源文件）', exact: true }).click();
   await page.getByRole('button', { name: '选择星际穿越', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.getByText('已选择 1 部')).toBeVisible();
   await page.getByRole('button', { name: '查看所选状态' }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
   await page.getByRole('button', { name: '关闭详情' }).click();
+  await page.getByRole('button', { name: '退出多选' }).click();
   await page.getByRole('button', { name: '查看星际穿越详情' }).click();
   await expect(page.getByRole('dialog')).toContainText('缺 6 集');
   await expect(page.getByRole('dialog')).toContainText('TMDB 已播 24 集');
