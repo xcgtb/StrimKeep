@@ -1,6 +1,6 @@
 """Authenticated Emby passthrough and exact, user-scoped source interception."""
 
-import asyncio
+import anyio
 import hashlib
 import json
 import re
@@ -310,13 +310,17 @@ async def websocket_proxy(socket: WebSocket, path: str):
                     else:
                         await socket.send_text(value)
 
-            tasks = [asyncio.create_task(upload()), asyncio.create_task(download())]
-            try:
-                await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            finally:
-                for task in tasks:
-                    task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
+            # Keep both relays inside the ASGI cancellation scope. Raw asyncio
+            # tasks can outlive it and leak cancellation during disconnect.
+            async with anyio.create_task_group() as relays:
+                async def relay(operation):
+                    try:
+                        await operation()
+                    finally:
+                        relays.cancel_scope.cancel()
+
+                relays.start_soon(relay, upload)
+                relays.start_soon(relay, download)
     except Exception:
         try:
             await socket.close(code=1011)

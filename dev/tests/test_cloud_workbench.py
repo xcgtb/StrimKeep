@@ -890,8 +890,9 @@ def test_cookie_required_playback_preserves_range_without_leaking_headers(
     )
 
 
+@pytest.mark.parametrize("attempt", range(30))
 def test_emby_websocket_relay_preserves_token_and_custom_upstream_port(
-    cloud, monkeypatch
+    cloud, monkeypatch, attempt
 ):
     import asyncio
     from contextlib import asynccontextmanager
@@ -928,6 +929,78 @@ def test_emby_websocket_relay_preserves_token_and_custom_upstream_port(
             assert socket.receive_text() == "echo:hello"
     assert calls[0][0] == "ws://emby.local:9000/emby/socket?api_key=user-token"
     assert calls[0][1]["additional_headers"]["x-emby-token"] == "user-token"
+
+
+
+@pytest.mark.parametrize("ending", ["client", "upstream", "error", "cancel"])
+def test_emby_websocket_relay_joins_both_directions(cloud, monkeypatch, ending):
+    import anyio
+    from contextlib import asynccontextmanager
+    from websockets.asyncio import client as ws_client
+
+    settings.save({"proxy_enabled": True})
+    monkeypatch.setattr(emby_proxy, "upstream", lambda: "http://emby.local:9000")
+    finished = set()
+    closes = []
+
+    async def scenario():
+        started = {name: anyio.Event() for name in ("upload", "download")}
+
+        class Socket:
+            url = SimpleNamespace(query="")
+            headers = {}
+
+            async def accept(self):
+                pass
+
+            async def receive(self):
+                started["upload"].set()
+                try:
+                    await started["download"].wait()
+                    if ending == "client":
+                        return {"type": "websocket.disconnect"}
+                    await anyio.sleep_forever()
+                finally:
+                    finished.add("upload")
+
+            async def close(self, code):
+                closes.append(code)
+
+        class RemoteSocket:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                started["download"].set()
+                try:
+                    await started["upload"].wait()
+                    if ending == "upstream":
+                        raise StopAsyncIteration
+                    if ending == "error":
+                        raise OSError("upstream disconnected")
+                    await anyio.sleep_forever()
+                finally:
+                    finished.add("download")
+
+        @asynccontextmanager
+        async def connect(*args, **kwargs):
+            try:
+                yield RemoteSocket()
+            finally:
+                finished.add("connection")
+
+        monkeypatch.setattr(ws_client, "connect", connect)
+        with anyio.fail_after(2):
+            async with anyio.create_task_group() as group:
+                group.start_soon(emby_proxy.websocket_proxy, Socket(), "socket")
+                if ending == "cancel":
+                    await started["upload"].wait()
+                    await started["download"].wait()
+                    group.cancel_scope.cancel()
+        assert finished == {"upload", "download", "connection"}
+        assert closes == ([1011] if ending == "error" else [])
+
+    anyio.run(scenario)
 
 
 def test_manual_season_episode_override_names_tv_files(cloud, monkeypatch):
