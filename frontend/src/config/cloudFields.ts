@@ -33,6 +33,22 @@ export const cloudSections: { key: string; title: string; description: string; f
           max: 86400,
         },
         {
+          key: 'strm_scan_cron',
+          label: 'STRM 全量同步（Cron，五段）',
+          hint: '留空=不排期。例如 0 0 * * * 表示每天 00:00 全量扫描所有 STRM 目录；到期后逐目录串行执行。',
+        },
+        {
+          key: 'strm_block_feiniu_ua',
+          label: '拦截飞牛媒体探测',
+          type: 'check',
+          hint: '命中 Lavf/60.3.100 的直连播放请求直接返回 403，避免刮削时反复拉流；Emby 反代不受影响。',
+        },
+        {
+          key: 'strm_scan_timezone',
+          label: '全量同步时区',
+          hint: '按这个时区解释上面的 Cron，例如 Asia/Shanghai。',
+        },
+        {
           key: 'operation_delay_seconds',
           label: '远端操作间隔（秒）',
           type: 'number',
@@ -105,8 +121,8 @@ export const cloudSections: { key: string; title: string; description: string; f
       title: '文件过滤',
       description: '用实际视频文件大小与文件名过滤，字幕和元数据跟随视频。',
       fields: [
-        { key: 'video_extensions', label: '视频扩展名（每行一个，带点）', type: 'lines' },
-        { key: 'metadata_extensions', label: '随行元数据扩展名', type: 'lines' },
+        { key: 'video_extensions', label: '视频扩展名（每行一个，带点）', type: 'chips' },
+        { key: 'metadata_extensions', label: '随行元数据扩展名', type: 'chips' },
         { key: 'min_video_mb', label: '最小视频体积（MB）', type: 'number', min: 0, max: 1000000 },
         { key: 'ignore_keywords', label: '忽略关键词', type: 'lines' },
         { key: 'ignore_regex', label: '忽略正则（每行一个）', type: 'lines' },

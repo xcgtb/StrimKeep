@@ -51,9 +51,10 @@ const fields: Field[] = [
     key: 'mode',
     label: '读取模式',
     type: 'select',
+    hint: '监控别人的公开频道请选「用户会话与历史读取」——机器人模式要求 Bot 是该频道管理员，公开频道做不到。',
     options: [
-      { value: 'bot', label: '机器人实时接收' },
-      { value: 'user', label: '用户会话与历史读取' },
+      { value: 'user', label: '用户会话与历史读取（推荐）' },
+      { value: 'bot', label: '机器人实时接收（需 Bot 是频道管理员）' },
     ],
   },
   { key: 'enabled', label: '启用频道', type: 'check' },
@@ -133,10 +134,10 @@ function edit(row?: Data) {
     : {
         name: '',
         address: '',
-        mode: 'bot',
+        mode: 'user',
         enabled: false,
         organize: false,
-        history_limit: 0,
+        history_limit: 20,
         poll_seconds: 300,
         include: [],
         exclude: [],
@@ -282,6 +283,11 @@ watch(
           <h2>编辑频道规则</h2>
           <button class="text-link" @click="draft = undefined">取消编辑</button>
         </header>
+        <p class="muted-text">
+          先填四项就能跑：<strong>频道名称</strong>、<strong>频道地址</strong>（粘
+          https://t.me/xxx 即可）、<strong>频道保存目录</strong>、<strong>读取模式</strong>。
+          关键词、正则、TMDB 筛选都可以留空，跑通后再加。
+        </p>
         <FormFields
           v-model="draft"
           :fields="fields.filter((f) => !['countries', 'genres'].includes(f.key))"

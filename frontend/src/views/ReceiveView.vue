@@ -315,22 +315,17 @@ watch(
 </script>
 <template>
   <PageHeading
-    :title="
-      shareOnly
-        ? '分享 STRM 生成与整理'
-        : tab === 'offline'
-          ? '离线转存'
-          : tab === 'bot'
-            ? '机器人接收'
-            : '链接转存'
-    "
+    :title="shareOnly ? '分享 STRM' : '资源接收'"
     :subtitle="
       shareOnly
         ? '浏览分享，直接生成到分类目录，保留分享源文件。'
-        : '接收 115 分享、磁力、ed2k 与秒传资源，核对目标后提交。'
+        : '接收 115 分享、磁力、ed2k 与秒传资源；上方切换来源方式，核对目标后提交。'
     "
   /><AccountPicker />
-  <nav v-if="shareOnly" class="module-navigation" aria-label="分享库功能">
+  <p v-if="shareOnly" class="muted-text">
+    命名模板、分类规则、输出与播放、入库核验都在「影视整理」里统一维护，这里只负责选分享、生成 STRM。点下面的入口会跳到对应设置。
+  </p>
+  <nav v-if="shareOnly" class="module-navigation" aria-label="分享库相关设置">
     <RouterLink to="/resources/share" class="current">分享生成</RouterLink>
     <RouterLink to="/organize/naming">命名模板</RouterLink>
     <RouterLink to="/settings/cloud?section=classification">分类规则</RouterLink>

@@ -1,7 +1,16 @@
 # -*- coding: utf-8 -*-
-"""统一任务总线：Web / Telegram Bot / 定时巡检共用同一份任务登记与互斥。
+"""执行槽（Execution Slot）：Web / Telegram Bot / 定时巡检共用同一份重任务占位与互斥。
 
-以前 Web 有自己的 TASKS/CURRENT，Bot 自己起线程跑扫描/清理，两边互相看不见：
+先说边界，这条最重要：
+
+    app/tasks.py（本模块）  = 执行槽。回答"现在有没有人在跑重活"。
+    app/cloud/jobs.py       = 业务任务。回答"这次转存做到哪一步了"。
+
+业务状态（排队 / 执行中 / 完成 / 失败 / 结果待核实 / 需要处理）**只存在 cloud_jobs 表**，
+本模块的 running/success/error/cancelled 仅是执行槽的占用状态，一旦进程重启就没了，
+不能当作业务进度展示给业务页面，只用于排障与互斥。
+
+历史沿革：以前 Web 有自己的 TASKS/CURRENT，Bot 自己起线程跑扫描/清理，两边互相看不见——
 Bot 发起的扫描可以和 Web 的扫描同时跑，Web 的「已有任务在执行」也拦不住 Bot。
 现在所有要遍历双库或改文件的重任务（exclusive=True）都经这里登记，同一时刻只允许一个；
 轻量只读任务（exclusive=False）只登记、不占位，方便排查。
@@ -17,6 +26,9 @@ log = logging.getLogger('strimkeep')
 MAX_KEEP = 200      # 完成态任务最多保留这么多份，超出按时间淘汰最旧的
 FINISHED_TTL = 3600  # 完成态任务保留 1 小时；运行中的任务永远不清理
 MAX_LOGS = 500
+
+# 执行槽的合法状态。业务状态见 app/cloud/states.py 的 JOB_STATES，两者不可混用。
+EXEC_STATUSES = frozenset({'running', 'success', 'error', 'cancelled'})
 
 _context = threading.local()
 
@@ -89,7 +101,12 @@ class _TaskStream:
             if len(self.task.logs) > MAX_LOGS: del self.task.logs[:100]
 
 
-class Task:
+class ExecSlot:
+    """一次重任务的执行占位。
+
+    status 只有 EXEC_STATUSES 里的四个值，且仅代表"这次占位"的结局，
+    不代表业务结果。需要业务结果时读 cloud_jobs。
+    """
     def __init__(self, kind, source='web', exclusive=True, cancellable=False):
         self.id = uuid.uuid4().hex[:12]; self.kind = kind
         self.source = source; self.exclusive = exclusive
@@ -108,6 +125,11 @@ class Task:
              'cancel_requested': self.cancel_event.is_set()}
         if with_logs: d['logs'] = self.logs[-200:]
         return d
+
+
+# 兼容别名：旧代码与测试仍可写 tasks.Task(...)；新代码请用 ExecSlot，
+# 让"执行槽"和"业务任务"在阅读时就能分开。
+Task = ExecSlot
 
 
 class TaskManager:
@@ -173,7 +195,7 @@ class TaskManager:
             # 两个请求前后脚进来能同时通过检查
             if exclusive and self.running() is not None:
                 raise TaskBusy(self.current)
-            t = Task(kind, source=source, exclusive=exclusive, cancellable=cancellable)
+            t = ExecSlot(kind, source=source, exclusive=exclusive, cancellable=cancellable)
             self.tasks[t.id] = t
             if exclusive:
                 self.current = t

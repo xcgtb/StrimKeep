@@ -4,7 +4,6 @@ import {
   KeyRound,
   Radio,
   Link2,
-  Download,
   ArrowDownUp,
   FileVideo,
   Share2,
@@ -43,11 +42,10 @@ export const navigation = [
     items: [
       { to: '/settings/accounts', name: '115 网盘配置', icon: KeyRound },
       { to: '/resources/channels', name: '115 频道监控', icon: Radio },
-      { to: '/resources/receive?tab=batch', name: '链接转存', icon: Link2 },
-      { to: '/resources/receive?tab=offline', name: '离线转存', icon: Download },
-      { to: '/organize/workspace', name: '影视整理', icon: ArrowDownUp },
+      { to: '/resources/receive', name: '资源接收', icon: Link2 },
+      { to: '/organize', name: '影视整理', icon: ArrowDownUp },
       { to: '/media/strm', name: 'STRM 生成', icon: FileVideo },
-      { to: '/resources/share', name: '分享 STRM 生成与整理', icon: Share2 },
+      { to: '/resources/share', name: '分享 STRM', icon: Share2 },
       { to: '/resources/files', name: '文件管理', icon: FolderOpen },
     ],
   },
@@ -197,8 +195,7 @@ const moduleTools = [
 ];
 const aliases: Record<string, string> = {
   '/resources/share': '免转存 分享STRM 分享 strm 生成 整理',
-  '/resources/receive?tab=batch': '资源接收 批量链接 115 转存 秒传',
-  '/resources/receive?tab=offline': '磁力 magnet ed2k 下载 离线任务',
+  '/resources/receive': '资源接收 链接转存 离线转存 批量链接 115 转存 秒传 磁力 magnet ed2k 下载 离线任务',
   '/governance/rules': '七维 画质 规则 治理 巡检',
   '/tasks/ingestion': 'Emby 入库 路径 核验 连接',
   '/tasks': '任务 进度 回执 失败 重试 继续 停止',
@@ -247,13 +244,14 @@ export function moduleName(path: string, section?: unknown) {
   return '';
 }
 export const moduleNavigation: Record<string, { to: string; name: string }[]> = {
+  // 顺序按数据流排：从哪里扫 → 什么算有效文件 → 怎么命名 → 归到哪 → 怎么择优 → 删什么 → 何时自动跑 → 跑完通知谁
   organize: [
     { to: '/organize/workspace', name: '扫描与整理' },
+    { to: '/settings/cloud?section=filters', name: '需要处理的文件类型' },
     { to: '/organize/naming', name: '命名模板' },
     { to: '/settings/cloud?section=classification', name: '归档分类' },
-    { to: '/settings/cloud?section=filters', name: '文件过滤' },
-    { to: '/organize/quality', name: '八维洗版' },
-    { to: '/settings/cloud?section=quality', name: '源文件治理' },
+    { to: '/organize/quality', name: '八维与洗版' },
+    { to: '/settings/cloud?section=quality', name: '删除与源文件处理' },
     { to: '/organize/automation', name: '自动整理' },
     { to: '/settings/cloud?section=notifications', name: '入库与通知' },
   ],
@@ -273,8 +271,9 @@ export const moduleNavigation: Record<string, { to: string; name: string }[]> = 
     { to: '/resources', name: '全部功能' },
   ],
   strm: [
+    // 「输出与播放设置」已经内嵌在 /media/strm 页面里（OutputSettings 组件），
+    // 不再单列一个跳去 /settings/cloud?section=output 的入口，避免同一份配置两个入口。
     { to: '/media/strm', name: '生成与播放引用' },
-    { to: '/settings/cloud?section=output', name: '输出与播放设置' },
     { to: '/settings/cloud?section=proxy', name: 'Emby 反代' },
   ],
   settings: [

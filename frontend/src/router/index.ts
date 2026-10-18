@@ -62,9 +62,14 @@ export const router = createRouter({
       meta: { title: '频道与机器人', group: '我的网盘' },
     },
     {
+      path: '/organize',
+      component: () => import('../views/OrganizeHubView.vue'),
+      meta: { title: '影视整理', group: '影视整理' },
+    },
+    {
       path: '/organize/workspace',
       component: () => import('../views/OrganizeView.vue'),
-      meta: { title: '媒体整理', group: '影视整理' },
+      meta: { title: '扫描与整理', group: '影视整理' },
     },
     {
       path: '/organize/naming',

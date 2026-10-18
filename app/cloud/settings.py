@@ -57,6 +57,12 @@ DEFAULTS = {
     "video_extensions": sorted(VIDEO),
     "metadata_extensions": sorted(SIDECAR),
     "min_video_mb": 0,
+    # STRM 全量同步（定时）：空字符串=不排期；last_run 由调度器回写
+    "strm_scan_cron": "",
+    "strm_scan_timezone": "Asia/Shanghai",
+    "strm_scan_last_run": 0,
+    # 飞牛媒体探测拦截：命中 Lavf/60.3.100 的直连播放请求返回 403（不含 Emby 反代）
+    "strm_block_feiniu_ua": True,
     "ignore_keywords": [],
     "ignore_regex": [],
     "quality8_enabled": False,

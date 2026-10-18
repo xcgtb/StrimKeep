@@ -225,11 +225,13 @@ def dashboard():
 
 @router.get('/api/tasks/recent', dependencies=[Depends(auth)])
 def api_tasks_recent():
+    """执行槽历史（排障用）。业务进度请看 /api/cloud/jobs。"""
     return {'status': 'success', 'items': tasks.manager.recent()}
 
 
 @router.get('/api/task/{tid}', dependencies=[Depends(auth)])
 def get_task(tid: str):
+    """单个执行槽的占用状态（排障用），不是业务任务进度。"""
     t = tasks.manager.get(tid)
     if not t:
         from app import task_history
@@ -242,6 +244,7 @@ def get_task(tid: str):
 
 @router.post('/api/task/{tid}/cancel', dependencies=[Depends(auth)])
 def cancel_task(tid: str):
+    """请求取消一个执行槽（排障用）；业务任务停止请用 /api/cloud/jobs/{id}/stop。"""
     try:
         task, accepted = tasks.manager.cancel(tid)
     except KeyError:

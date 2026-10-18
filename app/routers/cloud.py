@@ -219,26 +219,9 @@ def check_open(account_id: str):
 
 @router.delete("/accounts/{account_id}")
 def disconnect(account_id: str):
-    with store.db() as con:
-        active = con.execute(
-            "SELECT 1 FROM cloud_jobs j WHERE state IN ('queued','running') AND "
-            "(json_extract(payload,'$.account_id')=? OR EXISTS (SELECT 1 FROM cloud_plans p "
-            "WHERE p.id=json_extract(j.payload,'$.plan_id') AND p.account_id=?))",
-            (account_id, account_id),
-        ).fetchone()
-        if active:
-            raise HTTPException(409, "账号有未完成任务，请先处理任务")
-        con.execute("DELETE FROM cloud_accounts WHERE id=?", (account_id,))
-        con.execute("DELETE FROM cloud_directory_settings WHERE account_id=?", (account_id,))
-        con.execute("DELETE FROM cloud_media_probes WHERE account_id=?", (account_id,))
-        con.execute(
-            "UPDATE cloud_assets SET state='disconnected' WHERE account_id=?",
-            (account_id,),
-        )
-        con.execute(
-            "UPDATE cloud_rules SET enabled=0 WHERE json_extract(payload,'$.account_id')=?",
-            (account_id,),
-        )
+    if store.account_has_active_jobs(account_id):
+        raise HTTPException(409, "账号有未完成任务，请先处理任务")
+    store.disconnect_account(account_id)
     return {"status": "success"}
 
 
@@ -338,7 +321,7 @@ def channel_save(account_id:str,body:dict):
 
 @router.delete("/accounts/{account_id}/channels/{channel_id}")
 def channel_delete(account_id:str,channel_id:str):
-    with store.db() as con:con.execute("DELETE FROM cloud_channels WHERE id=? AND account_id=?",(channel_id,account_id))
+    store.delete_channel(account_id, channel_id)
     return {"status":"success"}
 
 
@@ -581,11 +564,7 @@ def continue_transfer(job_id: str, body: dict):
 
 @router.post("/jobs/{job_id}/cancel")
 def cancel_job(job_id: str):
-    with store.db() as con:
-        changed = con.execute(
-            "UPDATE cloud_jobs SET state='cancelled',updated=? WHERE id=? AND state='queued'",
-            (time.time(), job_id),
-        ).rowcount
+    changed = store.cancel_queued_job(job_id)
     if not changed:
         raise HTTPException(409, "任务已开始，写入不能直接中断")
     return {"status": "success"}
@@ -673,17 +652,7 @@ def refresh_emby():
 
 @router.get("/rules")
 def rules():
-    with store.db() as con:
-        rows = con.execute(
-            "SELECT id,payload,enabled,next_run FROM cloud_rules ORDER BY updated DESC"
-        ).fetchall()
-    return {
-        "status": "success",
-        "items": [
-            {"id": r[0], **json.loads(r[1]), "enabled": bool(r[2]), "next_run": r[3]}
-            for r in rows
-        ],
-    }
+    return {"status": "success", "items": store.list_rules()}
 
 
 @router.post('/jobs/{job_id}/upgrades/continue')
@@ -696,12 +665,7 @@ def continue_upgrades(job_id: str, body: dict):
         raise HTTPException(409, '请等待原任务结束并核对洗版记录')
     result = call(replacement.complete, job_id)
     refresh_pending = not workflow.refresh_emby()
-    with store.db() as con:
-        current = con.execute('SELECT result FROM cloud_jobs WHERE id=?', (job_id,)).fetchone()
-        payload = json.loads(current[0])
-        payload['upgrades'] = result
-        payload['refresh_pending'] = refresh_pending
-        con.execute('UPDATE cloud_jobs SET result=?,updated=? WHERE id=?', (store.encode(payload), time.time(), job_id))
+    store.append_job_result(job_id, {'upgrades': result, 'refresh_pending': refresh_pending})
     return {'status': 'success', 'upgrades': result, 'refresh_pending': refresh_pending}
 
 
@@ -727,17 +691,7 @@ def save_rule(body: RuleInput):
     rid = store.ident()
     payload = body.model_dump()
     payload["account_revision"] = account["revision"]
-    with store.db() as con:
-        con.execute(
-            "INSERT INTO cloud_rules VALUES(?,?,?,?,?)",
-            (
-                rid,
-                store.encode(payload),
-                int(body.enabled),
-                due,
-                time.time(),
-            ),
-        )
+    store.save_rule(rid, payload, body.enabled, due)
     return {"status": "success", "id": rid, "next_run": due}
 
 
@@ -750,8 +704,7 @@ def preview_schedule(body: ScheduleInput):
 
 @router.delete("/rules/{rule_id}")
 def delete_rule(rule_id: str):
-    with store.db() as con:
-        con.execute("DELETE FROM cloud_rules WHERE id=?", (rule_id,))
+    store.delete_rule(rule_id)
     return {"status": "success"}
 
 
@@ -759,26 +712,37 @@ def delete_rule(rule_id: str):
 def enable_rule(rule_id: str, body: dict):
     if set(body) != {"enabled"} or not isinstance(body["enabled"], bool):
         raise HTTPException(400, "请填写 enabled 布尔值")
-    with store.db() as con:
-        row = con.execute("SELECT payload FROM cloud_rules WHERE id=?", (rule_id,)).fetchone()
-        if not row:
-            raise HTTPException(404, "规则不存在")
-        payload = json.loads(row[0])
-        account = con.execute("SELECT revision FROM cloud_accounts WHERE id=?", (payload["account_id"],)).fetchone()
-        if body["enabled"] and (not account or account[0] != payload["account_revision"]):
-            raise HTTPException(409, "账号授权已变化，请重新创建规则")
-        due = call(schedules.next_run, payload, time.time()) if body["enabled"] else time.time()
-        payload.pop("schedule_error", None)
-        con.execute("UPDATE cloud_rules SET enabled=?,next_run=?,updated=?,payload=? WHERE id=?", (int(body["enabled"]), due, time.time(), store.encode(payload), rule_id))
+    payload = store.rule_payload(rule_id)
+    if payload is None:
+        raise HTTPException(404, "规则不存在")
+    revision = store.account_revision(payload["account_id"])
+    if body["enabled"] and revision != payload["account_revision"]:
+        raise HTTPException(409, "账号授权已变化，请重新创建规则")
+    due = call(schedules.next_run, payload, time.time()) if body["enabled"] else time.time()
+    payload.pop("schedule_error", None)
+    store.update_rule_enabled(rule_id, body["enabled"], due, payload)
     return {"status": "success", "enabled": body["enabled"]}
+
+
+# 飞牛 OS 的媒体信息探测：版本号精确匹配，避免把普通 ffmpeg 播放器一起挡掉。
+FEINIU_PROBE_UA = 'Lavf/60.3.100'
+
+
+def is_probe_request(user_agent, enabled=True):
+    """是否为飞牛媒体探测请求（纯函数，便于单测）。"""
+    return bool(enabled) and FEINIU_PROBE_UA.lower() in (user_agent or '').lower()
 
 
 @play_router.api_route("/play/{asset_id}", methods=["GET", "HEAD"])
 async def play(
     asset_id: str, request: Request, sig: str = Query(min_length=64, max_length=64)
 ):
-    from app.cloud import playback
+    from app.cloud import playback, settings as cloud_settings
 
+    # 只拦这一个直连播放端点；Emby 反代不经过这里，不受影响。
+    if is_probe_request(request.headers.get('user-agent'),
+                        cloud_settings.get().get('strm_block_feiniu_ua', True)):
+        raise HTTPException(403, '探测请求已拦截')
     try:
         return await playback.serve(request, asset_id, sig)
     except CloudError as error:

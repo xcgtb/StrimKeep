@@ -188,7 +188,20 @@ def gov_auto_update(body: dict) -> dict:
 
 
 # ═══════════════════ 主循环 ═══════════════════
+def _tick_strm_scan(now: float):
+    """STRM 全量同步的定时检查。惰性导入，避免 cloud 层与 scheduler 的导入环。"""
+    try:
+        from app.cloud import settings as _cloud_settings, strm_scan
+
+        queued = strm_scan.tick(_cloud_settings.get(), now)
+        if queued:
+            engine.log.info('STRM 定时全量同步：已投递 %d 个目录', len(queued))
+    except Exception as error:  # 定时任务失败不能拖垮整个调度循环
+        engine.log.warning('STRM 定时全量同步检查失败: %s', error)
+
+
 def _tick(now: float):
+    _tick_strm_scan(now)
     """每 30 秒一次，决定是否触发：入库缓存刷新 / 订阅检查 / 巡检 / 晨报预扫 / 晨报发送"""
     cfg = _cfg.load_config()
 

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { useId } from 'vue';
 import type { Data } from '../api/domain';
+import ChipList from './ChipList.vue';
 export interface Field {
   key: string;
   label: string;
-  type?: 'text' | 'secret' | 'number' | 'check' | 'lines' | 'area' | 'select';
+  type?: 'text' | 'secret' | 'number' | 'check' | 'lines' | 'area' | 'select' | 'chips';
   options?: { value: string; label: string }[];
   min?: number;
   max?: number;
@@ -26,6 +27,13 @@ function set(field: Field, event: Event) {
       .map((s) => s.trim())
       .filter(Boolean);
   emit('update:modelValue', { ...props.modelValue, [field.key]: value });
+}
+function chipValue(field: Field): string[] {
+  const v = props.modelValue[field.key];
+  return Array.isArray(v) ? (v as string[]) : [];
+}
+function setChips(field: Field, next: string[]) {
+  emit('update:modelValue', { ...props.modelValue, [field.key]: next });
 }
 function value(field: Field) {
   const v = props.modelValue[field.key];
@@ -64,7 +72,12 @@ function value(field: Field) {
           <option v-for="option in field.options" :key="option.value" :value="option.value">
             {{ option.label }}
           </option></select
-        ><textarea
+        ><ChipList
+          v-else-if="field.type === 'chips'"
+          :model-value="chipValue(field)"
+          :disabled="disabled || field.disabled"
+          @update:model-value="setChips(field, $event)"
+        /><textarea
           v-else-if="field.type === 'area' || field.type === 'lines'"
           :id="`${prefix}-${field.key}`"
           :aria-label="field.label"

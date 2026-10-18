@@ -1,65 +1,205 @@
-# StrimKeep 1.0.0 架构
+# StrimKeep 架构
 
-单 Docker 容器运行 FastAPI，端口 8321。前端没有构建流程；原生 JavaScript 按显式顺序 defer 加载。SQLite 是配置、缓存、订阅、治理计划及日志唯一写入存储。
+> 本文以源码为准。若与代码不符，改文档，不要改代码来迁就文档。
+> 最后核对：v1.5.16 / 2026-10-19
 
-```mermaid
-flowchart TD
-    Web["HTML / CSS / JavaScript"] --> Routes["FastAPI 路由"]
-    Routes --> Tasks["任务协调与取消"]
-    Bot["Telegram Bot"] --> Tasks
-    Schedule["后台调度"] --> Tasks
-    Tasks --> Gov["治理编排与计划复核"]
-    Gov --> Domain["纯规则：画质与完整性"]
-    Gov --> Cleanup["NAS / CD2 文件清理"]
-    Routes --> Library["片库事实 / 订阅 / 入库"]
-    Library --> External["Emby / TMDB"]
-    Library --> Store["SQLite 状态与缓存"]
-    Gov --> Store
-    Tasks --> Logs["实时日志 / 清理存档"]
-    Logs --> Store
+---
+
+## 一、运行形态
+
+单个 Docker 容器，FastAPI + uvicorn，端口 **8321**。
+
+```
+浏览器 ──HTTP──> uvicorn(单进程) ──> FastAPI 路由 ──> 云盘域 / 纯规则 ──> SQLite
+                                          │
+                                          ├──> Telegram Bot（同进程，长轮询）
+                                          └──> 后台调度线程（30 秒一拍）
 ```
 
-| 代码位置 | 职责 |
-| --- | --- |
-| `app/main.py`、`routers/` | 服务生命周期、静态资源、认证及按页面分组的 HTTP 接口 |
-| `app/tasks.py`、`scheduler.py`、`bot.py` | 已注册重任务互斥与取消、定时任务和 Bot |
-| `app/engine.py`、`compat.py` | 共享配置、缓存、路径与锁；现有业务及 CLI 名称的兼容入口 |
-| `app/domain/quality.py`、`domain/governance.py` | 不依赖 IO 的画质与治理规则 |
-| `app/core.py` | 名称、季号、集号解析与规则兼容转发 |
-| `app/governance.py`、`plan_guard.py` | 扫描、计划、规则指纹、文件身份复核与执行 |
-| `app/lib.py`、`wash.py`、`cloud_residue.py` | STRM 索引、NAS 与 CD2 删除、附属文件及目录处理 |
-| `app/morning.py`、`subscribe.py`、`ingest.py`、`stats.py` | 同源片库事实、健康和缺集、订阅变化、入库汇报与晨报 |
-| `app/emby.py`、`tmdb.py`、`tg.py` | 外部服务访问 |
-| `app/config.py`、`security.py` | 配置与会话、同源校验 |
-| `app/storage.py`、`state_store.py` | SQLite 事务、计划、缓存与旧 JSON 一次迁移 |
-| `app/runtime_logs.py`、`logger.py`、`storage_status.py` | 滚动运行日志、清理结果存档和存储错误诊断 |
-| `static/js/runtime.js`、`modal.js`、`icons.js` | API、任务提示与取消、主题、海报与公共交互 |
-| `static/js/dashboard.js`、`dashboard-layout.js` | 总览和顶部运行状态弹层 |
-| `static/js/governance.js`、`directory-cleanup.js`、`plans.js` | 治理、目录清理及计划存档 |
-| `static/js/mapping.js`、`explore.js` | 片库映射、探索、海报预取与滚动 |
-| `static/js/subscriptions.js`、`records.js`、`settings.js` | 订阅、晨报、入库、日志与设置 |
-| `static/js/bootstrap.js`、`theme-meta.js` | 初始化与状态栏颜色 |
+- 进程数：1（没有 gunicorn / 多 worker）
+- 并发主力：**线程**，不是进程
+- 业务数据主存储：SQLite（`/data/state/strimkeep.db`）
+- 配置：`/data/state/config.json`（环境变量可覆盖，见 `app/config.py`）
 
-## 数据与删除边界
+---
 
-`/data/state/strimkeep.db` 保存运行数据。历史 JSON/JSONL 只在第一次迁移时读取，成功标记后不再参与主读或双写。历史必填 `docs.version` 结构兼容升级，未知额外列与已有数据保留。
+## 二、请求链路（从点击到落库）
 
-本地库删除 NAS STRM 和附属文件，并经 CD2 清理对应 115 源及附属文件；分享库只清理 NAS。媒体清理不产生特殊备份。逐季策略仅处理选中季，其他季不动，主目录仅在为空时清理。目录清理跳过有 STRM、视频、未知文件或链接的目录；失败显示原因。
+```
+frontend/src/views/*.vue
+   └─ frontend/src/api/{client,domain,media}.ts      ← 统一请求封装
+        └─ app/routers/*.py                          ← 只做校验 + 鉴权 + 派发
+             ├─ 轻任务：直接调用 app/cloud/* 或根目录业务模块
+             └─ 重任务：app/cloud/jobs.enqueue() → 落库 → 返回 job_id
+                  └─ jobs._loop() 取出 → jobs.execute(job_id)
+                       └─ jobs.step(job_id, key, payload, fn)  ← 每一步单独记状态
+                            └─ app/cloud/store.py → SQLite
+```
 
-实时日志约保留 10,000 条，日志页面保留最近 500 行并每 2 秒增量刷新；切页或隐藏暂停。治理清理的结构化存档不随实时日志回收。顶部运行状态每 15 秒读取进程内状态，不扫描媒体或探测远端服务。
+**两条硬规则：**
 
-## 当前边界与后续改进
+1. **路由不写业务。** `app/routers/` 里只允许：参数校验、`deps.auth` 鉴权、`deps.spawn` 或 `jobs.enqueue` 派发。
+2. **写操作必须有 job。** 任何会改远端或改文件的操作，都要走 `jobs`，否则没有停止点和回执。
 
-前后端文件边界已经拆分，但前端全局调用、engine 的共享可变缓存仍存在。任务协调只覆盖已注册重任务，轻量接口与部分后台缓存有自己的刷新逻辑。后续可逐步收拢页面状态和缓存生命周期；不必为了单容器 NAS 工具立即拆微服务。
+---
 
-大库 TMDB 对照时仍会有短期资源占用，缓存聚合后内存是否回落需在真实 NAS 观察。DOM 替身测试不代替手机浏览器视觉验收；实际挂载权限、115 延迟、网络和反代需要部署验证。
+## 三、并发模型：三层，各管一件事
 
-## 海报与连续结果流
+| 层 | 载体 | 职责 | 状态存在哪 |
+|---|---|---|---|
+| **HTTP** | uvicorn 主线程池 | 收请求、立刻返回 | 无 |
+| **执行槽** | `app/tasks.py` 的 `ExecSlot` / `TaskManager` | 重任务**互斥**、取消信号、日志流 | 内存（`MAX_KEEP=200`，完成态 `FINISHED_TTL=3600`） |
+| **业务任务** | `app/cloud/jobs.py` + `cloud_jobs` 表 | 排队、步骤、进度、停止、回执 | **SQLite** |
+| **定时** | `app/scheduler.py` | 入库检查 / TMDB 预热 / 追更 / 巡检 / 晨报 | `kv` + `sub_state` |
 
-探索接口分页与可见卡片数量分别管理：按实际列数追加整行，尾部不足一行的条目保留到下一批，只有到最终页才展示真实尾数；跨页按媒体类型与 TMDB 标识去重。已有卡片仅更新变动的状态标记，追加不重建前面的图片。
+### ⚠️ 两个"任务"不是一回事
 
-探索预取下一数据页，并只预热下一屏的最多 12 张图片；省流量模式不主动预热。返回同一筛选在 3 分钟内复用已加载列表、页游标与滚动位置；切页或更换筛选会中止前端旧请求，后台已启动的缓存任务仍按原有时限完成。
+这是全项目最容易混淆的地方，改代码前先分清：
 
-公网海报使用浏览器懒加载，屏幕内图片提升加载优先级。鉴权海报在距离屏幕约 600px 内开始加载，页面间共用 6 个加载槽，同一地址合并请求；浏览器缓存定期限制在约 120 张，对象 URL 在加载、解码完成或失败时释放。更换筛选后移除失效的观察节点。
+| | **执行槽 ExecSlot**（`app/tasks.py`） | **业务任务 Job**（`cloud_jobs` + `app/cloud/states.py`） |
+|---|---|---|
+| 状态词 | `running` / `success` / `error` / `cancelled`（`EXEC_STATUSES`） | `queued` / `running` / `success` / `stopped` / `failed` / `uncertain` / `needs_review`（`JOB_STATES`） |
+| 生命周期 | 进程内，1 小时后淘汰 | 永久，重启还在 |
+| 回答什么问题 | "现在有没有人在跑重活？" | "这次转存做到哪一步了？" |
+| 前端该展示谁 | 只在排障页 | **业务页面一律用它** |
 
-映射读取缓存时保留当前墙，收到新结果后再替换；失败保留旧列表并提示原因，过时请求不能覆盖后来的结果。此轮不改变片库事实统计、TMDB 对照或治理删除逻辑。
+**约定：`cloud_jobs` 是业务状态的唯一来源。** `tasks.Task` 只是执行许可。
+
+`app/cloud/jobs.py` 的注释就是纪律本身：
+
+> `"""Durable queue backed by the existing task manager; never replay uncertain writes."""`
+
+**`uncertain` 绝不重放。** 写操作结果未知时，宁可停在 `needs_review` 让人看，也不要自动重试。
+
+---
+
+## 四、任务状态机
+
+```
+enqueue
+   │
+   ▼
+ queued ──request_stop──> stopped
+   │
+   ▼ (jobs.execute)
+ running ──checkpoint()──> stopped（安全边界停止，不硬断）
+   │
+   ├── 成功 + 无遗留  ──> success
+   ├── 有错误项       ──> needs_review
+   ├── 写结果未知     ──> uncertain   ← 永不自动重放
+   └── 抛异常         ──> failed
+```
+
+配套表：
+
+| 表 | 作用 | 关键约束 |
+|---|---|---|
+| `cloud_jobs` | 任务主体 | `id` 主键，`state` 文本 |
+| `cloud_steps` | 步骤级状态 | `(job_id, step_key)` 主键 |
+| `cloud_job_due` | 延迟 / 子任务 | `UNIQUE(origin_job, file_id)` ← 幂等钉在这 |
+| `cloud_job_controls` | 停止请求 | `stop_requested` |
+| `cloud_progress` | 进度 | 每 job 一行 |
+
+停止不是杀线程：`request_stop()` 置标志 → 执行侧在 `checkpoint()` 处抛出 `JobStopped` → 停在**安全边界**。
+
+---
+
+## 五、存储三平面
+
+| 平面 | 内容 | 位置 | 谁写 |
+|---|---|---|---|
+| **配置** | 账号、路径、阈值、规则开关 | `config.json`（+ `cloud_service_settings` 等表） | `app/config.py`、`app/cloud/settings.py` |
+| **业务状态** | 任务、步骤、资产、入库、删除、播放 | `strimkeep.db` | `app/cloud/store.py`、`app/storage.py` |
+| **产物** | STRM 文件、海报缓存、清理存档 | 文件系统（`S_ROOT` / `L_ROOT` / `CLOUD_L_ROOT`） | `app/cloud/strm.py`、`app/lib.py` |
+
+历史 JSON/JSONL 只在第一次迁移时读取，成功标记后不再参与主读或双写；未知额外列与已有数据保留。
+
+### 删除边界（重要）
+
+- **本地库**：删 NAS STRM 与附属文件，并经 CD2 清理对应 115 源
+- **分享库**：只清 NAS，不动云端
+- 逐季策略只处理选中季；主目录仅在为空时清理
+- 目录清理跳过含 STRM / 视频 / 未知文件 / 链接的目录
+- 媒体清理不产生特殊备份 —— 所以 `cloud_deletions` 必须留回执
+
+### 日志边界
+
+实时日志约保留 10,000 条；日志页保留最近 500 行，每 2 秒增量刷新，切页或隐藏暂停。治理清理的结构化存档不随实时日志回收。顶部运行状态每 15 秒读进程内状态，不扫描媒体、不探测远端。
+
+---
+
+## 六、目录职责
+
+### 后端
+
+| 路径 | 职责 |
+|---|---|
+| `app/main.py` | 应用装配、生命周期、静态挂载、CD2 看门狗 |
+| `app/routers/` | 8 个路由模块：`auth` `system` `governance` `library` `subscribe` `settings` `upstream` `cloud` |
+| `app/routers/deps.py` | 鉴权 / 会话 Cookie / `spawn()` 派发 / 公共常量 |
+| `app/cloud/` | 网盘域（40 个模块）：账号、频道、转存、整理、STRM、发布、入库、删除、恢复 |
+| `app/domain/` | **纯规则，零 IO**：`quality.py`（画质）、`governance.py`（治理判定） |
+| `app/tasks.py` | 执行槽：互斥、取消、日志流 |
+| `app/scheduler.py` | 定时编排（`TICK_SEC=30`，启动延迟 15 秒） |
+| `app/cloud/jobs.py` | 任务编排：`enqueue` / `step` / `checkpoint` / `progress` / `execute` |
+| `app/cloud/states.py` | **业务任务状态词表**：`JOB_STATES`、`JOB_STATE_LABELS`、`ACTIVE/TERMINAL_JOB_STATES` |
+| `app/cloud/pacing.py` | **频道轮询节奏**（纯计算、无依赖）：`next_poll_delay`、`flood_wait_seconds`、`ChannelFloodWait` |
+| `app/cloud/channel_reader.py` | 频道读取：Telegram 会话、增量游标、限流退避、积压排空 |
+| `app/cloud/store.py` | 云端域全部表结构与访问函数 |
+| `app/storage.py` / `state_store.py` | SQLite 事务、计划存档、缓存、旧 JSON 迁移 |
+| `app/config.py` | 配置读写、环境变量覆盖 |
+| `app/engine.py` / `compat.py` | **兼容导出层**（207 个旧名字），见第七节 |
+| `app/morning.py` `governance.py` `subscribe.py` `wash.py` `bot.py` `ingest.py` `stats.py` `tmdb.py` `emby.py` `lib.py` `core.py` | 根目录业务模块：片库健康、治理执行、追更、洗版、Bot、入库、报表、外部服务 |
+| `app/emby_events.py` `overview.py` `activity_stream.py` `runtime_logs.py` | 事件、总览、活动流、运行日志 |
+
+### 前端
+
+| 路径 | 职责 |
+|---|---|
+| `frontend/src/views/` | 页面：`DashboardView` `CloudSettingsView` `OrganizeView` `LibraryView` `GovernanceView` `ExploreView` … |
+| `frontend/src/api/` | `client.ts`（请求 / 错误）、`domain.ts`、`media.ts` |
+| `frontend/src/stores/` | Pinia：`cloud` `session` `subscriptions` `tasks` `ui` |
+| `frontend/src/composables/` | `useRequest` `useOperation` `useVisiblePoll` `useActivityUpdates` `useLibraryUpdates` `useCloudSettingsDraft` `format` |
+| `frontend/src/router/` `layouts/` `components/` | 路由、布局、组件 |
+| `frontend/src/config/` `types/` `styles/` | 常量、类型、样式 |
+| `static/` | **Vite 构建产物，不要手改** |
+
+**构建约定**：`frontend/vite.config.ts` 里 `base='/static/'`、`build.outDir='../static'`。后端把 `/static` 挂到仓库根 `static/` 目录（`app/routers/deps.py` 的 `STATIC_DIR`）。
+
+所以：**改前端 → `cd frontend && npm run build` → 产物落到 `static/` → 刷新页面。** 不存在 `static/js/*.js` 这种手写脚本。
+
+---
+
+## 七、兼容导出层（迁移中的结构）
+
+`app/engine.py`（362 行）+ `app/compat.py`（88 行）把 **207 个旧名字**重新导出，让老测试与 CLI 继续用 `engine.xxx`。
+
+这是绞杀者模式的垫片，**不是设计目标**。`dev/tests/test_architecture_boundaries.py` 锁住了这 207 个导出。
+
+**纪律：**
+
+- 新增功能**禁止**往 `engine` 加导出
+- 每次功能 PR，导出数量应**净减少**；改动涉及的旧导出顺手删掉
+- 删导出时同步删对应测试行
+
+目标：让 `engine` 变成薄转发，最终消失。
+
+---
+
+## 八、已知边界
+
+- 前端全局调用与 `engine` 共享可变缓存仍存在
+- 任务协调只覆盖已注册重任务；轻量接口与部分后台缓存有各自刷新逻辑
+- 大库 TMDB 对照仍有短期资源占用，缓存聚合后内存是否回落在真实 NAS 观察
+- DOM 替身测试不代替手机浏览器视觉验收；挂载权限、115 延迟、反代需部署验证
+- 单容器是刻意选择：不需要为 NAS 工具拆微服务
+
+---
+
+## 九、改代码前的三问
+
+1. **这是规则还是流程？** 规则进 `app/domain/`（可单测、零 IO）；流程进 `app/cloud/`
+2. **它会改远端或改文件吗？** 会 → 必须 `jobs.enqueue`，并给 `checkpoint()`
+3. **它的幂等键是什么？** 写之前先定 `UNIQUE(...)`，不要靠"先查后插"
+
+具体步骤见 `docs/ADDING_A_FEATURE.md`。

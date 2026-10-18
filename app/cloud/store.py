@@ -5,6 +5,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from app import storage
+from app.cloud import states
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS cloud_accounts (
@@ -281,10 +282,53 @@ def _job_activity(con, values):
         elif attention:
             a['label'] = '后续结果待核实'
         else:
-            a['label'] = {'queued': '等待定时执行' if value.get('due') else '等待执行',
-                          'running': '执行中', 'success': '已完成', 'stopped': '已安全停止',
-                          'cancelled': '已取消'}.get(value['state'], value['state'])
+            # 展示文案统一由 states 模块提供，避免状态词在多个文件里各写一遍。
+            a['label'] = ('等待定时执行' if value.get('due') else '等待执行'
+                          ) if value['state'] == 'queued' else states.JOB_STATE_LABELS.get(
+                              value['state'], value['state'])
         value['activity'] = a
+
+
+def account_has_active_jobs(account_id):
+    """账号是否还有排队或执行中的任务 —— 断开账号前的安全检查。
+
+    除了 payload.account_id，还要按 plan_id 反查：一个任务可能是用该账号创建的计划发起的。
+    """
+    with db() as con:
+        row = con.execute(
+            "SELECT 1 FROM cloud_jobs j WHERE state IN ('queued','running') AND "
+            "(json_extract(payload,'$.account_id')=? OR EXISTS (SELECT 1 FROM cloud_plans p "
+            "WHERE p.id=json_extract(j.payload,'$.plan_id') AND p.account_id=?)) LIMIT 1",
+            (account_id, account_id),
+        ).fetchone()
+    return row is not None
+
+
+def disconnect_account(account_id):
+    """断开账号：删除账号及其目录设置与探测缓存，资产标记 disconnected，规则停用。
+
+    调用方必须先确认没有未完成任务（见 account_has_active_jobs）。
+    保留 cloud_jobs / cloud_steps 等历史记录，便于事后追溯。
+    """
+    with db() as con:
+        con.execute("DELETE FROM cloud_accounts WHERE id=?", (account_id,))
+        con.execute("DELETE FROM cloud_directory_settings WHERE account_id=?", (account_id,))
+        con.execute("DELETE FROM cloud_media_probes WHERE account_id=?", (account_id,))
+        con.execute("UPDATE cloud_assets SET state='disconnected' WHERE account_id=?", (account_id,))
+        con.execute(
+            "UPDATE cloud_rules SET enabled=0 WHERE json_extract(payload,'$.account_id')=?",
+            (account_id,),
+        )
+
+
+def delete_channel(account_id, channel_id):
+    """删除某个账号下的频道；account_id 参与条件，防止跨账号误删。"""
+    with db() as con:
+        affected = con.execute(
+            "DELETE FROM cloud_channels WHERE id=? AND account_id=?",
+            (channel_id, account_id),
+        ).rowcount
+    return affected
 
 
 def asset(asset_id):
@@ -303,3 +347,62 @@ def asset(asset_id):
     )
     result["payload"] = json.loads(result["payload"])
     return result
+
+
+def cancel_queued_job(job_id, now=None):
+    """取消尚未开始的任务；返回受影响行数（0 表示已经开始，不能中断）。"""
+    with db() as con:
+        return con.execute(
+            "UPDATE cloud_jobs SET state='cancelled',updated=? WHERE id=? AND state='queued'",
+            (time.time() if now is None else now, job_id),
+        ).rowcount
+
+
+def list_rules():
+    with db() as con:
+        rows = con.execute(
+            "SELECT id,payload,enabled,next_run FROM cloud_rules ORDER BY updated DESC"
+        ).fetchall()
+    return [{"id": r[0], **json.loads(r[1]), "enabled": bool(r[2]), "next_run": r[3]} for r in rows]
+
+
+def append_job_result(job_id, updates):
+    """把若干键合并进 cloud_jobs.result，返回合并后的完整结果。"""
+    with db() as con:
+        row = con.execute('SELECT result FROM cloud_jobs WHERE id=?', (job_id,)).fetchone()
+        payload = json.loads(row[0]) if row and row[0] else {}
+        payload.update(updates)
+        con.execute('UPDATE cloud_jobs SET result=?,updated=? WHERE id=?',
+                    (encode(payload), time.time(), job_id))
+    return payload
+
+
+def save_rule(rule_id, payload, enabled, due, now=None):
+    with db() as con:
+        con.execute("INSERT INTO cloud_rules VALUES(?,?,?,?,?)",
+                    (rule_id, encode(payload), int(enabled), due,
+                     time.time() if now is None else now))
+
+
+def delete_rule(rule_id):
+    with db() as con:
+        return con.execute("DELETE FROM cloud_rules WHERE id=?", (rule_id,)).rowcount
+
+
+def rule_payload(rule_id):
+    with db() as con:
+        row = con.execute("SELECT payload FROM cloud_rules WHERE id=?", (rule_id,)).fetchone()
+    return json.loads(row[0]) if row else None
+
+
+def account_revision(account_id):
+    with db() as con:
+        row = con.execute("SELECT revision FROM cloud_accounts WHERE id=?", (account_id,)).fetchone()
+    return row[0] if row else None
+
+
+def update_rule_enabled(rule_id, enabled, due, payload, now=None):
+    with db() as con:
+        con.execute(
+            "UPDATE cloud_rules SET enabled=?,next_run=?,updated=?,payload=? WHERE id=?",
+            (int(enabled), due, time.time() if now is None else now, encode(payload), rule_id))
