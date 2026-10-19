@@ -369,7 +369,7 @@ onBeforeUnmount(() => void cancelQR());
     :title="confirmation === 'disconnect' ? '断开账号' : '确认维护操作'"
     :description="
       confirmation === 'disconnect'
-        ? '断开当前账号并停用相关定时规则，已有播放引用会被标记断开。'
+        ? '断开会删除此账号已保存的目录配置、服务连接（包括 Emby、Telegram）、频道规则及读取进度，并停用定时规则；已有播放引用会被标记断开。重新授权后需要重新配置这些设置。已完成任务的历史记录保留。'
         : confirmation === 'maintenance-save'
           ? '保存账号维护配置；开启回收站自动清理后，将按保留天数永久删除符合条件的条目。'
           : confirmation === 'recycle'

@@ -80,6 +80,7 @@ class TransferInput(BaseModel):
     file_ids: list[str] = Field(min_length=1, max_length=100)
     target_cid: str = Field(pattern=r"^[0-9]{1,25}$")
     organize_target: str | None = None
+    directory_revision: int | None = None
     generate: bool = True
     confirmed: bool = False
 
@@ -120,6 +121,7 @@ class SyncInput(AccountInput):
     source_cid: str = Field(pattern=r"^[0-9]{1,25}$")
     confirmed: bool = False
     overrides: dict[str, MediaChoice] = Field(default_factory=dict, max_length=2000)
+    reconcile: bool | None = None
 
 
 class ScheduleInput(BaseModel):
@@ -247,13 +249,14 @@ def share_preview(body: ShareInput):
 @router.post("/transfers", status_code=202)
 def transfer(body: TransferInput):
     job_id = call(
-        workflow.transfer_submit,
+        workflow.transfer_from_saved,
         body.preview_id,
         body.file_ids,
         body.target_cid,
         body.confirmed,
         body.organize_target,
         body.generate,
+        body.directory_revision,
     )
     return {"status": "success", "job_id": job_id}
 
@@ -414,6 +417,7 @@ def sync(body: SyncInput):
     call(pipeline.output_ready)
     payload = body.model_dump()
     payload["account_revision"] = account["revision"]
+    payload['reconcile'] = body.reconcile if body.reconcile is not None else settings.get()['strm_reconcile_enabled']
     return {"status": "success", "job_id": call(jobs.enqueue, "sync", payload)}
 
 
@@ -583,8 +587,9 @@ def browse_output_directories(path: str = Query('', max_length=4096)):
 
 @router.get("/settings")
 def get_settings():
-    from app.cloud import media_probe
-    return {"status": "success", "settings": call(settings.get), "capabilities": {"ffprobe_available": media_probe.available()}}
+    from app.cloud import media_probe, strm_scan
+    config = call(settings.get)
+    return {"status": "success", "settings": config, "schedule": call(strm_scan.status, config), "capabilities": {"ffprobe_available": media_probe.available()}}
 
 
 @router.get("/accounts/{account_id}/pipeline")
@@ -596,13 +601,16 @@ def pipeline_status(account_id: str, response: Response):
 
 @router.post("/settings")
 def save_settings(body: dict):
+    if set(body) & {'strm_scan_last_run','strm_scan_last_enqueued','strm_scan_anchor','strm_scan_pending'}:
+        raise HTTPException(400, '排期执行记录由调度器维护，请仅修改 Cron、时区与启动方式')
     previous = call(settings.get)
     result = call(settings.save, body)
     # Naming/authorization changes must not interrupt active playback listeners.
     if any(previous[k] != result[k] for k in ("proxy_enabled", "proxy_port")):
         emby_proxy.stop()
         emby_proxy.start()
-    return {"status": "success", "settings": result, "proxy": emby_proxy.status()}
+    from app.cloud import strm_scan
+    return {"status": "success", "settings": result, "schedule": call(strm_scan.status, result), "proxy": emby_proxy.status()}
 
 
 @router.post("/naming/preview")

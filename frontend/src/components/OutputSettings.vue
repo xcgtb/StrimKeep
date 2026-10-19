@@ -7,6 +7,10 @@ import FormFields from './FormFields.vue';
 import LocalPathPicker from './LocalPathPicker.vue';
 import OperationState from './OperationState.vue';
 import CloudSettingsConfirmation from './CloudSettingsConfirmation.vue';
+import EmbyMappingStatus from './EmbyMappingStatus.vue';
+import { date } from '../composables/format';
+import { object } from '../api/domain';
+import { useVisiblePoll } from '../composables/useVisiblePoll';
 const emit = defineEmits<{ saved: [] }>();
 const props = withDefaults(defineProps<{ kind?: 'personal' | 'share' }>(), { kind: 'personal' });
 const { request, op, draft, confirmation, changed, changes, load, save } = useCloudSettingsDraft();
@@ -47,7 +51,14 @@ const playbackFields = computed(() =>
     ),
 );
 const scheduleFields = computed(() =>
-  cloudSections[0]!.fields.filter((f) => ['strm_scan_cron', 'strm_scan_timezone'].includes(f.key)),
+  cloudSections[0]!.fields.filter((f) =>
+    [
+      'strm_scan_cron',
+      'strm_scan_timezone',
+      'strm_scan_start_mode',
+      'strm_reconcile_enabled',
+    ].includes(f.key),
+  ),
 );
 const protectionFields = computed(() =>
   cloudSections[0]!.fields.filter((f) => f.key === 'strm_block_feiniu_ua'),
@@ -69,6 +80,9 @@ async function saveAndNotify() {
   await save();
   if (!op.error.value && !op.uncertain.value && !confirmation.value) emit('saved');
 }
+useVisiblePoll(() => {
+  if (!changed.value.length && !confirmation.value && !busy.value) return load();
+}, 20000);
 </script>
 <template>
   <div class="strm-output-settings workspace-card-stack">
@@ -133,6 +147,18 @@ async function saveAndNotify() {
         </p>
         <FormFields v-model="draft" :fields="scheduleFields" :disabled="busy" />
         <p class="rule-note">同一目录已有同步任务时跳过本轮，避免重复排队。</p>
+        <p class="muted-text">
+          上次投递：{{ date(Number(object(request.data.value.schedule).last_run))
+          }}<br />预计下次：{{
+            object(request.data.value.schedule).enabled
+              ? date(Number(object(request.data.value.schedule).next_run))
+              : '未启用'
+          }}（按已保存配置；队列顺序影响实际开始时间）
+        </p>
+        <p class="rule-note">
+          失效引用清理：连续两次完整扫描均缺失，且挂载身份、文件内容核验通过后，才删除 NAS 自建 STRM
+          及未变化的自建附件；不会删除 115 源文件。关闭后仅补生成/更新。
+        </p>
       </section>
       <section class="panel workflow-config-card">
         <header class="section-heading">
@@ -144,13 +170,14 @@ async function saveAndNotify() {
           :label="kind === 'share' ? '分享库 NAS STRM 输出目录' : '个人库 NAS STRM 输出目录'"
           :disabled="busy"
         /><label
-          >Emby 可访问的输出路径<input v-model="draft[embyKey]" :disabled="busy" /><small
-            >填写 Emby 容器看到的同一目录；与 NAS 路径可以不同。</small
+          >Emby 反代识别路径<input v-model="draft[embyKey]" :disabled="busy" /><small
+            >用于反代定位播放引用。实际入库路径由每个 Emby 连接单独配置，见下方映射核对。</small
           ></label
         ><RouterLink to="/tasks/ingestion" class="text-link"
           >配置 Emby 连接与查看入库回执 →</RouterLink
         >
       </section>
+      <EmbyMappingStatus :kind="kind" />
       <section class="panel workflow-config-card">
         <header class="section-heading">
           <h3><Link2 :size="17" />播放地址</h3>

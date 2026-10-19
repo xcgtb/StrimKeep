@@ -62,17 +62,20 @@ def read(job_id):
         recoveries = dict(con.execute(f'SELECT origin_id,job_id FROM cloud_recovery_requests WHERE origin_id IN ({marks})',ids).fetchall())
     states = {r[0]:r[2] for r in rows}
     jobs = [dict(zip(('id','kind','state','message','created','updated'), r),
-                 label=LABELS.get(r[1],r[1]), parent_id=parents.get(r[0]), resolved_by=recoveries.get(r[0]) if states.get(recoveries.get(r[0]))!='cancelled' else None) for r in rows]
-    review = any(not j['resolved_by'] and j['state'] in ('failed','uncertain','needs_review','stopped') for j in jobs)
+                 label=LABELS.get(r[1],r[1]), parent_id=parents.get(r[0]), resolved_by=recoveries.get(r[0]) if states.get(recoveries.get(r[0])) in ('queued','running','success') else None) for r in rows]
+    unresolved = [j for j in jobs if not j['resolved_by']]
+    review = any(j['state'] in ('failed','uncertain','needs_review') for j in unresolved)
+    stopped = any(j['state'] in ('stopped','cancelled') for j in unresolved)
     pending = any(j['state'] in ('queued','running') for j in jobs)
     counts = dict(ingestion)
     waiting = sum(counts.get(k,0) for k in ('pending','timeout','paused','stale'))
     external = any('115云下载' in j['message'] for j in jobs) and not parents
     review = review or any(dict(notifications).get(k,0) for k in ('unknown','dispatched'))
-    state = 'needs_review' if review or any(counts.get(k,0) for k in ('timeout','stale')) else 'running' if pending else 'waiting' if waiting or external else 'success'
+    state = 'needs_review' if review or any(counts.get(k,0) for k in ('timeout','stale')) else 'running' if pending else 'stopped' if stopped else 'waiting' if waiting or external else 'success'
     if truncated:
         state = 'partial'
     return {'root_id':root, 'selected_id':job_id, 'state':state, 'jobs':jobs,
             'ingestion':counts, 'notifications':dict(notifications), 'truncated':truncated,
             'message':'任务较多，仅显示已加载范围，请分批查看' if truncated else '部分环节需要核实' if state=='needs_review' else '正在处理后续任务' if pending else
-                      '等待下载或入库回执' if state=='waiting' else '已记录环节全部结束；入库结果以回执为准'}
+                      '流程包含已取消或停止的环节，未完成全部处理；已有入库回执单独保留' if state=='stopped' else
+                      '等待下载或入库回执' if state=='waiting' else '处理已完成；Emby 入库确认 %d 条，其余以逐项回执为准' % counts['confirmed'] if counts.get('confirmed') else '处理已完成；暂无 Emby 入库确认'}

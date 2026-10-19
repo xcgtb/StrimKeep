@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue';
-import { readData, object, type Data } from '../api/domain';
+import { readData, object, records, accountPath, type Data } from '../api/domain';
+import { useCloud } from '../stores/cloud';
 import { useRequest } from '../composables/useRequest';
 const props = defineProps<{
   share: boolean;
@@ -12,20 +13,26 @@ const props = defineProps<{
   revision: number;
 }>();
 const state = useRequest<Data>();
+const mapping = useRequest<Data>();
+const cloud = useCloud();
 const config = computed(() => object(state.data.value?.settings));
 const output = computed(() =>
   String(config.value[props.share ? 'share_output_root' : 'output_root'] || '尚未配置'),
 );
-const emby = computed(() =>
-  String(
-    config.value[props.share ? 'share_emby_output_root' : 'emby_output_root'] ||
-      '在入库核验页配置映射',
-  ),
+const emby = computed(
+  () =>
+    records(object(mapping.data.value?.emby_mappings).items)
+      .filter((row) => row.enabled && row.kind === (props.share ? 'share' : 'personal'))
+      .map((row) => `${row.name}：${row.emby_root}`)
+      .join('；') || '在入库核验页配置连接路径',
 );
 watch(
-  () => props.revision,
+  [() => props.revision, () => cloud.id],
   () => {
+    mapping.cancel();
+    mapping.data.value = undefined;
     void state.run((signal) => readData('/api/cloud/settings', signal));
+    if (cloud.id) void mapping.run((signal) => readData(accountPath(cloud.id, 'pipeline'), signal));
   },
   { immediate: true },
 );
@@ -89,6 +96,9 @@ watch(
       </article>
     </div>
     <p v-if="state.error.value" class="inline-error">{{ state.error.value }}</p>
+    <p v-if="mapping.error.value" class="inline-error">
+      Emby 映射读取失败：{{ mapping.error.value }}
+    </p>
     <p
       v-if="config.generate_strm_enabled === false && (share || (organize && generate))"
       class="warning-text"

@@ -20,8 +20,8 @@ export const cloudSections: { key: string; title: string; description: string; f
         },
         { key: 'output_root', label: '个人库 NAS STRM 输出目录' },
         { key: 'share_output_root', label: '分享库 NAS STRM 输出目录' },
-        { key: 'emby_output_root', label: 'Emby 看到的个人库输出目录' },
-        { key: 'share_emby_output_root', label: 'Emby 看到的分享库输出目录' },
+        { key: 'emby_output_root', label: '反代识别的个人库路径' },
+        { key: 'share_emby_output_root', label: '反代识别的分享库路径' },
         { key: 'generate_strm_enabled', label: '整理后允许生成 STRM', type: 'check' },
         { key: 'nfo_enabled', label: '生成 NFO', type: 'check' },
         { key: 'artwork_enabled', label: '保存海报素材', type: 'check' },
@@ -35,7 +35,7 @@ export const cloudSections: { key: string; title: string; description: string; f
         {
           key: 'strm_scan_cron',
           label: 'STRM 全量同步（Cron，五段）',
-          hint: '留空=不排期。例如 0 0 * * * 表示每天 00:00 扫描各账号已保存的 STRM 同步来源；首次开启立即执行一次，后续按 Cron 串行排队。',
+          hint: '留空=不排期。例如 0 0 * * * 表示每天 00:00 扫描各账号已保存的 STRM 同步来源；首次开启、重新启用及修改排期均按所选启动方式执行。',
         },
         {
           key: 'strm_block_feiniu_ua',
@@ -47,6 +47,21 @@ export const cloudSections: { key: string; title: string; description: string; f
           key: 'strm_scan_timezone',
           label: '全量同步时区',
           hint: '按这个时区解释上面的 Cron，例如 Asia/Shanghai。',
+        },
+        {
+          key: 'strm_scan_start_mode',
+          label: '启用或修改排期后的启动方式',
+          type: 'select',
+          options: options({
+            immediate: '立即扫描一次，之后按 Cron',
+            scheduled: '等待下一个 Cron 时刻',
+          }),
+        },
+        {
+          key: 'strm_reconcile_enabled',
+          label: '清理连续两次扫描缺失的自建 NAS 引用',
+          type: 'check',
+          hint: '仅清理核验过挂载和内容的 STRM 及自建附件；不删除 115 源文件。',
         },
         {
           key: 'operation_delay_seconds',

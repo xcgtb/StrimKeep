@@ -149,9 +149,10 @@ def test_changed_password_requires_regeneration_before_playback(shared):
 
 
 def test_cancel_revoke_and_changed_generation_settings(shared):
-    a=generated(shared);strm.revoke(a['id'])
+    a=generated(shared);p=preview(shared);strm.revoke(a['id'])
     with pytest.raises(CloudError):playback.resolve(a['id'],strm.signature(a['id'],a['nonce']),'UA')
-    p=preview(shared);settings.save({'naming_style':'compact'})
+    assert not preview(shared)['items']  # Revoked sources cannot be silently re-enabled.
+    settings.save({'naming_style':'compact'})
     assert execute(p)['state']=='failed'
 
 

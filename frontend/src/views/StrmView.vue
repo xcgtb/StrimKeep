@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
+import { date } from '../composables/format';
 import { useCloud } from '../stores/cloud';
 import { readData, writeData, accountPath, query, records, object, type Data } from '../api/domain';
 import { useRequest } from '../composables/useRequest';
@@ -22,6 +23,7 @@ const cloud = useCloud(),
   assets = useRequest<Data>(),
   source = useRequest<Data>(),
   pipeline = useRequest<Data>(),
+  schedule = useRequest<Data>(),
   cid = ref(''),
   cidName = ref(''),
   directoryConfig = useRequest<Data>(),
@@ -41,6 +43,7 @@ async function load() {
       ),
     ),
     pipeline.run((signal) => readData(accountPath(aid, 'pipeline'), signal)),
+    schedule.run((signal) => readData('/api/cloud/settings', signal)),
   ]);
 }
 async function loadDefaultSource() {
@@ -69,6 +72,7 @@ async function execute() {
       source_cid: cid.value,
       confirmed: true,
       overrides: {},
+      reconcile: object(schedule.data.value?.settings).strm_reconcile_enabled !== false,
     };
   if (action !== 'sync') {
     path = `/api/cloud/assets/${asset.value?.id}/${action === 'revoke' ? 'revoke' : `deletion/${action}`}`;
@@ -87,6 +91,7 @@ watch(
   () => {
     assets.cancel();
     pipeline.cancel();
+    schedule.cancel();
     source.cancel();
     directoryConfig.cancel();
     sourceOpen.value = false;
@@ -114,22 +119,95 @@ useVisiblePoll(() => {
     title="STRM 资源"
     subtitle="管理已生成的播放引用、源文件关系与同步任务。"
   /><AccountPicker />
-  <div class="grid cols2 strm-workspace">
-    <div>
-      <OutputSettings /><DirectoryRoles
-        :roles="['strm']"
-        title="手动同步来源设置"
-        @saved="loadDefaultSource"
-      />
-    </div>
-    <div>
-      <OperationState
-        :busy="op.busy.value"
-        :error="op.error.value || assets.error.value || directoryConfig.error.value"
-        :uncertain="op.uncertain.value"
-        :receipt="op.receipt.value"
-      /><template v-if="cloud.id"
-        ><PlaybackCheck :key="cloud.id" :assets="records(assets.data.value?.items)" />
+  <div class="workspace-card-stack strm-workspace">
+    <section class="panel">
+      <header class="section-heading">
+        <h2>自动运行概况</h2>
+        <button class="button small" @click="load">刷新状态</button>
+      </header>
+      <p v-if="schedule.error.value" class="inline-error">{{ schedule.error.value }}</p>
+      <template v-if="schedule.data.value">
+        <p>
+          定时同步：{{ object(schedule.data.value.schedule).enabled ? '已启用' : '未启用' }} ·
+          {{ object(schedule.data.value.settings).strm_scan_cron || '未设置 Cron' }}
+        </p>
+        <p>上次投递：{{ date(Number(object(schedule.data.value.schedule).last_run)) }}</p>
+        <p class="muted-text">
+          上次调度检查：{{
+            date(Number(object(schedule.data.value.schedule).last_check))
+          }}（已有任务时跳过）
+        </p>
+        <p>
+          预计下次：{{
+            object(schedule.data.value.schedule).enabled
+              ? date(Number(object(schedule.data.value.schedule).next_run))
+              : '未启用'
+          }}（排队后串行执行）
+        </p>
+        <p>当前账号同步来源：{{ cidName || '尚未保存' }}</p>
+        <p class="rule-note">
+          {{
+            object(schedule.data.value.schedule).cleanup_enabled
+              ? '包含失效引用清理：连续两次完整扫描缺失并核验挂载、内容后，清理 NAS 自建 STRM 及未变化的自建附件。'
+              : '仅补生成或更新 STRM，失效引用清理已关闭。'
+          }}115 源文件不会因此被删除。
+        </p>
+        <RouterLink to="/tasks?kind=sync" class="text-link">查看同步任务与清理回执 →</RouterLink>
+      </template>
+    </section>
+    <details class="module-config">
+      <summary>当前配置：排期、输出、播放地址与来源</summary>
+      <OutputSettings @saved="load" />
+      <DirectoryRoles :roles="['strm']" title="当前账号定时同步来源" @saved="loadDefaultSource" />
+    </details>
+    <OperationState
+      :busy="op.busy.value"
+      :error="op.error.value || assets.error.value || directoryConfig.error.value"
+      :uncertain="op.uncertain.value"
+      :receipt="op.receipt.value"
+    />
+    <template v-if="cloud.id">
+      <section class="panel">
+        <h2>播放引用</h2>
+        <div class="asset-list">
+          <article v-for="row in records(assets.data.value?.items)" :key="String(row.id)">
+            <div>
+              <strong>{{ String(row.path).split('/').pop() }}</strong>
+              <p class="path-text">{{ row.path }}</p>
+              <small>{{ row.state }}</small>
+            </div>
+            <button class="button small" @click="inspect(row)">源关系与回执</button>
+          </article>
+          <p v-if="!records(assets.data.value?.items).length" class="muted-text">
+            当前账号暂无播放引用。
+          </p>
+        </div>
+        <div class="pagination">
+          <button
+            class="button"
+            :disabled="offset === 0 || assets.loading.value"
+            @click="
+              offset -= 50;
+              load();
+            "
+          >
+            上一页</button
+          ><span>{{ offset + 1 }} 起</span
+          ><button
+            class="button"
+            :disabled="records(assets.data.value?.items).length < 50 || assets.loading.value"
+            @click="
+              offset += 50;
+              load();
+            "
+          >
+            下一页
+          </button>
+        </div>
+      </section>
+      <details class="module-config">
+        <summary>手动补生成与高级核验</summary>
+        <PlaybackCheck :key="cloud.id" :assets="records(assets.data.value?.items)" />
         <section class="panel">
           <header class="section-heading">
             <h2>输出与播放配置检查</h2>
@@ -172,46 +250,9 @@ useVisiblePoll(() => {
             </div>
           </div>
         </section>
-        <section class="panel">
-          <h2>播放引用</h2>
-          <div class="asset-list">
-            <article v-for="row in records(assets.data.value?.items)" :key="String(row.id)">
-              <div>
-                <strong>{{ String(row.path).split('/').pop() }}</strong>
-                <p class="path-text">{{ row.path }}</p>
-                <small>{{ row.state }}</small>
-              </div>
-              <button class="button small" @click="inspect(row)">源关系与回执</button>
-            </article>
-            <p v-if="!records(assets.data.value?.items).length" class="muted-text">
-              当前账号暂无播放引用。
-            </p>
-          </div>
-          <div class="pagination">
-            <button
-              class="button"
-              :disabled="offset === 0 || assets.loading.value"
-              @click="
-                offset -= 50;
-                load();
-              "
-            >
-              上一页</button
-            ><span>{{ offset + 1 }} 起</span
-            ><button
-              class="button"
-              :disabled="records(assets.data.value?.items).length < 50 || assets.loading.value"
-              @click="
-                offset += 50;
-                load();
-              "
-            >
-              下一页
-            </button>
-          </div>
-        </section></template
-      ><TaskReceipt v-if="job" :id="job" />
-    </div>
+      </details>
+    </template>
+    <TaskReceipt v-if="job" :id="job" />
   </div>
   <ModalDialog
     v-if="sourceOpen"
@@ -256,7 +297,7 @@ useVisiblePoll(() => {
     :title="confirmation === 'sync' ? '同步生成 STRM' : '处理播放引用'"
     :description="
       confirmation === 'sync'
-        ? '读取所选目录，按照已保存配置生成与核实 STRM；实际 Emby 入库另行核实。'
+        ? '读取所选目录并补生成或更新 STRM。如已启用失效引用清理，连续两次完整扫描缺失且挂载、内容核验通过的 NAS 自建引用及附件会被清理；不删除 115 文件。实际 Emby 入库另行核实。'
         : confirmation === 'revoke'
           ? '将此播放引用标记为已撤销，后续播放被拒绝；此动作本身不删除 NAS 文件或 115 源文件，也不会自动重新启用。'
           : confirmation === 'verify'

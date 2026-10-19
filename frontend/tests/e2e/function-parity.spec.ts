@@ -173,6 +173,8 @@ test('STRM generator loads its configured source without overwriting a manual se
 }) => {
   await fixtures(page);
   await page.goto('/#/media/strm');
+  await page.getByText('当前配置：排期、输出、播放地址与来源', { exact: true }).click();
+  await page.getByText('手动补生成与高级核验', { exact: true }).click();
   await expect(
     page.getByRole('textbox', { name: '手动同步的 115 来源目录 选择目录', exact: true }),
   ).toHaveValue('目录4');

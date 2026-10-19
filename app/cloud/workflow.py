@@ -681,8 +681,31 @@ def preview_share(account_id, link, password="", cid="0", offset=0):
     return {"preview_id": pid, **page}
 
 
+def transfer_from_saved(preview_id, ids, target_cid, confirmed=False, organize_target=None, generate=True, directory_revision=None):
+    """The receive page references the organizer's saved archive directory."""
+    from app.cloud import directories
+    with store.db() as con:
+        row = con.execute('SELECT account_id FROM cloud_plans WHERE id=?', (preview_id,)).fetchone()
+    if not row:
+        raise CloudError('分享预览已过期或已使用', 409)
+    cfg = directories.get(row[0])
+    if organize_target is not None:
+        archive = cfg['directories'].get('target')
+        if not archive or str(organize_target) != archive['id'] or directory_revision is not None and directory_revision != cfg['revision']:
+            raise CloudError('整理归档目录已变化，请到影视整理保存后重新读取接收配置', 409)
+    return transfer_submit(preview_id, ids, target_cid, confirmed, organize_target, generate, cfg['revision'] if organize_target is not None else None)
+
+
+def verify_archive(payload):
+    if payload.get('archive_revision') is not None:
+        from app.cloud import directories
+        cfg = directories.get(payload['account_id'])
+        if cfg['revision'] != payload['archive_revision'] or (cfg['directories'].get('target') or {}).get('id') != payload['organize_target']:
+            raise CloudError('排队期间归档目录配置变化，已停止；请重新预览', 409)
+
+
 def transfer_submit(
-    preview_id, ids, target_cid, confirmed=False, organize_target=None, generate=True
+    preview_id, ids, target_cid, confirmed=False, organize_target=None, generate=True, directory_revision=None
 ):
     if confirmed is not True:
         raise CloudError("请确认转存内容与目录")
@@ -712,6 +735,7 @@ def transfer_submit(
                 "source_ids": ids,
                 "target_cid": target_cid,
                 "organize_target": organize_target,
+                "archive_revision": directory_revision,
                 "generate": bool(generate),
             },
             con,
@@ -720,6 +744,7 @@ def transfer_submit(
 
 def transfer(job_id, payload):
     provider = verify_account(payload)
+    verify_archive(payload)
     if payload.get("organize_target"):
         from app.cloud import pipeline
         pipeline.prepare(payload.get("generate", True))
@@ -762,6 +787,11 @@ def transfer(job_id, payload):
     )
     if payload.get("organize_target"):
         jobs.checkpoint(job_id, result)
+        try:
+            verify_archive(payload)
+        except CloudError as error:
+            error.partial_result = result
+            raise
         try:
             planned = plan(payload["account_id"], target, payload["organize_target"], job_id=job_id, source_ids=[r["target_id"] for r in result["mapping"]])
         except jobs.JobStopped:
@@ -896,12 +926,15 @@ def sync(job_id, payload):
                 {"file_id": row["id"], "name": row["name"], "reason": str(error)}
             )
         jobs.progress(job_id, len(videos), index + 1, "生成 STRM", row["name"])
-    if not result["errors"] and not result.get("stopped") and not jobs.stopping(job_id):
+    result['cleanup_enabled'] = payload.get('reconcile', config['strm_reconcile_enabled'])
+    if result['cleanup_enabled'] and not result["errors"] and not result.get("stopped") and not jobs.stopping(job_id):
         from app.cloud import strm
 
         result["reconciliation"] = strm.reconcile(
             payload["account_id"], payload["source_cid"], {r["id"] for r in rows}
         )
+        from app.cloud import events
+        events.emit('strm', 'STRM 补生成/更新 %d 项；失效引用清理结果已记录（仅 NAS 自建引用）' % len(result['generated']), job_id)
     if result["generated"]:
         result["refresh_pending"] = not refresh_library(payload["account_id"])
     return result

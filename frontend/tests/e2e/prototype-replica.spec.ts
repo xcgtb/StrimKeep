@@ -17,6 +17,8 @@ test('STRM output picker is read-only until module settings are confirmed and pe
     return fulfill(r, { status: 'success', settings });
   });
   await page.goto('/#/media/strm');
+  await page.getByText('当前配置：排期、输出、播放地址与来源', { exact: true }).click();
+  await page.getByText('手动补生成与高级核验', { exact: true }).click();
   await page.getByRole('button', { name: '选择个人库 NAS STRM 输出目录', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: '/strm', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'local', exact: true }).click();
@@ -37,6 +39,7 @@ test('STRM output picker is read-only until module settings are confirmed and pe
   expect(saved).toMatchObject({ output_root: '/strm/local', strm_delay_seconds: 30 });
   expect(saved).not.toHaveProperty('share_output_root');
   await page.reload();
+  await page.getByText('当前配置：排期、输出、播放地址与来源', { exact: true }).click();
   await expect(page.getByLabel('STRM 延迟生成（秒）', { exact: true })).toHaveValue('30');
   await expect(page.getByLabel('STRM 播放服务地址（302）', { exact: true })).toHaveValue(
     'https://play.example.test',
@@ -84,6 +87,8 @@ test('output directory read errors remain visible and cannot be confirmed as a s
     fulfill(r, { detail: '容器挂载目录暂不可访问' }, 409),
   );
   await page.goto('/#/media/strm');
+  await page.getByText('当前配置：排期、输出、播放地址与来源', { exact: true }).click();
+  await page.getByText('手动补生成与高级核验', { exact: true }).click();
   await page.getByRole('button', { name: '选择个人库 NAS STRM 输出目录', exact: true }).click();
   await expect(page.getByRole('dialog')).toContainText('容器挂载目录暂不可访问');
   await expect(page.getByRole('button', { name: '使用当前目录', exact: true })).toBeDisabled();

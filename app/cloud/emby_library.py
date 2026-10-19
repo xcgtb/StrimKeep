@@ -102,6 +102,32 @@ def mapped_path(asset, connection):
     return str(PurePosixPath(root)/relative)
 
 
+def mapping_status(account_id):
+    """Show the exact per-connection roots used by watch/poll, without network I/O."""
+    cfg = settings.get()
+    connections = get(account_id)
+    rows = []
+    with store.db() as con:
+        assets = con.execute("SELECT id FROM cloud_assets WHERE account_id=? AND state='active' ORDER BY updated DESC LIMIT 100", (account_id,)).fetchall()
+    samples = {}
+    for (aid,) in assets:
+        asset = store.asset(aid)
+        kind = 'share' if asset['payload'].get('source_kind') == 'share' else 'personal'
+        if asset['payload'].get('output_root') == cfg['share_output_root' if kind == 'share' else 'output_root']:
+            samples.setdefault(kind, asset)
+    for connection in connections['items']:
+        for kind, key, output, proxy in (('personal','personal_root','output_root','emby_output_root'), ('share','share_root','share_output_root','share_emby_output_root')):
+            active = connection['enabled'] and bool(connection[key])
+            sample = samples.get(kind)
+            path = mapped_path(sample, connection) if sample and connection[key] else ''
+            rows.append({'connection_id': connection['id'], 'name': connection['name'], 'kind': kind,
+                         'enabled': active, 'nas_root': cfg[output], 'emby_root': connection[key],
+                         'proxy_root': cfg[proxy], 'consistent': not cfg[proxy] or cfg[proxy].rstrip('/') == connection[key].rstrip('/'),
+                         'sample_nas_path': sample['local_path'] if path else '', 'sample_emby_path': path,
+                         'message': '按此连接的映射核验入库；服务器文件可见性以入库回执为准' if active else '连接关闭或该库路径留空，不核验此库'})
+    return {'revision': connections['revision'], 'items': rows}
+
+
 def watch(asset, *, backfill=False, config=None):
     """Record once for each published content/path and connection configuration."""
     if not settings.get()["emby_refresh_enabled"]:

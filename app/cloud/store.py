@@ -56,6 +56,10 @@ CREATE TABLE IF NOT EXISTS cloud_assets (
  local_path TEXT NOT NULL UNIQUE, payload TEXT NOT NULL, nonce TEXT NOT NULL,
  state TEXT NOT NULL, updated REAL NOT NULL, UNIQUE(account_id,file_id,local_path));
 CREATE INDEX IF NOT EXISTS cloud_assets_source ON cloud_assets(account_id,file_id);
+CREATE INDEX IF NOT EXISTS cloud_assets_share_version ON cloud_assets(
+ account_id,state,json_extract(payload,'$.output_root'),json_extract(payload,'$.media.kind'),
+ json_extract(payload,'$.media.tmdb_id'),json_extract(payload,'$.media.season'),json_extract(payload,'$.media.episode'))
+ WHERE json_extract(payload,'$.source_kind')='share';
 CREATE TABLE IF NOT EXISTS cloud_share_sources (
  id TEXT PRIMARY KEY, account_id TEXT NOT NULL, code_hash TEXT NOT NULL,
  sealed TEXT NOT NULL, revision INTEGER NOT NULL, updated REAL NOT NULL,
@@ -336,7 +340,7 @@ def disconnect_account(account_id):
         )
 
 
-def enqueue_sync_once(account_id, revision, source_cid):
+def enqueue_sync_once(account_id, revision, source_cid, reconcile=True):
     """Serialize the account check and pending-sync lookup with the enqueue."""
     from app.cloud import jobs
 
@@ -355,7 +359,7 @@ def enqueue_sync_once(account_id, revision, source_cid):
             return row[0], False
         return jobs.enqueue('sync', {'account_id': account_id,
                                     'account_revision': revision,
-                                    'source_cid': str(source_cid)}, con), True
+                                    'source_cid': str(source_cid), 'reconcile': reconcile}, con), True
 
 
 def delete_channel(account_id, channel_id):

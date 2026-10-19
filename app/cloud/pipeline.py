@@ -62,6 +62,7 @@ def status(account_id):
     add("tmdb", "TMDB 识别", "settings", "", tmdb_configured)
     add("output", "NAS STRM 输出", "strm", "strm-output", lambda: output_ready())
     required = {"source", "target", "tmdb"} | ({"output"} if config["generate_strm_enabled"] else set())
-    return {"checks": checks, "ready": all(c["ready"] for c in checks if c["key"] in required),
+    from app.cloud import emby_library
+    return {"checks": checks, "emby_mappings": emby_library.mapping_status(account_id), "ready": all(c["ready"] for c in checks if c["key"] in required),
             "generate": config["generate_strm_enabled"], "public_url": config["public_url"],
             "output_root": config["output_root"], "naming_style": config["naming_style"]}

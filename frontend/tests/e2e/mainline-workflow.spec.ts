@@ -147,6 +147,8 @@ test('playback check shows separate verified internal and external links', async
     });
   });
   await page.goto('/#/media/strm');
+  await page.getByText('当前配置：排期、输出、播放地址与来源', { exact: true }).click();
+  await page.getByText('手动补生成与高级核验', { exact: true }).click();
   await page.getByLabel('选择已生成的资源').selectOption('asset-a');
   expect(checked).toBe(0);
   await page.getByRole('button', { name: '核验源文件与播放解析', exact: true }).click();
@@ -162,6 +164,8 @@ test('delay units save seconds and leave unrelated module directories unchanged'
 }) => {
   const state = await fixtures(page);
   await page.goto('/#/media/strm');
+  await page.getByText('当前配置：排期、输出、播放地址与来源', { exact: true }).click();
+  await page.getByText('手动补生成与高级核验', { exact: true }).click();
   await page.getByRole('button', { name: '分钟', exact: true }).click();
   await page.getByLabel('STRM 延迟生成（分钟）', { exact: true }).fill('2');
   await page.getByRole('button', { name: '保存输出与联动设置', exact: true }).click();

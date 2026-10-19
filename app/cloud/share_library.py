@@ -5,7 +5,7 @@ import json
 import re
 import time
 from pathlib import PurePosixPath
-from app.cloud import credentials, store, settings, strm, jobs, workflow, recognition, file_filters
+from app.cloud import credentials, store, settings, strm, jobs, workflow, recognition, file_filters, share_selection
 from app.cloud.errors import CloudError
 from app.cloud import provider115
 
@@ -92,7 +92,8 @@ def current(payload):
 
 
 def snapshot(config):
-    return {"share_layout_version": 2, **workflow.naming_snapshot(config), **{k: config[k] for k in ("public_url", "share_output_root", "nfo_enabled", "artwork_enabled")}}
+    naming = {k: v for k, v in workflow.naming_snapshot(config).items() if not k.startswith('quality8_')}
+    return {"share_layout_version": 2, **naming, **{k: config[k] for k in ("public_url", "share_output_root", "nfo_enabled", "artwork_enabled", "share_quality_enabled", "share_quality_mode", "share_quality_rules", "share_quality_coexist_dv")}}
 
 
 def preview(preview_id, ids, overrides=None):
@@ -133,7 +134,7 @@ def preview(preview_id, ids, overrides=None):
     sid, revision = save_source(data["account_id"], access["code"], access["password"])
     selected, filtered = file_filters.select(rows, cfg)
     view = View(provider, access, rows)
-    items, skipped, paths = [], [], set()
+    items, skipped = [], []
     for row in selected:
         try:
             if not re.fullmatch(r"[A-Fa-f0-9]{40}", row["sha1"]) or row["size"] <= 0:
@@ -147,28 +148,20 @@ def preview(preview_id, ids, overrides=None):
                         raise
                     return {"status": "fallback", "fields": {}, "warning": "分享媒体提取失败，已按设置回退文件名解析"}
             media = recognition.recognize(row["name"], (overrides or {}).get(row["id"]), cfg, probe if cfg["ffprobe_enabled"] else None)
-            relative = media["directory"]+"/"+str(PurePosixPath(media["name"]).with_suffix(".strm"))
-            destination = strm.target(base, relative)
-            if destination.exists():
-                with store.db() as con:
-                    bound = con.execute("SELECT id FROM cloud_assets WHERE account_id=? AND file_id=? AND local_path=?", (data["account_id"], "share:"+sid+":"+row["id"], str(destination))).fetchone()
-                asset = store.asset(bound[0]) if bound else None
-                if not asset or not destination.is_file() or strm.digest(destination.read_bytes()) != asset["payload"].get("digest"):
-                    raise CloudError("同名 STRM 已存在，保留现有版本；请先在片库核对去留，不另建分享来源目录", 409)
-            if relative in paths:
-                raise CloudError("本批命名输出相同，请修正模板或分次选择版本", 409)
-            paths.add(relative)
             items.append({"source": row, "media": media, "followers": workflow.related_companions(rows, row, cfg)})
         except CloudError as error:
             skipped.append({"file_id": row["id"], "name": row["name"], "reason": str(error)})
+    items, held, comparisons = share_selection.select(data['account_id'], sid, items, cfg, base)
+    skipped.extend(held)
     payload = {"account_id": data["account_id"], "account_revision": data["account_revision"],
                "share_id": sid, "share_revision": revision, "items": items, "skipped": skipped,
-               "filtered": filtered, "config": snapshot(cfg), "root_identity": [base.stat().st_dev, base.stat().st_ino]}
+               "filtered": filtered, "comparisons": comparisons, "config": snapshot(cfg), "root_identity": [base.stat().st_dev, base.stat().st_ino]}
     current(payload)
     pid = store.ident()
     with store.db() as con:
         con.execute("INSERT INTO cloud_plans VALUES(?,?,?,?,?,?)", (pid, data["account_id"], data["account_revision"], "share_strm_pending", store.encode(payload), time.time()+600))
-    return {"id": pid, "items": items, "skipped": skipped, "filtered": filtered, "output_root": str(base), "effect": "仅生成 NAS 分享库 STRM；不转存、不改名、不移动、不删除 115 文件"}
+    return {"id": pid, "items": items, "skipped": skipped, "filtered": filtered, "comparisons": comparisons,
+            "replacement_count": sum(len(i['upgrades']) for i in items), "output_root": str(base), "effect": "仅生成或换版 NAS 分享库 STRM；旧引用在新来源与输出核验后处理，不转存、不改名、不移动、不删除 115 文件"}
 
 
 def apply(plan_id, confirmed=False):
@@ -211,7 +204,7 @@ def prune_legacy_directory(base, previous, share_id, identity):
 
 
 def run(job_id, payload):
-    result = {"generated": [], "skipped": payload["skipped"], "filtered": payload["filtered"], "errors": [], "publication": {}}
+    result = {"generated": [], "replaced": [], "skipped": [r for r in payload['skipped'] if not r.get('retained')], "retained": [r for r in payload['skipped'] if r.get('retained')], "filtered": payload["filtered"], "errors": [], "publication": {}}
     provider, access = current(payload)
     if snapshot(settings.get()) != payload["config"]:
         raise CloudError("命名或输出配置已变化，请重新预览分享 STRM", 409)
@@ -238,16 +231,42 @@ def run(job_id, payload):
                 raise CloudError("分享库挂载变化，请重新预览", 409)
             with store.db() as con:
                 previous = con.execute("SELECT local_path FROM cloud_assets WHERE account_id=? AND file_id=? AND json_extract(payload,'$.output_root')=?", (payload["account_id"], "share:"+payload["share_id"]+":"+item["source"]["id"], str(base))).fetchone()
-            asset = strm.generate(payload["account_id"], item["source"], item["media"], companions=item["followers"], provider=view, source_context={"source_kind": "share", "share_id": payload["share_id"], "share_revision": payload["share_revision"]})
+            context = {"source_kind": "share", "share_id": payload["share_id"], "share_revision": payload["share_revision"]}
+            def publish_selected():
+                old = [share_selection.verify(expected, payload['account_id'], base) for expected in item.get('upgrades', [])]
+                destination = strm.target(base, item['media']['directory']+'/'+str(PurePosixPath(item['media']['name']).with_suffix('.strm')))
+                same_path = next((asset for asset in old if asset['local_path'] == str(destination)), None)
+                if same_path:
+                    expected = next(v for v in item['upgrades'] if v['id'] == same_path['id'])
+                    rebound = share_selection.rebind(expected, payload['account_id'], item['source'], item['media'], context, base, output_keys)
+                    published = strm.generate(payload['account_id'], item['source'], item['media'], companions=item['followers'], provider=view, source_context={**context, 'replacement': rebound['payload']['replacement']}, expected_output=output_keys)
+                    retained_subtitles = share_selection.prune_old_subtitles(same_path, published, base)
+                else:
+                    published = strm.generate(payload['account_id'], item['source'], item['media'], companions=item['followers'], provider=view, source_context=context, expected_output=output_keys)
+                replaced = []
+                for expected in item.get('upgrades', []):
+                    if expected['id'] == published['id']:
+                        replaced.append({'asset_id': published['id'], 'successor': published['id'], 'rebound': True, 'removed': [], 'retained': retained_subtitles})
+                    else:
+                        replaced.append(share_selection.retire(expected, payload['account_id'], base, published))
+                return {'asset_id': published['id'], 'replaced': replaced}
+            # Layout/version marker is not a runtime setting key.
+            output_keys = {k:v for k,v in payload['config'].items() if k in settings.DEFAULTS}
+            if item.get('upgrades'):
+                outcome = jobs.step(job_id, 'share_replace:'+item['source']['id'], {'old': item['upgrades'], 'source': item['source'], 'root_identity': payload['root_identity']}, publish_selected)
+                asset = store.asset(outcome['asset_id'])
+                result['replaced'].extend(outcome['replaced'])
+            else:
+                asset = strm.generate(payload['account_id'], item['source'], item['media'], companions=item['followers'], provider=view, source_context=context, expected_output=output_keys)
             if previous and previous[0] != asset["local_path"]:
                 prune_legacy_directory(base, previous[0], payload["share_id"], payload["root_identity"])
             result["generated"].append({"asset_id": asset["id"], "path": asset["local_path"]})
             result.setdefault("warnings", []).extend({"name": item["source"]["name"], "reason": w} for w in asset["payload"].get("warnings", []))
             counts['published'] += 1
             posters.verified(index, item["source"], item["media"])
-        except (CloudError, OSError):
+        except (CloudError, OSError) as error:
             counts['failed'] += 1
-            result["errors"].append({"name": item["source"]["name"], "reason": "分享读取或输出核验失败，保留现有引用；请检查分享、挂载与配置后重新预览"})
+            result["errors"].append({"name": item["source"]["name"], "reason": str(error)+"；请先核对本任务步骤与当前引用，勿重复提交未知结果"})
             break
         jobs.progress(job_id, len(payload["items"]), index+1, "生成分享 STRM", item["source"]["name"])
     posters.flush()

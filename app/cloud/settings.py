@@ -2,6 +2,8 @@
 
 import os
 import copy
+import time
+import threading
 from pathlib import Path
 from urllib.parse import urlsplit
 from app import state_store, storage
@@ -61,6 +63,11 @@ DEFAULTS = {
     "strm_scan_cron": "",
     "strm_scan_timezone": "Asia/Shanghai",
     "strm_scan_last_run": 0,
+    "strm_scan_last_enqueued": 0,
+    "strm_scan_start_mode": "immediate",
+    "strm_scan_anchor": 0,
+    "strm_scan_pending": False,
+    "strm_reconcile_enabled": True,
     # 飞牛媒体探测拦截：命中 Lavf/60.3.100 的直连播放请求返回 403（不含 Emby 反代）
     "strm_block_feiniu_ua": False,
     "ignore_keywords": [],
@@ -69,8 +76,13 @@ DEFAULTS = {
     "quality8_mode": "preview",
     "quality8_rules": QUALITY8_DEFAULT,
     "quality8_coexist_dv": True,
+    "share_quality_enabled": False,
+    "share_quality_mode": "preview",
+    "share_quality_rules": QUALITY8_DEFAULT,
+    "share_quality_coexist_dv": True,
     **DEFAULT_TEMPLATES,
 }
+_LOCK = threading.RLock()
 
 
 def path():
@@ -88,11 +100,26 @@ def get():
 def save(value):
     if not isinstance(value, dict) or set(value) - set(DEFAULTS):
         raise CloudError("配置字段无效")
-    result = get()
-    result.update(value)
-    result = validate(result)
-    state_store.save(path(), result)
-    return result
+    with _LOCK:
+        previous = get()
+        result = validate({**previous, **value})
+        if any(previous[k] != result[k] for k in ('strm_scan_cron','strm_scan_timezone','strm_scan_start_mode')):
+            result['strm_scan_anchor'] = time.time()
+            result['strm_scan_pending'] = bool(result['strm_scan_cron']) and result['strm_scan_start_mode'] == 'immediate'
+        state_store.save(path(), result)
+        return result
+
+
+def record_scan(config, now, enqueued=False):
+    """A completed scheduler tick cannot reset a concurrently edited schedule."""
+    with _LOCK:
+        stored = state_store.read(path(), {})
+        current = {**copy.deepcopy(DEFAULTS), **stored}
+        keys = ('strm_scan_cron','strm_scan_timezone','strm_scan_start_mode','strm_scan_anchor')
+        if any(current[k] != config.get(k, DEFAULTS[k]) for k in keys):
+            return False
+        return state_store.compare_and_save(path(), stored, {**current, 'strm_scan_last_run': now,
+                    'strm_scan_last_enqueued': now if enqueued else current['strm_scan_last_enqueued'], 'strm_scan_pending': False})
 
 
 def validate(result):
@@ -106,8 +133,13 @@ def validate(result):
     if cron.strip():
         schedules.cron_next(cron, result["strm_scan_timezone"], 0)
     result["strm_scan_cron"] = cron.strip()
-    if type(result["strm_scan_last_run"]) not in (int, float) or not 0 <= result["strm_scan_last_run"] < float('inf'):
-        raise CloudError("STRM 上次同步时间无效")
+    for key in ('strm_scan_last_run','strm_scan_last_enqueued'):
+        if type(result[key]) not in (int, float) or not 0 <= result[key] < float('inf'):
+            raise CloudError("STRM 上次同步时间无效")
+    if result['strm_scan_start_mode'] not in ('immediate','scheduled'):
+        raise CloudError('定时同步启动方式无效')
+    if type(result['strm_scan_anchor']) not in (int,float) or not 0 <= result['strm_scan_anchor'] < float('inf'):
+        raise CloudError('定时同步起算时间无效')
 
     if result["open_app_id"]:
         result["open_app_id"] = numeric(result["open_app_id"])
@@ -169,6 +201,7 @@ def validate(result):
     for key in (
         "proxy_enabled",
         "strm_block_feiniu_ua",
+        "strm_scan_pending", "strm_reconcile_enabled",
         "nfo_enabled",
         "artwork_enabled",
         "notify_enabled",
@@ -180,6 +213,7 @@ def validate(result):
         "year_classification", "unknown_enabled",
         "animation_movie_folder", "ffprobe_enabled",
         "quality8_enabled", "quality8_coexist_dv",
+        "share_quality_enabled", "share_quality_coexist_dv",
         "cleanup_empty_directories", "generate_strm_enabled",
     ):
         if not isinstance(result[key], bool):
@@ -190,6 +224,8 @@ def validate(result):
         raise CloudError("整理八维模式无效")
     if result["quality8_mode"] == "upgrade" and not result["quality8_enabled"]:
         raise CloudError("请先启用整理八维策略，再选择执行洗版")
+    if result['share_quality_mode'] not in ('preview','upgrade') or result['share_quality_mode'] == 'upgrade' and not result['share_quality_enabled']:
+        raise CloudError('请先启用分享库独立比较，再选择执行洗版')
     if type(result["strm_delay_seconds"]) not in (int, float) or not 0 <= result["strm_delay_seconds"] <= 86400:
         raise CloudError("STRM 联动延时应为 0 至 86400 秒")
     if type(result["operation_delay_seconds"]) not in (int,float) or not 0 <= result["operation_delay_seconds"] <= 60:
@@ -203,4 +239,5 @@ def validate(result):
     from app.cloud import file_filters, quality8
     file_filters.validate(result)
     quality8.validate(result["quality8_rules"])
+    quality8.validate(result["share_quality_rules"])
     return result

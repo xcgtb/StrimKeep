@@ -86,8 +86,9 @@ with tempfile.TemporaryDirectory(prefix='strimkeep-vue3-') as folder:
             cloud=json.loads(fetch('/api/cloud/settings')[0])['settings']
             fields=(ROOT/'frontend/src/config/cloudFields.ts').read_text()
             special=(ROOT/'frontend/src/views/CloudSettingsView.vue').read_text()
+            special+=(ROOT/'frontend/src/components/ShareQualitySettings.vue').read_text()
             # Scheduler-owned metadata is returned for status, never edited as a form field.
-            internal = {'strm_scan_last_run'}
+            internal = {'strm_scan_last_run', 'strm_scan_last_enqueued', 'strm_scan_anchor', 'strm_scan_pending'}
             assert all(key in fields+special or key in internal for key in cloud), {
                 key for key in cloud if key not in fields+special and key not in internal}
             assert isinstance(cloud['strm_scan_last_run'], (int, float))

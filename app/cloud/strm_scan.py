@@ -81,7 +81,7 @@ def start(account_id=None):
             skipped.append({'account_id': aid, 'reason': '没有配置 STRM 角色目录'})
             continue
         for cid in dirs:
-            job_id, created = store.enqueue_sync_once(aid, account['revision'], cid)
+            job_id, created = store.enqueue_sync_once(aid, account['revision'], cid, settings.get()['strm_reconcile_enabled'])
             if not created:
                 skipped.append({'account_id': aid, 'source_cid': cid,
                                 'active_job_id': job_id, 'reason': '此目录已有排队或执行中的同步任务'})
@@ -92,13 +92,27 @@ def start(account_id=None):
     return queued, skipped
 
 
+def status(config, now=None):
+    """Read-only schedule overview. Keep historical runs across disable/re-enable."""
+    now = time.time() if now is None else now
+    last = config.get('strm_scan_last_run', 0)
+    anchor = config.get('strm_scan_anchor', 0)
+    enabled = next_run(config.get('strm_scan_cron'), config.get('strm_scan_timezone'), now) > 0
+    immediate = config.get('strm_scan_pending', False) or (last <= 0 and anchor <= 0 and config.get('strm_scan_start_mode', 'immediate') == 'immediate')
+    baseline = max(last, anchor) if config.get('strm_scan_start_mode') == 'scheduled' else last
+    next_at = 0 if not enabled else now if immediate else next_run(config.get('strm_scan_cron'), config.get('strm_scan_timezone'), baseline or now)
+    return {'enabled': enabled, 'last_run': config.get('strm_scan_last_enqueued', 0), 'last_check': last, 'next_run': next_at,
+            'due': enabled and next_at > 0 and next_at <= now,
+            'start_mode': config.get('strm_scan_start_mode','immediate'),
+            'cleanup_enabled': config.get('strm_reconcile_enabled', True)}
+
+
 def tick(config, now=None):
     """调度器每拍调用；命中则投递并记录本次时间。返回本次投递列表。"""
     now = time.time() if now is None else now
-    if not due(config.get('strm_scan_cron'), config.get('strm_scan_timezone'),
-               config.get('strm_scan_last_run'), now):
+    if not status(config, now)['due']:
         return []
     queued, _skipped = start()
     if queued or any(item.get('active_job_id') for item in _skipped):
-        settings.save({'strm_scan_last_run': now})
+        settings.record_scan(config, now, enqueued=bool(queued))
     return queued

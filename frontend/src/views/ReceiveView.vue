@@ -25,6 +25,7 @@ import TaskReceipt from '../components/TaskReceipt.vue';
 import DirectoryRoles from '../components/DirectoryRoles.vue';
 import ResourceRoute from '../components/ResourceRoute.vue';
 import OutputSettings from '../components/OutputSettings.vue';
+import ShareQualitySettings from '../components/ShareQualitySettings.vue';
 import MediaOverride from '../components/MediaOverride.vue';
 function showOutput() {
   const section = document.querySelector<HTMLDetailsElement>('.share-output-config');
@@ -159,6 +160,7 @@ async function planShare() {
       files: records(sharePage.value?.items).filter((r) => selected.value.has(String(r.id))),
       target_cid: target.value,
       organize_target: organize.value ? archive.value : null,
+      directory_revision: directoryConfig.data.value?.revision,
       generate: generate.value,
     };
     return;
@@ -189,6 +191,7 @@ async function execute() {
       file_ids: [...selected.value],
       target_cid: original.target_cid,
       organize_target: original.organize_target,
+      directory_revision: original.directory_revision,
       generate: original.generate,
       confirmed: true,
     };
@@ -323,8 +326,7 @@ watch(
     "
   /><AccountPicker />
   <p v-if="shareOnly" class="muted-text">
-    命名模板、分类规则、输出与播放、入库核验都在「影视整理」里统一维护，这里只负责选分享、生成
-    STRM。点下面的入口会跳到对应设置。
+    分享版本策略在本页独立保存；命名模板与分类规则沿用已保存设置。先预览去留与输出范围，再确认生成或换版。
   </p>
   <nav v-if="shareOnly" class="module-navigation" aria-label="分享库相关设置">
     <RouterLink to="/resources/share" class="current">分享生成</RouterLink>
@@ -363,6 +365,7 @@ watch(
     <summary>输出与播放设置 <small>分享库目录、302 地址和生成时机</small></summary>
     <OutputSettings kind="share" @saved="outputRevision++" />
   </details>
+  <ShareQualitySettings v-if="shareOnly" @saved="outputRevision++" />
   <details v-if="!shareOnly" class="module-config">
     <summary>接收目录设置 <small>在本页选择并保存</small></summary>
     <DirectoryRoles
@@ -371,7 +374,7 @@ watch(
           ? ['magnet', 'ed2k']
           : tab === 'bot'
             ? ['bot']
-            : ['transfer', 'instant', 'magnet', 'ed2k', ...(organize ? ['target'] : [])]
+            : ['transfer', 'instant', 'magnet', 'ed2k']
       "
       title="接收目录设置"
       @saved="loadDirectories"
@@ -520,14 +523,16 @@ watch(
             @selected="(v) => (targetName = v.name)"
           /><label class="checkbox-label"
             ><input v-model="organize" type="checkbox" />转存后整理</label
-          ><DirectoryPicker
-            v-if="organize"
-            v-model="archive"
-            :account-id="cloud.id"
-            label="整理归档目录"
-            :name="archiveName"
-            @selected="(v) => (archiveName = v.name)"
-          /><label v-if="organize" class="checkbox-label"
+          >
+          <div v-if="organize" class="rule-note">
+            <strong>整理归档目录：{{ archiveName || '尚未保存' }}</strong>
+            <p>使用影视整理模块已保存的归档目录。</p>
+            <RouterLink to="/organize/workspace" class="text-link"
+              >到影视整理修改归档目录 →</RouterLink
+            >
+            <button class="button small" @click="loadDirectories">重新读取配置</button>
+          </div>
+          <label v-if="organize" class="checkbox-label"
             ><input v-model="generate" type="checkbox" />整理后生成 STRM</label
           >
         </div>
@@ -627,9 +632,10 @@ watch(
     :title="shareOnly ? '生成分享 STRM' : '提交资源接收'"
     :description="
       shareOnly
-        ? '仅从当前选择生成分享库 STRM，不转存到个人网盘。STRM 生成后还需单独核实 Emby 实际入库。'
+        ? '按预览的质量比较与去留结果生成分享 STRM；如有换版，核验新来源后处理已登记的旧 NAS 引用。不修改 115 文件。实际 Emby 入库另行核实。'
         : `把已预览内容接收到当前账号所选目录${organize ? '，并执行整理归档' : ''}；后台任务接受不代表处理或入库完成。`
     "
+    :danger="shareOnly && Number(plan.replacement_count || 0) > 0"
     :busy="op.busy.value"
     :disabled="op.uncertain.value"
     @close="confirm = false"

@@ -30,6 +30,8 @@ test('organize hub retains the source-deletion confirmation before saving', asyn
 test('STRM workspace saves its schedule, timezone and probe setting in place', async ({ page }) => {
   const state = await fixtures(page);
   await page.goto('/#/media/strm');
+  await page.getByText('当前配置：排期、输出、播放地址与来源', { exact: true }).click();
+  await page.getByText('手动补生成与高级核验', { exact: true }).click();
   await page.getByLabel('STRM 全量同步（Cron，五段）', { exact: true }).fill('0 3 * * *');
   await page.getByLabel('全量同步时区', { exact: true }).fill('UTC');
   await page.getByLabel('拦截飞牛媒体探测', { exact: true }).check();
@@ -104,6 +106,8 @@ for (const width of [320, 390, 430]) {
       }),
     );
     await page.goto('/#/media/strm');
+    await page.getByText('当前配置：排期、输出、播放地址与来源', { exact: true }).click();
+    await page.getByText('手动补生成与高级核验', { exact: true }).click();
     await page.getByLabel('选择已生成的资源').selectOption('asset-a');
     await page.getByRole('button', { name: '核验源文件与播放解析', exact: true }).click();
     await expect(page.getByText('302 解析通过', { exact: true })).toBeVisible();

@@ -117,6 +117,7 @@
   },
   "cloud": {
     "public_url": "",
+    "external_url": "",
     "output_root": "/strm/local",
     "emby_output_root": "",
     "share_output_root": "/strm/share",
@@ -133,6 +134,8 @@
     "notify_channel": true,
     "notify_maintenance": true,
     "emby_refresh_enabled": true,
+    "ingest_retry_seconds": 60,
+    "ingest_max_attempts": 120,
     "open_app_id": "",
     "naming_style": "standard",
     "movie_folder": "电影",
@@ -223,6 +226,15 @@
       ".vtt"
     ],
     "min_video_mb": 0,
+    "strm_scan_cron": "",
+    "strm_scan_timezone": "Asia/Shanghai",
+    "strm_scan_last_run": 0,
+    "strm_scan_last_enqueued": 0,
+    "strm_scan_start_mode": "immediate",
+    "strm_scan_anchor": 0,
+    "strm_scan_pending": false,
+    "strm_reconcile_enabled": true,
+    "strm_block_feiniu_ua": false,
     "ignore_keywords": [],
     "ignore_regex": [],
     "quality8_enabled": false,
@@ -325,6 +337,106 @@
       }
     ],
     "quality8_coexist_dv": true,
+    "share_quality_enabled": false,
+    "share_quality_mode": "preview",
+    "share_quality_rules": [
+      {
+        "key": "release_group",
+        "enabled": false,
+        "tiers": [],
+        "groups": []
+      },
+      {
+        "key": "source",
+        "enabled": false,
+        "tiers": [
+          "UHD Remux",
+          "Remux",
+          "UHD BluRay / BDMV",
+          "BluRay",
+          "WEB-DL",
+          "WEBRip",
+          "HDTV",
+          "DVD",
+          "其他 / 未识别"
+        ],
+        "groups": []
+      },
+      {
+        "key": "resolution",
+        "enabled": true,
+        "tiers": [
+          "4320p / 8K",
+          "2160p / 4K",
+          "1440p / 2K",
+          "1080p",
+          "720p",
+          "SD（576p 及以下）",
+          "其他 / 未识别"
+        ],
+        "groups": []
+      },
+      {
+        "key": "dynamic_range",
+        "enabled": true,
+        "tiers": [
+          "Dolby Vision Profile 7",
+          "Dolby Vision Profile 5",
+          "Dolby Vision Profile 8",
+          "Dolby Vision（未识别 Profile）",
+          "HDR10+",
+          "HDR Vivid",
+          "HDR10",
+          "HDR / HLG",
+          "SDR",
+          "其他 / 未识别"
+        ],
+        "groups": []
+      },
+      {
+        "key": "fps",
+        "enabled": true,
+        "tiers": [
+          "60 / 59.94 fps",
+          "50 fps",
+          "30 / 29.97 fps",
+          "25 fps",
+          "24 / 23.976 fps",
+          "其他 / 未识别"
+        ],
+        "groups": []
+      },
+      {
+        "key": "bitdepth",
+        "enabled": true,
+        "tiers": ["12bit", "10bit", "8bit", "其他 / 未识别"],
+        "groups": []
+      },
+      {
+        "key": "audio",
+        "enabled": true,
+        "tiers": [
+          "TrueHD Atmos / DTS:X",
+          "TrueHD / DTS-HD MA",
+          "LPCM / FLAC",
+          "Audio Vivid / AV3A",
+          "DD+ Atmos",
+          "DD+ / E-AC-3",
+          "DTS",
+          "AC3 / DD",
+          "AAC",
+          "其他 / 未识别"
+        ],
+        "groups": []
+      },
+      {
+        "key": "size",
+        "enabled": true,
+        "tiers": [],
+        "groups": []
+      }
+    ],
+    "share_quality_coexist_dv": true,
     "movie_directory_template": "{title} ({year}) [tmdb-{tmdb_id}]",
     "tv_directory_template": "{title} ({year}) [tmdb-{tmdb_id}]",
     "season_directory_template": "Season {season:02d}",

@@ -774,6 +774,9 @@ def test_scheduler_deduplicates_active_rule_jobs(cloud):
 
 def test_existing_session_api_runs_transfer_organization_and_strm(cloud, monkeypatch):
     from app.routers import deps
+    from app.cloud import directories
+    monkeypatch.setattr(directories, 'for_account', lambda aid: cloud.remote)
+    directories.save(cloud.id, {'target': '2'}, 0)
 
     monkeypatch.setattr(readiness, "failed", lambda: False)
     client = TestClient(main.app)
