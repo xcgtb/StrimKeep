@@ -49,6 +49,7 @@ git push --atomic origin main v1.2.9
 只推送 `main` 不会自动构建镜像；即使晚些时候单独推送新 Tag，也会触发该版本的发布。`workflow_dispatch` 保留手工运行权限，手工运行时请选择目标版本 Tag；选择 `main` 会显示 `main`，仅用于特殊场景，避免当作常规正式发布。
 
 版本由 Git 标签注入构建参数 `APP_VERSION`；不要修改 `app/version.py` 的本地兜底值 `0.0.0+local`。
+精确版本标签构建使用该标签。未打新标签的提交沿第一父提交历史查找最近的正式版本，兼容轻量和附注标签；不取数字最大的历史标签，也不受侧分支标签或标签创建时间影响。可执行 `python3 dev/tools/image_version.py` 检查基线版本，`python3 dev/tools/image_version.py --github-output` 检查本次镜像元数据。历史 `v1.12.11` 保留，不移动、不删除。
 `latest` 仍适合 NAS 测试，待镜像构建成功后在部署目录执行：
 
 ```bash

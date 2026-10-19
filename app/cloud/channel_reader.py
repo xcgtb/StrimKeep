@@ -150,7 +150,7 @@ def poll_one():
     from app import config
     now = time.time()
     with store.db() as con:
-        row = con.execute("SELECT c.id,c.account_id,c.account_revision,c.revision,c.payload,s.cursor,s.initialized FROM cloud_channels c LEFT JOIN cloud_channel_cursors s ON s.id=c.id WHERE json_extract(c.payload,'$.enabled')=1 AND json_extract(c.payload,'$.mode')='user' AND COALESCE(s.next_poll,0)<=? ORDER BY COALESCE(s.next_poll,0) LIMIT 1", (now,)).fetchone()
+        row = con.execute("SELECT c.id,c.account_id,c.account_revision,c.revision,c.payload,s.cursor,s.initialized FROM cloud_channels c JOIN cloud_accounts a ON a.id=c.account_id LEFT JOIN cloud_channel_cursors s ON s.id=c.id WHERE json_extract(c.payload,'$.enabled')=1 AND json_extract(c.payload,'$.mode')='user' AND COALESCE(s.next_poll,0)<=? ORDER BY COALESCE(s.next_poll,0) LIMIT 1", (now,)).fetchone()
     if not row:
         return False
     rid, aid, arev, rev, raw, cursor, initialized = row
@@ -216,6 +216,6 @@ def schedule():
     global _future
     if _future is None or _future.done():
         with store.db() as con:
-            exists = con.execute("SELECT 1 FROM cloud_channels c LEFT JOIN cloud_channel_cursors s ON s.id=c.id WHERE json_extract(c.payload,'$.enabled')=1 AND json_extract(c.payload,'$.mode')='user' AND COALESCE(s.next_poll,0)<=? LIMIT 1", (time.time(),)).fetchone()
+            exists = con.execute("SELECT 1 FROM cloud_channels c JOIN cloud_accounts a ON a.id=c.account_id LEFT JOIN cloud_channel_cursors s ON s.id=c.id WHERE json_extract(c.payload,'$.enabled')=1 AND json_extract(c.payload,'$.mode')='user' AND COALESCE(s.next_poll,0)<=? LIMIT 1", (time.time(),)).fetchone()
         if exists:
             _future = _POOL.submit(drain)

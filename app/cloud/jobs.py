@@ -474,6 +474,7 @@ def _loop():
                 except tasks.TaskBusy:
                     pass
                 else:
+                    next_schedule = time.monotonic() + 2
                     while not task.done.wait(0.5):
                         if _STOP.is_set():
                             return
@@ -481,6 +482,14 @@ def _loop():
                         # is running; this scheduler never submits 115 writes.
                         from app.cloud import emby_library
                         emby_library.schedule()
+                        if time.monotonic() >= next_schedule:
+                            # Only capture/read and enqueue here. Remote writes
+                            # still wait for the single exclusive execution slot.
+                            try:
+                                schedule()
+                            except Exception:
+                                log.error("网盘后台调度失败，保留待处理记录")
+                            next_schedule = time.monotonic() + 2
         except Exception:
             log.error("网盘任务调度失败，保留待处理记录")
         _WAKE.wait(2)

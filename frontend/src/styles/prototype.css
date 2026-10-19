@@ -2754,6 +2754,8 @@ body {
 .workflow-config-card {
   margin: 0 !important;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 16px;
   align-content: start;
 }

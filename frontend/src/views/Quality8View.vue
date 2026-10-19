@@ -93,7 +93,7 @@ function resetQuality() {
     <aside class="panel stage-guide">
       <h2>整理链路的配置关系</h2>
       <RouterLink to="/settings/cloud?section=quality"
-        ><strong>源文件治理授权</strong><span>核查删除权限与源文件登记 →</span></RouterLink
+        ><strong>Cookie 源文件删除</strong><span>核查删除开关与源文件登记 →</span></RouterLink
       >
       <RouterLink to="/organize/naming"
         ><strong>自定义命名模板</strong><span>目录、文件名与季集格式 →</span></RouterLink

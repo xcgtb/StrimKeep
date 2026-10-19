@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { FileVideo, Save, Clock3, FolderOpen, Link2, Radio } from '@lucide/vue';
+import { FileVideo, Save, Clock3, FolderOpen, Link2, Radio, CalendarClock } from '@lucide/vue';
 import { useCloudSettingsDraft } from '../composables/useCloudSettingsDraft';
 import { cloudSections } from '../config/cloudFields';
 import FormFields from './FormFields.vue';
@@ -45,6 +45,12 @@ const playbackFields = computed(() =>
           }
         : f,
     ),
+);
+const scheduleFields = computed(() =>
+  cloudSections[0]!.fields.filter((f) => ['strm_scan_cron', 'strm_scan_timezone'].includes(f.key)),
+);
+const protectionFields = computed(() =>
+  cloudSections[0]!.fields.filter((f) => f.key === 'strm_block_feiniu_ua'),
 );
 const notificationFields = computed(() =>
   cloudSections
@@ -117,6 +123,17 @@ async function saveAndNotify() {
           归档 → 等待 {{ Number(draft.strm_delay_seconds || 0) }} 秒 → 生成 STRM → Emby 核验
         </p>
       </section>
+      <section v-if="kind === 'personal'" class="panel workflow-config-card">
+        <header class="section-heading">
+          <h3><CalendarClock :size="17" />定时全量同步</h3>
+          <span class="module-tag">各账号独立来源</span>
+        </header>
+        <p class="muted-text">
+          使用各账号在本页保存的 STRM 同步来源，只更新播放引用，不移动或重命名网盘文件。
+        </p>
+        <FormFields v-model="draft" :fields="scheduleFields" :disabled="busy" />
+        <p class="rule-note">同一目录已有同步任务时跳过本轮，避免重复排队。</p>
+      </section>
       <section class="panel workflow-config-card">
         <header class="section-heading">
           <h3><FolderOpen :size="17" />输出与路径映射</h3>
@@ -140,6 +157,7 @@ async function saveAndNotify() {
           <span class="module-tag">302 / 代理</span>
         </header>
         <FormFields v-model="draft" :fields="playbackFields" :disabled="busy" />
+        <FormFields v-model="draft" :fields="protectionFields" :disabled="busy" />
         <p class="muted-text">
           外网地址用于复制播放链接；已生成的 STRM 通过同步更新。需要 Cookie 的 115
           资源自动使用受控代理。

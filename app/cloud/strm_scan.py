@@ -11,7 +11,7 @@
 """
 import time
 
-from app.cloud import directories, events, jobs, schedules, settings, store
+from app.cloud import directories, events, schedules, settings, store
 
 DEFAULT_CRON = ''
 DEFAULT_TZ = 'Asia/Shanghai'
@@ -29,6 +29,8 @@ def targets(account_id):
     items = raw if isinstance(raw, list) else [raw]
     out, seen = [], set()
     for item in items:
+        if isinstance(item, dict):
+            item = item.get('id')
         text = str(item).strip()
         if text and text.isdigit() and text not in seen:
             seen.add(text)
@@ -79,11 +81,11 @@ def start(account_id=None):
             skipped.append({'account_id': aid, 'reason': '没有配置 STRM 角色目录'})
             continue
         for cid in dirs:
-            job_id = jobs.enqueue('sync', {
-                'account_id': aid,
-                'account_revision': account['revision'],
-                'source_cid': cid,
-            })
+            job_id, created = store.enqueue_sync_once(aid, account['revision'], cid)
+            if not created:
+                skipped.append({'account_id': aid, 'source_cid': cid,
+                                'active_job_id': job_id, 'reason': '此目录已有排队或执行中的同步任务'})
+                continue
             queued.append({'account_id': aid, 'source_cid': cid, 'job_id': job_id})
     if queued:
         events.emit('strm', 'STRM 全量同步已排队：%d 个目录' % len(queued))
@@ -97,8 +99,6 @@ def tick(config, now=None):
                config.get('strm_scan_last_run'), now):
         return []
     queued, _skipped = start()
-    if queued:
-        current = dict(settings.get())
-        current['strm_scan_last_run'] = now
-        settings.save(current)
+    if queued or any(item.get('active_job_id') for item in _skipped):
+        settings.save({'strm_scan_last_run': now})
     return queued

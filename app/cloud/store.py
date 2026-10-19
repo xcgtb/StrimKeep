@@ -321,11 +321,41 @@ def disconnect_account(account_id):
         con.execute("DELETE FROM cloud_accounts WHERE id=?", (account_id,))
         con.execute("DELETE FROM cloud_directory_settings WHERE account_id=?", (account_id,))
         con.execute("DELETE FROM cloud_media_probes WHERE account_id=?", (account_id,))
+        con.execute("DELETE FROM cloud_files WHERE account_id=?", (account_id,))
+        con.execute("DELETE FROM cloud_service_settings WHERE account_id=?", (account_id,))
+        con.execute("DELETE FROM cloud_channel_cursors WHERE id IN "
+                    "(SELECT id FROM cloud_channels WHERE account_id=?)", (account_id,))
+        con.execute("DELETE FROM cloud_channels WHERE account_id=?", (account_id,))
+        con.execute("UPDATE cloud_inbox SET state='processed',result=? "
+                    "WHERE account_id=? AND state='queued'",
+                    (encode({'errors': [{'reason': '账号已断开，未提交接收任务'}]}), account_id))
         con.execute("UPDATE cloud_assets SET state='disconnected' WHERE account_id=?", (account_id,))
         con.execute(
             "UPDATE cloud_rules SET enabled=0 WHERE json_extract(payload,'$.account_id')=?",
             (account_id,),
         )
+
+
+def enqueue_sync_once(account_id, revision, source_cid):
+    """Serialize the account check and pending-sync lookup with the enqueue."""
+    from app.cloud import jobs
+
+    with db() as con:
+        account = con.execute("SELECT revision FROM cloud_accounts WHERE id=?",
+                              (account_id,)).fetchone()
+        if not account or account[0] != revision:
+            raise CloudError("账号授权已变化，未投递同步任务", 409)
+        row = con.execute(
+            "SELECT id FROM cloud_jobs WHERE kind='sync' AND state IN ('queued','running') "
+            "AND json_extract(payload,'$.account_id')=? "
+            "AND CAST(json_extract(payload,'$.source_cid') AS TEXT)=? ORDER BY created LIMIT 1",
+            (account_id, str(source_cid)),
+        ).fetchone()
+        if row:
+            return row[0], False
+        return jobs.enqueue('sync', {'account_id': account_id,
+                                    'account_revision': revision,
+                                    'source_cid': str(source_cid)}, con), True
 
 
 def delete_channel(account_id, channel_id):

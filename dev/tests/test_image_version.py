@@ -89,3 +89,35 @@ def test_unrelated_nonrelease_tags_do_not_trigger_version_publish(tmp_path):
     git(root, 'tag', 'v1.2.7')
     git(root, 'tag', 'latest-test')
     assert versions.head_release_tag(root) == 'v1.2.7'
+
+
+@pytest.mark.parametrize('annotated', [False, True])
+def test_historical_large_version_does_not_override_newer_release_ancestry(tmp_path, annotated):
+    root = repo(tmp_path)
+    git(root, 'tag', 'v1.12.11')
+    (root/'release.txt').write_text('current release')
+    git(root, 'add', '.')
+    git(root, 'commit', '-qm', 'current release')
+    if annotated:
+        git(root, 'tag', '-a', 'v1.5.18', '-m', 'current release')
+    else:
+        git(root, 'tag', 'v1.5.18')
+    (root/'next.txt').write_text('unreleased fix')
+    git(root, 'add', '.')
+    git(root, 'commit', '-qm', 'fix')
+    assert versions.resolve(root, 'branch', 'main') == '1.5.18'
+    assert versions.publish_metadata(root) == {'value': '1.5.18', 'tag': '', 'release': 'false'}
+    assert git(root, 'tag', '--list', 'v1.12.11') == 'v1.12.11'
+
+
+def test_merged_feature_branch_release_does_not_override_main_lineage(tmp_path):
+    root = repo(tmp_path)
+    git(root, 'tag', '-a', 'v1.5.18', '-m', 'main release')
+    git(root, 'checkout', '-qb', 'feature')
+    (root/'feature.txt').write_text('feature')
+    git(root, 'add', '.')
+    git(root, 'commit', '-qm', 'feature')
+    git(root, 'tag', 'v9.0.0')
+    git(root, 'checkout', '-q', '-')
+    git(root, 'merge', '--no-ff', '-qm', 'merge feature', 'feature')
+    assert versions.resolve(root, 'branch', 'main') == '1.5.18'

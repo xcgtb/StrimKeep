@@ -2,7 +2,7 @@
 
 ## Versioning (mandatory for AI/Codex and maintainers)
 
-- **Release version:** obtain the highest semantic `vX.Y.Z` Git tag reachable from the commit being inspected. Use `git fetch --tags` and `git tag --merged HEAD --sort=-version:refname`. An annotated tag and a lightweight tag both count. Do not rely on `app/version.py` or the top line of `CHANGELOG.md` to infer a release.
+- **Release version:** use the nearest semantic `vX.Y.Z` release tag on the inspected commit's first-parent history. Fetch full history and tags, then run `python3 dev/tools/image_version.py`. Annotated and lightweight tags both count. Historical numeric maxima (such as `v1.12.11`) and tags on merged feature branches must not override later releases on the main lineage. Do not rely on `app/version.py` or the top line of `CHANGELOG.md` to infer a release. Publishing requires one unambiguous release tag on the exact commit; never rewrite old tags.
 - **Source revision:** identify the actual inspected branch/ref and `git rev-parse HEAD`. The moving `main`/`latest` build can contain commits newer than the most recent release tag while still displaying that release version.
 - **Production image:** `.github/workflows/docker.yml` resolves `APP_VERSION` from Git and passes it to the Dockerfile. Runtime `/api/runtime/status` returns that version. **The Web UI displays only `X.Y.Z`, never SHA, branch, or date.**
 - **Local fallback:** `app/version.py` defines `0.0.0+local` only for non-CI local source/image runs with no `APP_VERSION`. It is **not** a release version. Do not auto-bump it on release.

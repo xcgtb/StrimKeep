@@ -25,7 +25,7 @@ def save(account_id, kind, config, expected, defaults, validate):
         current = con.execute("SELECT revision FROM cloud_accounts WHERE id=?", (account_id,)).fetchone()
         if (row[0] if row else 0) != expected or not current or current[0] != account["revision"]:
             raise CloudError("账号或配置变化，请刷新后重试", 409)
-        if kind == "receiving" and result.get("tg_enabled") and con.execute("SELECT 1 FROM cloud_service_settings WHERE kind='receiving' AND account_id!=? AND json_extract(payload,'$.tg_enabled')=1",(account_id,)).fetchone():
+        if kind == "receiving" and result.get("tg_enabled") and con.execute("SELECT 1 FROM cloud_service_settings s JOIN cloud_accounts a ON a.id=s.account_id WHERE s.kind='receiving' AND s.account_id!=? AND json_extract(s.payload,'$.tg_enabled')=1",(account_id,)).fetchone():
             raise CloudError("另一个账号已开启 TG 接收，请先关闭",409)
         con.execute("INSERT INTO cloud_service_settings VALUES(?,?,?,?,?,?) ON CONFLICT(account_id,kind) DO UPDATE SET payload=excluded.payload,revision=excluded.revision,account_revision=excluded.account_revision,updated=excluded.updated", (account_id, kind, store.encode(result), expected+1, account["revision"], time.time()))
     return get(account_id, kind, defaults)

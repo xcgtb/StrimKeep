@@ -164,7 +164,7 @@ test('naming and source-governance controls remain reachable inside organize', a
     .getByRole('navigation', { name: '模块功能' })
     .getByRole('link', { name: '删除与源文件处理', exact: true })
     .click();
-  await expect(page.getByLabel('允许通过官方授权删除源文件', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('允许通过 Cookie 删除源文件', { exact: true })).toBeVisible();
   expect(state.writes).toEqual([]);
 });
 

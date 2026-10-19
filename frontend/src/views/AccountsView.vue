@@ -84,14 +84,14 @@ const statusItems = computed(() => {
       ok: yes(a.open) && a.open_state === 'ready' && Number(a.expires_at) > Date.now() / 1000,
       text: yes(a.open)
         ? '已保存授权，请检查官方授权以核实接口是否可用'
-        : '未连接，官方接口与按 ID 删源不可用',
+        : '未保存官方授权；转存、整理与源文件删除使用 Cookie 登录',
     },
     {
-      label: '官方删除',
-      ok: yes(a.official_delete),
-      text: yes(a.official_delete)
-        ? '已记录官方删除能力，实际操作仍需核验授权与删除配置'
-        : '未记录可用的官方删除能力',
+      label: '源文件删除（Cookie）',
+      ok: yes(a.cookie_delete ?? a.cookie),
+      text: yes(a.cookie_delete ?? a.cookie)
+        ? '已保存 Cookie，可按文件 ID 删源；执行前仍需开启删除并核验文件身份'
+        : '请先保存 Cookie 登录凭证，再配置源文件删除',
     },
     {
       label: '登录客户端',

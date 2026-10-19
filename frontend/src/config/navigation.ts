@@ -117,10 +117,10 @@ export const navigation = [
 const moduleTools = [
   {
     to: '/settings/cloud?section=quality',
-    name: '源文件治理授权',
+    name: 'Cookie 源文件删除',
     group: '影视整理',
     icon: ShieldCheck,
-    keywords: '官方授权 删除源文件 OpenAPI AppID 八维 治理',
+    keywords: 'Cookie 删除源文件 文件ID OpenAPI AppID 八维 治理',
   },
   {
     to: '/settings/cloud?section=proxy',

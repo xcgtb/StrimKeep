@@ -81,7 +81,7 @@ def save(account_id, patch, expected):
             if not directories.get(account_id)["directories"]["transfer"]:
                 raise CloudError("请先选择分享转存目录", 409)
             with store.db() as con:
-                other = con.execute("SELECT 1 FROM cloud_service_settings WHERE kind='receiving' AND account_id!=? AND json_extract(payload,'$.tg_enabled')=1", (account_id,)).fetchone()
+                other = con.execute("SELECT 1 FROM cloud_service_settings s JOIN cloud_accounts a ON a.id=s.account_id WHERE s.kind='receiving' AND s.account_id!=? AND json_extract(s.payload,'$.tg_enabled')=1", (account_id,)).fetchone()
             if other:
                 raise CloudError("另一个账号已开启 TG 接收，请先关闭，避免多账号重复接收", 409)
             if not old["config"]["tg_enabled"]:
@@ -281,7 +281,7 @@ def capture(msg, token_scope="", channel=False, authorized=False):
     chat = msg.get("chat") or {};targets=[]
     with store.db() as con:
         if channel:
-            rows=con.execute("SELECT id,account_id,account_revision,revision,payload FROM cloud_channels WHERE json_extract(payload,'$.enabled')=1").fetchall()
+            rows=con.execute("SELECT c.id,c.account_id,c.account_revision,c.revision,c.payload FROM cloud_channels c JOIN cloud_accounts a ON a.id=c.account_id AND a.revision=c.account_revision WHERE json_extract(c.payload,'$.enabled')=1").fetchall()
             addresses={str(chat.get("id", "")),"@"+str(chat.get("username", "")).lower()}
             for rid,aid,arev,rev,raw in rows:
                 cfg=json.loads(raw)
@@ -289,13 +289,16 @@ def capture(msg, token_scope="", channel=False, authorized=False):
                 if (cfg.get("chat_id")==str(chat.get("id")) if cfg.get("chat_id") else cfg["address"] in addresses) and msg.get("date",0)>=cfg["start_after"]:
                     targets.append((aid,arev,{"channel_id":rid,"channel_revision":rev,"rule":cfg},rid))
         elif authorized:
-            rows=con.execute("SELECT account_id,account_revision,revision,payload FROM cloud_service_settings WHERE kind='receiving' AND json_extract(payload,'$.tg_enabled')=1").fetchall()
+            rows=con.execute("SELECT s.account_id,s.account_revision,s.revision,s.payload FROM cloud_service_settings s JOIN cloud_accounts a ON a.id=s.account_id AND a.revision=s.account_revision WHERE s.kind='receiving' AND json_extract(s.payload,'$.tg_enabled')=1").fetchall()
             for aid,arev,rev,raw in rows:
                 if msg.get("date",0)>=json.loads(raw).get("start_after",0):targets.append((aid,arev,{"receiving_revision":rev},"private"))
     sealed=credentials.seal({"text":text,"entities":entities,"share_direct":(text.strip().split() or [""])[0].split("@")[0].lower() in ("/strm", "/sharestrm", "/create_115share_strm")}) if targets else ""
     ids=[]
     with store.db() as con:
         for aid,arev,extra,scope in targets:
+            account = con.execute("SELECT revision FROM cloud_accounts WHERE id=?", (aid,)).fetchone()
+            if not account or account[0] != arev:
+                continue
             key=hashlib.sha256(store.encode([token_scope,chat.get("id"),msg.get("message_id"),scope]).encode()).hexdigest()
             iid=store.ident()
             con.execute("INSERT OR IGNORE INTO cloud_inbox(id,event_key,account_id,source,payload,state,created) VALUES(?,?,?,?,?,'queued',?)",(iid,key,aid,"channel" if channel else "telegram",store.encode({"account_id":aid,"account_revision":arev,"sealed_message":sealed,**extra}),time.time()))
@@ -306,6 +309,9 @@ def capture(msg, token_scope="", channel=False, authorized=False):
 
 def schedule():
     with store.db() as con:
+        con.execute("UPDATE cloud_inbox SET state='processed',result=? WHERE state='queued' "
+                    "AND NOT EXISTS (SELECT 1 FROM cloud_accounts a WHERE a.id=cloud_inbox.account_id)",
+                    (store.encode({'errors': [{'reason': '账号已断开，未提交接收任务'}]}),))
         rows=con.execute("SELECT id,account_id,source,payload FROM cloud_inbox WHERE state='queued' ORDER BY created LIMIT 20").fetchall()
         for iid,aid,source,raw in rows:
             jid=jobs.enqueue("channel" if source=="channel" else "intake",{**json.loads(raw),"inbox_id":iid},con)

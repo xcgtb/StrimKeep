@@ -73,3 +73,33 @@ async function copy(value: unknown) {
     <p v-if="!props.assets.length" class="muted-text">生成首个 STRM 后即可在这里核验。</p>
   </section>
 </template>
+
+<style scoped>
+.playback-check,
+.playback-check-result {
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+.playback-check > *,
+.playback-check-result > *,
+.playback-check label {
+  min-width: 0;
+  max-width: 100%;
+}
+.playback-check select,
+.playback-check input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  text-overflow: ellipsis;
+}
+.playback-check > .button {
+  width: 100%;
+  white-space: normal;
+}
+.playback-check p,
+.playback-check-result .text-link {
+  overflow-wrap: anywhere;
+}
+</style>

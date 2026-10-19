@@ -20,14 +20,25 @@ def resolve(root, ref_type, ref_name):
         if not match:
             raise ValueError('Release tag must have the form v1.2.3')
         return match[1]
-    # Full checkout history is required by CI. Only releases in this branch
-    # determine its base version; unrelated branch tags are ignored.
-    tags = git(root, 'tag', '--merged', 'HEAD', '--sort=-version:refname').splitlines()
-    base = next((RELEASE_TAG.fullmatch(tag)[1] for tag in tags
-                 if RELEASE_TAG.fullmatch(tag)), None)
-    if base is None:
-        raise ValueError('No reachable release tag (vX.Y.Z). Fetch tags or create the first release tag before CI image publishing.')
-    return base
+    # Follow release ancestry, not numeric maxima or editable tag dates.
+    # Historical v1.12.11 must not override a later v1.5.18 release, and
+    # a feature branch's tags must not replace the main release lineage.
+    tags = [tag for tag in git(root, 'tag', '--merged', 'HEAD').splitlines()
+            if RELEASE_TAG.fullmatch(tag)]
+    if tags:
+        refs = {}
+        for line in git(root, 'show-ref', '--tags', '--dereference').splitlines():
+            sha, ref = line.split()
+            name = ref.removeprefix('refs/tags/').removesuffix('^{}')
+            # The peeled annotated-tag line follows its object line.
+            refs[name] = sha
+        by_commit = {}
+        for tag in tags:
+            by_commit.setdefault(refs[tag], []).append(tag[1:])
+        for commit in git(root, 'rev-list', '--first-parent', 'HEAD').splitlines():
+            if commit in by_commit:
+                return max(by_commit[commit], key=lambda value: tuple(map(int, value.split('.'))))
+    raise ValueError('No reachable release tag (vX.Y.Z) on first-parent history. Fetch full history and tags or create the first release tag before CI image publishing.')
 
 
 def head_release_tag(root):

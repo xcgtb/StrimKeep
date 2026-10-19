@@ -35,7 +35,7 @@ export const cloudSections: { key: string; title: string; description: string; f
         {
           key: 'strm_scan_cron',
           label: 'STRM 全量同步（Cron，五段）',
-          hint: '留空=不排期。例如 0 0 * * * 表示每天 00:00 全量扫描所有 STRM 目录；到期后逐目录串行执行。',
+          hint: '留空=不排期。例如 0 0 * * * 表示每天 00:00 扫描各账号已保存的 STRM 同步来源；首次开启立即执行一次，后续按 Cron 串行排队。',
         },
         {
           key: 'strm_block_feiniu_ua',
@@ -141,7 +141,12 @@ export const cloudSections: { key: string; title: string; description: string; f
           options: options({ preview: '只预览建议', upgrade: '按已保存策略执行洗版' }),
         },
         { key: 'quality8_coexist_dv', label: '杜比与非杜比版本共存', type: 'check' },
-        { key: 'official_delete_enabled', label: '允许通过官方授权删除源文件', type: 'check' },
+        {
+          key: 'official_delete_enabled',
+          label: '允许通过 Cookie 删除源文件',
+          type: 'check',
+          hint: '按已登记的文件 ID、SHA1 与账号身份核验后执行；分享库清理仅删除 NAS 引用。',
+        },
         {
           key: 'governance_generated_enabled',
           label: '治理联动处理本项目生成的源文件',

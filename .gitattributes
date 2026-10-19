@@ -1,1 +1,10 @@
-frontend/** text eol=lf
+frontend/** text=auto eol=lf
+*.png -text
+*.ico -text
+*.webp -text
+*.jpg -text
+*.jpeg -text
+*.gif -text
+*.avif -text
+*.woff -text
+*.woff2 -text
