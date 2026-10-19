@@ -743,6 +743,20 @@ def transfer_submit(
 
 
 def transfer(job_id, payload):
+    try:
+        return _transfer(job_id, payload)
+    except jobs.JobStopped:
+        raise
+    except CloudError as error:
+        from app.cloud.errors import diagnostic
+        item = diagnostic(error)
+        result = getattr(error, 'partial_result', {})
+        result.setdefault('errors', []).append(item)
+        error.partial_result = result
+        raise
+
+
+def _transfer(job_id, payload):
     provider = verify_account(payload)
     verify_archive(payload)
     if payload.get("organize_target"):
@@ -769,12 +783,16 @@ def transfer(job_id, payload):
             job_id, len(payload["source_ids"]), 0, "转存中；结果确认前不会重复提交"
         )
         access = share_access(payload)
-        provider.receive(access["code"], access["password"], payload["source_ids"], target)
+        try:
+            provider.receive(access["code"], access["password"], payload["source_ids"], target)
+        except CloudError as error:
+            error.stage = "submit_transfer"
+            raise
         try:
             return transfer_receipt(provider, payload, intent, job_id)
         except CloudError as error:
             # Receive has already returned; a read failure cannot prove no write.
-            raise CloudError(str(error), error.status, uncertain=True) from None
+            raise CloudError(str(error), error.status, uncertain=True, code=error.code, category=error.category, stage="verify_transfer") from None
 
     result = jobs.step(
         job_id,

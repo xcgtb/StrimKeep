@@ -215,3 +215,11 @@ STRM 全量扫描由 `scheduler` 调用 `cloud/strm_scan.tick()`，从已保存�
 3. **它的幂等键是什么？** 写之前先定 `UNIQUE(...)`，不要靠"先查后插"
 
 具体步骤见 `docs/ADDING_A_FEATURE.md`。
+
+
+## 频道命令转发边界（v1.6.0）
+
+- `app/domain/telegram_intake.py` 归一化命令、直接回复、说明与隐藏链接，校验命令头并按 UTF-16 计算转发长度；`provider_errors.py` 只输出白名单诊断；`media_labels.py` 只影响通知显示，不影响命名和质量比较。
+- `receiving` 统一频道筛选、持久收件箱、内置分享 STRM/转存调度及接收历史；`channel_forwarding` 只拥有通过用户会话发送命令文本的流程，以现有 channel 任务及 telegram-forward 步骤保存回执。没有新增第二套业务状态或执行队列。
+- `public_channel_reader` 负责有界公开网页读取；`channel_reader` 负责 MTProto 读取与会话；两者均在同一事务中提交消息和游标并核对账号/规则/游标修订。`cloud_public_channel_status` 保留最初补丁表名，兼容保存两类轮询读取的状态，不是任务业务状态。
+- 外部消息写入只在 jobs 内发生；未知发送不会重放，观察模式无远端操作。接收历史按当前子任务只读补充失败，不重写父任务已提交的事实。未修改双库治理和版本替换策略。

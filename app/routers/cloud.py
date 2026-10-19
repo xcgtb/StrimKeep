@@ -320,6 +320,16 @@ def channel_save(account_id:str,body:dict):
     return {"status":"success","channel":call(receiving.save_channel,account_id,body)}
 
 
+@router.post("/accounts/{account_id}/channels/public-preview")
+def public_channel_preview(account_id: str, body: dict):
+    """Read-only network preview: no inbox, cursor or 115 remote writes."""
+    if set(body) - {"address", "limit"} or not isinstance(body.get("address"), str):
+        raise HTTPException(400, "请填写公开频道地址")
+    from app.cloud import public_channel_reader
+    return {"status": "success", **call(public_channel_reader.preview, account_id,
+                                           body["address"], body.get("limit", 20))}
+
+
 @router.delete("/accounts/{account_id}/channels/{channel_id}")
 def channel_delete(account_id:str,channel_id:str):
     store.delete_channel(account_id, channel_id)
@@ -330,10 +340,7 @@ def channel_delete(account_id:str,channel_id:str):
 def channel_filter_test(account_id:str,channel_id:str,body:dict):
     from app.cloud import receiving
     if set(body)!={"text"} or not isinstance(body["text"],str) or len(body["text"])>8000:raise HTTPException(400,"请填写不超过8000字的测试消息")
-    rule=next((r for r in call(receiving.channels,account_id) if r["id"]==channel_id),None)
-    if not rule:raise HTTPException(404,"频道规则不存在")
-    matched,reason=call(receiving.allowed_message,body["text"],rule)
-    return {"status":"success","matched":matched,"reason":reason}
+    return {"status":"success", **call(receiving.test_channel, account_id, channel_id, body["text"])}
 
 
 @router.get("/accounts/{account_id}/inbox")

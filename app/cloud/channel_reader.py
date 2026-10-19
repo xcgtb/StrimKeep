@@ -1,6 +1,5 @@
 """Bounded MTProto reads. Sessions stay encrypted; cursors commit with inbox records."""
 import asyncio
-import hashlib
 import json
 import re
 import time
@@ -137,6 +136,8 @@ async def _messages(secret, rule, cursor, initialized):
         result = []
         for m in sorted(messages, key=lambda v: v.id):
             entities = [{"type": "text_link", "url": e.url} for e in (m.entities or []) if getattr(e, "url", None)]
+            for row in (getattr(getattr(m, 'reply_markup', None), 'rows', None) or [])[:20]:
+                entities.extend({'type':'text_link','url':b.url} for b in (getattr(row,'buttons',None) or [])[:20] if isinstance(getattr(b,'url',None),str))
             result.append({"message_id": m.id, "date": int(m.date.timestamp()), "chat": {"id": get_peer_id(entity)}, "text": m.message or "", "entities": entities})
         # 取满上限说明后面可能还有未读：让调度立刻再跑一轮，而不是干等一个周期。
         backlog = bool(initialized and len(messages) >= limit)
@@ -147,7 +148,6 @@ async def _messages(secret, rule, cursor, initialized):
 
 def poll_one():
     from app.cloud import receiving
-    from app import config
     now = time.time()
     with store.db() as con:
         row = con.execute("SELECT c.id,c.account_id,c.account_revision,c.revision,c.payload,s.cursor,s.initialized FROM cloud_channels c JOIN cloud_accounts a ON a.id=c.account_id LEFT JOIN cloud_channel_cursors s ON s.id=c.id WHERE json_extract(c.payload,'$.enabled')=1 AND json_extract(c.payload,'$.mode')='user' AND COALESCE(s.next_poll,0)<=? ORDER BY COALESCE(s.next_poll,0) LIMIT 1", (now,)).fetchone()
@@ -168,12 +168,15 @@ def poll_one():
             messages, tip, backlog = loaded[0], loaded[1], bool(loaded[2])
         else:
             messages, tip, backlog = loaded[0], loaded[1], False
-        token_scope = hashlib.sha256((config.load_config().get("telegram_bot_token") or "").encode()).hexdigest()
+        token_scope = "user:"+rule["address"]
         with store.db() as con:
             current = con.execute("SELECT revision,payload FROM cloud_channels WHERE id=?", (rid,)).fetchone()
             session = con.execute("SELECT revision FROM cloud_service_settings WHERE account_id=? AND kind='telegram_reader'", (aid,)).fetchone()
             account = con.execute("SELECT revision FROM cloud_accounts WHERE id=?", (aid,)).fetchone()
             if not current or current[0] != rev or not json.loads(current[1])["enabled"] or not session or session[0] != cfg["revision"] or not account or account[0] != arev:
+                return True
+            position = con.execute('SELECT cursor,initialized FROM cloud_channel_cursors WHERE id=?', (rid,)).fetchone()
+            if (position or (None, None)) != (cursor, initialized):
                 return True
             for msg in messages:
                 receiving.record_channel(con, rid, aid, arev, rev, rule, msg, token_scope)
@@ -183,6 +186,7 @@ def poll_one():
                 events.emit('channel','频道仍有积压，立即继续：'+rule['name'],con=con)
             delay = next_poll_delay(default_seconds=rule.get("poll_seconds", 300), backlog=backlog)
             con.execute("INSERT INTO cloud_channel_cursors VALUES(?,?,1,?, '') ON CONFLICT(id) DO UPDATE SET cursor=excluded.cursor,initialized=1,next_poll=excluded.next_poll,last_error=''", (rid, tip, time.time()+delay))
+            con.execute("INSERT INTO cloud_public_channel_status VALUES(?,?,?,?,0) ON CONFLICT(channel_id) DO UPDATE SET last_success=excluded.last_success,last_check=excluded.last_check,last_count=excluded.last_count,failures=0", (rid,time.time(),time.time(),len(messages)))
         return True
     except Exception as exc:
         failed_at = time.time()
@@ -197,6 +201,11 @@ def poll_one():
             delay = next_poll_delay()
             events.emit('channel',rule['name']+' · '+error,level='WARNING')
     with store.db() as con:
+        current = con.execute('SELECT c.revision,c.payload,a.revision FROM cloud_channels c JOIN cloud_accounts a ON a.id=c.account_id WHERE c.id=?', (rid,)).fetchone()
+        position = con.execute('SELECT cursor,initialized FROM cloud_channel_cursors WHERE id=?', (rid,)).fetchone()
+        if not current or current[0] != rev or current[2] != arev or not json.loads(current[1]).get('enabled') or (position or (None,None)) != (cursor, initialized):
+            return True
+        con.execute("INSERT INTO cloud_public_channel_status VALUES(?,0,?,0,1) ON CONFLICT(channel_id) DO UPDATE SET last_check=excluded.last_check,failures=failures+1", (rid,failed_at))
         con.execute("INSERT INTO cloud_channel_cursors VALUES(?,0,0,?,?) ON CONFLICT(id) DO UPDATE SET next_poll=excluded.next_poll,last_error=excluded.last_error", (rid, failed_at+delay, error))
     return True
 

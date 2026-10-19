@@ -14,6 +14,10 @@ def operation(result):
 
 
 def guidance(reason, category):
+    if any(word in reason for word in ('分享已取消', '分享不存在', '分享已过期', '分享不存在或已删除')):
+        return '读取分享', '重新获取有效的 115 分享链接，原分享失效不代表转存程序故障。', 'resources', 'receive'
+    if '提取码错误' in reason:
+        return '读取分享', '检查访问密码；多个链接建议分别携带自己的 password 参数。', 'resources', 'receive'
     if category == 'filtered':
         return '文件过滤', '核对命中的规则；如需处理此文件，调整过滤条件后重新预览来源目录。', 'organize', 'naming'
     if category == 'retained':
@@ -61,7 +65,7 @@ def items(result):
             stage, suggestion, page, module = guidance(reason, actual)
             rows.append({'category': actual, 'label': LABELS[actual], 'file_id': fid,
                          'name': name or ('文件 ID '+fid if fid else '任务级记录'),
-                         'reason': reason, 'stage': events.clean(entry.get('stage') or stage),
+                         'reason': reason, 'stage': events.clean(entry.get('stage_label') or entry.get('stage') or stage),
                          'suggestion': suggestion, 'page': page, 'module': module,
                          'path': events.clean(entry.get('path') or entry.get('source_path') or ''),
                          'rule': events.clean(entry.get('rule') or ''),

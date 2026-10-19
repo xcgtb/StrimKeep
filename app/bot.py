@@ -924,7 +924,7 @@ def _capture_resources(token, msg, channel=False):
         authorized = False
     else:
         authorized = _is_allowed((msg.get('from') or {}).get('id'), (msg.get('chat') or {}).get('id'))
-        text = (msg.get('text') or '').strip()
+        text = (msg.get('text') or msg.get('caption') or '').strip()
         if text.startswith('/') and not text.split()[0].split('@')[0].lower() in ('/receive', '/strm', '/sharestrm', '/create_115share_strm'):
             return []
     import hashlib

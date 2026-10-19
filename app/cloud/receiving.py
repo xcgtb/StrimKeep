@@ -4,9 +4,10 @@ import json
 import re
 import time
 from urllib.parse import urlsplit, parse_qs, unquote, urlencode
-from app.cloud import services, credentials, store, workflow, jobs, directories, recognition, file_filters
+from app.cloud import services, credentials, store, workflow, jobs, directories, recognition, file_filters, events
 from app.cloud.provider115 import numeric, parse_share
-from app.cloud.errors import CloudError
+from app.cloud.errors import CloudError, diagnostic
+from app.domain import telegram_intake
 
 DEFAULT = {"tg_enabled": False, "organize_after_transfer": False, "start_after": 0}
 LINK = re.compile(r"https://(?:www\.)?(?:115\.com|115cdn\.com)/s/[A-Za-z0-9-]+(?:\?[^\s<>\"']*)?|magnet:\?[^\s<>\"']+|ed2k://\|file\|[^\r\n<>]+?\|/|115://[^\r\n<>]+", re.I)
@@ -137,6 +138,8 @@ def apply(plan_id, confirmed):
 
 def channel_address(value):
     value = str(value).strip()
+    if value.startswith("https://t.me/s/"):
+        value = "@"+value.removeprefix("https://t.me/s/").rstrip("/")
     if value.startswith("https://t.me/"):
         value = "@"+value.removeprefix("https://t.me/").rstrip("/")
     if not re.fullmatch(r"@[A-Za-z][A-Za-z0-9_]{4,31}|-100[0-9]{5,16}", value):
@@ -149,17 +152,37 @@ def channels(account_id):
         rows = con.execute("SELECT id,revision,payload FROM cloud_channels WHERE account_id=? ORDER BY updated DESC", (account_id,)).fetchall()
     with store.db() as con:
         statuses={r[0]:r[1] for r in con.execute("SELECT id,last_error FROM cloud_channel_cursors")}
-    return [{"id": r[0], "revision": r[1], **json.loads(r[2]), "reader_status":statuses.get(r[0], "")} for r in rows]
+    with store.db() as con:
+        public = {r[0]: {"last_success": r[1], "last_check": r[2], "last_count": r[3],
+                         "failures": r[4], "cursor": r[5], "next_poll": r[6]}
+                  for r in con.execute("SELECT p.channel_id,p.last_success,p.last_check,p.last_count,p.failures,"
+                                       "COALESCE(c.cursor,0),COALESCE(c.next_poll,0) "
+                                       "FROM cloud_public_channel_status p LEFT JOIN cloud_channel_cursors c ON c.id=p.channel_id")}
+    return [{"id": r[0], "revision": r[1], **json.loads(r[2]), "reader_status":statuses.get(r[0], ""),
+             "public_status": public.get(r[0], {})} for r in rows]
 
 
 def save_channel(account_id, value):
-    allowed = {"id", "revision", "name", "address", "target_cid", "enabled", "include", "exclude", "regex", "tmdb_ids", "kinds", "countries", "genres", "organize", "mode", "history_limit", "poll_seconds", "rule_cards"}
+    allowed = {"id", "revision", "name", "address", "target_cid", "enabled", "include", "exclude", "regex", "tmdb_ids", "kinds", "countries", "genres", "organize", "mode", "history_limit", "poll_seconds", "rule_cards", "auto_transfer", "action", "command_prefix", "forward_target"}
     if not isinstance(value, dict) or set(value)-allowed:
         raise CloudError("频道配置字段无效")
-    data = {"name":"", "mode":"bot", "history_limit":20 if value.get("mode")=="user" else 0, "poll_seconds":300, "enabled":False, "include":[], "exclude":[], "regex":[], "tmdb_ids":[], "kinds":[], "countries":[], "genres":[], "organize":False, "rule_cards":[], **value}
+    data = {"name":"", "mode":"bot", "auto_transfer":True, "action":"transfer", "command_prefix":"/strm", "forward_target":"self", "history_limit":20 if value.get("mode") in ("user", "public_web") else 0, "poll_seconds":300, "enabled":False, "include":[], "exclude":[], "regex":[], "tmdb_ids":[], "kinds":[], "countries":[], "genres":[], "organize":False, "rule_cards":[], **value}
     cid = data.pop("id", None) or store.ident();expected = data.pop("revision", 0)
-    data["address"] = channel_address(data.get("address", ""));data["target_cid"] = numeric(data.get("target_cid", ""))
-    if type(expected) is not int or not re.fullmatch(r"[a-f0-9]{32}",cid) or not isinstance(data["name"], str) or not 1 <= len(data["name"]) <= 80 or any(type(data[k]) is not bool for k in ("enabled", "organize")):
+    data["address"] = channel_address(data.get("address", ""));data["target_cid"] = numeric(data.get("target_cid", "")) if data.get("target_cid") else ""
+    if data["action"] not in ("transfer", "share_strm", "forward"):
+        raise CloudError("频道处理动作无效")
+    try:
+        telegram_intake.validate_relay(data["command_prefix"], data["forward_target"])
+    except ValueError as exc:
+        raise CloudError(str(exc)) from None
+    transfer_action = data["action"] == "transfer" or (data["action"] == "forward" and data["forward_target"] == "self" and telegram_intake.command(data["command_prefix"]) == "/receive")
+    if transfer_action and not data["target_cid"]:
+        raise CloudError("转存动作需选择接收目录")
+    if type(data["organize"]) is not bool:
+        raise CloudError("频道整理开关必须为布尔值")
+    # Legacy field is accepted but channel intake and organizer remain independent.
+    data["organize"] = False
+    if type(expected) is not int or not re.fullmatch(r"[a-f0-9]{32}",cid) or not isinstance(data["name"], str) or not 1 <= len(data["name"]) <= 80 or any(type(data[k]) is not bool for k in ("enabled", "organize", "auto_transfer")):
         raise CloudError("请填写频道名称和有效开关")
     for k in ("include", "exclude", "regex", "tmdb_ids", "kinds", "countries", "genres"):
         if not isinstance(data[k], list) or len(data[k]) > 100 or any(not isinstance(v, str) or not 0 < len(v) <= 160 for v in data[k]):
@@ -186,12 +209,19 @@ def save_channel(account_id, value):
             raise CloudError('规则海报路径无效')
     account = store.account(account_id)
     if not account:raise CloudError("当前账号不存在",404)
-    provider = workflow.verify_account({"account_id": account_id, "account_revision": account["revision"]})
-    workflow._directory(provider, data["target_cid"])
+    if transfer_action:
+        provider = workflow.verify_account({"account_id": account_id, "account_revision": account["revision"]})
+        workflow._directory(provider, data["target_cid"])
+    if data["enabled"] and data["action"] == "forward" and data["forward_target"] != "self":
+        from app.cloud import channel_reader
+        if not channel_reader.get(account_id)["connected"]:
+            raise CloudError("转发到其他机器人需要先登录 Telegram 用户会话", 409)
     if data["organize"] and not directories.get(account_id)["directories"]["target"]:
         raise CloudError("自动整理需先保存整理归档目录",409)
-    if data["mode"] not in ("bot", "user") or type(data["history_limit"]) is not int or not 0 <= data["history_limit"] <= 1000 or type(data["poll_seconds"]) is not int or not 30 <= data["poll_seconds"] <= 3600:
+    if data["mode"] not in ("bot", "user", "public_web") or type(data["history_limit"]) is not int or not 0 <= data["history_limit"] <= 1000 or type(data["poll_seconds"]) is not int or not 30 <= data["poll_seconds"] <= 3600:
         raise CloudError("频道模式或历史条数（0–1000）/轮询秒数（30–3600）无效")
+    if data["mode"] == "public_web" and (not data["address"].startswith("@") or data["history_limit"] > 100 or data["poll_seconds"] < 300):
+        raise CloudError("公开网页模式仅支持 @公开用户名、0–100 条历史消息、最短 300 秒轮询", 409)
     if data["mode"] == "bot" and data["history_limit"]:
         raise CloudError("历史读取需要选择用户会话模式并登录 Telegram", 409)
     if data["enabled"] and data["mode"] == "user":
@@ -223,6 +253,7 @@ def save_channel(account_id, value):
             raise CloudError("频道配置已变化，请刷新重试",409)
         if old and (json.loads(old[1]).get("address") != data["address"] or json.loads(old[1]).get("mode","bot") != data["mode"]):
             con.execute("DELETE FROM cloud_channel_cursors WHERE id=?",(cid,))
+            con.execute("DELETE FROM cloud_public_channel_status WHERE channel_id=?",(cid,))
         data["start_after"] = json.loads(old[1]).get("start_after",0) if old and json.loads(old[1])["enabled"] and data["enabled"] else int(time.time())
         con.execute("INSERT INTO cloud_channels VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,payload=excluded.payload,account_revision=excluded.account_revision,updated=excluded.updated", (cid,account_id,account["revision"],expected+1,store.encode(data),time.time()))
     return {"id":cid,"revision":expected+1,**data}
@@ -275,9 +306,10 @@ def card_matches(card,text):
 def capture(msg, token_scope="", channel=False, authorized=False):
     """Fast durable capture before Bot offset advances; no remote I/O here."""
     if not isinstance(msg.get("message_id"),int) or not isinstance((msg.get("chat") or {}).get("id"),int) or type(msg.get("date")) is not int:return []
-    text = str(msg.get("text") or msg.get("caption") or "")[:16000]
-    entities = msg.get("entities") or msg.get("caption_entities") or []
-    if not LINK.search(text) and not any(e.get("type")=="text_link" for e in entities):return []
+    normalized = telegram_intake.content(msg, allow_reply=not channel)
+    text, entities = normalized["text"], normalized["entities"]
+    has_resource = bool(LINK.search(text) or entities)
+    if not channel and not has_resource:return []
     chat = msg.get("chat") or {};targets=[]
     with store.db() as con:
         if channel:
@@ -286,13 +318,14 @@ def capture(msg, token_scope="", channel=False, authorized=False):
             for rid,aid,arev,rev,raw in rows:
                 cfg=json.loads(raw)
                 if cfg.get("mode", "bot") != "bot":continue
+                if not has_resource and not (cfg.get("action") == "forward" and text.strip()):continue
                 if (cfg.get("chat_id")==str(chat.get("id")) if cfg.get("chat_id") else cfg["address"] in addresses) and msg.get("date",0)>=cfg["start_after"]:
                     targets.append((aid,arev,{"channel_id":rid,"channel_revision":rev,"rule":cfg},rid))
         elif authorized:
             rows=con.execute("SELECT s.account_id,s.account_revision,s.revision,s.payload FROM cloud_service_settings s JOIN cloud_accounts a ON a.id=s.account_id AND a.revision=s.account_revision WHERE s.kind='receiving' AND json_extract(s.payload,'$.tg_enabled')=1").fetchall()
             for aid,arev,rev,raw in rows:
                 if msg.get("date",0)>=json.loads(raw).get("start_after",0):targets.append((aid,arev,{"receiving_revision":rev},"private"))
-    sealed=credentials.seal({"text":text,"entities":entities,"share_direct":(text.strip().split() or [""])[0].split("@")[0].lower() in ("/strm", "/sharestrm", "/create_115share_strm")}) if targets else ""
+    sealed=credentials.seal(normalized) if targets else ""
     ids=[]
     with store.db() as con:
         for aid,arev,extra,scope in targets:
@@ -321,7 +354,22 @@ def schedule():
 def inbox(account_id, offset=0):
     with store.db() as con:
         rows=con.execute("SELECT id,source,state,job_id,result,created FROM cloud_inbox WHERE account_id=? ORDER BY created DESC LIMIT 50 OFFSET ?",(account_id,offset)).fetchall()
-    return [{"id":r[0],"source":r[1],"state":r[2],"job_id":r[3],"result":json.loads(r[4]),"created":r[5],"job":store.job(r[3]) if r[3] else None} for r in rows]
+    result = []
+    for r in rows:
+        value = json.loads(r[4])
+        children = []
+        for jid in value.get('child_jobs', [])[:100]:
+            job = store.job(jid)
+            if job and job['state'] in ('failed', 'uncertain', 'needs_review'):
+                errors = job.get('result', {}).get('errors', [])
+                children.extend({**e, 'job_id': jid} for e in errors if isinstance(e, dict))
+                if not errors:
+                    children.append({'job_id': jid, 'reason': job['message'], 'stage_label': '后续处理'})
+        if children:
+            value['child_errors'] = children[:100]
+        result.append({'id':r[0], 'source':r[1], 'state':r[2], 'job_id':r[3], 'result':value,
+                       'created':r[5], 'job':store.job(r[3]) if r[3] else None})
+    return result
 
 
 def verify_dispatch(payload,data):
@@ -340,10 +388,27 @@ def verify_dispatch(payload,data):
             raise CloudError("TG 接收配置变化，已停止",409)
 
 
+def verify_source(payload):
+    account = store.account(payload['account_id'])
+    if not account or account['revision'] != payload['account_revision']:
+        raise CloudError('账号授权已变化，已停止接收', 409)
+    if payload.get('channel_id'):
+        with store.db() as con:
+            row = con.execute('SELECT revision,payload FROM cloud_channels WHERE id=? AND account_id=?', (payload['channel_id'], payload['account_id'])).fetchone()
+        if not row or row[0] != payload['channel_revision'] or not json.loads(row[1])['enabled']:
+            raise CloudError('频道已暂停或规则变化，已停止接收', 409)
+    elif payload.get('receiving_revision') is not None:
+        cfg = get(payload['account_id'])
+        if cfg['revision'] != payload['receiving_revision'] or not cfg['config']['tg_enabled']:
+            raise CloudError('TG 接收配置变化，已停止', 409)
+
+
 def run(job_id,payload):
     result={"accepted":[],"errors":[],"child_jobs":[]}
+    stage = "prepare"
     try:
-        provider=workflow.verify_account(payload)
+        verify_source(payload)
+        jobs.checkpoint(job_id, result)
         if payload.get("inbox_id"):
             message=credentials.unseal(payload["sealed_message"])
             if payload.get("channel_id"):
@@ -353,66 +418,111 @@ def run(job_id,payload):
                 if not allowed:
                     result["filtered"]=[{"name":cfg["name"],"reason":reason}]
                     return result
-                source,target,organize="channel",cfg["target_cid"],False
+                if not cfg.get("auto_transfer", True):
+                    result["observed"] = [{"channel": cfg["name"], "message": events.clean(message["text"][:500]),
+                                            "reason": "自动处理已关闭；仅记录消息"}]
+                    return result
+                source,target,organize="channel",cfg.get("target_cid"),False
+                result['channel'] = cfg['name']
+                result['action'] = cfg.get('action', 'transfer')
+                if cfg.get('action') == 'forward' and cfg.get('forward_target', 'self') != 'self':
+                    from app.cloud import channel_forwarding
+                    stage = 'forward'
+                    jobs.progress(job_id, 1, 0, '准备转发命令消息')
+                    accepted = channel_forwarding.run(job_id, payload, cfg, message, lambda: verify_source(payload))
+                    result['accepted'].append(accepted)
+                    jobs.progress(job_id, 1, 1, '转发消息已确认发送')
+                    return result
             else:
                 cfg=get(payload["account_id"])
                 if cfg["revision"]!=payload["receiving_revision"] or not cfg["config"]["tg_enabled"]:raise CloudError("TG 接收已关闭或配置变化",409)
                 source,target,organize="telegram",None,bool(cfg["config"].get("organize_after_transfer", False))
             items=extract(message["text"],message["entities"])
+            if payload.get("channel_id") and cfg.get("mode") == "public_web":
+                ignored = [i for i in items if i["kind"] != "share"]
+                if ignored:
+                    result.setdefault("filtered", []).extend({"name":i["name"], "reason":"公开网页首版仅允许自动转存 115 分享"} for i in ignored)
+                items = [i for i in items if i["kind"] == "share"]
+                if not items:
+                    return result
             if not items:raise CloudError("消息中没有支持的资源链接")
-            if message.get("share_direct"):
-                if source != "telegram" or any(i["kind"] != "share" for i in items):
+            direct_share = message.get('share_direct') if source == 'telegram' else cfg.get('action') == 'share_strm' or (cfg.get('action') == 'forward' and cfg.get('forward_target', 'self') == 'self' and telegram_intake.command(cfg.get('command_prefix', '/strm')) in telegram_intake.SHARE_COMMANDS)
+            if direct_share:
+                if any(i["kind"] != "share" for i in items):
                     raise CloudError("/strm 仅接受115分享链接，不提交转存或云下载")
                 from app.cloud import share_library
                 for index, item in enumerate(items):
+                    jobs.checkpoint(job_id, result)
+                    verify_source(payload)
+                    stage = "read_share"
                     first=workflow.preview_share(payload["account_id"],item["code"],item["password"])
                     if first["has_more"] or not first["items"]:
                         raise CloudError("分享根目录为空或超过100项，请在Web分批选择",409)
+                    stage = "generate_share_strm"
                     plan=share_library.preview(first["preview_id"],[r["id"] for r in first["items"]],{})
                     def direct(plan=plan):
-                        cfg_now=get(payload["account_id"])
-                        if cfg_now["revision"]!=payload["receiving_revision"] or not cfg_now["config"]["tg_enabled"]:
-                            raise CloudError("TG接收配置变化，请重新发送命令",409)
+                        verify_source(payload)
+                        jobs.checkpoint(job_id, result)
                         return {"job_id":share_library.apply(plan["id"],True),"kind":"share_strm","name":"分享库免转存","completed":False}
                     accepted=jobs.step(job_id,"share-direct:"+str(index),{"kind":"share_strm"},direct)
                     result["child_jobs"].append(accepted["job_id"]);result["accepted"].append(accepted)
+                    jobs.progress(job_id, len(items), index+1, "分享 STRM 任务已提交")
                 return result
             data=make_payload(payload["account_id"],items,source,target,organize)
         else:
             data=payload;items=credentials.unseal(data["sealed"])
+        provider=workflow.verify_account(payload)
         if directories.get(data["account_id"])["revision"]!=data["directory_revision"]:raise CloudError("保存目录已变化，请重新预览资源",409)
         for index,item in enumerate(items):
+            jobs.checkpoint(job_id, result)
+            stage = "prepare"
             verify_dispatch(payload,data)
             target=data["targets"][item["kind"]];workflow._directory(provider,target)
             if item["kind"]=="share":
                 # Enqueue exactly once; the child owns receive receipts and optional organization.
+                stage = "read_share"
                 first=workflow.preview_share(data["account_id"],item["code"],item["password"])
                 if first["has_more"] or not first["items"]:raise CloudError("分享根目录为空或超过100项，请在分享浏览器分批选择",409)
                 def transfer():
                     verify_dispatch(payload,data)
                     jid=workflow.transfer_submit(first["preview_id"],[r["id"] for r in first["items"]],target,True,data["organize_target"],True)
                     return {"job_id":jid,"kind":"share","name":"115 分享","completed":False}
+                stage = "submit_transfer"
                 accepted=jobs.step(job_id,"resource:"+str(index),{"kind":"share","target_cid":target},transfer)
                 result["child_jobs"].append(accepted["job_id"])
             elif item["kind"]=="instant":
+                stage = "submit_transfer"
                 accepted=jobs.step(job_id,"resource:"+str(index),{"kind":"instant","target_cid":target},lambda:provider.instant_receive(item,target))
             else:
+                stage = "submit_transfer"
                 accepted=jobs.step(job_id,"resource:"+str(index),{"kind":item["kind"],"target_cid":target},lambda:provider.offline_add(item["url"],target))
             result["accepted"].append({"kind":item["kind"],"name":item["name"],"target_cid":target,**accepted})
             jobs.progress(job_id,len(items),index+1,"资源请求已提交",item["name"])
         return result
+    except jobs.JobStopped:
+        result['stopped'] = True
+        raise jobs.JobStopped(result)
     except CloudError as error:
+        item = diagnostic(error, stage)
+        result['errors'].append(item)
+        error.stage = item['stage']
         error.partial_result=result
+        events.emit('channel' if payload.get('channel_id') else 'transfer', item['stage_label']+'失败：'+item['reason'], job_id, level='WARNING', details=item)
         raise
+    except Exception:
+        error = CloudError('接收处理异常，请查看步骤记录；已提交操作不会自动重发', 502, stage=stage)
+        result['errors'].append(diagnostic(error, stage))
+        error.partial_result = result
+        raise error from None
     finally:
         if payload.get("inbox_id"):
             with store.db() as con:con.execute("UPDATE cloud_inbox SET state='processed',result=? WHERE id=?",(store.encode(result),payload["inbox_id"]))
 
 
 def record_channel(con, rid, aid, arev, rev, rule, msg, token_scope):
-    text = str(msg.get("text") or "")[:16000]
-    entities = msg.get("entities") or []
-    if not LINK.search(text) and not any(e.get("type")=="text_link" for e in entities):
+    message = telegram_intake.content(msg)
+    text, entities = message["text"], message["entities"]
+    if not LINK.search(text) and not any(e.get("type")=="text_link" for e in entities) and not (rule.get("action") == "forward" and text.strip()):
         return
     key = hashlib.sha256(store.encode([token_scope,msg["chat"]["id"],msg["message_id"],rid]).encode()).hexdigest()
     payload = {"account_id":aid,"account_revision":arev,"channel_id":rid,"channel_revision":rev,"rule":rule,
@@ -459,3 +569,20 @@ def receive(account_id, text, expected_revision, request_id, confirmed=False, or
         jid = jobs.enqueue('intake',payload,con)
         con.execute('INSERT INTO cloud_transfer_requests VALUES(?,?,?,?,?)',(account_id,request_id,credentials.seal(intent),jid,time.time()))
     return jid
+
+
+def test_channel(account_id, channel_id, text):
+    rule = next((r for r in channels(account_id) if r['id'] == channel_id), None)
+    if not rule:
+        raise CloudError('频道规则不存在', 404)
+    matched, reason = allowed_message(text, rule)
+    result = {'matched': matched, 'reason': reason, 'action': rule.get('action', 'transfer')}
+    if rule.get('action') == 'forward':
+        try:
+            result['preview_text'] = telegram_intake.relay_text(rule.get('command_prefix', '/strm'), {'text':text,'entities':[]})
+        except ValueError as error:
+            result['matched'] = False
+            result['reason'] = str(error)
+        result['target'] = rule.get('forward_target', 'self')
+        result['note'] = '仅预览，不发送消息，不生成或转存资源'
+    return result

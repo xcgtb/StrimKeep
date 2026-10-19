@@ -6,7 +6,7 @@ import threading
 import time
 from app import tasks
 from app.cloud import store, events
-from app.cloud.errors import CloudError
+from app.cloud.errors import CloudError, diagnostic as error_diagnostic
 
 log = logging.getLogger("strimkeep")
 _STOP = threading.Event()
@@ -39,7 +39,7 @@ def request_stop(job_id):
         row = con.execute("SELECT kind,state,payload FROM cloud_jobs WHERE id=?", (job_id,)).fetchone()
         if not row:
             raise CloudError("任务不存在", 404)
-        if row[0] not in ("organize", "workflow", "transfer", "sync", "share_strm"):
+        if row[0] not in ("organize", "workflow", "transfer", "sync", "share_strm", "intake", "channel"):
             raise CloudError("此任务不支持停止整理", 409)
         if row[1] not in ("queued", "running", "stopped"):
             raise CloudError("任务已结束，请查看结果", 409)
@@ -49,13 +49,22 @@ def request_stop(job_id):
         rule_id = payload.get("rule_id")
         if rule_id:
             con.execute("UPDATE cloud_rules SET enabled=0,updated=? WHERE id=?", (time.time(), rule_id))
+        channel_paused = False
+        if row[0] == 'channel' and payload.get('channel_id'):
+            channel = con.execute('SELECT payload FROM cloud_channels WHERE id=? AND account_id=?', (payload['channel_id'],payload.get('account_id'))).fetchone()
+            if channel:
+                config = json.loads(channel[0])
+                if config.get('enabled'):
+                    config['enabled'] = False
+                    con.execute('UPDATE cloud_channels SET payload=?,revision=revision+1,updated=? WHERE id=? AND account_id=?', (store.encode(config),time.time(),payload['channel_id'],payload.get('account_id')))
+                channel_paused = True
         con.execute("INSERT OR REPLACE INTO cloud_job_controls VALUES(?,?,?)", (job_id, 1, time.time()))
         if row[1] == "queued":
             con.execute("UPDATE cloud_jobs SET state='stopped',message='执行前停止',updated=? WHERE id=? AND state='queued'", (time.time(), job_id))
             if payload.get("plan_id"):
                 con.execute("UPDATE cloud_plans SET state='stopped' WHERE id=? AND state='queued'", (payload["plan_id"],))
     events.emit('queue','停止请求已保存，等待当前操作核实后停止',job_id)
-    return {"stop_requested": True, "rule_paused": bool(rule_id), "message": "停止请求已保存；当前视频及关联文件完成后停止，已发出的转存请求先核实结果"}
+    return {"stop_requested": True, "rule_paused": bool(rule_id) or channel_paused, "message": "停止请求已保存；当前视频及关联文件完成后停止，已发出的转存请求先核实结果"}
 
 
 def enqueue(kind, payload, con=None, *, parent_id=None):
@@ -111,7 +120,7 @@ def step(job_id, key, payload, fn):
     except CloudError as error:
         with store.db() as con:
             con.execute("UPDATE cloud_steps SET result=?,updated=? WHERE job_id=? AND step_key=? AND state='dispatched'",
-                        (store.encode({'reason': events.clean(str(error)), 'uncertain': error.uncertain}), time.time(), job_id, key))
+                        (store.encode({**error_diagnostic(error), 'reason': events.clean(str(error))}), time.time(), job_id, key))
         if stage:
             events.emit(stage,label+('结果待核实：' if error.uncertain else '未完成：')+str(error),job_id,level='WARNING',details={**diagnostic,'status':'uncertain' if error.uncertain else 'failed','elapsed_ms':int((time.monotonic()-started)*1000),'reason':str(error)})
         raise
@@ -196,13 +205,21 @@ def _execute(job_id):
             state = "stopped"
         message = "已在安全边界停止" if state == "stopped" else "部分项目需要处理" if state == "needs_review" else "任务完成"
         if state == "success" and row[0] in ("intake", "channel"):
-            message = "接收请求已提交，等待转存任务或115云下载完成" if result.get("accepted") else "规则未匹配，未接收资源"
+            accepted = result.get('accepted', [])
+            message = ('命令消息已发送，等待目标机器人处理' if all(i.get('kind') == 'forward' for i in accepted) else
+                       '分享 STRM 生成任务已提交，等待生成结果' if all(i.get('kind') == 'share_strm' for i in accepted) else
+                       '接收请求已提交，等待转存任务或115云下载完成') if accepted else '仅观察记录，未自动处理' if result.get('observed') else '规则未匹配，未接收资源'
     except JobStopped as error:
         result, state, message = error.result, "stopped", str(error)
     except CloudError as error:
         result = getattr(error, "partial_result", {})
+        if getattr(error, "stage", "") and not result.get("errors"):
+            result["errors"] = [error_diagnostic(error)]
         state = "uncertain" if error.uncertain else "failed"
         message = str(error)
+        if getattr(error, "stage", ""):
+            from app.cloud.errors import STAGES
+            message = STAGES.get(error.stage, error.stage) + "：" + message
     except Exception:
         result = {}
         state = "needs_review"
@@ -423,6 +440,8 @@ def schedule():
     receiving.schedule()
     from app.cloud import channel_reader, emby_library
     channel_reader.schedule()
+    from app.cloud import public_channel_reader
+    public_channel_reader.schedule()
     emby_library.schedule()
     now = time.time()
     with store.db() as con:

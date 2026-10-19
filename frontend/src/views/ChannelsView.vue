@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useCloud } from '../stores/cloud';
 import {
   accountPath,
@@ -7,6 +7,7 @@ import {
   writeData,
   removeData,
   records,
+  object,
   strings,
   type Data,
 } from '../api/domain';
@@ -27,6 +28,7 @@ const cloud = useCloud(),
   reader = useRequest<Data>(),
   catalog = useRequest<Data>(),
   inbox = useRequest<Data>(),
+  publicPreview = useRequest<Data>(),
   tab = ref('channels'),
   draft = ref<Data>(),
   target = ref(''),
@@ -51,14 +53,35 @@ const fields: Field[] = [
     key: 'mode',
     label: '读取模式',
     type: 'select',
-    hint: '监控别人的公开频道请选「用户会话与历史读取」——机器人模式要求 Bot 是该频道管理员，公开频道做不到。',
+    hint: '公开频道优先选免登录网页抓取；它不是稳定消息 API，网页预览受限时需改用用户会话。',
     options: [
-      { value: 'user', label: '用户会话与历史读取（推荐）' },
+      { value: 'public_web', label: '公开网页抓取（免登录，尽力而为）' },
+      { value: 'user', label: '用户会话与历史读取' },
       { value: 'bot', label: '机器人实时接收（需 Bot 是频道管理员）' },
     ],
   },
+  {
+    key: 'action',
+    label: '处理动作',
+    type: 'select',
+    options: [
+      { value: 'transfer', label: '接收转存到 115' },
+      { value: 'share_strm', label: '生成分享 STRM（免转存）' },
+      { value: 'forward', label: '万能转发（带命令头）' },
+    ],
+  },
+  {
+    key: 'command_prefix',
+    label: '转发命令头',
+    hint: '内置接收：/strm 免转存生成，/receive 转存；其他机器人可填写自己的命令。',
+  },
+  {
+    key: 'forward_target',
+    label: '目标机器人',
+    hint: 'self = 内置接收；@机器人用户名 = 使用已登录的用户会话发送。',
+  },
   { key: 'enabled', label: '启用频道', type: 'check' },
-  { key: 'organize', label: '接收后自动整理', type: 'check' },
+  { key: 'auto_transfer', label: '匹配消息后自动处理（关闭则仅记录）', type: 'check' },
   {
     key: 'history_limit',
     label: '首次历史条数（机器人模式为 0）',
@@ -66,7 +89,7 @@ const fields: Field[] = [
     min: 0,
     max: 1000,
   },
-  { key: 'poll_seconds', label: '用户模式轮询秒数', type: 'number', min: 30, max: 3600 },
+  { key: 'poll_seconds', label: '用户/公开网页轮询秒数', type: 'number', min: 30, max: 3600 },
   { key: 'include', label: '包含关键词（每行一个）', type: 'lines' },
   { key: 'exclude', label: '排除关键词', type: 'lines' },
   { key: 'regex', label: '正则匹配', type: 'lines' },
@@ -75,6 +98,37 @@ const fields: Field[] = [
   { key: 'countries', label: '允许地区（CN / US 等两位代码）', type: 'lines' },
   { key: 'genres', label: '允许题材（TMDB 数字 ID）', type: 'lines' },
 ];
+const transferAction = computed(
+  () =>
+    !draft.value?.action ||
+    draft.value.action === 'transfer' ||
+    (draft.value.action === 'forward' &&
+      draft.value.forward_target === 'self' &&
+      String(draft.value.command_prefix).split(/\s|@/)[0] === '/receive'),
+);
+const visibleRules = computed(() =>
+  records(rules.data.value?.items).filter((r) =>
+    tab.value === 'forward' ? r.action === 'forward' : r.action !== 'forward',
+  ),
+);
+function visibleField(f: Field) {
+  if (['countries', 'genres'].includes(f.key)) return false;
+  if (['command_prefix', 'forward_target'].includes(f.key))
+    return draft.value?.action === 'forward';
+  if (f.key === 'organize') return transferAction.value;
+  return true;
+}
+watch(
+  () => draft.value?.mode,
+  (mode) => {
+    if (!draft.value) return;
+    if (mode === 'bot') draft.value.history_limit = 0;
+    if (mode === 'public_web') {
+      draft.value.history_limit = Math.min(Number(draft.value.history_limit) || 0, 100);
+      draft.value.poll_seconds = Math.max(Number(draft.value.poll_seconds) || 300, 300);
+    }
+  },
+);
 const readerFields: Field[] = [
   { key: 'api_id', label: 'Telegram API ID' },
   { key: 'api_hash', label: 'API Hash', type: 'secret' },
@@ -134,7 +188,11 @@ function edit(row?: Data) {
     : {
         name: '',
         address: '',
-        mode: 'user',
+        action: tab.value === 'forward' ? 'forward' : 'transfer',
+        command_prefix: '/strm',
+        forward_target: 'self',
+        mode: 'public_web',
+        auto_transfer: true,
         enabled: false,
         organize: false,
         history_limit: 20,
@@ -148,7 +206,11 @@ function edit(row?: Data) {
         genres: [],
         rule_cards: [],
       };
+  draft.value.action ||= 'transfer';
+  draft.value.command_prefix ||= '/strm';
+  draft.value.forward_target ||= 'self';
   target.value = String(row?.target_cid || '');
+  publicPreview.data.value = undefined;
 }
 async function save() {
   if (!draft.value) return;
@@ -159,6 +221,15 @@ async function save() {
     draft.value = undefined;
     await load();
   }
+}
+async function previewPublic() {
+  if (!draft.value || !cloud.id || draft.value.mode !== 'public_web') return;
+  await publicPreview.run(() =>
+    writeData(accountPath(cloud.id, 'channels/public-preview'), {
+      address: String(draft.value?.address || ''),
+      limit: Number(draft.value?.history_limit ?? 20),
+    }),
+  );
 }
 async function readerAction(action: string) {
   const body: Data = { action, expected_revision: reader.data.value?.revision };
@@ -208,6 +279,8 @@ watch(
     rules.cancel();
     reader.cancel();
     inbox.cancel();
+    publicPreview.cancel();
+    publicPreview.data.value = undefined;
     op.reconcile();
     draft.value = undefined;
     target.value = '';
@@ -226,7 +299,12 @@ watch(
   /><AccountPicker /><DirectoryRoles :roles="['channel']" title="频道默认接收目录" />
   <nav class="browse-tabs">
     <button
-      v-for="(label, key) in { channels: '频道规则', reader: '用户会话', history: '接收历史' }"
+      v-for="(label, key) in {
+        channels: '频道规则',
+        forward: '万能转发',
+        reader: '用户会话',
+        history: '接收历史',
+      }"
       :key="key"
       :class="{ active: tab === key }"
       @click="tab = key"
@@ -248,21 +326,55 @@ watch(
     :uncertain="op.uncertain.value"
     :receipt="op.receipt.value"
   /><template v-if="cloud.id"
-    ><template v-if="tab === 'channels'"
-      ><button class="button primary" @click="edit()">添加频道</button>
+    ><template v-if="tab === 'channels' || tab === 'forward'"
+      ><p v-if="tab === 'forward'" class="notice-bar">
+        监控频道 → 按筛选规则匹配 → 附加命令头。内置 /strm 直接生成分享
+        STRM；转发给其他机器人需登录用户会话。回执只确认发送，不代表对方已入库。
+      </p>
+      <button class="button primary" @click="edit()">
+        {{ tab === 'forward' ? '添加转发规则' : '添加频道' }}
+      </button>
       <div class="module-grid">
-        <article
-          v-for="r in records(rules.data.value?.items)"
-          :key="String(r.id)"
-          class="panel module-card"
-        >
+        <article v-for="r in visibleRules" :key="String(r.id)" class="panel module-card">
           <h2>{{ r.name }}</h2>
-          <p>{{ r.address }}</p>
+          <p>
+            {{ r.address }} ·
+            {{
+              r.action === 'share_strm'
+                ? '分享 STRM（免转存）'
+                : r.action === 'forward'
+                  ? '万能转发 → ' +
+                    (r.forward_target === 'self' ? '内置接收' : r.forward_target) +
+                    ' · ' +
+                    r.command_prefix
+                  : '接收转存'
+            }}
+          </p>
           <span class="small-status"
             >{{ r.enabled ? '已启用' : '已暂停' }} ·
-            {{ r.mode === 'user' ? '用户会话' : '机器人' }}</span
+            {{
+              r.mode === 'public_web' ? '公开网页' : r.mode === 'user' ? '用户会话' : '机器人'
+            }}</span
           >
           <p v-if="r.reader_status" class="inline-error">{{ r.reader_status }}</p>
+          <p v-if="r.mode !== 'bot'" class="muted-text">
+            上次成功：{{
+              Number(object(r.public_status).last_success)
+                ? new Date(Number(object(r.public_status).last_success) * 1000).toLocaleString()
+                : '尚未成功'
+            }}
+            · 最近新消息：{{ object(r.public_status).last_count ?? 0 }} · 失败次数：{{
+              object(r.public_status).failures ?? 0
+            }}
+          </p>
+          <p v-if="r.mode !== 'bot'" class="muted-text">
+            下次检查：{{
+              Number(object(r.public_status).next_poll)
+                ? new Date(Number(object(r.public_status).next_poll) * 1000).toLocaleString()
+                : '等待调度'
+            }}
+            · 游标 #{{ object(r.public_status).cursor ?? 0 }}
+          </p>
           <div class="action-row">
             <button class="button small" @click="edit(r)">编辑规则</button
             ><button class="button small" @click="testId = String(r.id)">测试筛选</button
@@ -284,15 +396,48 @@ watch(
           <button class="text-link" @click="draft = undefined">取消编辑</button>
         </header>
         <p class="muted-text">
-          先填四项就能跑：<strong>频道名称</strong>、<strong>频道地址</strong>（粘 https://t.me/xxx
-          即可）、<strong>频道保存目录</strong>、<strong>读取模式</strong>。 关键词、正则、TMDB
-          筛选都可以留空，跑通后再加。
+          填写频道名称、地址、读取模式与处理动作。转存需选择保存目录；生成分享 STRM
+          无需转存目录。首次历史条数仅在建立游标时生效，重新启用会继续上次游标；修改筛选规则不回放旧消息。
         </p>
         <FormFields
           v-model="draft"
-          :fields="fields.filter((f) => !['countries', 'genres'].includes(f.key))"
+          :fields="fields.filter(visibleField)"
           :disabled="op.busy.value || op.uncertain.value"
-        /><DirectoryPicker v-model="target" :account-id="cloud.id" label="频道保存目录" />
+        /><DirectoryPicker
+          v-if="transferAction"
+          v-model="target"
+          :account-id="cloud.id"
+          label="频道保存目录"
+        />
+        <section v-if="draft.mode === 'public_web'" class="panel">
+          <h3>公开网页读取测试（只读）</h3>
+          <p class="muted-text">
+            仅读取 Telegram 公开预览页，不保存游标、不登记任务、不触发 115 转存。需要可以公开访问的
+            t.me 频道用户名。
+          </p>
+          <button
+            class="button"
+            :disabled="publicPreview.loading.value || op.busy.value"
+            @click="previewPublic"
+          >
+            测试公开网页抓取
+          </button>
+          <OperationState :busy="publicPreview.loading.value" :error="publicPreview.error.value" />
+          <template v-if="publicPreview.data.value">
+            <p>成功读取 {{ publicPreview.data.value.count }} 条公开消息（显示最多 20 个链接）。</p>
+            <div
+              v-for="item in records(publicPreview.data.value.messages)"
+              :key="String(item.message_id)"
+              class="panel"
+            >
+              <strong>消息 #{{ item.message_id }}</strong>
+              <p class="muted-text">{{ String(item.text || '').slice(0, 200) }}</p>
+              <p v-for="link in strings(item.links)" :key="String(link)" class="path-text">
+                {{ link }}
+              </p>
+            </div>
+          </template>
+        </section>
         <section class="catalog-filters">
           <h3 class="detail-section-title">地区与题材筛选</h3>
           <p class="muted-text">留空表示不限；题材会同时选择后端提供的电影与剧集分类。</p>
@@ -351,7 +496,7 @@ watch(
         <div class="action-row">
           <button
             class="button primary"
-            :disabled="!target || op.busy.value || op.uncertain.value"
+            :disabled="(transferAction && !target) || op.busy.value || op.uncertain.value"
             @click="save"
           >
             保存频道规则
@@ -419,7 +564,33 @@ watch(
     </section>
     <section v-if="tab === 'history'" class="panel">
       <h2>接收历史</h2>
-      <EvidenceDetails :value="inbox.data.value?.items" />
+      <article
+        v-for="entry in records(inbox.data.value?.items)"
+        :key="String(entry.id)"
+        class="panel"
+      >
+        <strong
+          >{{ entry.source === 'channel' ? '频道' : '资源接收' }} ·
+          {{ object(entry.result).channel || entry.id }}</strong
+        >
+        <p>{{ object(entry.job).message || entry.state }}</p>
+        <p
+          v-for="(error, index) in records(object(entry.result).errors)"
+          :key="index"
+          class="inline-error"
+        >
+          {{ error.stage_label || '处理阶段' }}：{{ error.reason
+          }}{{ error.uncertain ? ' · 结果待核实，请勿重复提交' : '' }}
+        </p>
+        <p
+          v-for="(error, index) in records(object(entry.result).child_errors)"
+          :key="'child' + index"
+          class="inline-error"
+        >
+          后续任务 · {{ error.stage_label || '处理阶段' }}：{{ error.reason }}
+        </p>
+        <EvidenceDetails :value="entry" />
+      </article>
       <div class="pagination">
         <button
           class="button"

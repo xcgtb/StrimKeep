@@ -6,6 +6,7 @@ import re
 import time
 from pathlib import PurePosixPath
 from app.cloud import store, settings, events
+from app.domain import media_labels
 
 
 def group_key(asset, connection, revision, origin):
@@ -51,23 +52,27 @@ def caption(items, source_kind='personal', expected=None):
             ranges.append([n, n])
     suffix = ''
     if m['kind'] == 'tv':
-        suffix = ' S' + str(int(m['season'])).zfill(2) + ' ' + ', '.join('E' + str(a).zfill(2) + (('-E' + str(b).zfill(2)) if b != a else '') for a, b in ranges)
-    versions = sorted({' '.join(str(i['media'].get('naming_fields', {}).get(k) or i['media'].get(k) or '') for k in ('source', 'dynamic_range', 'resolution')).strip() for i in items})
-    groups = sorted({str(i['media'].get('naming_fields', {}).get('release_group') or '-') for i in items})
+        suffix = ' S' + str(int(m['season'])).zfill(2) + ' ' + ', '.join('E' + str(a).zfill(2) + (('-E' + str(b).zfill(2)) if b != a else '') for a, b in ranges[:6]) + (' 等 '+str(len(episodes))+' 集' if len(ranges)>6 else '')
+    versions = sorted({media_labels.version(i['media'], i['source']) for i in items})
+    groups = sorted({g for i in items if (g := media_labels.release_group(i['media']))})
+    def short_list(values, count=3):
+        return ' / '.join(values[:count]) + (' 等 '+str(len(values))+' 种' if len(values)>count else '')
     size = sum(int(i['source'].get('size') or 0) for i in items)
     parts = PurePosixPath(m['directory']).parts
     if source_kind == 'share' and parts and parts[0].startswith('分享-'):
         parts = parts[1:]
     category = '/'.join(parts[:-2] if m['kind'] == 'tv' else parts[:-1]) or '未分类'
     heading = '分享 STRM 已生成' if source_kind == 'share' else '115 整理完成'
-    text = '✅ ' + heading + '\n📺 ' + safe(m['title']) + ' (' + safe(m.get('year', '')) + ')' + safe(suffix)
+    text = '✅ ' + heading + '\n📺 ' + safe(str(m['title'])[:120]) + (' (' + safe(m.get('year')) + ')' if str(m.get('year', '')) not in ('', '0', '0000', 'None') else '') + safe(suffix)
     text += '\n☁️ 来源：' + ('115网盘分享（免转存）' if source_kind == 'share' else '115网盘')
-    text += '\n🗂 分类：' + safe(category) + '\n🎞 版本：' + safe(' / '.join(versions) or '未识别')
+    text += '\n🗂 分类：' + safe(category[:80]) + '\n🎞 版本：' + safe(short_list(versions))
     text += '\n📁 文件：' + str(len(items)) + ' 个' + (('\n🎬 本次：' + str(len(episodes)) + ' 集') if episodes else '')
     if m['kind'] == 'tv':
         totals = {i['media'].get('season_episode_count') for i in items if type(i['media'].get('season_episode_count')) is int}
         text += '\n🗓 本季：S' + str(int(m['season'])).zfill(2) + (' 共 ' + str(next(iter(totals))) + ' 集（TMDB）' if len(totals) == 1 else ' 总集数暂未取得')
-    text += '\n💾 体积：' + format(size / 1024**3, '.2f') + ' GB\n🎟 影号：TMDB ' + safe(m['tmdb_id']) + '\n👥 组名：' + safe(' / '.join(groups))
+    text += '\n💾 体积：' + format(size / 1024**3, '.2f') + ' GB\n🎟 影号：TMDB ' + safe(m['tmdb_id'])
+    if groups:
+        text += '\n👥 组名：' + safe(short_list(groups))
     if expected and expected > len(items):
         text += '\n⚠️ 本组仅完成 ' + str(len(items)) + '/' + str(expected) + ' 个文件，其余请查看任务记录。'
     return text
@@ -176,14 +181,20 @@ def batch_result(operation, state, message, job_id='', kind='', diagnostic_repor
     metadata = {v['path'] for r in rows for v in r['owned'] if v.get('path')}
     title = 'STRM 批量结果' if rows or directories or kind in ('sync', 'publish', 'share_strm') else '整理结果'
     text = '📦 '+title+'：' + html.escape(events.clean(message)[:160])
-    text += '\n同步目录：'+str(len(directories))+' 个\n目录成功：'+str(success)+' 个 | 目录异常：'+str(failed)+' 个'
-    text += '\nSTRM 更新：'+str(len(rows))+' 个\n元数据写入：'+str(len(metadata))+' 个'
-    text += '\n处理异常：'+str(len(operation.get('errors',[])))+' 项 | 跳过：'+str(len(operation.get('skipped',[])))+' 项'
-    text += '\n规则过滤：'+str(len(operation.get('filtered',[])))+' 项 | 版本保留：'+str(len(operation.get('quality_held',[])))+' 项'
+    if directories:
+        text += '\n同步目录：'+str(len(directories))+' 个 · 目录成功：'+str(success)+' 个'
+        if failed:
+            text += ' · 目录异常：'+str(failed)+' 个'
+    text += '\nSTRM 更新：'+str(len(rows))+' 个'
+    if metadata:
+        text += ' · 元数据写入：'+str(len(metadata))+' 个'
+    for key, label in (('errors','处理异常'), ('skipped','跳过'), ('filtered','规则过滤'), ('quality_held','版本保留')):
+        if operation.get(key):
+            text += '\n'+label+'：'+str(len(operation[key]))+' 项'
     removed = operation.get('reconciliation',{}).get('removed',[])
     if removed:
         text += '\n失效引用清理：'+str(len(removed))+' 项'
-    if operation.get('cleanup'):
+    if operation.get('cleanup', {}).get('removed'):
         text += '\n来源空目录清理：'+str(len(operation['cleanup'].get('removed',[])))+' 个'
     if operation.get('deferred'):
         text += '\n等待延时生成：'+str(len(operation['deferred']))+' 项'

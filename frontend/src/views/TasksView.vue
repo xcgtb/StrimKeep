@@ -325,14 +325,20 @@ useActivityUpdates(async () => {
       <button
         v-if="
           detail.data.value.job.state === 'running' &&
-          ['organize', 'workflow', 'transfer', 'sync', 'share_strm'].includes(
+          ['organize', 'workflow', 'transfer', 'sync', 'share_strm', 'intake', 'channel'].includes(
             detail.data.value.job.kind,
           )
         "
         class="button"
         @click="action = 'stop'"
       >
-        安全停止并暂停规则
+        {{
+          detail.data.value.job.kind === 'channel'
+            ? '安全停止并暂停频道'
+            : detail.data.value.job.kind === 'intake'
+              ? '安全停止当前接收'
+              : '安全停止并暂停规则'
+        }}
       </button>
       <button
         v-if="

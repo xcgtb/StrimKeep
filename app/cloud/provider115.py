@@ -19,10 +19,12 @@ def sdk():
     return P115Client
 
 
-def checked(response):
+def checked(response, method=''):
     if not isinstance(response, dict) or response.get("state") not in (True, 1):
-        code = next((str(response[k]) for k in ('errno','errcode','code') if isinstance(response,dict) and k in response and re.fullmatch(r'-?[0-9]{1,12}',str(response[k]))), '')
-        raise CloudError("115 拒绝请求，请检查账号状态与操作条件"+("（错误码 "+code+"）" if code else ""), 502)
+        from app.domain.provider_errors import classify
+        info = classify(response if isinstance(response, dict) else {}, method)
+        stage = 'read_share' if method.startswith('share_') and method != 'share_receive' else 'submit_transfer' if method == 'share_receive' else ''
+        raise CloudError(info['message'], 502, code=info['code'], category=info['category'], stage=stage)
     return response
 
 
@@ -163,10 +165,14 @@ class Provider115:
     def call(self, method, *args, write=False, **kwargs):
         try:
             result = getattr(self.client, method)(*args, timeout=15, **kwargs)
-            return checked(result) if isinstance(result, dict) else result
+            return checked(result, method) if isinstance(result, dict) else result
         except CloudError:
             raise
-        except Exception:
+        except Exception as exc:
+            # Pinned SDK exceptions can carry the original explicit rejection dict.
+            for value in exc.args:
+                if isinstance(value, dict) and value.get("state") in (False, 0):
+                    checked(value, method)
             raise CloudError(
                 (
                     "115 写入结果待核实，请查看任务记录"
@@ -175,6 +181,8 @@ class Provider115:
                 ),
                 502,
                 uncertain=write,
+                category="write_unknown" if write else "transport",
+                stage="submit_transfer" if method == "share_receive" else "read_share" if method.startswith("share_") else "",
             ) from None
 
     def profile(self):

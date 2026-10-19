@@ -6,7 +6,7 @@ import re
 import time
 from pathlib import PurePosixPath
 from app.cloud import credentials, store, settings, strm, jobs, workflow, recognition, file_filters, share_selection
-from app.cloud.errors import CloudError
+from app.cloud.errors import CloudError, diagnostic
 from app.cloud import provider115
 
 LIMIT = 2000
@@ -266,7 +266,8 @@ def run(job_id, payload):
             posters.verified(index, item["source"], item["media"])
         except (CloudError, OSError) as error:
             counts['failed'] += 1
-            result["errors"].append({"name": item["source"]["name"], "reason": str(error)+"；请先核对本任务步骤与当前引用，勿重复提交未知结果"})
+            info = diagnostic(error, "generate_share_strm") if isinstance(error, CloudError) else {"stage":"generate_share_strm", "stage_label":"生成分享 STRM", "reason":"NAS 文件写入失败，请检查挂载与权限"}
+            result["errors"].append({**info, "name": item["source"]["name"], "reason": info["reason"]+"；请先核对本任务步骤与当前引用，勿重复提交未知结果"})
             break
         jobs.progress(job_id, len(payload["items"]), index+1, "生成分享 STRM", item["source"]["name"])
     posters.flush()

@@ -81,6 +81,10 @@ CREATE TABLE IF NOT EXISTS cloud_inbox (
 CREATE TABLE IF NOT EXISTS cloud_channel_cursors (
  id TEXT PRIMARY KEY, cursor INTEGER NOT NULL, initialized INTEGER NOT NULL,
  next_poll REAL NOT NULL, last_error TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS cloud_public_channel_status (
+ channel_id TEXT PRIMARY KEY, last_success REAL NOT NULL DEFAULT 0,
+ last_check REAL NOT NULL DEFAULT 0, last_count INTEGER NOT NULL DEFAULT 0,
+ failures INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS cloud_ingestion (
  id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, connection_id TEXT NOT NULL,
  revision INTEGER NOT NULL, payload TEXT NOT NULL, state TEXT NOT NULL,
@@ -329,6 +333,8 @@ def disconnect_account(account_id):
         con.execute("DELETE FROM cloud_service_settings WHERE account_id=?", (account_id,))
         con.execute("DELETE FROM cloud_channel_cursors WHERE id IN "
                     "(SELECT id FROM cloud_channels WHERE account_id=?)", (account_id,))
+        con.execute("DELETE FROM cloud_public_channel_status WHERE channel_id IN "
+                    "(SELECT id FROM cloud_channels WHERE account_id=?)", (account_id,))
         con.execute("DELETE FROM cloud_channels WHERE account_id=?", (account_id,))
         con.execute("UPDATE cloud_inbox SET state='processed',result=? "
                     "WHERE account_id=? AND state='queued'",
@@ -365,6 +371,8 @@ def enqueue_sync_once(account_id, revision, source_cid, reconcile=True):
 def delete_channel(account_id, channel_id):
     """删除某个账号下的频道；account_id 参与条件，防止跨账号误删。"""
     with db() as con:
+        con.execute("DELETE FROM cloud_public_channel_status WHERE channel_id IN "
+                    "(SELECT id FROM cloud_channels WHERE id=? AND account_id=?)", (channel_id, account_id))
         affected = con.execute(
             "DELETE FROM cloud_channels WHERE id=? AND account_id=?",
             (channel_id, account_id),
