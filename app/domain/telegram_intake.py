@@ -48,3 +48,28 @@ def relay_text(prefix, message):
     if len(value.encode('utf-16-le')) // 2 > 4096:
         raise ValueError('转发内容超过 Telegram 4096 字符限制，请缩小来源消息；未发送截断内容')
     return value
+
+
+
+def delivery_route(rule):
+    action = rule.get('action', 'transfer')
+    if action == 'forward' and rule.get('forward_target', 'self') != 'self':
+        return 'external', '发送给 ' + rule['forward_target']
+    if action == 'share_strm' or (action == 'forward' and command(rule.get('command_prefix', '/strm')) in SHARE_COMMANDS):
+        return 'share_strm', '内置生成分享 STRM（免转存）'
+    return 'transfer', '转存到 115 接收目录'
+
+
+def delivery_eligibility(rule, kinds):
+    destination, _ = delivery_route(rule)
+    if destination == 'external':
+        return True, '可发送命令消息；对方处理结果需在目标机器人查看'
+    if not kinds:
+        return False, '没有找到支持的资源链接'
+    if rule.get('mode') == 'public_web':
+        kinds = [kind for kind in kinds if kind == 'share']
+        if not kinds:
+            return False, '公开网页自动处理仅支持 115 分享链接'
+    if destination == 'share_strm' and any(kind != 'share' for kind in kinds):
+        return False, '分享 STRM 只接受 115 分享链接'
+    return True, '资源类型符合当前处理动作'

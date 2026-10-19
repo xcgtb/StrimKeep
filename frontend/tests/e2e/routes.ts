@@ -12,7 +12,7 @@ export const routes = [
   ['organize/workspace', '媒体整理'],
   ['organize', '影视整理'],
   ['organize/automation', '整理自动化'],
-  ['resources/channels', '频道与机器人'],
+  ['resources/channels', '115 频道监控'],
   ['governance', '治理总览'],
   ['governance/rules', '七维与治理规则'],
   ['governance/cleanup', '目录与残留清理'],

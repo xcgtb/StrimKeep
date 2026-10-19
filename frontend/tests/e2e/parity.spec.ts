@@ -132,11 +132,11 @@ test('channel Chinese filters save exact backend country and paired genre IDs', 
   await page.getByRole('button', { name: '添加频道', exact: true }).click();
   await page.getByLabel('频道名称', { exact: true }).fill('我的频道');
   await page.getByLabel('频道地址 / @名称 / -100 ID', { exact: true }).fill('@test_channel');
+  await page.getByText('筛选规则与指定作品（可选）', { exact: true }).click();
   await page.getByRole('button', { name: '中国大陆', exact: true }).click();
   await page.getByRole('button', { name: '动作', exact: true }).click();
   await page
-    .locator('.panel')
-    .filter({ has: page.getByRole('heading', { name: '编辑频道规则', exact: true }) })
+    .getByRole('dialog', { name: '编辑频道规则', exact: true })
     .locator('.directory-field')
     .getByRole('button', { name: '选择目录', exact: true })
     .click();

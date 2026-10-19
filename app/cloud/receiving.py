@@ -11,6 +11,7 @@ from app.domain import telegram_intake
 
 DEFAULT = {"tg_enabled": False, "organize_after_transfer": False, "start_after": 0}
 LINK = re.compile(r"https://(?:www\.)?(?:115\.com|115cdn\.com)/s/[A-Za-z0-9-]+(?:\?[^\s<>\"']*)?|magnet:\?[^\s<>\"']+|ed2k://\|file\|[^\r\n<>]+?\|/|115://[^\r\n<>]+", re.I)
+CHANNEL_FIELDS = {"id", "revision", "name", "address", "target_cid", "enabled", "include", "exclude", "regex", "tmdb_ids", "kinds", "countries", "genres", "organize", "mode", "history_limit", "poll_seconds", "rule_cards", "auto_transfer", "action", "command_prefix", "forward_target"}
 
 
 def parse(value):
@@ -163,7 +164,7 @@ def channels(account_id):
 
 
 def save_channel(account_id, value):
-    allowed = {"id", "revision", "name", "address", "target_cid", "enabled", "include", "exclude", "regex", "tmdb_ids", "kinds", "countries", "genres", "organize", "mode", "history_limit", "poll_seconds", "rule_cards", "auto_transfer", "action", "command_prefix", "forward_target"}
+    allowed = CHANNEL_FIELDS
     if not isinstance(value, dict) or set(value)-allowed:
         raise CloudError("频道配置字段无效")
     data = {"name":"", "mode":"bot", "auto_transfer":True, "action":"transfer", "command_prefix":"/strm", "forward_target":"self", "history_limit":20 if value.get("mode") in ("user", "public_web") else 0, "poll_seconds":300, "enabled":False, "include":[], "exclude":[], "regex":[], "tmdb_ids":[], "kinds":[], "countries":[], "genres":[], "organize":False, "rule_cards":[], **value}
@@ -257,6 +258,26 @@ def save_channel(account_id, value):
         data["start_after"] = json.loads(old[1]).get("start_after",0) if old and json.loads(old[1])["enabled"] and data["enabled"] else int(time.time())
         con.execute("INSERT INTO cloud_channels VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,payload=excluded.payload,account_revision=excluded.account_revision,updated=excluded.updated", (cid,account_id,account["revision"],expected+1,store.encode(data),time.time()))
     return {"id":cid,"revision":expected+1,**data}
+
+
+def set_channel_enabled(account_id, channel_id, enabled, revision):
+    """Pausing must work even when Telegram/115 credentials or networks fail."""
+    if type(enabled) is not bool or type(revision) is not int:
+        raise CloudError('请提供有效的频道开关和配置版本')
+    with store.db() as con:
+        row = con.execute('SELECT revision,payload FROM cloud_channels WHERE id=? AND account_id=?', (channel_id, account_id)).fetchone()
+        if not row:
+            raise CloudError('频道规则不存在', 404)
+        if row[0] != revision:
+            raise CloudError('频道配置已变化，请刷新后重试', 409)
+        data = json.loads(row[1])
+        if not enabled:
+            data['enabled'] = False
+            con.execute('UPDATE cloud_channels SET revision=revision+1,payload=?,updated=? WHERE id=? AND account_id=?', (store.encode(data), time.time(), channel_id, account_id))
+            return {'id': channel_id, 'revision': revision + 1, **data}
+    # Enabling still performs all original account, target and reader checks.
+    return save_channel(account_id, {**{key: value for key, value in data.items() if key in CHANNEL_FIELDS},
+                                     'id': channel_id, 'revision': revision, 'enabled': True})
 
 
 def allowed_message(text, rule):
@@ -415,6 +436,8 @@ def run(job_id,payload):
                 with store.db() as con:rule=con.execute("SELECT revision,payload FROM cloud_channels WHERE id=? AND account_id=?",(payload["channel_id"],payload["account_id"])).fetchone()
                 if not rule or rule[0]!=payload["channel_revision"] or not json.loads(rule[1])["enabled"]:raise CloudError("频道已暂停或规则变化，请人工检查原消息",409)
                 cfg=json.loads(rule[1]);filter_text=message["text"]+"\n"+"\n".join(e.get("url","") for e in message["entities"] if "themoviedb.org/" in e.get("url",""));allowed,reason=allowed_message(filter_text,cfg)
+                result['channel'] = cfg['name']
+                result['action'] = cfg.get('action', 'transfer')
                 if not allowed:
                     result["filtered"]=[{"name":cfg["name"],"reason":reason}]
                     return result
@@ -575,14 +598,5 @@ def test_channel(account_id, channel_id, text):
     rule = next((r for r in channels(account_id) if r['id'] == channel_id), None)
     if not rule:
         raise CloudError('频道规则不存在', 404)
-    matched, reason = allowed_message(text, rule)
-    result = {'matched': matched, 'reason': reason, 'action': rule.get('action', 'transfer')}
-    if rule.get('action') == 'forward':
-        try:
-            result['preview_text'] = telegram_intake.relay_text(rule.get('command_prefix', '/strm'), {'text':text,'entities':[]})
-        except ValueError as error:
-            result['matched'] = False
-            result['reason'] = str(error)
-        result['target'] = rule.get('forward_target', 'self')
-        result['note'] = '仅预览，不发送消息，不生成或转存资源'
-    return result
+    from app.cloud.channel_inspection import evaluate
+    return evaluate(rule, {'text': text, 'entities': []})

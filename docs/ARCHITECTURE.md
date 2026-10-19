@@ -223,3 +223,10 @@ STRM 全量扫描由 `scheduler` 调用 `cloud/strm_scan.tick()`，从已保存�
 - `receiving` 统一频道筛选、持久收件箱、内置分享 STRM/转存调度及接收历史；`channel_forwarding` 只拥有通过用户会话发送命令文本的流程，以现有 channel 任务及 telegram-forward 步骤保存回执。没有新增第二套业务状态或执行队列。
 - `public_channel_reader` 负责有界公开网页读取；`channel_reader` 负责 MTProto 读取与会话；两者均在同一事务中提交消息和游标并核对账号/规则/游标修订。`cloud_public_channel_status` 保留最初补丁表名，兼容保存两类轮询读取的状态，不是任务业务状态。
 - 外部消息写入只在 jobs 内发生；未知发送不会重放，观察模式无远端操作。接收历史按当前子任务只读补充失败，不重写父任务已提交的事实。未修改双库治理和版本替换策略。
+
+### 频道检查与交互改进（未发布）
+
+- `app/cloud/channel_inspection.py` 只读取得已保存规则及最近五条消息，复用现有公开预览/用户会话读取和筛选逻辑。它不捕获收件箱、不推进游标、不提交业务任务。Bot 模式明确说明只能接收实时更新；暂停与观察模式不会因检查被开启。
+- `app/domain/telegram_intake.py` 补充纯计算的处理路由和资源类型可处理性，供测试结果解释使用。实际执行继续通过 `receiving`、`jobs` 与原步骤记录。
+- `receiving.set_channel_enabled()` 暂停时只作账号内、配置版本匹配的本地更新；启用时仍复用原账号、目录及 Telegram 权限检查。暂停规则不撤销已发出的远端请求，也不自动停止已派发的后续子任务。
+- Vue 频道页使用既有 `ModalDialog`、`useRequest`、`useOperation` 和 `useVisiblePoll`；配置草稿与自动刷新分离。检查和筛选结果直接展示，接收历史通过持久任务 ID 跳转任务中心。

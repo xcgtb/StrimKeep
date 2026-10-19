@@ -349,6 +349,20 @@ def inbox_history(account_id:str,offset:int=Query(0,ge=0,le=100000)):
     return {"status":"success","items":call(receiving.inbox,account_id,offset)}
 
 
+@router.post("/accounts/{account_id}/channels/{channel_id}/inspect")
+def channel_inspect(account_id: str, channel_id: str):
+    from app.cloud import channel_inspection
+    return {"status": "success", **call(channel_inspection.inspect, account_id, channel_id)}
+
+
+@router.post("/accounts/{account_id}/channels/{channel_id}/enabled")
+def channel_enabled(account_id: str, channel_id: str, body: dict):
+    if set(body) != {'enabled', 'revision'}:
+        raise HTTPException(400, '请提供频道开关和配置版本')
+    from app.cloud import receiving
+    return {"status": "success", "channel": call(receiving.set_channel_enabled, account_id, channel_id, body['enabled'], body['revision'])}
+
+
 @router.get("/accounts/{account_id}/maintenance")
 def maintenance_config(account_id:str):
     from app.cloud import maintenance
