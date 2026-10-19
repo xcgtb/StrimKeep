@@ -14,6 +14,15 @@ watch(
   },
 );
 const labels: Record<string, string> = {
+  inventory: '盘内库存',
+  root_cid: '扫描目录编号',
+  root_name: '扫描目录',
+  media_count: '作品目录数',
+  video_count: '视频数',
+  unassigned_videos: '未归入作品目录的视频',
+  metadata_failed: '海报资料未取得',
+  metadata_pending: '海报资料本轮暂缓',
+  note: '说明',
   name: '名称',
   id: '编号',
   state: '状态',
@@ -172,6 +181,7 @@ function shown(v: unknown) {
           instant: '秒传',
           transfer: '转存',
           organize: '整理归档',
+          inventory: '盘内库存扫描',
           sync: 'STRM 同步',
           intake: '资源接收',
           share_strm: '分享 STRM',

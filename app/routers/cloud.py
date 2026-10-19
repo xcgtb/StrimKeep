@@ -308,6 +308,20 @@ def receiving_catalog():
     return {"status":"success","genres":[{"name":name,"ids":list(dict.fromkeys(str(v) for v in ids.values() if v))} for name,ids in engine.GENRE_MAP.items()],"countries":[{"name":name,"id":cid} for name,cid in (("中国大陆","CN"),("中国香港","HK"),("中国台湾","TW"),("韩国","KR"),("日本","JP"),("美国","US"),("英国","GB"),("法国","FR"),("德国","DE"),("加拿大","CA"),("澳大利亚","AU"),("印度","IN"))]}
 
 
+@router.post('/accounts/{account_id}/inventory/scan', status_code=202)
+def inventory_scan(account_id: str, body: dict):
+    if set(body) - {'root_cid', 'kind_hint', 'enrich'}:
+        raise HTTPException(400, '库存扫描参数无效')
+    from app.cloud import inventory
+    return {'status': 'success', 'job_id': call(inventory.start, account_id, body.get('root_cid', '0'), body.get('kind_hint', 'auto'), body.get('enrich', True))}
+
+
+@router.get('/accounts/{account_id}/inventory')
+def inventory_list(account_id: str, root_cid: str = '0', kind: Literal['', 'movie', 'tv', 'unknown'] = '', keyword: str = Query('', max_length=100), offset: int = Query(0, ge=0, le=100000), limit: int = Query(48, ge=1, le=100)):
+    from app.cloud import inventory
+    return {'status': 'success', **call(inventory.listing, account_id, root_cid, kind, keyword, offset, limit)}
+
+
 @router.get("/accounts/{account_id}/channels")
 def channel_list(account_id:str):
     from app.cloud import receiving

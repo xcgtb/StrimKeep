@@ -230,3 +230,10 @@ STRM 全量扫描由 `scheduler` 调用 `cloud/strm_scan.tick()`，从已保存�
 - `app/domain/telegram_intake.py` 补充纯计算的处理路由和资源类型可处理性，供测试结果解释使用。实际执行继续通过 `receiving`、`jobs` 与原步骤记录。
 - `receiving.set_channel_enabled()` 暂停时只作账号内、配置版本匹配的本地更新；启用时仍复用原账号、目录及 Telegram 权限检查。暂停规则不撤销已发出的远端请求，也不自动停止已派发的后续子任务。
 - Vue 频道页使用既有 `ModalDialog`、`useRequest`、`useOperation` 和 `useVisiblePoll`；配置草稿与自动刷新分离。检查和筛选结果直接展示，接收历史通过持久任务 ID 跳转任务中心。
+
+### 盘内库存（1.6.2）
+
+- `app/domain/inventory.py` 从完整目录快照推导作品目录、类型与已有季集，零 IO。S00、连续/多集文件保留原始证据；单独 E01/[01] 仅在明确季目录下归属，不默认 S01。
+- `app/cloud/inventory.py` 复用 `workflow.walk()` 与适配器完整分页，扫描受现有 20,000 文件/目录上限约束，超限失败并要求缩小目录。TMDB 只读取明确类型与编号，按 `(kind,id)` 复用，单轮最多 200 个唯一编号。
+- 新任务类型 `inventory` 复用 `cloud_jobs.state`、步骤、停止与进度。`cloud_inventory_items` 以 `(job_id,cid)` 保存目录记录；单事务核验账号修订/停止信号后写入，列表只选当前授权修订下、相同账号/扫描根的最近成功任务。写入后若任务失败或停止，仍不发布该批结果。账号断开时移除库存记录，保留原任务历史。
+- `CloudInventory.vue` 嵌入文件管理，不新增侧栏层级。`useInventorySource.ts` 只在内存选择已连接账号及数字目录，后续预览/同步仍走原服务端校验和确认；不自动写入目录配置。库存计数是作品目录数，季集是文件名观察值，不承诺整剧完整或 Emby 已入库。

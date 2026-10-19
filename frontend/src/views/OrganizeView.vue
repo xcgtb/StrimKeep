@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue';
 import { request } from '../api/client';
+import { useInventorySource } from '../composables/useInventorySource';
 import { useCloud } from '../stores/cloud';
 import { readData, writeData, accountPath, object, records, type Data } from '../api/domain';
 import { useRequest } from '../composables/useRequest';
@@ -14,6 +15,7 @@ import TaskReceipt from '../components/TaskReceipt.vue';
 import EvidenceDetails from '../components/EvidenceDetails.vue';
 import OperationState from '../components/OperationState.vue';
 import MediaOverride from '../components/MediaOverride.vue';
+const inventorySource = useInventorySource();
 const cloud = useCloud(),
   op = useOperation(() => cloud.id),
   preview = useRequest<Data>(),
@@ -71,14 +73,32 @@ function selectDirectory(key: string, value: { id: string; name: string }) {
   directoryValues.value[key as keyof typeof directoryValues.value].value = value.id;
   directoryNames.value[key as keyof typeof directoryNames.value].value = value.name;
 }
-const candidates = computed(() => [
-  ...records(plan.value?.items),
-  ...records(plan.value?.skipped),
-  ...records(plan.value?.unknown_items),
+const previewFilter = ref(''),
+  previewSearch = ref('');
+const candidates = computed<Data[]>(() => [
+  ...records(plan.value?.items).map((row) => ({ ...row, previewStatus: 'planned' })),
+  ...records(plan.value?.skipped).map((row) => ({ ...row, previewStatus: 'skipped' })),
+  ...records(plan.value?.unknown_items).map((row) => ({ ...row, previewStatus: 'unknown' })),
 ]);
+const visibleCandidates = computed(() =>
+  candidates.value.filter(
+    (row) =>
+      (!previewFilter.value || row.previewStatus === previewFilter.value) &&
+      (!previewSearch.value.trim() ||
+        JSON.stringify(row).toLowerCase().includes(previewSearch.value.trim().toLowerCase())),
+  ),
+);
+const previewLabel = (status: unknown) =>
+  status === 'planned' ? '待整理' : status === 'skipped' ? '已跳过' : '待识别';
+function episodeLabel(media: Data) {
+  if (media.kind !== 'tv' || media.season == null || media.episode == null) return '';
+  return `S${String(media.season).padStart(2, '0')}E${String(media.episode).padStart(2, '0')}`;
+}
 function invalidate() {
   preview.cancel();
   plan.value = undefined;
+  previewFilter.value = '';
+  previewSearch.value = '';
   confirm.value = '';
   op.reconcile();
 }
@@ -91,6 +111,10 @@ async function defaults() {
     const d = object(r.directories);
     source.value = String(object(d.source).id || '');
     sourceName.value = String(object(d.source).name || '');
+    if (inventorySource.value) {
+      source.value = inventorySource.value.id;
+      sourceName.value = inventorySource.value.name;
+    }
     target.value = String(object(d.target).id || '');
     targetName.value = String(object(d.target).name || '');
     unknown.value = String(object(d.unknown).id || '');
@@ -176,6 +200,9 @@ watch(
     title="媒体整理"
     subtitle="识别、纠正、命名与归档先预览，核对本批范围后执行。"
   /><AccountPicker />
+  <p v-if="inventorySource" class="notice-bar">
+    已带入盘内库存目录；先扫描预览。本次选择不会自动保存为定时整理来源。
+  </p>
   <div class="flow-scope">
     <span class="badge blue">个人库</span
     ><strong>识别 → 八维洗版 → 命名归档 → STRM → Emby 入库</strong>
@@ -204,7 +231,7 @@ watch(
             { name: '确认归档', note: '提交任务' },
           ]"
           :key="step.name"
-          :class="{ active: i === (plan ? 1 : 0) }"
+          :class="{ active: i === (fixing ? 2 : job ? 3 : plan || preview.loading.value ? 1 : 0) }"
         >
           <span>{{ i + 1 }}</span>
           <div>
@@ -335,15 +362,50 @@ watch(
         核对并整理
       </button>
     </header>
+    <div class="preview-toolbar">
+      <label
+        >显示结果<select v-model="previewFilter" aria-label="筛选整理结果">
+          <option value="">全部 {{ candidates.length }}</option>
+          <option value="planned">待整理 {{ records(plan.items).length }}</option>
+          <option value="skipped">已跳过 {{ records(plan.skipped).length }}</option>
+          <option value="unknown">待识别 {{ records(plan.unknown_items).length }}</option>
+        </select></label
+      >
+      <label
+        >查找文件<input
+          v-model="previewSearch"
+          placeholder="原文件名或目标片名"
+          aria-label="查找整理文件"
+      /></label>
+    </div>
+    <p v-if="!visibleCandidates.length" class="muted-text">没有符合条件的文件。</p>
     <div class="plan-item-list">
       <article
-        v-for="(row, i) in candidates"
+        v-for="(row, i) in visibleCandidates"
         :key="String(object(row.source).id || row.file_id || i)"
       >
-        <div>
-          <strong>{{ object(row.source).name || row.name }}</strong>
-          <p>{{ object(row.media).directory }} / {{ object(row.media).name || row.reason }}</p>
-          <small v-if="row.reason" class="warning-text">{{ row.reason }}</small>
+        <div class="preview-comparison">
+          <span class="badge" :class="row.previewStatus === 'planned' ? 'blue' : ''">{{
+            previewLabel(row.previewStatus)
+          }}</span>
+          <small>原文件</small
+          ><strong class="path-text">{{ object(row.source).name || row.name }}</strong>
+          <template v-if="row.previewStatus === 'planned'">
+            <small>整理后文件名</small
+            ><strong class="path-text">{{ object(row.media).name }}</strong>
+            <small>归档子目录</small>
+            <p class="path-text">{{ object(row.media).directory }}</p>
+            <p class="muted-text">
+              {{ object(row.media).title }} {{ object(row.media).year || '' }}
+              {{ episodeLabel(object(row.media))
+              }}<template v-if="object(row.media).tmdb_id">
+                · TMDB {{ object(row.media).tmdb_id }}</template
+              ><template v-if="records(row.followers).length">
+                · 随行文件 {{ records(row.followers).length }} 个</template
+              >
+            </p>
+          </template>
+          <p v-if="row.reason" class="warning-text">{{ row.reason }}</p>
         </div>
         <button
           class="button small"
@@ -424,3 +486,35 @@ watch(
     "
   />
 </template>
+
+<style scoped>
+.preview-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 18px 0;
+}
+.preview-toolbar label {
+  display: grid;
+  gap: 6px;
+  flex: 1;
+  min-width: 180px;
+}
+.preview-comparison {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+.preview-comparison > .badge {
+  justify-self: start;
+}
+.preview-comparison small {
+  color: var(--muted);
+}
+.preview-comparison p {
+  margin: 0;
+}
+.preview-comparison .path-text {
+  overflow-wrap: anywhere;
+}
+</style>

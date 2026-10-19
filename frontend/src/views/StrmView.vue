@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
 import { date } from '../composables/format';
+import { useInventorySource } from '../composables/useInventorySource';
 import { useCloud } from '../stores/cloud';
 import { readData, writeData, accountPath, query, records, object, type Data } from '../api/domain';
 import { useRequest } from '../composables/useRequest';
@@ -18,6 +19,7 @@ import DirectoryRoles from '../components/DirectoryRoles.vue';
 import PlaybackCheck from '../components/PlaybackCheck.vue';
 import { useActivityUpdates } from '../composables/useActivityUpdates';
 import ModalDialog from '../components/ModalDialog.vue';
+const inventorySource = useInventorySource();
 const cloud = useCloud(),
   op = useOperation(() => cloud.id),
   assets = useRequest<Data>(),
@@ -56,6 +58,10 @@ async function loadDefaultSource() {
     const saved = object(object(result.directories).strm);
     cid.value = String(saved.id || '');
     cidName.value = String(saved.name || '');
+    if (inventorySource.value) {
+      cid.value = inventorySource.value.id;
+      cidName.value = inventorySource.value.name;
+    }
   }
 }
 async function inspect(row: Data) {
@@ -119,6 +125,9 @@ useVisiblePoll(() => {
     title="STRM 资源"
     subtitle="管理已生成的播放引用、源文件关系与同步任务。"
   /><AccountPicker />
+  <p v-if="inventorySource" class="notice-bar">
+    已带入盘内库存目录用于本次手动同步；定时同步来源未改变。请核对来源后再提交任务。
+  </p>
   <div class="workspace-card-stack strm-workspace">
     <section class="panel">
       <header class="section-heading">
@@ -144,7 +153,7 @@ useVisiblePoll(() => {
               : '未启用'
           }}（排队后串行执行）
         </p>
-        <p>当前账号同步来源：{{ cidName || '尚未保存' }}</p>
+        <p>本次手动同步来源：{{ cidName || '尚未保存' }}</p>
         <p class="rule-note">
           {{
             object(schedule.data.value.schedule).cleanup_enabled

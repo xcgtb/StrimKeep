@@ -983,6 +983,9 @@ def refresh_emby():
 
 
 def run(job_id, kind, payload):
+    if kind == 'inventory':
+        from app.cloud import inventory
+        return inventory.run(job_id, payload)
     if kind in ("intake", "channel", "maintenance"):
         from app.cloud import receiving, maintenance
         if kind == "maintenance":

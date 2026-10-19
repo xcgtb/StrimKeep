@@ -116,6 +116,13 @@ export const navigation = [
 // Keep the function catalogue separate from the sidebar hierarchy.
 const moduleTools = [
   {
+    to: '/resources/files?view=inventory',
+    name: '盘内媒体库存',
+    group: '资源管理',
+    icon: PanelsTopLeft,
+    keywords: '115 网盘 电影 剧集 海报 季集 扫描 STRM',
+  },
+  {
     to: '/settings/cloud?section=quality',
     name: 'Cookie 源文件删除',
     group: '影视整理',

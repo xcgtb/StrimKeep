@@ -1,10 +1,23 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { Folder, FileVideo, File, ChevronRight, ArrowUp, RefreshCw, HardDrive } from '@lucide/vue';
 import { get, query } from '../api/client';
 import { useRequest } from '../composables/useRequest';
 import type { CloudAccount, CloudFile, FilePage } from '../types/api';
+import { useRoute, useRouter } from 'vue-router';
+import CloudInventory from '../components/CloudInventory.vue';
 import LoadState from '../components/LoadState.vue';
+const route = useRoute(),
+  router = useRouter();
+const inventoryView = computed(() => route.query.view === 'inventory');
+function showView(view: string) {
+  void router.replace({ query: { ...route.query, view } });
+}
+function browseInventory(value: { cid: string; name: string }) {
+  cid.value = value.cid;
+  breadcrumbs.value = [{ cid: '0', name: '全部文件' }, ...(value.cid === '0' ? [] : [value])];
+  showView('files');
+}
 const accounts = useRequest<{ accounts: CloudAccount[] }>(),
   files = useRequest<FilePage>(),
   accountId = ref(''),
@@ -52,7 +65,9 @@ async function loadAccounts() {
   const result = await accounts.run((signal) =>
     get<{ accounts: CloudAccount[] }>('/api/cloud/status', signal),
   );
-  if (result?.accounts.length) accountId.value = result.accounts[0]!.id;
+  if (result?.accounts.length)
+    accountId.value =
+      result.accounts.find((a) => a.id === route.query.account)?.id || result.accounts[0]!.id;
 }
 watch(accountId, () => {
   files.cancel();
@@ -60,7 +75,10 @@ watch(accountId, () => {
   files.data.value = undefined;
   breadcrumbs.value = [{ cid: '0', name: '全部文件' }];
   cid.value = '0';
-  void load();
+  if (!inventoryView.value) void load();
+});
+watch(inventoryView, (inventory) => {
+  if (!inventory) void load();
 });
 onMounted(loadAccounts);
 </script>
@@ -88,7 +106,16 @@ onMounted(loadAccounts);
     message="尚未连接 115 账号"
     @retry="loadAccounts"
   />
-  <section v-if="accountId" class="panel file-panel">
+  <nav v-if="accountId" class="browse-tabs" aria-label="文件管理视图">
+    <button :class="{ active: !inventoryView }" @click="showView('files')">文件浏览</button>
+    <button :class="{ active: inventoryView }" @click="showView('inventory')">盘内库存</button>
+  </nav>
+  <CloudInventory
+    v-if="accountId && inventoryView"
+    :account-id="accountId"
+    @browse="browseInventory"
+  />
+  <section v-if="accountId && !inventoryView" class="panel file-panel">
     <div class="file-toolbar">
       <button
         class="icon-button"

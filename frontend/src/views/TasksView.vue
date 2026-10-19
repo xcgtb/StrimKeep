@@ -63,6 +63,7 @@ const rows = computed(() =>
   ),
 );
 const kinds: Record<string, string> = {
+  inventory: '盘内库存扫描',
   transfer: '分享转存',
   organize: '整理归档',
   workflow: '接收与整理',
@@ -325,19 +326,28 @@ useActivityUpdates(async () => {
       <button
         v-if="
           detail.data.value.job.state === 'running' &&
-          ['organize', 'workflow', 'transfer', 'sync', 'share_strm', 'intake', 'channel'].includes(
-            detail.data.value.job.kind,
-          )
+          [
+            'organize',
+            'workflow',
+            'transfer',
+            'sync',
+            'share_strm',
+            'intake',
+            'channel',
+            'inventory',
+          ].includes(detail.data.value.job.kind)
         "
         class="button"
         @click="action = 'stop'"
       >
         {{
-          detail.data.value.job.kind === 'channel'
-            ? '安全停止并暂停频道'
-            : detail.data.value.job.kind === 'intake'
-              ? '安全停止当前接收'
-              : '安全停止并暂停规则'
+          detail.data.value.job.kind === 'inventory'
+            ? '停止库存扫描'
+            : detail.data.value.job.kind === 'channel'
+              ? '安全停止并暂停频道'
+              : detail.data.value.job.kind === 'intake'
+                ? '安全停止当前接收'
+                : '安全停止并暂停规则'
         }}
       </button>
       <button

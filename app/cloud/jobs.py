@@ -39,7 +39,7 @@ def request_stop(job_id):
         row = con.execute("SELECT kind,state,payload FROM cloud_jobs WHERE id=?", (job_id,)).fetchone()
         if not row:
             raise CloudError("任务不存在", 404)
-        if row[0] not in ("organize", "workflow", "transfer", "sync", "share_strm", "intake", "channel"):
+        if row[0] not in ("organize", "workflow", "transfer", "sync", "share_strm", "intake", "channel", "inventory"):
             raise CloudError("此任务不支持停止整理", 409)
         if row[1] not in ("queued", "running", "stopped"):
             raise CloudError("任务已结束，请查看结果", 409)
@@ -68,7 +68,7 @@ def request_stop(job_id):
 
 
 def enqueue(kind, payload, con=None, *, parent_id=None):
-    if kind not in ("transfer", "organize", "sync", "workflow", "categories", "publish", "share_strm", "intake", "channel", "maintenance"):
+    if kind not in ("transfer", "organize", "sync", "workflow", "categories", "publish", "share_strm", "intake", "channel", "maintenance", "inventory"):
         raise CloudError("任务类型不受支持")
     job_id = store.ident()
     now = time.time()
@@ -245,6 +245,8 @@ def _execute(job_id):
 
 
 def notify(job_id, kind, state, message):
+    if kind == 'inventory':
+        return  # Read-only catalogue refresh is not an organization/ingestion notice.
     from app.cloud import settings, notifications, diagnostics
 
     cfg = settings.get()

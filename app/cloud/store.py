@@ -17,6 +17,10 @@ CREATE TABLE IF NOT EXISTS cloud_files (
  account_id TEXT NOT NULL, file_id TEXT NOT NULL, parent_id TEXT NOT NULL,
  name TEXT NOT NULL, size INTEGER NOT NULL, sha1 TEXT NOT NULL, pickcode TEXT NOT NULL,
  is_dir INTEGER NOT NULL, observed REAL NOT NULL, PRIMARY KEY(account_id,file_id));
+CREATE TABLE IF NOT EXISTS cloud_inventory_items (
+ job_id TEXT NOT NULL, account_id TEXT NOT NULL, cid TEXT NOT NULL,
+ payload TEXT NOT NULL, updated REAL NOT NULL, PRIMARY KEY(job_id,cid));
+CREATE INDEX IF NOT EXISTS cloud_inventory_account ON cloud_inventory_items(account_id,job_id);
 CREATE TABLE IF NOT EXISTS cloud_directory_settings (
  account_id TEXT PRIMARY KEY, payload TEXT NOT NULL, revision INTEGER NOT NULL,
  updated REAL NOT NULL);
@@ -330,6 +334,7 @@ def disconnect_account(account_id):
         con.execute("DELETE FROM cloud_directory_settings WHERE account_id=?", (account_id,))
         con.execute("DELETE FROM cloud_media_probes WHERE account_id=?", (account_id,))
         con.execute("DELETE FROM cloud_files WHERE account_id=?", (account_id,))
+        con.execute("DELETE FROM cloud_inventory_items WHERE account_id=?", (account_id,))
         con.execute("DELETE FROM cloud_service_settings WHERE account_id=?", (account_id,))
         con.execute("DELETE FROM cloud_channel_cursors WHERE id IN "
                     "(SELECT id FROM cloud_channels WHERE account_id=?)", (account_id,))
