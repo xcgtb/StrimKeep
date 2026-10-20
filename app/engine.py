@@ -24,7 +24,7 @@ _bind_engine_exports(globals(), __package__)
 def _p(env, default):
     return Path(os.environ.get(env, default))
 
-# 容器内路径固定：用户只需在 docker-compose 里把宿主机目录挂载到这三个位置。
+# 上游兼容根目录保持固定；自建两库输出通过 library_sources 与其并存。
 # 环境变量覆盖仅供测试使用（tests/ 用它指向临时目录），不对用户开放、不写入文档。
 L_ROOT = _p('L_ROOT', '/media/local')
 S_ROOT = _p('S_ROOT', '/media/share')
@@ -104,7 +104,8 @@ class EmbyPathMap:
     """Emby 路径 → 本地/分享库 的唯一映射处（根目录来自配置 emby_local_path / emby_share_path）。
     片库总览要对 ~10 万个分集路径分类，所以这里只做字符串前缀比较，构造时把能算的都算好。"""
 
-    def __init__(self, local_root, share_root):
+    def __init__(self, local_root, share_root, extra=()):
+        self.extra = list(extra)
         self.local = _norm_emby_path(local_root)
         self.share = _norm_emby_path(share_root)
         # (根目录, 根目录+'/', 库) —— 长的优先（嵌套时取更精确的那个），等长时本地在前，与旧逻辑一致
@@ -118,33 +119,61 @@ class EmbyPathMap:
         self._bases = [(b if b in _LEGACY_LIB_NAMES else '/' + b + '/', lib)
                        for b, lib in ((lb, 'local'), (sb, 'share')) if b] if lb != sb else []
 
+    def entries(self):
+        key = (str(L_ROOT), str(S_ROOT), self.local, self.share)
+        if getattr(self, '_entries_key', None) != key:
+            self._entries_key = key
+            self._entries = [dict(id='upstream_local',origin='upstream',kind='local',label='上游个人库',root=str(L_ROOT),emby_root=self.local),
+                             dict(id='upstream_share',origin='upstream',kind='share',label='上游分享库',root=str(S_ROOT),emby_root=self.share),
+                             *[{**r, 'emby_root': _norm_emby_path(r['emby_root'])} for r in self.extra]]
+        return self._entries
+
+    def source(self, path):
+        if __package__:
+            from .domain.media_sources import select
+        else:
+            from domain.media_sources import select
+        return select(path, self.entries())
+
     def lib_of(self, path, fallback=True):
-        """展示/统计用：'local' | 'share' | ''"""
         if not path:
             return ''
-        p = path.replace('\\', '/') if '\\' in path else path
-        for root, pre, lib in self._roots:
-            if p == root or p.startswith(pre):
-                return lib
-        if fallback and self._bases:
-            padded = '/' + p + '/'
+        row = self.source(path)
+        if row:
+            return row['kind']
+        p = str(path).replace('\\', '/')
+        # An ambiguous explicit match must never fall back to a library name.
+        if any(r['emby_root'] and (p == r['emby_root'] or p.startswith(r['emby_root'].rstrip('/')+'/')) for r in self.entries()):
+            return ''
+        if fallback:
             for needle, lib in self._bases:
-                if needle in padded:
+                if needle in '/' + p + '/':
                     return lib
         return ''
 
+    def container_root(self, path):
+        row = self.source(path)
+        return Path(row['root']) if row else None
+
     def to_container(self, path):
-        """删除用：严格前缀匹配（不走末级目录名兜底），转成容器内路径；对不上或含 .. 返回 None"""
-        if not path:
+        row = self.source(path)
+        if not row:
             return None
-        p = str(path).replace('\\', '/')
-        for root, pre, lib in self._roots:
-            if p.startswith(pre):
-                parts = [x for x in p[len(pre):].split('/') if x and x != '.']
-                if not parts or '..' in parts:
-                    return None
-                return (L_ROOT if lib == 'local' else S_ROOT).joinpath(*parts)
-        return None
+        p = _norm_emby_path(path)
+        relative = p[len(_norm_emby_path(row['emby_root'])):].lstrip('/')
+        parts = [part for part in relative.split('/') if part and part != '.']
+        return Path(row['root']).joinpath(*parts) if parts and '..' not in parts else None
+
+    def to_emby(self, path, kind):
+        if __package__:
+            from .domain.media_sources import select
+        else:
+            from domain.media_sources import select
+        row = select(str(path), [r for r in self.entries() if r['kind'] == kind and r['emby_root']], 'root')
+        if not row:
+            return None
+        relative = Path(path).relative_to(row['root'])
+        return row['emby_root'].rstrip('/') + ('/'+relative.as_posix() if relative.parts else '')
 
 
 RUNTIME_CFG = _cfg.load_config()
@@ -152,11 +181,16 @@ EMBY_HOST = RUNTIME_CFG['emby_host']
 EMBY_KEY  = RUNTIME_CFG['emby_key']
 
 
-def emby_path_map(local_root=None, share_root=None):
+def emby_path_map(local_root=None, share_root=None, config=None):
     """按配置构造 EmbyPathMap；留空的一侧回落到默认值（设置页输入框的占位符就是默认值，
     清空后若变成「什么都匹配不上」，与界面提示不符）"""
+    if __package__:
+        from . import library_sources
+    else:
+        import library_sources
     return EmbyPathMap((local_root or '').strip() or _cfg.DEFAULTS['emby_local_path'],
-                       (share_root or '').strip() or _cfg.DEFAULTS['emby_share_path'])
+                       (share_root or '').strip() or _cfg.DEFAULTS['emby_share_path'],
+                       library_sources.extra_mappings(config if config is not None else RUNTIME_CFG))
 
 
 EMBY_PATHS = emby_path_map(RUNTIME_CFG.get('emby_local_path'), RUNTIME_CFG.get('emby_share_path'))

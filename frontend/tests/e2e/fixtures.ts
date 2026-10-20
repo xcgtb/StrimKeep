@@ -86,6 +86,7 @@ export async function fixtures(page: Page, initialAuth = true) {
           body: `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600"><defs><linearGradient id="g" x2="1" y2="1"><stop stop-color="${colors[i % colors.length]}"/><stop offset="1" stop-color="#102335"/></linearGradient></defs><rect width="400" height="600" fill="url(#g)"/><circle cx="200" cy="220" r="110" fill="none" stroke="#ffffff18" stroke-width="30"/><path d="M0 520L170 300L280 420L400 200V600H0" fill="#ffffff0b"/><text x="30" y="490" fill="#ffffffb0" font-family="sans-serif" font-size="21">STRIMKEEP CINEMA</text><text x="30" y="540" fill="#ffffff60" font-family="sans-serif" font-size="15">MEDIA COLLECTION · 2026</text></svg>`,
         });
       }
+      if (path === '/api/library/sources') return fulfill(route, { status: 'success', items: [] });
       if (path === '/api/runtime/status')
         return fulfill(route, {
           status: 'success',

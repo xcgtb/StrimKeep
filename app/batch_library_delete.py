@@ -132,11 +132,12 @@ def _collect_movie(row):
         if lib != row['target']:
             continue
         converted = engine.emby_path_to_container(path)
-        if converted is None or converted.suffix.lower() != '.strm' or not engine._inside(converted, root) or not converted.is_file():
+        actual_root = engine.EMBY_PATHS.container_root(path)
+        if converted is None or actual_root is None or converted.suffix.lower() != '.strm' or not engine._inside(converted, actual_root) or not converted.is_file():
             raise ValueError('电影路径无法严格核实为目标库 STRM')
         paths.add(str(converted))
     # Do not remove extra files that Emby did not explicitly prove.
-    found = {str(p) for p in engine.find_movie_strms_by_tmdb(root, tid)}
+    found = {str(p) for p in cloud_bridge.movie_files(tid, row['target'] == 'local')}
     if paths != found:
         raise ValueError('电影目录文件与 Emby 版本不一致，请单片核实')
     return sorted(paths), members[0]

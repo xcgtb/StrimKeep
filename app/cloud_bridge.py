@@ -66,10 +66,28 @@ def preview(path, root, local=True):
     return None
 
 
+def _effective_root(path, root, local):
+    path, root = Path(path), Path(root)
+    if path.is_relative_to(root):
+        return root
+    if __package__:
+        from . import library_sources
+    else:
+        import library_sources
+    return library_sources.root_for(path, local, mutation=True)
+
+
 def snapshots(paths, root, local=True):
-    return {
-        str(p): value for p in paths if (value := preview(p, root, local)) is not None
-    }
+    return {str(p): value for p in paths
+            if (value := preview(p, _effective_root(p, root, local), local)) is not None}
+
+
+def fingerprints(paths, root, local):
+    if __package__:
+        from . import plan_guard as guard
+    else:
+        import plan_guard as guard
+    return {str(p): guard.fingerprint(p, (_effective_root(p, root, local),)) for p in paths}
 
 
 def governance_roots(local=None):
@@ -78,17 +96,22 @@ def governance_roots(local=None):
         service()
     from importlib import import_module
     engine = import_module('.engine', __package__) if __package__ else import_module('engine')
-    from app.cloud import settings
-    cfg = settings.get()
+    if __package__:
+        from . import library_sources
+    else:
+        import library_sources
+    catalogue = {row['id']:row for row in library_sources.definitions()}
     result = []
-    for is_local, legacy, key in ((True,engine.L_ROOT,'output_root'),(False,engine.S_ROOT,'share_output_root')):
+    for is_local, kind, other_kind in ((True,'local','share'),(False,'share','local')):
         if local is not None and local != is_local:
             continue
+        legacy = Path(catalogue['upstream_'+kind]['root'])
+        generated = catalogue['generated_'+kind]
         roots = [Path(legacy)]
-        candidate = Path(cfg[key])
-        other = Path(cfg['share_output_root' if is_local else 'output_root'])
-        other_legacy = Path(engine.S_ROOT if is_local else engine.L_ROOT)
-        if cfg['governance_generated_enabled']:
+        candidate = Path(generated['root'])
+        other = Path(catalogue['generated_'+other_kind]['root'])
+        other_legacy = Path(catalogue['upstream_'+other_kind]['root'])
+        if generated['governance']:
             if (not candidate.is_absolute() or candidate.is_symlink() or '..' in candidate.parts
                 or candidate == other or candidate.is_relative_to(other) or other.is_relative_to(candidate)):
                 raise ValueError('自生成 STRM 治理根目录无效或相互重叠，已停止')
@@ -139,10 +162,35 @@ def governance_library(root):
         for key in ('by_base','tmdb_refs'):
             for k,v in getattr(extra,key).items(): getattr(merged,key)[k].update(v)
         merged.strm_count += extra.strm_count
+    # Bind aliases and hard links must never propose two deletions of one file.
+    generated = [r for r in roots if r != Path(root)]
+    all_files = {Path(p) for values in merged.mov.values() for p in values}
+    all_files.update(Path(p) for seasons in merged.tv.values() for values in seasons.values() for p in values)
+    winners, physical = {}, {}
+    for path in sorted(all_files, key=lambda p:(not any(p.is_relative_to(r) for r in generated), str(p))):
+        info = path.lstat()
+        identity = (info.st_dev, info.st_ino)
+        physical[path] = identity
+        winners.setdefault(identity, path)
+    chosen = set(winners.values())
+    used = set()
+    def unique(values):
+        result = []
+        for value in values:
+            path = Path(value)
+            if path in chosen and physical[path] not in used:
+                used.add(physical[path])
+                result.append(value)
+        return result
+    merged.mov = defaultdict(list, {k: unique(values) for k, values in merged.mov.items()})
+    merged.tv = defaultdict(lambda:defaultdict(list), {k:defaultdict(list, {sn:unique(values) for sn,values in seasons.items()}) for k,seasons in merged.tv.items()})
+    merged.mov = defaultdict(list, {k:v for k,v in merged.mov.items() if v})
+    merged.tv = defaultdict(lambda:defaultdict(list), {k:defaultdict(list,{sn:v for sn,v in seasons.items() if v}) for k,seasons in merged.tv.items() if any(seasons.values())})
+    merged.strm_count = len(used)
     return merged
 
 
-def governance_delete(files, local, dry_run=False):
+def governance_delete(files, local, dry_run=False, progress=None):
     from importlib import import_module
     engine = import_module('.engine', __package__) if __package__ else import_module('engine')
     # Preflight every root before deleting any group. Extra roots are only for
@@ -155,8 +203,18 @@ def governance_delete(files, local, dry_run=False):
             raise ValueError('自生成输出目录含未登记引用，请移出或完成来源绑定后重新预览')
         grouped.setdefault(root,[]).append(path)
     result = {}
+    completed = 0
     for root, members in grouped.items():
-        row = engine.safe_delete_files(members,root,engine.CLOUD_L_ROOT if local else None,dry_run)
+        def update(event):
+            event = dict(event, total=len(files), processed=completed+int(event.get('processed', 0)))
+            for key in ('strm_removed', 'cloud_removed'):
+                event[key] = result.get(key, 0) + int(event.get(key, 0))
+            event['error_count'] = len(result.get('errors', [])) + int(event.get('error_count', 0))
+            event['retained'] = max(0, event['processed'] - event['strm_removed'])
+            progress(event)
+        kwargs = {'progress': update} if progress is not None else {}
+        row = engine.safe_delete_files(members,root,engine.CLOUD_L_ROOT if local else None,dry_run, **kwargs)
+        completed += len(members)
         for key,value in row.items():
             if isinstance(value,list):result.setdefault(key,[]).extend(value)
             elif type(value) is int:result[key]=result.get(key,0)+value
@@ -172,6 +230,27 @@ _confirmations = {}
 _confirmation_lock = threading.RLock()
 
 
+def movie_files(tmdb_id, local):
+    engine = _engine_module()
+    return sorted({file for root in governance_roots(local)
+                   for file in engine.find_movie_strms_by_tmdb(root, tmdb_id)}, key=str)
+
+
+def source_counts(files, root, local):
+    counts = {}
+    legacy = _engine_module().L_ROOT if local else _engine_module().S_ROOT
+    for path in files:
+        effective = _effective_root(path, root, local)
+        name = ('上游' if effective == Path(legacy) else '自建') + ('个人库' if local else '分享库')
+        counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def _engine_module():
+    from importlib import import_module
+    return import_module('.engine', __package__) if __package__ else import_module('engine')
+
+
 def capture(files, root, local):
     from importlib import import_module
 
@@ -182,7 +261,7 @@ def capture(files, root, local):
     )
     sources = snapshots(files, root, local)
     if not sources:
-        return {}
+        return {"source_counts": source_counts(files, root, local)}
     if any(v.get("blocked") or not v.get("enabled") for v in sources.values()):
         raise ValueError("115 来源未完成身份或官方删除配置，请在工作台处理后重新预览")
     key = uuid.uuid4().hex
@@ -197,10 +276,10 @@ def capture(files, root, local):
             "expires": now + 300,
             "root": str(root),
             "local": local,
-            "paths": {str(p): guard.fingerprint(p, (root,)) for p in files},
+            "paths": fingerprints(files, root, local),
             "sources": sources,
         }
-    return {"source_preview_id": key, "cloud_sources": list(sources.values())}
+    return {"source_preview_id": key, "cloud_sources": list(sources.values()), "source_counts": source_counts(files, root, local)}
 
 
 def confirm(key, files, root, local):
@@ -220,7 +299,7 @@ def confirm(key, files, root, local):
         or old["expires"] < time.monotonic()
         or old["root"] != str(root)
         or old["local"] != local
-        or old["paths"] != {str(p): guard.fingerprint(p, (root,)) for p in files}
+        or old["paths"] != fingerprints(files, root, local)
         or old["sources"] != snapshots(files, root, local)
     ):
         raise ValueError("115 来源或确认快照变化、过期，请重新预览后确认删除")

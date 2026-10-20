@@ -22,9 +22,15 @@ def ctx(monkeypatch, tmp_path):
           'name':'国民老公','year':2018,'in_local':True,'in_share':True,
           'tmdb_info':{'match_status':'missing'}}
     pager._filtered = lambda media,status,scope,*args: [data_row()]
+    engine.RUNTIME_CFG = {}
     engine.L_ROOT=tmp_path/'local'; engine.S_ROOT=tmp_path/'share'
     engine.L_ROOT.mkdir(); engine.S_ROOT.mkdir()
     class PM:
+        local = '/local'
+        share = '/share'
+        def container_root(self, path):
+            kind = self.lib_of(path)
+            return engine.L_ROOT if kind == 'local' else engine.S_ROOT if kind == 'share' else None
         def lib_of(self,path,fallback=False):
             return 'local' if path.startswith('/local/') else ('share' if path.startswith('/share/') else '')
     engine.EMBY_PATHS=PM()

@@ -119,7 +119,11 @@ def _build_emby_library_overview():
     """
     out = {'series': [], 'movies': []}
     lib_of = _eng().EMBY_PATHS.lib_of
-    disk_lookup = _eng()._disk_tmdb_lookup()  # 上游目录名 {tmdb-xxx} 兜底表
+    if __package__:
+        from . import lib as media_lib
+    else:
+        import lib as media_lib
+    disk_lookup = media_lib._disk_tmdb_lookup()  # 上游目录名 {tmdb-xxx} 兜底表
     series_data = _eng().emby_request('/Items', {
         'Recursive': 'true', 'IncludeItemTypes': 'Series',
         'Fields': 'ProviderIds,Path,ProductionYear,CommunityRating,ImageTags,Genres',

@@ -34,7 +34,7 @@ services:
       # 只替换冒号左侧，右侧容器路径及 :rslave 保持不变
       - /你的网盘源视频目录:/media/cloud:rslave
 
-      # ④ StrimKeep 自己生成的 STRM，独立于上面的上游治理目录
+      # ④ StrimKeep 自建两库，与上游两库并存并分别统计；治理联动在 Web 中明确开启
       # 启动前创建 ./strm/local 和 ./strm/share
       # Web 个人输出填 /strm/local，分享输出填 /strm/share
       - ./strm:/strm:rw

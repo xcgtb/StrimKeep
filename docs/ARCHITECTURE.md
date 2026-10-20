@@ -1,7 +1,7 @@
 # StrimKeep 架构
 
 > 本文以源码为准。若与代码不符，改文档，不要改代码来迁就文档。
-> 最后核对：v1.6.3 基线及频道链路修复（未发布）/ 2026-10-20
+> 最后核对：v1.6.4 基线及双来源接入（未发布）/ 2026-10-20
 
 ---
 
@@ -153,7 +153,7 @@ enqueue
 | `app/cloud/store.py` | 云端域全部表结构与访问函数 |
 | `app/storage.py` / `state_store.py` | SQLite 事务、计划存档、缓存、旧 JSON 迁移 |
 | `app/config.py` | 配置读写、环境变量覆盖 |
-| `app/engine.py` / `compat.py` | **兼容导出层**（206 个旧名字），见第七节 |
+| `app/engine.py` / `compat.py` | **兼容导出层**（205 个旧名字），见第七节 |
 | `app/morning.py` `governance.py` `subscribe.py` `wash.py` `bot.py` `ingest.py` `stats.py` `tmdb.py` `emby.py` `lib.py` `core.py` | 根目录业务模块：片库健康、治理执行、追更、洗版、Bot、入库、报表、外部服务 |
 
 账号断开的未完成任务检查与删除在 `store.disconnect_account()` 的同一写事务内完成；同时移除账号服务凭证、频道及游标，未投递接收记录标记已处理并写明断开原因，任务历史保留。接收与开关互斥忽略历史孤儿账号；捕获消息在入库前再次核对账号。规则启停在写事务内重新核对账号修订和规则内容。取消未启动任务写入 `stopped`，历史 `cancelled` 仍可读取。
@@ -189,9 +189,9 @@ STRM 全量扫描由 `scheduler` 调用 `cloud/strm_scan.tick()`，从已保存�
 
 ## 七、兼容导出层（迁移中的结构）
 
-`app/engine.py`（362 行）+ `app/compat.py`（88 行）把 **206 个旧名字**重新导出，让老测试与 CLI 继续用 `engine.xxx`。
+`app/engine.py`（362 行）+ `app/compat.py`（88 行）把 **205 个旧名字**重新导出，让老测试与 CLI 继续用 `engine.xxx`。
 
-这是绞杀者模式的垫片，**不是设计目标**。`dev/tests/test_architecture_boundaries.py` 锁住了这 206 个导出。
+这是绞杀者模式的垫片，**不是设计目标**。`dev/tests/test_architecture_boundaries.py` 锁住了这 205 个导出。
 
 **纪律：**
 
@@ -251,3 +251,13 @@ STRM 全量扫描由 `scheduler` 调用 `cloud/strm_scan.tick()`，从已保存�
 - `workflow_progress` 仅汇总任务族持久步骤与 Emby 入库回执，缺少步骤证据时不宣称阶段成功；业务状态仍来自 cloud_jobs。
 - `runtime_logs` 的缓冲锁和 Handler 锁共用 storage._LOCK，避免日志查询与事务内日志相互等待；事务内写日志复用活动连接，不提交外层事务。storage_status 在释放自身诊断锁后才记录日志。
 - 频道消息加密可接收调用方连接，只查询账号是否存在，避免打开嵌套事务导致游标与收件箱提前提交。
+
+## 上游与自建媒体来源（v1.6.4 后未发布）
+
+- `app/library_sources.py` 是四个来源的目录、库类型、来源标签、全局 Emby 路径与治理范围的共同定义。它不在状态接口执行文件系统扫描。`app/domain/media_sources.py` 是纯路径选择与标签规则；重复映射不授权转换，最长精确前缀匹配不按目录末级名授权删除。
+- 上游 `L_ROOT` / `S_ROOT` 保持默认 `/media/local` / `/media/share`；自建 NAS 根复用 cloud.settings 的 output_root / share_output_root，默认 `/strm/local` / `/strm/share`，不替换或迁移旧目录。
+- 全局配置新增 emby_generated_local_path / emby_generated_share_path；它们独立于上游 emby_local_path / emby_share_path，留空不猜测。四来源通过 EmbyPathMap 共用分类、严格转换及反向删除通知。账号级 Emby 入库连接仍保存各连接的实际映射；全局片库连接与入库连接用途分别说明。
+- stats 后台完整核验四来源，按设备号与 inode 去重实际文件；相同链接文本的不同文件仍分别计数。首次尚不存在的自建输出显示未核验而非零；已核验目录丢失、扫描失败及未确认的挂载身份变化保留整个旧快照。schema=2 的目录统计台账记录来源和计数，非别名的普通文件支持事件增量；存在硬链接/别名或来源配置变化时等待完整核验。
+- library_first_screen / library_pagination 只投影缓存中的路径标签，不扫描目录；响应缓存键包含映射对象，避免更改映射后沿用来源标签。磁盘元数据、分集、NAS 作品检索和追更兜底使用同一四来源定义。
+- cloud_bridge 的治理范围继续尊重 governance_generated_enabled；接入只读统计不会开启删除权限。按原本地/分享维度比较质量，显式治理扫描跨来源合并时去除实际文件别名。各删除入口核验真实根并分组调用原 safe_delete_files；自建个人源文件由 cloud.jobs 持久任务按登记身份执行，不回退到 CD2 路径猜测。上游路径链与分享库 NAS 清理语义保持。
+- 读接口 `/api/library/sources` 仅鉴权并派发状态读取；Vue MediaSources 复用于总览、片库和设置。总览优先显示紧凑数量，路径与治理范围展开查看，不新增侧边栏分类。

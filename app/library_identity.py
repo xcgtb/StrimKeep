@@ -33,7 +33,7 @@ def mapped_path(engine, path, *, file=False):
     converted = engine.emby_path_to_container(path)
     if lib not in ('local', 'share') or converted is None:
         raise ValueError('媒体路径无法严格映射到目标库')
-    root = engine.L_ROOT if lib == 'local' else engine.S_ROOT
+    root = engine.EMBY_PATHS.container_root(path)
     if not root.is_dir() or not engine._inside(converted, root) or converted.is_symlink():
         raise ValueError('STRM 根目录不可见或路径无效，保留原状态')
     if file and converted.suffix.lower() != '.strm':

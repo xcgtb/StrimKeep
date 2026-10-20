@@ -7,6 +7,7 @@ import { useOperation } from '../composables/useOperation';
 import { useVisiblePoll } from '../composables/useVisiblePoll';
 import { date } from '../composables/format';
 import { useUi } from '../stores/ui';
+import MediaSources from '../components/MediaSources.vue';
 import PageHeading from '../components/PageHeading.vue';
 import FormFields, { type Field } from '../components/FormFields.vue';
 import ConfirmAction from '../components/ConfirmAction.vue';
@@ -54,8 +55,18 @@ const groups: {
     fields: [
       { key: 'emby_host', label: '服务地址' },
       { key: 'emby_key', label: 'API Key', type: 'secret' },
-      { key: 'emby_local_path', label: 'Emby 中的本地 STRM 路径' },
-      { key: 'emby_share_path', label: 'Emby 中的分享 STRM 路径' },
+      { key: 'emby_local_path', label: 'Emby 中的上游个人库路径' },
+      { key: 'emby_share_path', label: 'Emby 中的上游分享库路径' },
+      {
+        key: 'emby_generated_local_path',
+        label: 'Emby 中的自建个人库路径',
+        hint: '填写 Emby 实际看到的目录；留空不猜测，保留上游映射。',
+      },
+      {
+        key: 'emby_generated_share_path',
+        label: 'Emby 中的自建分享库路径',
+        hint: '与上游来源分别映射，不能用同一路径指向不同目录。',
+      },
     ],
   },
   {
@@ -281,6 +292,10 @@ useVisiblePoll(async () => {
 }, 15000);
 </script>
 <template>
+  <details class="panel">
+    <summary>查看当前媒体来源与统计</summary>
+    <MediaSources />
+  </details>
   <PageHeading title="连接与设置" subtitle="集中管理服务、通知、网络、实时入库与外观，保存后生效。"
     ><button
       class="button primary"

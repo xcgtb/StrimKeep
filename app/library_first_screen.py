@@ -37,6 +37,11 @@ def _series_cmp(a, b):
     return (an > bn) - (an < bn)
 
 
+def source_labels(row):
+    from .domain.media_sources import labels
+    return labels(row.get('paths') or [row.get('path')], engine.EMBY_PATHS.entries())
+
+
 def _series_card(src):
     info = src.get('tmdb_info') or {}
     return {key: src.get(key) for key in (
@@ -44,13 +49,13 @@ def _series_card(src):
         'total_episodes', 'total_seasons', 'local_eps', 'share_eps',
         'in_local', 'in_share', '_md')} | {'tmdb_info': {
             k: info.get(k) for k in ('poster', 'match_status', 'diff', 'declared_total', 'tmdb_total')
-        }}
+        }, 'source_labels': source_labels(src)}
 
 
 def _movie_card(src):
     return {key: src.get(key) for key in (
         'id', 'name', 'year', 'tmdb_id', 'has_image',
-        'poster_tmdb', 'in_local', 'in_share')}
+        'poster_tmdb', 'in_local', 'in_share')} | {'source_labels': source_labels(src)}
 
 
 def preview():

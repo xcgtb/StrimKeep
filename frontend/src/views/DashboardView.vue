@@ -26,6 +26,7 @@ import { useLibraryUpdates } from '../composables/useLibraryUpdates';
 import { number, date, titleOf, stateLabel } from '../composables/format';
 import { useUi } from '../stores/ui';
 import { readData, writeData, records, type Data } from '../api/domain';
+import MediaSources from '../components/MediaSources.vue';
 import PlaybackMetrics from '../components/PlaybackMetrics.vue';
 import PosterCard from '../components/PosterCard.vue';
 import LoadState from '../components/LoadState.vue';
@@ -85,7 +86,7 @@ const stats = computed(() => [
   {
     label: '本地 STRM',
     value: dashboard.value.localCount,
-    note: '个人库播放引用',
+    note: '上游 + 自建个人库',
     icon: HardDrive,
     tone: 'blue',
     to: '/media/strm',
@@ -93,7 +94,7 @@ const stats = computed(() => [
   {
     label: '分享 STRM',
     value: dashboard.value.shareCount,
-    note: '分享库播放引用',
+    note: '上游 + 自建分享库',
     icon: LibraryBig,
     tone: 'teal',
     to: '/media/strm',
@@ -232,6 +233,7 @@ useLibraryUpdates(async () => {
         ><span class="metricsmall">{{ stat.note }}</span></RouterLink
       >
     </div>
+    <MediaSources :snapshot="overview.data.value.media_sources" compact />
     <p v-if="dashboard.libraryHealth?.stale" class="data-caption">
       片库统计正在重新核验，当前显示上次快照。
     </p>

@@ -120,42 +120,66 @@ def _verified_stats(allow_root_change):
         'share_total': 0,
     }
 
-    directories = {}
-    buckets = {}
-    roots = (_eng().L_ROOT, _eng().S_ROOT)
-    identities = {str(root): list(_root_identity(root)) for root in roots}
+    if __package__:
+        from . import library_sources
+        from .domain.media_sources import select
+    else:
+        import library_sources
+        from domain.media_sources import select
+    specs = library_sources.definitions()
     previous = _state.read(_eng().STATE_DIR / 'strm_directory_counts.json', {})
-    if previous.get('roots') == list(map(str, roots)) and not allow_root_change:
-        for root in roots:
-            old = previous.get('identities', {}).get(str(root))
-            if old and old != identities[str(root)]:
-                raise LibraryScanError(root, root, '根目录挂载身份已变化，请确认挂载后手动刷新总览')
-
-    for root, key in ((_eng().L_ROOT, 'local'), (_eng().S_ROOT, 'share')):
+    directories, buckets, identities, observed = {}, {}, {}, {}
+    roots, seen_files = [], set()
+    for spec in specs:
+        root = Path(spec['root'])
+        if not root.is_absolute() or root.is_symlink() or '..' in root.parts:
+            raise LibraryScanError(root, root, '媒体来源必须是独立、非软链接的绝对目录')
+        record = {**spec, 'count': None, 'duplicates': 0, 'verified_ts': 0, 'error': ''}
+        try:
+            identity = list(_root_identity(root))
+        except LibraryScanError as error:
+            # A never-observed generated output may not exist before first use.
+            # A previously verified source disappearing must retain all totals.
+            if spec['origin'] == 'generated' and isinstance(error.__cause__, FileNotFoundError) and str(root) not in previous.get('identities', {}):
+                record['error'] = '输出目录尚未创建或未挂载，未计入统计'
+                observed[spec['id']] = record
+                continue
+            raise
+        old = previous.get('identities', {}).get(str(root))
+        if old and old != identity and not allow_root_change:
+            raise LibraryScanError(root, root, '根目录挂载身份已变化，请确认挂载后手动刷新总览')
+        identities[str(root)] = identity
+        record.update(count=0, verified_ts=time.time())
+        observed[spec['id']] = record
+        roots.append(root)
+    available = [r for r in specs if observed[r['id']]['count'] is not None]
+    for index, first in enumerate(available):
+        for second in available[index+1:]:
+            if first['kind'] != second['kind'] and (identities[first['root']] == identities[second['root']] or Path(first['root']).is_relative_to(second['root']) or Path(second['root']).is_relative_to(first['root'])):
+                raise LibraryScanError(first['root'], second['root'], '个人库与分享库来源重叠，禁止混用统计或治理身份')
+    # Prefer the registered generated path when bind aliases expose one inode.
+    for spec in sorted(available, key=lambda r: r['origin'] != 'generated'):
+        root, key = Path(spec['root']), spec['kind']
+        record = observed[spec['id']]
         for f in _statistics_files(root):
+            owner = select(str(f), available, 'root')
+            if not owner or owner['id'] != spec['id']:
+                continue
             try:
-                if not stat.S_ISREG(f.lstat().st_mode):
+                info = f.lstat()
+                if not stat.S_ISREG(info.st_mode):
                     raise OSError('STRM 不是普通文件或是软链接')
             except OSError as error:
                 raise LibraryScanError(root, f, error) from error
-            try:
-                parts = f.relative_to(root).parts
-            except ValueError:
+            identity = (info.st_dev, info.st_ino)
+            if identity in seen_files:
+                record['duplicates'] += 1
                 continue
+            seen_files.add(identity)
+            record['count'] += 1
             directories[str(f.parent)] = directories.get(str(f.parent), 0) + 1
-            matched = None
-            for part in parts:
-                for cat_name, kws in CATS:
-                    hit = False
-                    for kw in kws:
-                        if kw in part:
-                            hit = True
-                            break
-                    if hit:
-                        matched = cat_name
-                        break
-                if matched:
-                    break
+            parts = f.relative_to(root).parts
+            matched = next((name for part in parts for name, words in CATS if any(word in part for word in words)), None)
             if matched:
                 out[key][matched] += 1
             else:
@@ -184,10 +208,14 @@ def _verified_stats(allow_root_change):
     now = time.time()
     result['ts'] = now
     result['verified_ts'] = now
+    result['sources'] = [observed[r['id']] for r in specs]
+    result['source_roots'] = [[r['id'], r['root']] for r in specs]
     # Verify both roots again after traversing both libraries, before any write.
     if any(list(_root_identity(root)) != identities[str(root)] for root in roots):
         raise LibraryScanError(roots[0], roots[0], '扫描期间根目录挂载身份已变化')
-    ledger = {'roots': list(map(str, roots)), 'identities': identities,
+    ledger = {'schema': 2, 'has_aliases': any(r['duplicates'] for r in observed.values()) or len(set(map(tuple, identities.values()))) != len(available),
+              'sources': result['sources'], 'source_roots': result['source_roots'],
+              'roots': list(map(str, roots)), 'identities': identities,
               'directories': directories, 'buckets': buckets, 'verified_ts': now}
     _state.save_many([(_eng().STATE_DIR / 'library_stats_cache.json', result),
                       (_eng().STATE_DIR / 'strm_directory_counts.json', ledger),
@@ -208,20 +236,36 @@ def refresh_event_directories(paths):
     Idempotent for duplicate/retried events. No count is inferred from episode
     numbers or callbacks. A missing baseline waits for explicit initialization.
     """
-    roots = [Path(_eng().L_ROOT), Path(_eng().S_ROOT)]
+    if __package__:
+        from . import library_sources
+    else:
+        import library_sources
+    specs = library_sources.definitions()
     with _eng()._strm_count_refreshing:
         ledger_path = _eng().STATE_DIR / 'strm_directory_counts.json'
         cache_path = _eng().STATE_DIR / 'library_stats_cache.json'
         ledger = _state.read(ledger_path, {})
         data = _state.read(cache_path, {})
-        if ledger.get('roots') != list(map(str, roots)) or not data.get('rows'):
+        if not data.get('rows'):
             return False
+        if ledger.get('schema') == 2:
+            expected = [[r['id'], r['root']] for r in specs]
+            if ledger.get('source_roots') != expected or ledger.get('has_aliases'):
+                return False
+            active = [r for r in specs if r['root'] in ledger.get('identities', {})]
+            roots = [Path(r['root']) for r in active]
+            kinds = [r['kind'] for r in active]
+        else:
+            roots = [Path(_eng().L_ROOT), Path(_eng().S_ROOT)]
+            kinds = ['local', 'share']
+            if ledger.get('roots') != list(map(str, roots)):
+                return False
         counts = ledger.get('directories') or {}
         buckets = ledger.get('buckets') or {}
         changed = False
         for value in sorted(set(paths)):
             directory = Path(value)
-            for root, lib in zip(roots, ['local', 'share']):
+            for root, lib in sorted(zip(roots, kinds), key=lambda r: -len(str(r[0]))):
                 try:
                     relative = directory.resolve().relative_to(root.resolve())
                 except ValueError:
@@ -239,6 +283,8 @@ def refresh_event_directories(paths):
                         if i >= 10000:
                             raise RuntimeError('单目录过大，等待全量统计')
                         if file.name.endswith('.strm') and file.is_file():
+                            if file.is_symlink() or file.stat().st_nlink > 1:
+                                return False
                             current += 1
                             category = next((name for part in file.relative_to(root).parts for name, words in CATS
                                              if any(word in part for word in words)), 'other')
@@ -251,6 +297,11 @@ def refresh_event_directories(paths):
                 if not difference and current_buckets == previous_buckets:
                     break
                 data[lib + '_total'] += difference
+                for source in data.get('sources', []):
+                    if source['root'] == str(root) and source.get('count') is not None:
+                        source['count'] += difference
+                        source['verified_ts'] = time.time()
+                        break
                 for category in set(current_buckets) | set(previous_buckets):
                     delta = current_buckets.get(category, 0) - previous_buckets.get(category, 0)
                     if category == 'other':
@@ -270,6 +321,8 @@ def refresh_event_directories(paths):
         data['ts'] = time.time()
         ledger['directories'] = counts
         ledger['buckets'] = buckets
+        if data.get('sources'):
+            ledger['sources'] = data['sources']
         count_path = _eng()._STRM_COUNT_CACHE_FILE
         _state.save_many([(cache_path, data), (ledger_path, ledger), (count_path,
                           {'ts': data['ts'], 'local': data['local_total'], 'share': data['share_total']})])

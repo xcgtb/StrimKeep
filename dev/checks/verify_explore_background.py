@@ -125,7 +125,7 @@ def main():
             return {'Items':[],'TotalRecordCount':0}
         with patch.object(engine,'_emby_index_cache',index_cache), patch.object(engine,'_emby_index_refresh_lock',threading.Lock()), \
              patch.object(engine,'_EMBY_INDEX_CACHE_FILE',temp/'missing.json'), patch.object(engine,'STATE_DIR',temp), \
-             patch.object(engine,'_disk_tmdb_lookup',lambda:{}), patch.object(engine,'emby_request',partial_index):
+             patch.object(__import__('app.lib', fromlist=['_disk_tmdb_lookup']),'_disk_tmdb_lookup',lambda:{}), patch.object(engine,'emby_request',partial_index):
             assert tmdb.emby_library_index() == old
             lock = engine._emby_index_refresh_lock; assert lock.acquire(timeout=2); lock.release()
             assert index_cache['data'] == old and index_cache['ts'] == 1 and index_cache['error_ts'] > 0

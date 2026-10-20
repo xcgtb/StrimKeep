@@ -463,3 +463,7 @@ StrimKeep/
 本项目仅用于整理和管理用户依法拥有管理权限的媒体文件，不提供影视资源或下载服务。所有删除均由用户主动确认触发，可能造成不可恢复的数据丢失；请自行备份并核验结果。本项目与 115、123、光鸭、CloudDrive2、OpenList、Emby、TMDB、Telegram 均无隶属、合作或背书关系，商标归各自权利人所有。
 
 *This product uses the TMDB API but is not endorsed or certified by TMDB.*
+
+### 上游与自建 STRM 并存
+
+媒体总览、片库路径映射与治理可同时接入上游 `/media/local`、`/media/share` 和自建 `/strm/local`、`/strm/share`。保留原挂载；自建输出复用已有 STRM 设置，在全局 Emby 设置中分别填写自建两库的实际可见路径。来源统计不会自动打开删除权限。更新后的设置和核验步骤见 [双来源接入说明](docs/DUAL_MEDIA_SOURCES.md)。

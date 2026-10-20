@@ -7,6 +7,7 @@ import { useVisiblePoll } from '../composables/useVisiblePoll';
 import { useLibraryUpdates } from '../composables/useLibraryUpdates';
 import { titleOf, posterUrl, date, badge } from '../composables/format';
 import type { LibraryType, LibraryPage, LibraryItem, MediaCard } from '../types/api';
+import MediaSources from '../components/MediaSources.vue';
 import PosterCard from '../components/PosterCard.vue';
 import LoadState from '../components/LoadState.vue';
 import ModalDialog from '../components/ModalDialog.vue';
@@ -344,6 +345,10 @@ const live = useLibraryUpdates(refreshLoaded);
     <h2>TMDB 后台对照进度</h2>
     <EvidenceDetails :value="comparisonProgress.data.value?.progress" />
   </section>
+  <details class="panel">
+    <summary>查看上游与自建媒体来源</summary>
+    <MediaSources />
+  </details>
   <details class="panel nas-library-search">
     <summary>在 NAS 的 STRM 目录中检索作品</summary>
     <p class="muted-text">
@@ -639,6 +644,9 @@ const live = useLibraryUpdates(refreshLoaded);
         >
           从磁盘同步此剧状态
         </button>
+        <p v-if="detail.data.value.item.source_labels?.length" class="notice-bar">
+          来源：{{ detail.data.value.item.source_labels.join(' · ') }}
+        </p>
         <div class="single-delete-actions">
           <SingleDelete
             v-if="detail.data.value.item.in_local"

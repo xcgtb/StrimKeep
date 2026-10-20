@@ -1298,9 +1298,13 @@ def action_inter_check(args):
     # 计数直接取自 build_plan 刚遍历出来的 _eng().Lib（同一次遍历，数据与计划严格一致），
     # 不再为了计数把双库重新 rglob 一遍——大库/网络挂载上这是扫描耗时翻倍的元凶。
     try:
-        _eng()._strm_count_cache.update({'ts': time.time(), 'local': L_lib.strm_count, 'share': S_lib.strm_count})
-        _eng()._save_strm_count_disk(L_lib.strm_count, S_lib.strm_count)
-        log.info('扫描后刷新 STRM 计数: local=%d share=%d', L_lib.strm_count, S_lib.strm_count)
+        if __package__:
+            from . import stats
+        else:
+            import stats
+        with _eng()._strm_count_refreshing:
+            counts = stats._recompute_all_stats()
+        log.info('扫描后刷新全部来源 STRM 计数: local=%d share=%d', counts['local_total'], counts['share_total'])
     except Exception as e:
         log.warning('刷新 STRM 计数缓存失败: %s', e)
     # 扫描后失效 _eng().Lib 缓存。执行阶段不再重新 build_plan：

@@ -781,7 +781,14 @@ def _disk_series_eps(series_tmdb_id: str):
     eps = set()
     names = []
     try:
-        for lib in (_eng()._get_lib(_eng().L_ROOT), _eng()._get_lib(_eng().S_ROOT)):
+        if __package__:
+            from . import library_sources
+        else:
+            import library_sources
+        for source in library_sources.definitions():
+            root = Path(source['root'])
+            if source['origin'] == 'generated' and not root.exists(): continue
+            lib = _eng()._get_lib(root)
             for key in lib.tmdb_refs.get('tv:' + str(series_tmdb_id), ()):
                 disp = lib.meta.get(key, ('', '', None))[0]
                 if disp and disp not in names:

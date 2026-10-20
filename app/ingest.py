@@ -453,14 +453,24 @@ def action_search(args):
     if not tokens:
         return {'status': 'success', 'text': '请输入片名关键词'}
     found = []
-    for root, tag in ((_eng().L_ROOT, '本地影视库'), (_eng().S_ROOT, '分享影视库')):
+    if __package__:
+        from . import library_sources
+    else:
+        import library_sources
+    seen = set()
+    for source in library_sources.definitions():
+        root, tag = Path(source['root']), source['label']
         if not root.exists(): continue
         for dp, dns, fns in os.walk(root):
             dns[:] = [d for d in dns if parse_season_dir(d) is None]
             is_title = any(x.endswith('.strm') for x in fns) or any(parse_season_dir(d) is not None for d in os.listdir(dp) if os.path.isdir(os.path.join(dp, d)))
             base = os.path.basename(dp)
             if is_title and all(t in base.casefold() for t in tokens):
-                p = Path(dp); rel = p.relative_to(root).parts
+                p = Path(dp)
+                identity = (p.stat().st_dev, p.stat().st_ino)
+                if identity in seen: continue
+                seen.add(identity)
+                rel = p.relative_to(root).parts
                 m_type = rel[0] if rel else '影视库'; m_cat = rel[1] if len(rel) > 1 else '分类'
                 icon = '🎬' if any(x in m_type for x in ('电影', '演唱会')) else '📺'
                 found.append(f'{icon} **《{esc(p.name)}》**\n  ├ 📂 归属库: `{tag}`\n  ├ 🏷️ 分类: `{m_type} / {m_cat}`\n  └ 📍 路径: `{p}`')

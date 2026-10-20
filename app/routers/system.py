@@ -2,7 +2,7 @@
 """系统：健康 / 任务查询 / 仪表盘 / 一致性 / 缓存 / Bot 状态"""
 import time, threading
 from fastapi import APIRouter, Depends, HTTPException
-from app import overview, readiness, stats, morning
+from app import overview, readiness, stats, morning, library_sources
 
 try:
     from app.routers.deps import auth, engine, bot, tasks, _current_task_dict, APP_VERSION
@@ -14,6 +14,11 @@ except ImportError:
     import storage
 
 router = APIRouter()
+
+
+@router.get('/api/library/sources', dependencies=[Depends(auth)])
+def api_library_sources():
+    return library_sources.status()
 
 
 @router.get('/api/overview', dependencies=[Depends(auth)])

@@ -250,7 +250,8 @@ def get_overview():
     if health:
         health['stale'] = not health.get('ts') or time.time() - health['ts'] > 1800
     try:
-        from . import overview_activity
+        from . import overview_activity, library_sources
+        result['media_sources'] = library_sources.status()
         result['activity'] = overview_activity.snapshot(health)
     except Exception:
         engine.log.exception('总览动态读取失败')

@@ -205,7 +205,11 @@ def _save_emby_index_disk(data):
 
 def _build_emby_library_index():
     out = {}
-    disk_lookup = _eng()._disk_tmdb_lookup()  # 上游目录名 {tmdb-xxx} 兜底表
+    if __package__:
+        from . import lib as media_lib
+    else:
+        import lib as media_lib
+    disk_lookup = media_lib._disk_tmdb_lookup()  # 上游目录名 {tmdb-xxx} 兜底表
     for item_type in ('Movie', 'Series'):
         media_key = 'tv' if item_type == 'Series' else 'movie'
         try:

@@ -3,6 +3,14 @@
 Uses existing repository's isolated batch fixture.
 """
 import time
+import pytest
+
+@pytest.fixture(autouse=True)
+def unbound_batch_sources(ctx, monkeypatch):
+    # These batch-size cases stub _collect with synthetic paths; source binding
+    # and filesystem ownership are covered by the real-root integration suite.
+    monkeypatch.setattr(ctx[0].cloud_bridge, "snapshots", lambda *args: {})
+
 
 from dev.tests.test_batch_library_delete import ctx
 

@@ -100,7 +100,7 @@ function closeResult() {
       title="确认删除作品"
       :description="
         target === 'local'
-          ? '删除已核验的本地 STRM，按原后端规则联动删除匹配的源视频和附属文件；源文件删除失败时保留对应 STRM。'
+          ? '删除已核验的本地 STRM，上游按原挂载链路、自建按已登记的 115 身份联动删除源视频和附属文件；源文件删除失败时保留对应 STRM。'
           : '仅删除已核验的 NAS 分享库 STRM，保留分享源视频。'
       "
       :phrase="target === 'local' ? '删除本地库及源文件' : '删除分享库'"
@@ -119,6 +119,11 @@ function closeResult() {
           以上为预览核验结果，确认后才会真正删除；执行中会再次核验，已变化的文件自动跳过。
         </p>
       </div>
+      <p v-if="preview.source_counts" class="notice-bar">
+        来源范围：<span v-for="(count, name) in preview.source_counts" :key="name"
+          >{{ name }} {{ count }} 个；</span
+        >
+      </p>
       <details>
         <summary>核验明细与证据</summary>
         <EvidenceDetails :value="preview" />

@@ -39,9 +39,9 @@ assert engine.ACTIONS['inter_check'] is engine.action_inter_check
 assert engine.ACTIONS['inter_clean'] is engine.action_inter_clean
 assert engine.MUTATING == {'inter_clean', 'clean_orphans'}
 assert not Path(engine.DATA_DIR).exists(), 'import must not create runtime state'
-print('206 original exports intact')
+print('205 original exports intact')
 ''' % (module, str(CONTRACT), prefix)
-    assert '206 original exports intact' in isolated(tmp_path, code, ROOT if mode == 'package' else ROOT / 'app')
+    assert '205 original exports intact' in isolated(tmp_path, code, ROOT if mode == 'package' else ROOT / 'app')
 
 
 def test_compat_import_failure_propagates_without_fallback_or_partial_publication(monkeypatch):

@@ -109,7 +109,7 @@ def test_ingest_resync_keeps_declared_total_and_poster(cached, monkeypatch):
 
 def test_full_overview_also_saves_season_library_breakdown(cached, monkeypatch):
     monkeypatch.setattr(engine, 'EMBY_PATHS', SimpleNamespace(lib_of=lambda p: 'share' if p.startswith('/share') else 'local'))
-    monkeypatch.setattr(engine, '_disk_tmdb_lookup', lambda: {})
+    monkeypatch.setattr(__import__('app.lib', fromlist=['_disk_tmdb_lookup']), '_disk_tmdb_lookup', lambda: {})
     monkeypatch.setattr(engine, '_disk_eps_by_tmdb', lambda: {})
     monkeypatch.setattr(engine, '_alive_dir_map', lambda paths: {})
     monkeypatch.setattr(engine, '_fetch_all_episodes', lambda: [

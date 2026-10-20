@@ -83,10 +83,6 @@
     "lib",
     "_lib_cache"
   ],
-  "_disk_tmdb_lookup": [
-    "lib",
-    "_disk_tmdb_lookup"
-  ],
   "_disk_eps_by_tmdb": [
     "lib",
     "_disk_eps_by_tmdb"

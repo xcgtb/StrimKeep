@@ -450,7 +450,8 @@ def _delete_title_files(files, target, title, media_type, series_id=None, tmdb_i
     try:
         with engine.mutation_lock():
             kwargs = {'progress': progress} if progress is not None else {}
-            result = engine.safe_delete_files(files, root, cloud, dry_run=False, **kwargs)
+            from app import cloud_bridge
+            result = cloud_bridge.governance_delete(files, target == 'local', dry_run=False, **kwargs)
     except engine.MutationBusy as e:
         return {'status': 'busy', 'message': str(e)}
 
@@ -640,7 +641,11 @@ def _movie_delete(body, progress=None):
         return {'status': 'error', 'message': 'target 必须是 local 或 share'}
 
     root = engine.L_ROOT if target == 'local' else engine.S_ROOT
-    files = engine.find_movie_strms_by_tmdb(root, tmdb_id)
+    from app import cloud_bridge
+    try:
+        files = cloud_bridge.movie_files(tmdb_id, target == 'local')
+    except ValueError as error:
+        return {'status': 'error', 'message': str(error)}
     if not files:
         return {'status': 'success', 'count': 0, 'target': target}
     from app import cloud_bridge

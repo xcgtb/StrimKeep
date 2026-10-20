@@ -107,7 +107,12 @@ def save(value):
             result['strm_scan_anchor'] = time.time()
             result['strm_scan_pending'] = bool(result['strm_scan_cron']) and result['strm_scan_start_mode'] == 'immediate'
         state_store.save(path(), result)
-        return result
+    if any(previous[k] != result[k] for k in ('output_root', 'share_output_root')):
+        import sys
+        engine = sys.modules.get('app.engine') or sys.modules.get('engine')
+        if engine and hasattr(engine, 'reload_config'):
+            engine.reload_config()
+    return result
 
 
 def record_scan(config, now, enqueued=False):

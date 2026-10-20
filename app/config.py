@@ -36,6 +36,10 @@ DEFAULTS = {
     'emby_local_path':        os.environ.get('EMBY_LOCAL_PATH',        '/strm/115网盘/影视媒体库'),
     'emby_share_path':        os.environ.get('EMBY_SHARE_PATH',        '/strm/115网盘/分享影视库'),
 
+    # 自建库在全局 Emby 中的实际路径；留空不猜测，不影响上游映射。
+    'emby_generated_local_path': '',
+    'emby_generated_share_path': '',
+
     # Telegram
     'telegram_bot_token':     os.environ.get('TG_BOT_TOKEN',           ''),
     'telegram_chat_id':       os.environ.get('TG_CHAT_ID',             ''),

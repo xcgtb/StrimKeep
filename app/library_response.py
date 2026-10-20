@@ -15,7 +15,7 @@ _MAX_BYTES = 32 * 1024 * 1024
 def _key():
     return (tuple(state_store.stamp(p) for p in
                   (engine.LIBRARY_SNAPSHOT_FILE, engine.EMBY_LIB_CACHE_FILE, engine.MANUAL_DONE_FILE)),
-            engine.EMBY_HOST, id(engine.cached_library_view), id(morning.read_manual_done))
+            engine.EMBY_HOST, id(engine.EMBY_PATHS), id(engine.cached_library_view), id(morning.read_manual_done))
 
 
 def _gzip_accepted(encoding):

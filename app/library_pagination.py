@@ -10,7 +10,7 @@ import time
 from collections import OrderedDict
 from functools import cmp_to_key
 from . import engine, library_response, morning
-from .library_first_screen import _series_cmp, _series_card, _movie_card
+from .library_first_screen import _series_cmp, _series_card, _movie_card, source_labels
 
 _lock = threading.RLock()
 _cache = {'key': None, 'until': 0., 'series': (), 'movies': (), 'stats': {},
@@ -150,7 +150,7 @@ def detail(media, item_id):
         row = collection.get(item_id)
         if row is None:
             return {'status': 'notfound'}
-        item = dict(row)
+        item = dict(row, source_labels=source_labels(row))
         if media == 'movies':
             paths = set(item.get('paths') or ([item['path']] if item.get('path') else []))
             item['local_versions'] = sum(engine.EMBY_PATHS.lib_of(p, fallback=False) == 'local' for p in paths)

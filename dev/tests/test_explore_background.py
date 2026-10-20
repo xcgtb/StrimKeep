@@ -61,7 +61,7 @@ def test_cold_page_failure_is_an_error_without_persisting_empty_success(tmp_path
 def test_truncated_emby_identity_response_is_not_success(monkeypatch):
     import pytest
     from app import engine,tmdb
-    monkeypatch.setattr(engine,'_disk_tmdb_lookup',lambda:{})
+    monkeypatch.setattr(__import__('app.lib', fromlist=['_disk_tmdb_lookup']),'_disk_tmdb_lookup',lambda:{})
     monkeypatch.setattr(engine,'emby_request',lambda *a,**kw:{'Items':[],'TotalRecordCount':1})
     with pytest.raises(RuntimeError, match='身份索引拉取失败'):
         tmdb._build_emby_library_index()

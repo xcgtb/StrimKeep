@@ -93,11 +93,17 @@ watch(url, () => {
         {{ episodeSummary(card) }}
       </p>
       <div
-        v-if="card.in_local || card.in_share"
+        v-if="card.source_labels?.length || card.in_local || card.in_share"
         class="library-tags"
-        :aria-hidden="!card.in_local && !card.in_share"
+        :aria-hidden="!card.source_labels?.length && !card.in_local && !card.in_share"
       >
-        <span v-if="card.in_local">本地库</span><span v-if="card.in_share">分享库</span>
+        <template v-if="card.source_labels?.length"
+          ><span v-for="source in card.source_labels" :key="source">{{ source }}</span></template
+        >
+        <template v-else
+          ><span v-if="card.in_local">本地库</span
+          ><span v-if="card.in_share">分享库</span></template
+        >
       </div>
     </div>
   </article>

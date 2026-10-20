@@ -188,7 +188,15 @@ def _disk_tmdb_lookup():
     """
     lookup = {}
     try:
-        for lib in (_get_lib(_engine_ns().L_ROOT), _get_lib(_engine_ns().S_ROOT)):
+        if __package__:
+            from . import library_sources
+        else:
+            import library_sources
+        for source in library_sources.definitions():
+            root = Path(source['root'])
+            if source['origin'] == 'generated' and not root.exists():
+                continue
+            lib = _get_lib(root)
             lookup.update(lib.path_tmdb)
     except Exception as e:
         log.warning('磁盘 tmdb 兜底表构建失败: %s', e)
@@ -203,7 +211,15 @@ def _disk_eps_by_tmdb():
     """
     out = defaultdict(lambda: {'episodes': set(), 'local_eps': set(), 'share_eps': set()})
     try:
-        for lib, tag in ((_get_lib(_engine_ns().L_ROOT), 'local'), (_get_lib(_engine_ns().S_ROOT), 'share')):
+        if __package__:
+            from . import library_sources
+        else:
+            import library_sources
+        for source in library_sources.definitions():
+            root, tag = Path(source['root']), source['kind']
+            if source['origin'] == 'generated' and not root.exists():
+                continue
+            lib = _get_lib(root)
             for key, tid in lib.key_tmdb_tv.items():
                 for sn, files in lib.tv.get(key, {}).items():
                     if sn <= 0:

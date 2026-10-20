@@ -72,15 +72,7 @@ def emby_request(path, params=None, method='GET', timeout=None, body=None, retri
 
 def container_to_emby_path(p, target):
     """容器内路径 → Emby 侧路径（notify_emby_deleted 用）；映射不上返回 None"""
-    root = _eng().L_ROOT if target == 'local' else _eng().S_ROOT
-    eroot = _eng().EMBY_PATHS.local if target == 'local' else _eng().EMBY_PATHS.share
-    if not eroot:
-        return None
-    try:
-        rel = Path(p).relative_to(root)
-    except ValueError:
-        return None
-    return eroot.rstrip('/') + ('/' + rel.as_posix() if rel.parts else '')
+    return _eng().EMBY_PATHS.to_emby(p, target)
 
 def notify_emby_deleted(emby_paths, background=True):
     """告诉 Emby「这些路径已删除」（POST /Library/Media/Updated, UpdateType=Deleted）。

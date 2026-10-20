@@ -187,6 +187,11 @@ def api_set_config(body: dict = None):
         cfg[k] = new_val
     cfg.update({k: proxy.get(k, '') for k in network.PROXY_KEYS})
     cfg.update(appearance)
+    from app import library_sources
+    try:
+        library_sources.validate_config(cfg)
+    except ValueError as error:
+        raise HTTPException(400, str(error))
     saved = save_config(cfg)
     engine.reload_config()
     try: bot.restart()
@@ -217,7 +222,8 @@ def api_test_emby(body: dict = None):
         msg = f"✅ 连接成功\n服务器: {data.get('ServerName', '?')}\n版本: {data.get('Version', '?')}"
         # 设置页未保存的路径也拿来比对，方便边改边测；没传就用当前生效的配置
         pm = engine.emby_path_map(body.get('emby_local_path', engine.EMBY_PATHS.local),
-                                body.get('emby_share_path', engine.EMBY_PATHS.share))
+                                body.get('emby_share_path', engine.EMBY_PATHS.share),
+                                config={**engine.RUNTIME_CFG, **{k:v for k,v in body.items() if k.startswith('emby_')}})
         return {'status': 'success', 'message': msg + _emby_lib_paths_hint(host, key, pm)}
     except Exception as e:
         return {'status': 'error', 'message': f'❌ 连接失败: {e}'}
@@ -237,12 +243,12 @@ def _emby_lib_paths_hint(host, key, pm):
                 loc_n = str(loc).replace('\\', '/').rstrip('/')
                 lib = pm.lib_of(loc_n, fallback=False)
                 if lib:
-                    tag = f' ← 匹配{names[lib]}'
+                    source = pm.source(loc_n)
+                    tag = ' ← 匹配' + (source['label'] if source else names[lib])
                     hit.add(lib)
                 else:
                     # 媒体库选的是上级目录（一个库里同时含本地/分享）也算对上
-                    inner = [k for k, root in (('local', pm.local), ('share', pm.share))
-                             if root and loc_n and root.startswith(loc_n + '/')]
+                    inner = list(dict.fromkeys(r['kind'] for r in pm.entries() if r['emby_root'] and loc_n and r['emby_root'].startswith(loc_n + '/')))
                     tag = (' ← 包含' + '、'.join(names[k] for k in inner)) if inner else ''
                     hit.update(inner)
                 lines.append(f"  {f.get('Name') or '?'}: {loc}{tag}")

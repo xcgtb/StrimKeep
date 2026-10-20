@@ -15,6 +15,7 @@ export interface TmdbInfo {
   seasons?: { season: number; tmdb: number }[];
 }
 export interface MediaCard {
+  source_labels?: string[];
   tmdb_id?: string;
   type?: MediaType;
   title?: string;
@@ -115,6 +116,7 @@ export interface Dashboard {
   lastScan?: { time?: string; total?: number; protected?: number } | null;
 }
 export interface Overview extends Envelope {
+  media_sources?: Record<string, unknown>;
   dashboard?: Dashboard;
   ts?: number;
   stale?: boolean;
