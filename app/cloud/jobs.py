@@ -254,6 +254,9 @@ def notify(job_id, kind, state, message):
     job = store.job(job_id)
     result = (job or {}).get("result", {})
     operation = result.get('organization') or result
+    if state == 'success':
+        from app.cloud import automatic_runs
+        automatic_runs.claim_notice(job, kind, state, operation)
     notice_key = 'notification'
     if kind == 'publish':
         combined = notifications.deferred_result(job_id)
@@ -277,6 +280,10 @@ def notify(job_id, kind, state, message):
     if not cfg["notify_enabled"] or not cfg["notify_"+category]:
         reason = '网盘任务通知总开关 notify_enabled 已关闭' if not cfg['notify_enabled'] else '分模块通知 notify_'+category+' 已关闭'
         events.emit('notify','此类任务通知已关闭，本次不发送：'+reason,job_id)
+        return
+    from app.cloud import automatic_runs
+    if not automatic_runs.claim_notice(job, kind, state, operation):
+        events.emit('notify', '自动任务结果与上次相同，已合并重复告警；详情保留在任务记录', job_id)
         return
     from app.tg import notify_telegram
     import html
@@ -466,8 +473,10 @@ def schedule():
                 "SELECT 1 FROM cloud_jobs WHERE state IN ('queued','running') AND json_extract(payload,'$.rule_id')=?",
                 (rid,),
             ).fetchone()
-            if not active:
-                enqueue("sync" if data.get("kind") == "sync" else "workflow", {**data, "rule_id": rid}, con)
+            from app.cloud import automatic_runs
+            kind = "sync" if data.get("kind") == "sync" else "workflow"
+            if not active and not automatic_runs.equivalent_active(con, kind, data):
+                enqueue(kind, {**data, "rule_id": rid}, con)
             con.execute(
                 "UPDATE cloud_rules SET next_run=?,updated=? WHERE id=?",
                 (due, now, rid),

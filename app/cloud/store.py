@@ -9,6 +9,12 @@ from app.cloud import states
 from app.cloud.errors import CloudError
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS cloud_scan_failures (
+ account_id TEXT NOT NULL, file_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
+ payload TEXT NOT NULL, attempts INTEGER NOT NULL, next_retry REAL NOT NULL, updated REAL NOT NULL,
+ PRIMARY KEY(account_id,file_id));
+CREATE TABLE IF NOT EXISTS cloud_notice_incidents (
+ scope TEXT PRIMARY KEY, signature TEXT NOT NULL, job_id TEXT NOT NULL, updated REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS cloud_channel_backfill (
  channel_id TEXT PRIMARY KEY, account_revision INTEGER NOT NULL, rule_revision INTEGER NOT NULL,
  cursor INTEGER NOT NULL, tip INTEGER NOT NULL, before_id INTEGER NOT NULL,
@@ -205,6 +211,11 @@ def job(job_id):
     return value
 
 
+def pending_count():
+    with db() as con:
+        return con.execute("SELECT count(*) FROM cloud_jobs WHERE state IN ('queued','running','uncertain','needs_review')").fetchone()[0]
+
+
 def jobs(limit=50):
     with db() as con:
         ids = [
@@ -216,8 +227,14 @@ def jobs(limit=50):
     return [job(i) for i in ids]
 
 
-def job_summaries(limit=50, query=''):
+def job_summaries(limit=50, query='', group='all', offset=0):
     """Poll bounded metadata, never deserialize whole file results for every job."""
+    groups = {'all': (), 'active': ('queued', 'running'), 'review': ('failed', 'uncertain', 'needs_review'),
+              'finished': ('success', 'stopped', 'cancelled')}
+    if group not in groups:
+        raise CloudError('任务筛选条件无效')
+    selected = groups[group]
+    condition = ' AND j.state IN ('+','.join('?' for _ in selected)+')' if selected else ''
     with db() as con:
         pattern = '%'+query.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')+'%'
         rows = con.execute(
@@ -227,7 +244,8 @@ def job_summaries(limit=50, query=''):
             "LEFT JOIN cloud_job_controls c ON c.job_id=j.id "
             "LEFT JOIN cloud_progress p ON p.job_id=j.id "
             "WHERE (?='' OR j.id LIKE ? ESCAPE '\\' OR j.message LIKE ? ESCAPE '\\') "
-            "ORDER BY j.created DESC,j.id LIMIT ?", (query, pattern, pattern, max(1, min(int(limit), 200)))
+            + condition + " ORDER BY j.created DESC,j.id LIMIT ? OFFSET ?",
+            (query, pattern, pattern, *selected, max(1, min(int(limit), 200)), max(0, int(offset)))
         ).fetchall()
         values = []
         for row in rows:
@@ -240,6 +258,11 @@ def job_summaries(limit=50, query=''):
             values.append(value)
         _job_activity(con, values)
     return values
+
+
+def job_page(query='', group='all', offset=0):
+    rows = job_summaries(51, query, group, offset)
+    return {'items': rows[:50], 'offset': offset, 'has_more': len(rows) > 50}
 
 
 def attach_job_activity(value):

@@ -97,11 +97,16 @@ def get():
     return result
 
 
-def save(value):
+def save(value, expected=None):
     if not isinstance(value, dict) or set(value) - set(DEFAULTS):
         raise CloudError("配置字段无效")
     with _LOCK:
         previous = get()
+        if expected is not None:
+            if not isinstance(expected, dict) or set(expected) != set(value):
+                raise CloudError('配置比较字段无效')
+            if any(previous[k] != v for k, v in expected.items()):
+                raise CloudError('这些设置已在其他页面修改，请重新读取后核对再保存；当前草稿未覆盖新设置', 409)
         result = validate({**previous, **value})
         if any(previous[k] != result[k] for k in ('strm_scan_cron','strm_scan_timezone','strm_scan_start_mode')):
             result['strm_scan_anchor'] = time.time()

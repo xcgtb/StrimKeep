@@ -24,7 +24,7 @@ ENGINE_EXPORTS = (
      'emby_request container_to_emby_path emby_path_to_container notify_emby_deleted notify_emby_refresh '
      'parse_dt _fetch_all_episodes _alive_dir_map _dir_has_media _paged_items _src _recent', None),
     ('tmdb',
-     'TmdbError Tmdb _load_emby_index_disk _save_emby_index_disk _build_emby_library_index '
+     'Tmdb _load_emby_index_disk _save_emby_index_disk _build_emby_library_index '
      '_emby_index_bg_refresh emby_library_index action_explore classify_series_by_tmdb '
      '_emby_series_ids_by_tmdb _emby_series_live_eps _tmdb_aired_set_from_info _tmdb_series_info', None),
     ('ingest',

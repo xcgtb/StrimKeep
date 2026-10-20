@@ -217,7 +217,7 @@ export const allNavigation = [
 
 export function matchesNavigation(to: string, path: string, query: Record<string, unknown>) {
   const [target, search] = to.split('?');
-  if (target !== path) return false;
+  if (target !== path && !(target === '/organize' && path.startsWith('/organize/'))) return false;
   return [...new URLSearchParams(search)].every(
     ([key, value]) =>
       String(query[key] ?? (key === 'tab' ? 'batch' : key === 'section' ? 'output' : '')) === value,

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { RouterLink } from 'vue-router';
+import { RouterLink, useRoute, useRouter } from 'vue-router';
 import { useVisiblePoll } from '../composables/useVisiblePoll';
 import { date, stateLabel } from '../composables/format';
 import ModalDialog from '../components/ModalDialog.vue';
@@ -27,6 +27,17 @@ import EvidenceDetails from '../components/EvidenceDetails.vue';
 import OperationState from '../components/OperationState.vue';
 import MediaOverride from '../components/MediaOverride.vue';
 import ResourceRoute from '../components/ResourceRoute.vue';
+const route = useRoute(),
+  router = useRouter();
+const tab = computed({
+  get: () =>
+    ['channels', 'forward', 'reader', 'history'].includes(String(route.query.tab))
+      ? String(route.query.tab)
+      : 'channels',
+  set: (value: string) => {
+    void router.replace({ query: { ...route.query, tab: value } });
+  },
+});
 const cloud = useCloud(),
   op = useOperation(() => cloud.id),
   rules = useRequest<Data>(),
@@ -39,7 +50,6 @@ const cloud = useCloud(),
   inspectId = ref(''),
   feedback = ref(''),
   filterOpen = ref(false),
-  tab = ref('channels'),
   draft = ref<Data>(),
   target = ref(''),
   targetName = ref(''),

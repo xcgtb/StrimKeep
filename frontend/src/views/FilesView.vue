@@ -7,6 +7,8 @@ import type { CloudAccount, CloudFile, FilePage } from '../types/api';
 import { useRoute, useRouter } from 'vue-router';
 import CloudInventory from '../components/CloudInventory.vue';
 import LoadState from '../components/LoadState.vue';
+import { useCloud } from '../stores/cloud';
+const cloud = useCloud();
 const route = useRoute(),
   router = useRouter();
 const inventoryView = computed(() => route.query.view === 'inventory');
@@ -20,7 +22,12 @@ function browseInventory(value: { cid: string; name: string }) {
 }
 const accounts = useRequest<{ accounts: CloudAccount[] }>(),
   files = useRequest<FilePage>(),
-  accountId = ref(''),
+  accountId = computed({
+    get: () => cloud.id,
+    set: (value: string) => {
+      cloud.id = value;
+    },
+  }),
   cid = ref('0'),
   rows = ref<CloudFile[]>([]),
   offset = ref(0),
@@ -67,7 +74,10 @@ async function loadAccounts() {
   );
   if (result?.accounts.length)
     accountId.value =
-      result.accounts.find((a) => a.id === route.query.account)?.id || result.accounts[0]!.id;
+      result.accounts.find((a) => a.id === route.query.account)?.id ||
+      result.accounts.find((a) => a.id === cloud.id)?.id ||
+      result.accounts[0]!.id;
+  if (accountId.value && !inventoryView.value) await load();
 }
 watch(accountId, () => {
   files.cancel();

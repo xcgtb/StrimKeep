@@ -348,6 +348,12 @@ def generate(account_id, row, media, scope_cid=None, companions=None, provider=N
                 payload["owned"].append({"path": str(poster), "digest": digest(data)})
             except CloudError as error:
                 payload["warnings"].append(str(error))
+        # A successful transport/write is not enough for a ready poster or an
+        # old-source replacement: re-read the bound file on the same mount.
+        verified_root = root('share') if share else root()
+        verified_path = target(verified_root, relative)
+        if (str(verified_root) != payload['output_root'] or [verified_root.stat().st_dev, verified_root.stat().st_ino] != payload['root_identity'] or not verified_path.is_file() or digest(verified_path.read_bytes()) != payload['digest'] or (expected_output and any(settings.get()[k] != v for k,v in expected_output.items()))):
+            raise CloudError('STRM 写入后挂载或内容核验失败，请检查输出目录',409)
         if asset and asset["local_path"] != str(path):
             old = Path(asset["local_path"])
             if (
@@ -367,17 +373,13 @@ def generate(account_id, row, media, scope_cid=None, companions=None, provider=N
                     ):
                         old_file.unlink()
         with store.db() as con:
-            con.execute(
-                "UPDATE cloud_assets SET state='active',payload=?,updated=? WHERE id=?",
+            activated = con.execute(
+                "UPDATE cloud_assets SET state='active',payload=?,updated=? WHERE id=? AND state='publishing'",
                 (store.encode(payload), time.time(), asset_id),
-            )
+            ).rowcount
+            if activated != 1:
+                raise CloudError('STRM 发布状态已变化，请核实产物后重试', 409)
         published = store.asset(asset_id)
-        # A successful transport/write is not enough for a ready poster or an
-        # old-source replacement: re-read the bound file on the same mount.
-        verified_root = root('share') if share else root()
-        verified_path = target(verified_root, relative)
-        if (str(verified_root) != payload['output_root'] or [verified_root.stat().st_dev, verified_root.stat().st_ino] != payload['root_identity'] or not verified_path.is_file() or digest(verified_path.read_bytes()) != payload['digest'] or (expected_output and any(settings.get()[k] != v for k,v in expected_output.items()))):
-            raise CloudError('STRM 写入后挂载或内容核验失败，请检查输出目录',409)
         from app.cloud import emby_library
         emby_library.watch(published)
         events.emit('strm','STRM 已发布：'+published['local_path']+(' · 分享库' if share else ' · 115网盘'),details={'status':'published','asset_id':asset_id,'account_id':account_id,'file_id':row['id'],'sha1':row['sha1'],'size':row['size'],'path':published['local_path'],'tmdb_id':media['tmdb_id'],'source_count':1+len(companions),'result':'已写入并登记；实际 Emby 入库另行确认'})

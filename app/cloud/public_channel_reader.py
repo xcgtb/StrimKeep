@@ -150,7 +150,7 @@ def _public_dns():
     try:
         addrs = socket.getaddrinfo(_HOST, 443, type=socket.SOCK_STREAM)
         if not addrs or any(not ipaddress.ip_address(a[4][0]).is_global for a in addrs):
-            raise PublicPageError("Telegram 域名未解析到公共网络地址，已拒绝请求")
+            raise PublicPageError("Telegram 域名未解析到公共网络地址，已拒绝请求；当前使用直连，请检查运行容器的 DNS/Fake-IP，或在服务连接配置 HTTP 代理。公开网页读取不需要 TG API")
     except socket.gaierror as exc:
         raise PublicPageError("无法解析 Telegram 公开网页域名") from exc
 

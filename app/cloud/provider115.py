@@ -122,7 +122,7 @@ def parse_share(link, password=""):
         parsed = urlsplit(text)
         if (
             parsed.scheme != "https"
-            or parsed.hostname not in ("115.com", "www.115.com", "115cdn.com")
+            or parsed.hostname not in ("115.com", "www.115.com", "115cdn.com", "anxia.com", "www.anxia.com")
             or parsed.username
             or parsed.password
         ):

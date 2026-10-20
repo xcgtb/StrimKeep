@@ -160,9 +160,11 @@ def recognize(name, override=None, naming_config=None, probe=None, context=None)
         try:
             episode_detail = tmdb().get(f"/tv/{tmdb_id}/season/{season}/episode/{episode}")
         except Exception:
-            raise CloudError("TMDB 季集查询失败，保留源文件", 502) from None
+            raise CloudError(f"TMDB 季集查询失败（作品 {tmdb_id} / S{season:02d}E{episode:02d}），保留源文件", 502, code='tmdb_episode_request', stage='tmdb_episode') from None
+        if episode_detail is None:
+            raise CloudError(f"TMDB 未找到所选季集（作品 {tmdb_id} / S{season:02d}E{episode:02d}）；请核对作品 ID 与季集号，保留源文件", 404, code='tmdb_episode_missing', stage='tmdb_episode')
         if not isinstance(episode_detail, dict):
-            raise CloudError("TMDB 季集响应不完整，保留源文件", 502)
+            raise CloudError("TMDB 季集响应格式异常，保留源文件", 502, code='tmdb_episode_schema', stage='tmdb_episode')
         if not episode_detail.get("id") or episode_detail.get("season_number") != season or episode_detail.get("episode_number") != episode:
             raise UnrecognizedMedia("TMDB 季集信息无法核实，请检查季集号后重新预览")
     information = probe() if callable(probe) else (probe or {"status": "filename", "fields": {}})

@@ -168,7 +168,9 @@ def recognize_source(account_id, provider, row, overrides, config, directory_cac
             return {"status": "fallback", "fields": {}, "warning": str(error).replace("，保留源文件", "")+"；已按设置回退文件名解析"}
     choice = media_choice(account_id, row, overrides)
     context = {} if choice else parent_context(provider, row, directory_cache if directory_cache is not None else {})
-    media = recognition.recognize(row["name"], choice, config, probe if config["ffprobe_enabled"] else None, context=context)
+    from app.cloud import automatic_runs
+    media = automatic_runs.recognize(account_id, row, [choice, context], config,
+        lambda: recognition.recognize(row["name"], choice, config, probe if config["ffprobe_enabled"] else None, context=context))
     if context.get("tmdb_id") and not re.search(r"(?i)[\[{]tmdb-\d+[\]}]", row["name"]):
         media["recognition_context"] = context
         events.emit('recognize','父目录作品身份：'+context['directory']+' · TMDB '+context['tmdb_id'])
@@ -239,7 +241,8 @@ def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, j
             items.append({"source": row, "media": media, "followers": related})
         except CloudError as error:
             events.emit('recognize','跳过：'+row['name']+' · '+str(error),job_id,level='WARNING')
-            entry = {"file_id": row["id"], "name": row["name"], "reason": str(error)}
+            entry = {"file_id": row["id"], "name": row["name"], "reason": str(error),
+                     "sha1": row.get('sha1', ''), "size": row.get('size', 0), "code": error.code}
             if isinstance(error, UnrecognizedMedia) and unknown_cid and str(unknown_cid) != str(source_cid):
                 with store.db() as con:
                     bound = con.execute("SELECT 1 FROM cloud_assets WHERE account_id=? AND file_id=? AND state IN ('active','publishing','needs_review')", (account_id, row["id"])).fetchone()
@@ -898,13 +901,14 @@ def receipt_mapping(payload, received):
 
 
 def sync(job_id, payload):
-    from app.cloud import pipeline
+    from app.cloud import pipeline, publication
     pipeline.output_ready()
     provider = verify_account(payload)
     _directory(provider, payload["source_cid"])
     rows = walk(provider, payload["source_cid"], job_id=job_id)
     result = {"generated": [], "skipped": [], "errors": [], "warnings": [], "publication": {}}
     config = settings.get()
+    output_snapshot = {k: config[k] for k in publication.OUTPUT_KEYS}
     videos, result["filtered"] = file_filters.select(rows, config)
     directory_cache = {}
     jobs.progress(job_id, len(videos), 0, "生成 STRM")
@@ -929,6 +933,7 @@ def sync(job_id, payload):
                 payload["source_cid"],
                 companions,
                 provider,
+                expected_output=output_snapshot,
             )
             result["generated"].append(asset["local_path"])
             counts['published'] += 1
@@ -945,7 +950,7 @@ def sync(job_id, payload):
             )
         jobs.progress(job_id, len(videos), index + 1, "生成 STRM", row["name"])
     result['cleanup_enabled'] = payload.get('reconcile', config['strm_reconcile_enabled'])
-    if result['cleanup_enabled'] and not result["errors"] and not result.get("stopped") and not jobs.stopping(job_id):
+    if result['cleanup_enabled'] and not result["errors"] and not result["skipped"] and not result.get("stopped") and not jobs.stopping(job_id):
         from app.cloud import strm
 
         result["reconciliation"] = strm.reconcile(
@@ -1069,6 +1074,6 @@ def transfer_link(account_id, link, password, organize, expected_revision, reque
         if not revision or revision[0] != expected_revision or not account or account[0] != data["account_revision"]:
             raise CloudError("账号或转存目录在读取期间变化，请重新发起",409)
         con.execute("UPDATE cloud_plans SET state='share_queued' WHERE id=?",(first["preview_id"],))
-        jid=jobs.enqueue('transfer',{**data,"source_ids":[r["id"] for r in first["items"]],"target_cid":target["id"],"organize_target":archive["id"] if archive else None,"generate":True},con)
+        jid=jobs.enqueue('transfer',{**data,"source_ids":[r["id"] for r in first["items"]],"target_cid":target["id"],"organize_target":archive["id"] if archive else None,"archive_revision":expected_revision,"generate":True},con)
         con.execute("INSERT INTO cloud_transfer_requests VALUES(?,?,?,?,?)",(account_id,request_id,credentials.seal(intent),jid,time.time()))
     return jid

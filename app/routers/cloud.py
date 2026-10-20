@@ -149,10 +149,7 @@ def status(response: Response):
         "accounts": call(accounts.describe),
         "devices": [{"id": k, "name": v} for k,v in accounts.DEVICE_LABELS.items()],
         "proxy": call(emby_proxy.status),
-        "pending": sum(
-            x["state"] in ("queued", "running", "uncertain", "needs_review")
-            for x in call(store.jobs)
-        ),
+        "pending": call(store.pending_count),
     }
 
 
@@ -550,8 +547,8 @@ def reset_deletion(asset_id: str, body: dict):
 
 
 @router.get("/jobs")
-def list_jobs(query: str = Query('', max_length=200)):
-    return {"status": "success", "items": call(store.job_summaries, 50, query)}
+def list_jobs(query: str = Query('', max_length=200), group: str = Query('all', max_length=20), offset: int = Query(0, ge=0, le=1000000)):
+    return {"status": "success", **call(store.job_page, query, group, offset)}
 
 
 @router.get("/jobs/{job_id}")
@@ -650,10 +647,12 @@ def pipeline_status(account_id: str, response: Response):
 
 @router.post("/settings")
 def save_settings(body: dict):
+    body = dict(body)
+    expected = body.pop('_expected', None)
     if set(body) & {'strm_scan_last_run','strm_scan_last_enqueued','strm_scan_anchor','strm_scan_pending'}:
         raise HTTPException(400, '排期执行记录由调度器维护，请仅修改 Cron、时区与启动方式')
     previous = call(settings.get)
-    result = call(settings.save, body)
+    result = call(settings.save, body, expected)
     # Naming/authorization changes must not interrupt active playback listeners.
     if any(previous[k] != result[k] for k in ("proxy_enabled", "proxy_port")):
         emby_proxy.stop()

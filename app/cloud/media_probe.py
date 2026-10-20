@@ -26,6 +26,10 @@ UA = "StrimKeep-MediaProbe"
 _GATE = threading.BoundedSemaphore(2)
 
 
+def probe_error(code, message):
+    return CloudError(message + '，保留源文件', 502, code=code, stage='probe')
+
+
 def available():
     return bool(shutil.which("ffprobe"))
 
@@ -98,14 +102,22 @@ def probe_url(link, size):
     if size <= 0:
         raise CloudError("源文件大小无效，无法提取媒体信息", 409)
     url = safe_url(link["url"])
-    addresses = socket.getaddrinfo(urlsplit(url).hostname, 443, type=socket.SOCK_STREAM)
+    try:
+        addresses = socket.getaddrinfo(urlsplit(url).hostname, 443, type=socket.SOCK_STREAM)
+    except OSError:
+        raise probe_error('probe_dns', '115 CDN 域名解析失败，请检查容器 DNS') from None
     if not addresses or any(not ipaddress.ip_address(a[4][0]).is_global for a in addresses):
-        raise CloudError("115 CDN 地址异常，无法提取媒体信息", 502)
+        raise probe_error('probe_dns_nonpublic', '115 CDN 地址异常（包含非公网解析），请检查容器 DNS/Fake-IP 设置')
     headers = {str(k): str(v) for k, v in link.get("headers", {}).items() if k.lower() in ("user-agent", "cookie", "referer")}
     headers.update({"User-Agent": UA, "Accept-Encoding": "identity"})
     token = "/"+secrets.token_hex(24)
-    state = {"remaining": MAX_BYTES, "deadline": time.monotonic()+TIMEOUT, "requests": 0}
+    state = {"remaining": MAX_BYTES, "deadline": time.monotonic()+TIMEOUT, "requests": 0, "failure": None}
     lock = threading.Lock()
+
+    def failed(code, message):
+        with lock:
+            if state['failure'] is None:
+                state['failure'] = (code, message)
 
     class Relay(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -134,6 +146,7 @@ def probe_url(link, size):
             with lock:
                 state["requests"] += 1
                 if start >= size or state["remaining"] <= 0 or state["requests"] > 24 or time.monotonic() >= state["deadline"]:
+                    state['failure'] = state['failure'] or ('probe_budget', 'ffprobe 达到读取字节、请求次数或时间预算')
                     self.send_error(416)
                     return
                 end = min(int(match[2]) if match[2] else size-1, size-1, start+CHUNK_BYTES-1, start+state["remaining"]-1)
@@ -150,6 +163,10 @@ def probe_url(link, size):
                         valid = response.status_code == 206 and response.headers.get("content-range") == expected
                         full = response.status_code == 200 and start == 0 and end == size-1
                         if not (valid or full) or response.headers.get("content-encoding", "identity") != "identity":
+                            if response.status_code not in (200, 206):
+                                failed('probe_http_'+str(response.status_code), '115 媒体读取返回 HTTP '+str(response.status_code))
+                            else:
+                                failed('probe_range', '115 媒体响应的 Range 或编码与读取请求不符')
                             self.send_error(502)
                             return
                         self.send_response(206)
@@ -163,13 +180,19 @@ def probe_url(link, size):
                         for chunk in response.iter_raw(65536):
                             with lock:
                                 if time.monotonic() >= state["deadline"] or len(chunk) > left or len(chunk) > state["remaining"]:
+                                    state['failure'] = state['failure'] or ('probe_budget', 'ffprobe 达到读取预算或媒体响应超过请求范围')
                                     break
                                 state["remaining"] -= len(chunk)
                             self.wfile.write(chunk)
                             left -= len(chunk)
                             if not left:
                                 break
-            except Exception:
+                        if left:
+                            failed('probe_truncated', '115 媒体响应提前结束')
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # ffprobe may finish as soon as it has sufficient metadata.
+            except Exception as error:
+                failed('probe_transport', '115 媒体读取连接异常（'+type(error).__name__+'）')
                 if not sent:
                     try:
                         self.send_error(502)
@@ -188,17 +211,29 @@ def probe_url(link, size):
     entries = "stream=codec_type,codec_name,profile,width,height,pix_fmt,bits_per_raw_sample,avg_frame_rate,r_frame_rate,color_transfer,channels,channel_layout,field_order:stream_disposition=default,attached_pic:stream_side_data:format=duration"
     command = [executable, "-v", "error", "-protocol_whitelist", "http,tcp", "-format_whitelist", "mov,matroska,webm,avi,mpegts,flv,asf,mpeg,ogg", "-rw_timeout", "10000000", "-probesize", "8000000", "-analyzeduration", "5000000", "-show_entries", entries, "-of", "json", f"http://127.0.0.1:{server.server_port}{token}"]
     try:
-        with tempfile.TemporaryFile() as output:
-            completed = subprocess.run(command, stdout=output, stderr=subprocess.DEVNULL, timeout=TIMEOUT, check=False)
+        with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as stderr:
+            completed = subprocess.run(command, stdout=output, stderr=stderr, timeout=TIMEOUT, check=False)
             output.seek(0)
             raw = output.read(1024*1024+1)
+            stderr.seek(0)
+            from app.cloud import events
+            detail = events.clean(stderr.read(4096).decode('utf-8', errors='replace'))[:800]
         if completed.returncode or len(raw) > 1024*1024:
-            raise CloudError("ffprobe 提取失败或超过读取限制，保留源文件", 502)
-        return summarize(json.loads(raw))
+            code, reason = state['failure'] or ('probe_exit' if completed.returncode else 'probe_output_limit',
+                'ffprobe 退出码 '+str(completed.returncode) if completed.returncode else 'ffprobe 输出超过限制')
+            events.emit('probe', reason, level='WARNING', details={'code': code, 'stage': 'probe',
+                'count': state['requests'], 'size': MAX_BYTES-state['remaining'], 'reason': detail})
+            raise probe_error(code, reason)
+        try:
+            return summarize(json.loads(raw))
+        except (ValueError, TypeError, AttributeError):
+            raise probe_error('probe_json', 'ffprobe 返回的媒体信息格式异常') from None
     except CloudError:
         raise
+    except subprocess.TimeoutExpired:
+        raise probe_error('probe_timeout', 'ffprobe 媒体提取超时') from None
     except Exception:
-        raise CloudError("ffprobe 提取超时或响应异常，保留源文件", 502) from None
+        raise probe_error('probe_process', 'ffprobe 启动或读取进程响应失败') from None
     finally:
         server.shutdown()
         server.server_close()
@@ -223,10 +258,13 @@ def extract(account_id, provider, row):
         raise CloudError("媒体信息提取繁忙，请稍后重新预览", 409)
     try:
         fields = probe_url(provider.download(current["id"], current["pickcode"], UA), current["size"])
-    except CloudError:
+    except CloudError as error:
+        if not error.stage and error.status >= 500 and not error.uncertain:
+            error.stage = 'probe'
+            error.code = error.code or 'probe_download'
         raise
     except Exception:
-        raise CloudError("媒体信息提取失败，请检查源文件与网络", 502) from None
+        raise probe_error('probe_download', '媒体取链或提取失败，请检查源文件与网络') from None
     finally:
         _GATE.release()
     after = provider.info(row["id"])

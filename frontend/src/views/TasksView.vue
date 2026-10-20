@@ -42,10 +42,11 @@ async function act() {
 }
 
 const governance = useRequest<{ items: Data[] }>(),
-  request = useRequest<{ items: Job[] }>(),
+  request = useRequest<{ items: Job[]; has_more?: boolean }>(),
   detail = useRequest<{ job: Job }>(),
   diagnostics = useRequest<{ diagnostics: DiagnosticPage }>();
 const search = ref(''),
+  pageIndex = ref(0),
   appliedSearch = ref(''),
   filter = ref('all'),
   jobId = ref(''),
@@ -103,8 +104,23 @@ const governanceRows = computed(() =>
 function load() {
   void governance.run((signal) => get<{ items: Data[] }>('/api/tasks/recent', signal));
   return request.run((signal) =>
-    get<{ items: Job[] }>(query('/api/cloud/jobs', { query: appliedSearch.value }), signal),
+    get<{ items: Job[]; has_more?: boolean }>(
+      query('/api/cloud/jobs', {
+        query: appliedSearch.value,
+        group: filter.value,
+        offset: pageIndex.value * 50,
+      }),
+      signal,
+    ),
   );
+}
+watch([filter, appliedSearch], () => {
+  pageIndex.value = 0;
+  void load();
+});
+function movePage(direction: number) {
+  pageIndex.value = Math.max(0, pageIndex.value + direction);
+  void load();
 }
 async function open(job: Job) {
   operation.invalidate();
@@ -202,7 +218,23 @@ useActivityUpdates(async () => {
       {{ label }}
     </button>
   </div>
-  <p class="data-caption">显示最近 50 条匹配记录；输入任务编号可以查找更早的任务。</p>
+  <div class="action-row">
+    <span class="data-caption"
+      >第 {{ pageIndex + 1 }} 页 · 每页最多 50 条，筛选覆盖全部历史任务</span
+    ><button
+      class="button"
+      :disabled="pageIndex === 0 || request.loading.value"
+      @click="movePage(-1)"
+    >
+      上一页</button
+    ><button
+      class="button"
+      :disabled="!request.data.value?.has_more || request.loading.value"
+      @click="movePage(1)"
+    >
+      下一页
+    </button>
+  </div>
   <LoadState
     :loading="request.loading.value && !request.data.value"
     :error="request.error.value"

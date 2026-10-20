@@ -27,6 +27,8 @@ import ResourceRoute from '../components/ResourceRoute.vue';
 import OutputSettings from '../components/OutputSettings.vue';
 import ShareQualitySettings from '../components/ShareQualitySettings.vue';
 import MediaOverride from '../components/MediaOverride.vue';
+import CloudSettingsEditor from '../components/CloudSettingsEditor.vue';
+const settingsSection = ref<'naming' | 'classification'>();
 function showOutput() {
   const section = document.querySelector<HTMLDetailsElement>('.share-output-config');
   if (section) {
@@ -104,7 +106,7 @@ watch([() => cloud.id, input, link, password, shareOnly], () => {
   overrides.value = {};
 });
 
-watch([organize, target, archive, generate], invalidate);
+watch([organize, target, archive, generate, outputRevision], invalidate);
 async function previewBatch() {
   const r = await preview.run((signal) =>
     request<Data>('/api/cloud/resources/preview', {
@@ -330,11 +332,17 @@ watch(
   </p>
   <nav v-if="shareOnly" class="module-navigation" aria-label="分享库相关设置">
     <RouterLink to="/resources/share" class="current">分享生成</RouterLink>
-    <RouterLink to="/organize/naming">命名模板</RouterLink>
-    <RouterLink to="/settings/cloud?section=classification">分类规则</RouterLink>
+    <button class="text-link" @click="settingsSection = 'naming'">命名模板</button>
+    <button class="text-link" @click="settingsSection = 'classification'">分类规则</button>
     <a href="#" @click.prevent="showOutput()">输出与播放设置</a>
     <RouterLink to="/tasks/ingestion">入库核验</RouterLink>
   </nav>
+  <CloudSettingsEditor
+    v-if="settingsSection"
+    :section="settingsSection"
+    @close="settingsSection = undefined"
+    @saved="outputRevision++"
+  />
   <nav v-if="!shareOnly" class="browse-tabs">
     <button
       v-for="(label, key) in {

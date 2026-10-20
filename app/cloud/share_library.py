@@ -114,12 +114,16 @@ def preview(preview_id, ids, overrides=None):
         raise CloudError("已选分享内容变化，请重新预览", 409)
     queue = [(fresh[r["id"]], 0) for r in chosen]
     rows, seen = [], set()
+    # This tree belongs exclusively to the share. Never resolve its numeric
+    # directory IDs through the personal-drive provider.info method.
+    folder_cache = {data['share_parent']: {'id': data['share_parent'], 'parent_id': '0', 'name': '', 'is_dir': True}}
     while queue:
         row, depth = queue.pop(0)
         if row["id"] in seen or depth > 20 or len(seen) >= LIMIT:
             raise CloudError("分享目录重复、层级过深或内容过多，请分目录生成", 409)
         seen.add(row["id"])
         if row["is_dir"]:
+            folder_cache[row['id']] = row
             children = page_all(provider, access, row["id"])
             if len(seen)+len(queue)+len(children) > LIMIT:
                 raise CloudError("分享内容过多，请分目录生成", 413)
@@ -147,7 +151,9 @@ def preview(preview_id, ids, overrides=None):
                     if cfg["ffprobe_failure"] == "skip" or error.status == 409:
                         raise
                     return {"status": "fallback", "fields": {}, "warning": "分享媒体提取失败，已按设置回退文件名解析"}
-            media = recognition.recognize(row["name"], (overrides or {}).get(row["id"]), cfg, probe if cfg["ffprobe_enabled"] else None)
+            choice = (overrides or {}).get(row['id'])
+            context = {} if choice else workflow.parent_context(view, row, folder_cache)
+            media = recognition.recognize(row["name"], choice, cfg, probe if cfg["ffprobe_enabled"] else None, context=context)
             items.append({"source": row, "media": media, "followers": workflow.related_companions(rows, row, cfg)})
         except CloudError as error:
             skipped.append({"file_id": row["id"], "name": row["name"], "reason": str(error)})

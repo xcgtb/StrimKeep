@@ -10,7 +10,7 @@ from app.cloud.errors import CloudError, diagnostic
 from app.domain import telegram_intake
 
 DEFAULT = {"tg_enabled": False, "organize_after_transfer": False, "start_after": 0}
-LINK = re.compile(r"https://(?:www\.)?(?:115\.com|115cdn\.com)/s/[A-Za-z0-9-]+(?:\?[^\s<>\"']*)?|magnet:\?[^\s<>\"']+|ed2k://\|file\|[^\r\n<>]+?\|/|115://[^\r\n<>]+", re.I)
+LINK = re.compile(r"https://(?:www\.)?(?:115\.com|115cdn\.com|anxia\.com)/s/[A-Za-z0-9-]+(?:\?[^\s<>\"'，。；）】]*)?|magnet:\?[^\s<>\"']+|ed2k://\|file\|[^\r\n<>]+?\|/|115://[^\r\n<>]+", re.I)
 CHANNEL_FIELDS = {"id", "revision", "name", "address", "target_cid", "enabled", "include", "exclude", "regex", "tmdb_ids", "kinds", "countries", "genres", "organize", "mode", "history_limit", "poll_seconds", "rule_cards", "auto_transfer", "action", "command_prefix", "forward_target"}
 
 
@@ -45,21 +45,33 @@ def parse(value):
     raise CloudError("仅支持 115 分享、磁力、ed2k 和 115:// 秒传链接")
 
 
-def extract(text, entities=None):
-    values = LINK.findall(str(text)[:16000])
-    values += [e["url"] for e in (entities or []) if e.get("type") == "text_link" and isinstance(e.get("url"), str) and LINK.fullmatch(e["url"])]
-    values=list(dict.fromkeys(values))
-    if len(values)>20:
+def extract(text, entities=None, errors=None):
+    text = str(text)[:16000]
+    matches = list(LINK.finditer(text))
+    values = [(m[0], text[m.end():matches[i+1].start() if i+1 < len(matches) else len(text)].split('\n\n', 1)[0]) for i, m in enumerate(matches)]
+    values += [(e['url'], '') for e in (entities or []) if e.get('type') == 'text_link' and isinstance(e.get('url'), str) and LINK.fullmatch(e['url'])]
+    values = list(dict.fromkeys(values))
+    if len({value for value, _ in values})>20:
         raise CloudError("单次最多接收20条不同资源链接，请分批提交",413)
     result, seen = [], set()
-    password = re.search(r"(?:提取码|访问码|密码)\s*[:：]?\s*([a-zA-Z0-9]{1,12})", str(text))
-    for value in values:
-        item = parse(value)
+    rejected = []
+    for index, (value, suffix) in enumerate(values):
+        try:
+            item = parse(value)
+        except CloudError as error:
+            rejected.append({'name': '资源 '+str(index+1), 'reason': str(error), 'stage': 'prepare'})
+            continue
+        codes = re.findall(r"(?:提取码|访问码|密码)\s*[:：=]?\s*([a-zA-Z0-9]{1,12})", suffix or (text if len({v[0] for v in values}) == 1 else ''))
+        password = codes[0] if len(set(codes)) == 1 else None
         if item["kind"] == "share" and not item["password"] and password:
-            item["password"] = password[1]
+            item["password"] = password
         fingerprint = hashlib.sha256(store.encode(item).encode()).hexdigest()
         if fingerprint not in seen:
             seen.add(fingerprint);result.append(item)
+    if errors is not None:
+        errors.extend(rejected)
+    if not result and rejected:
+        raise CloudError(rejected[0]['reason'])
     return result
 
 
@@ -114,7 +126,8 @@ def make_payload(account_id, items, source="web", target=None, organize=False):
 
 
 def preview(account_id, text, organize=False):
-    items = extract(text)
+    errors = []
+    items = extract(text, errors=errors)
     if not items:
         raise CloudError("没有找到支持的资源链接")
     payload = make_payload(account_id, items, organize=organize)
@@ -122,7 +135,7 @@ def preview(account_id, text, organize=False):
     pid = store.ident()
     with store.db() as con:
         con.execute("INSERT INTO cloud_plans VALUES(?,?,?,?,?,?)", (pid, account_id, payload["account_revision"], "intake_pending", store.encode(payload), time.time()+600))
-    return {"id": pid, "organize_after_transfer": bool(organize), "items": [{"kind": i["kind"], "name": i["name"], "target_cid": payload["targets"][i["kind"]]} for i in items]}
+    return {"id": pid, "organize_after_transfer": bool(organize), "errors": errors, "items": [{"kind": i["kind"], "name": i["name"], "target_cid": payload["targets"][i["kind"]]} for i in items]}
 
 
 def apply(plan_id, confirmed):
@@ -470,7 +483,7 @@ def run(job_id,payload):
                 cfg=get(payload["account_id"])
                 if cfg["revision"]!=payload["receiving_revision"] or not cfg["config"]["tg_enabled"]:raise CloudError("TG 接收已关闭或配置变化",409)
                 source,target,organize="telegram",None,bool(cfg["config"].get("organize_after_transfer", False))
-            items=extract(message["text"],message["entities"])
+            items=extract(message["text"],message["entities"], errors=result['errors'])
             if payload.get("channel_id") and cfg.get("mode") == "public_web":
                 ignored = [i for i in items if i["kind"] != "share"]
                 if ignored:
@@ -511,26 +524,36 @@ def run(job_id,payload):
             stage = "prepare"
             verify_dispatch(payload,data)
             target=data["targets"][item["kind"]];workflow._directory(provider,target)
-            if item["kind"]=="share":
-                # Enqueue exactly once; the child owns receive receipts and optional organization.
-                stage = "read_share"
-                first=workflow.preview_share(data["account_id"],item["code"],item["password"])
-                if first["has_more"] or not first["items"]:raise CloudError("分享根目录为空或超过100项，请在分享浏览器分批选择",409)
-                def transfer():
-                    verify_dispatch(payload,data)
-                    jid=workflow.transfer_submit(first["preview_id"],[r["id"] for r in first["items"]],target,True,data["organize_target"],True)
-                    return {"job_id":jid,"kind":"share","name":"115 分享","completed":False}
-                stage = "submit_transfer"
-                accepted=jobs.step(job_id,"resource:"+str(index),{"kind":"share","target_cid":target},transfer)
-                result["child_jobs"].append(accepted["job_id"])
-            elif item["kind"]=="instant":
-                stage = "submit_transfer"
-                accepted=jobs.step(job_id,"resource:"+str(index),{"kind":"instant","target_cid":target},lambda:provider.instant_receive(item,target))
-            else:
-                stage = "submit_transfer"
-                accepted=jobs.step(job_id,"resource:"+str(index),{"kind":item["kind"],"target_cid":target},lambda:provider.offline_add(item["url"],target))
-            result["accepted"].append({"kind":item["kind"],"name":item["name"],"target_cid":target,**accepted})
-            jobs.progress(job_id,len(items),index+1,"资源请求已提交",item["name"])
+            try:
+                if item["kind"]=="share":
+                    # Enqueue exactly once; the child owns receive receipts and optional organization.
+                    stage = "read_share"
+                    first=workflow.preview_share(data["account_id"],item["code"],item["password"])
+                    if first["has_more"] or not first["items"]:raise CloudError("分享根目录为空或超过100项，请在分享浏览器分批选择",409)
+                    def transfer():
+                        verify_dispatch(payload,data)
+                        jid=workflow.transfer_submit(first["preview_id"],[r["id"] for r in first["items"]],target,True,data["organize_target"],True,directory_revision=data['directory_revision'])
+                        return {"job_id":jid,"kind":"share","name":"115 分享","completed":False}
+                    stage = "submit_transfer"
+                    accepted=jobs.step(job_id,"resource:"+str(index),{"kind":"share","target_cid":target},transfer)
+                    result["child_jobs"].append(accepted["job_id"])
+                elif item["kind"]=="instant":
+                    stage = "submit_transfer"
+                    accepted=jobs.step(job_id,"resource:"+str(index),{"kind":"instant","target_cid":target},lambda:provider.instant_receive(item,target))
+                else:
+                    stage = "submit_transfer"
+                    accepted=jobs.step(job_id,"resource:"+str(index),{"kind":item["kind"],"target_cid":target},lambda:provider.offline_add(item["url"],target))
+                result["accepted"].append({"kind":item["kind"],"name":item["name"],"target_cid":target,**accepted})
+                jobs.progress(job_id,len(items),index+1,"资源请求已提交",item["name"])
+            except jobs.JobStopped:
+                raise
+            except CloudError as error:
+                if error.uncertain or (index == len(items)-1 and not result['accepted']):
+                    raise
+                problem = {**diagnostic(error, stage), 'name': item['name']}
+                result['errors'].append(problem)
+                events.emit('transfer', '此资源处理失败，继续后续资源：'+problem['reason'], job_id, level='WARNING', details=problem)
+                jobs.progress(job_id, len(items), index+1, '资源失败已记录', item['name'])
         return result
     except jobs.JobStopped:
         result['stopped'] = True

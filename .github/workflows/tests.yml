@@ -13,7 +13,10 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install test dependencies
-        run: pip install -r dev/requirements.txt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          pip install -r dev/requirements.txt
       - name: Static and release boundaries
         run: |
           python dev/tools/static_check.py

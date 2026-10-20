@@ -24,7 +24,14 @@ export function useCloudSettingsDraft() {
     }
   }
   async function save() {
-    const result = await op.run(() => writeData('/api/cloud/settings', changes.value));
+    const result = await op.run(() =>
+      writeData('/api/cloud/settings', {
+        ...changes.value,
+        _expected: Object.fromEntries(
+          changed.value.map((k) => [k, object(request.data.value?.settings)[k]]),
+        ),
+      }),
+    );
     if (result) {
       request.data.value = result;
       draft.value = structuredClone(object(result.settings));
