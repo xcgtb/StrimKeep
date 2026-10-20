@@ -781,8 +781,10 @@ async def play(
     from app.cloud import playback, settings as cloud_settings
 
     # 只拦这一个直连播放端点；Emby 反代不经过这里，不受影响。
+    import asyncio
+    config = await asyncio.to_thread(cloud_settings.get)
     if is_probe_request(request.headers.get('user-agent'),
-                        cloud_settings.get().get('strm_block_feiniu_ua', False)):
+                        config.get('strm_block_feiniu_ua', False)):
         raise HTTPException(403, '探测请求已拦截')
     try:
         return await playback.serve(request, asset_id, sig)

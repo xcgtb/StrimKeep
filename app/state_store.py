@@ -6,7 +6,6 @@ value stop migration, rather than silently resetting notification/config baselin
 """
 import contextlib
 import json
-import threading
 import time
 import sys
 from pathlib import Path
@@ -20,7 +19,11 @@ _MISSING = object()
 _READY = set()
 _FRESH_CONFIG = set()
 _REVISIONS = {}
-_LOCK = threading.RLock()
+# A document can be read inside an existing cloud/storage transaction. A
+# separate document lock would invert the order used by prepare/save (document
+# -> storage) and deadlock those callers (storage -> document). Use the same
+# reentrant lock for document metadata and the shared SQLite connection.
+_LOCK = storage._LOCK
 
 
 class StateStoreError(OSError):

@@ -20,7 +20,7 @@ router = APIRouter()
 async def api_emby_webhook(request: Request):
     from app import emby_events
     token = request.headers.get('X-StrimKeep-Token') or request.query_params.get('token') or ''
-    if not emby_events.authorized(token):
+    if not await asyncio.to_thread(emby_events.authorized, token):
         raise HTTPException(status_code=401, detail='回调令牌无效或监控已关闭')
     body = bytearray()
     async for chunk in request.stream():
@@ -38,7 +38,7 @@ async def api_emby_webhook(request: Request):
             payload = json.loads(form.get('data') or '')
         else:
             payload = json.loads(body)
-        result = emby_events.accept(payload)
+        result = await asyncio.to_thread(emby_events.accept, payload)
     except (ValueError, TypeError, UnicodeError) as error:
         raise HTTPException(status_code=400, detail='回调内容格式错误') from error
     return Response(content=json.dumps(result, ensure_ascii=False), media_type='application/json',
@@ -276,10 +276,10 @@ def api_library_changes(since: int = 0):
 async def api_library_events(request: Request):
     """Authenticated SSE hints; clients read actual facts via /changes."""
     async def updates():
-        last = library_updates.changes(0)['version']
+        last = (await asyncio.to_thread(library_updates.changes, 0))['version']
         yield 'retry: 5000\n\n'
         while not await request.is_disconnected():
-            latest = library_updates.changes(last)['version']
+            latest = (await asyncio.to_thread(library_updates.changes, last))['version']
             if latest != last:
                 last = latest
                 yield 'event: library\ndata: ' + str(last) + '\n\n'
