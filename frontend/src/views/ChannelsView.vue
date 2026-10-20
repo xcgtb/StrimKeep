@@ -26,6 +26,7 @@ import ConfirmAction from '../components/ConfirmAction.vue';
 import EvidenceDetails from '../components/EvidenceDetails.vue';
 import OperationState from '../components/OperationState.vue';
 import MediaOverride from '../components/MediaOverride.vue';
+import ResourceRoute from '../components/ResourceRoute.vue';
 const cloud = useCloud(),
   op = useOperation(() => cloud.id),
   rules = useRequest<Data>(),
@@ -41,6 +42,9 @@ const cloud = useCloud(),
   tab = ref('channels'),
   draft = ref<Data>(),
   target = ref(''),
+  targetName = ref(''),
+  positionId = ref(''),
+  position = useRequest<Data>(),
   removeId = ref(''),
   testId = ref(''),
   message = ref(''),
@@ -91,6 +95,7 @@ const fields: Field[] = [
   },
   { key: 'enabled', label: '启用频道', type: 'check' },
   { key: 'auto_transfer', label: '匹配消息后自动处理（关闭则仅记录）', type: 'check' },
+  { key: 'organize', label: '转存后自动识别、命名、归档并按已保存开关生成 STRM', type: 'check' },
   {
     key: 'history_limit',
     label: '首次历史条数（机器人模式为 0）',
@@ -162,7 +167,9 @@ const routeHint = computed(() =>
     : draft.value.action === 'forward' && draft.value.forward_target !== 'self'
       ? `匹配消息 → 添加 ${draft.value.command_prefix || '命令头'} → 发给 ${draft.value.forward_target || '目标机器人'}。需要先登录用户会话。`
       : transferAction.value
-        ? '匹配资源 → 转存到接收目录。后续整理与生成 STRM 由影视整理规则执行。'
+        ? draft.value.organize
+          ? '匹配资源 → 转存 → 自动识别、命名与归档 → 按已保存开关生成 STRM → Emby 入库核验。'
+          : '匹配资源 → 转存到接收目录。本规则不触发后续整理；可勾选转存后自动整理。'
         : '匹配 115 分享 → 内置识别与选版 → 生成分享 STRM，无需先转存到你的网盘。',
 );
 function actionLabel(rule: Data) {
@@ -199,6 +206,24 @@ async function inspectRule(row: Data) {
   inspection.data.value = undefined;
   inspectId.value = String(row.id);
   await inspection.run(() => writeData(accountPath(cloud.id, `channels/${row.id}/inspect`)));
+}
+async function previewPosition(row: Data) {
+  positionId.value = String(row.id);
+  position.data.value = undefined;
+  await position.run(() => writeData(accountPath(cloud.id, `channels/${row.id}/position/preview`)));
+}
+async function resetPosition() {
+  const result = await op.run(() =>
+    writeData(accountPath(cloud.id, `channels/${positionId.value}/position/apply`), {
+      token: position.data.value?.token,
+      confirmed: true,
+    }),
+  );
+  if (result) {
+    feedback.value = String(result.message);
+    positionId.value = '';
+    await load();
+  }
 }
 function testRule(row: Data) {
   testId.value = String(row.id);
@@ -293,9 +318,11 @@ function edit(row?: Data) {
         rule_cards: [],
       };
   draft.value.action ||= 'transfer';
+  if (row?.organize_effective === false) draft.value.organize = false;
   draft.value.command_prefix ||= '/strm';
   draft.value.forward_target ||= 'self';
   target.value = String(row?.target_cid || '');
+  targetName.value = '';
   publicPreview.data.value = undefined;
 }
 async function save() {
@@ -372,6 +399,8 @@ watch(
     publicPreview.cancel();
     inspection.cancel();
     matchPreview.cancel();
+    position.cancel();
+    positionId.value = '';
     inspectId.value = '';
     testId.value = '';
     feedback.value = '';
@@ -489,6 +518,10 @@ watch(
             }}</span
           >
           <p v-if="r.reader_status" class="inline-error">{{ r.reader_status }}</p>
+          <p v-if="Number(object(r.public_status).backfill_count)" class="notice-bar">
+            正在分批补读历史：已暂存
+            {{ object(r.public_status).backfill_count }} 条消息。补读完整后统一接收，不会跳过积压。
+          </p>
           <p v-if="r.mode !== 'bot'" class="muted-text">
             上次成功：{{
               Number(object(r.public_status).last_success)
@@ -512,6 +545,13 @@ watch(
             {{ actionLabel(r)
             }}<template v-if="r.action === 'transfer'"> · 接收目录 {{ r.target_cid }}</template>
           </p>
+          <p v-if="r.action === 'transfer'" class="channel-route-summary">
+            {{
+              r.organize_effective
+                ? '转存 → 识别命名 → 归档 → 按设置生成 STRM'
+                : '仅转存到接收目录；未开启自动整理'
+            }}
+          </p>
           <div class="action-row">
             <button
               class="button small"
@@ -521,7 +561,13 @@ watch(
             >
               {{ r.enabled ? '暂停监控' : '启用监控' }}
             </button>
-            <button class="button small" @click="inspectRule(r)">读取并检查</button>
+            <button
+              class="button small"
+              :disabled="inspection.loading.value"
+              @click="inspectRule(r)"
+            >
+              读取并检查
+            </button>
             <button class="button small" @click="edit(r)">编辑规则</button
             ><button class="button small" @click="testRule(r)">测试筛选</button
             ><button
@@ -532,6 +578,13 @@ watch(
               "
             >
               移除
+            </button>
+            <button
+              v-if="r.mode === 'public_web' && !r.enabled"
+              class="text-link"
+              @click="previewPosition(r)"
+            >
+              重新建立读取位置
             </button>
           </div>
         </article>
@@ -587,6 +640,28 @@ watch(
             :account-id="cloud.id"
             label="频道保存目录"
             :disabled="op.busy.value || op.uncertain.value"
+            @selected="(value) => (targetName = value.name)"
+          />
+          <FormFields
+            v-if="transferAction"
+            v-model="draft"
+            :fields="groupFields(['organize'])"
+            :disabled="op.busy.value || op.uncertain.value"
+          />
+          <ResourceRoute
+            v-if="
+              transferAction ||
+              draft.action === 'share_strm' ||
+              (draft.action === 'forward' && draft.forward_target === 'self')
+            "
+            :share="!transferAction"
+            :organize="transferAction && !!draft.organize"
+            :generate="true"
+            :target="targetName || target"
+            archive=""
+            :count="0"
+            continuous
+            :revision="Number(draft.revision || 0)"
           />
         </section>
         <section class="channel-form-section">
@@ -618,6 +693,10 @@ watch(
           </button>
           <OperationState :busy="publicPreview.loading.value" :error="publicPreview.error.value" />
           <template v-if="publicPreview.data.value">
+            <p class="notice-bar">
+              {{ object(publicPreview.data.value.network).label }} ·
+              {{ publicPreview.data.value.elapsed_ms }} ms
+            </p>
             <p>成功读取 {{ publicPreview.data.value.count }} 条公开消息（显示最多 20 个链接）。</p>
             <div
               v-for="item in records(publicPreview.data.value.messages)"
@@ -935,7 +1014,38 @@ watch(
         </button>
       </div>
     </section></template
-  ><ConfirmAction
+  >
+  <ModalDialog
+    v-if="positionId"
+    title="重新建立频道读取位置"
+    @close="!op.busy.value && (positionId = '')"
+  >
+    <OperationState
+      :busy="position.loading.value || op.busy.value"
+      :error="position.error.value || op.error.value"
+      :uncertain="op.uncertain.value"
+    />
+    <template v-if="position.data.value">
+      <p class="notice-bar">{{ position.data.value.message }}</p>
+      <p>
+        原位置 #{{ position.data.value.previous_cursor }} → 本次最新位置 #{{
+          position.data.value.latest_cursor
+        }}
+      </p>
+      <p>频道保持暂停，需自行启用；不会重放已有任务。</p>
+    </template>
+    <template #footer>
+      <button class="button" :disabled="op.busy.value" @click="positionId = ''">取消</button>
+      <button
+        class="button danger"
+        :disabled="!position.data.value || op.busy.value || op.uncertain.value"
+        @click="resetPosition"
+      >
+        确认略过历史并更新位置
+      </button>
+    </template>
+  </ModalDialog>
+  <ConfirmAction
     v-if="confirmation"
     title="确认移除配置"
     :description="

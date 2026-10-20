@@ -13,7 +13,9 @@ else:
 MAX_LOGS = 10000
 _LOCAL = threading.local()
 _PENDING = deque(maxlen=200)
-_LOCK = threading.RLock()
+# Log readers and handlers can run inside a cloud transaction. A separate
+# log lock would invert the transaction -> logging order used by diagnostics.
+_LOCK = storage._LOCK
 _SEQ = 0
 
 
@@ -28,6 +30,11 @@ def _insert(con, row):
 
 
 class RuntimeHandler(logging.Handler):
+    def createLock(self):
+        # logging.Handler normally adds another lock around emit(). It must
+        # participate in the same order, including logs emitted inside a DB tx.
+        self.lock = storage._LOCK
+
     def __init__(self, level=logging.INFO):
         super().__init__(level)
         self._strimkeep_runtime_handler = __name__
@@ -63,6 +70,12 @@ class RuntimeHandler(logging.Handler):
                    'message': redact(message), 'details': details}
             with _LOCK:
                 try:
+                    # A log emitted inside a cloud transaction belongs to that
+                    # transaction. Opening another context would commit it early.
+                    active = storage._conn()
+                    if active.in_transaction:
+                        _insert(active, row)
+                        return
                     with storage._transaction() as con:
                         for pending in _PENDING: _insert(con, pending)
                         rid = _insert(con, row)

@@ -229,7 +229,7 @@ def api_explore_library_status(body: dict):
 
 @router.get('/api/tmdb/progress', dependencies=[Depends(auth)])
 def api_tmdb_progress():
-    return {'status': 'success', 'progress': engine.get_tmdb_scan_progress()}
+    return {'status': 'success', 'progress': morning.get_tmdb_scan_progress()}
 
 
 @router.get('/api/library/changes', dependencies=[Depends(auth)])

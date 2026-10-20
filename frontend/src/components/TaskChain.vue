@@ -38,26 +38,43 @@ useActivityUpdates(load);
     </header>
     <p v-if="state.error.value" class="inline-error">{{ state.error.value }}</p>
     <p class="muted-text">{{ state.data.value?.message }}</p>
-    <ol class="chain-jobs">
-      <li
-        v-for="row in records(state.data.value?.jobs)"
-        :key="String(row.id)"
-        :class="{ selected: row.id === id }"
+    <div
+      v-if="records(state.data.value?.stages).length"
+      class="flow-stage-grid"
+      aria-label="各阶段实际回执"
+    >
+      <article
+        v-for="stage in records(state.data.value?.stages)"
+        :key="String(stage.key)"
+        :class="{ verified: Number(stage.verified) > 0, attention: Number(stage.outstanding) > 0 }"
       >
-        <span class="chain-dot" :class="String(row.state)"></span>
-        <div>
-          <strong>{{ row.label }}</strong
-          ><small>{{ row.resolved_by ? '已转交后续任务' : stateLabel(String(row.state)) }}</small>
-          <p>{{ row.message }}</p>
-        </div>
-        <RouterLink
-          v-if="row.id !== id"
-          class="text-link"
-          :to="{ path: '/tasks', query: { job: String(row.id) } }"
-          >查看</RouterLink
+        <strong>{{ stage.label }}</strong>
+        <p>{{ stage.detail }}</p>
+      </article>
+    </div>
+    <details class="flow-job-details">
+      <summary>关联任务与执行回执（{{ records(state.data.value?.jobs).length }}）</summary>
+      <ol class="chain-jobs">
+        <li
+          v-for="row in records(state.data.value?.jobs)"
+          :key="String(row.id)"
+          :class="{ selected: row.id === id }"
         >
-      </li>
-    </ol>
+          <span class="chain-dot" :class="String(row.state)"></span>
+          <div>
+            <strong>{{ row.label }}</strong
+            ><small>{{ row.resolved_by ? '已转交后续任务' : stateLabel(String(row.state)) }}</small>
+            <p>{{ row.message }}</p>
+          </div>
+          <RouterLink
+            v-if="row.id !== id"
+            class="text-link"
+            :to="{ path: '/tasks', query: { job: String(row.id) } }"
+            >查看</RouterLink
+          >
+        </li>
+      </ol>
+    </details>
     <div class="chain-receipts">
       <div>
         <small>Emby 入库回执</small

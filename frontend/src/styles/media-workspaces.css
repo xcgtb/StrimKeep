@@ -309,6 +309,37 @@
   list-style: none;
   padding: 0;
 }
+.flow-stage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 10px;
+  margin: 18px 0;
+}
+.flow-stage-grid article {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+  min-width: 0;
+  background: var(--surface2);
+}
+.flow-stage-grid article.verified {
+  border-color: var(--green);
+}
+.flow-stage-grid article.attention {
+  border-color: var(--amber, #c78b36);
+}
+.flow-stage-grid p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 8px 0 0;
+  overflow-wrap: anywhere;
+}
+.flow-job-details > summary {
+  cursor: pointer;
+  padding: 12px 0;
+  color: var(--muted);
+}
 .chain-jobs li {
   display: flex;
   gap: 12px;

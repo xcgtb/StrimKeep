@@ -53,11 +53,14 @@ def storage_directory():
     return base
 
 
-def seal(value):
-    with store.db() as con:
-        required = (
-            con.execute("SELECT 1 FROM cloud_accounts LIMIT 1").fetchone() is not None
-        )
+def seal(value, *, con=None):
+    def has_accounts(db):
+        return db.execute("SELECT 1 FROM cloud_accounts LIMIT 1").fetchone() is not None
+    if con is None:
+        with store.db() as db:
+            required = has_accounts(db)
+    else:
+        required = has_accounts(con)
     return (
         Fernet(key(".cloud_credentials_key", required=required))
         .encrypt(store.encode(value).encode())

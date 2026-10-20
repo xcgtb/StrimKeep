@@ -9,6 +9,10 @@ from app.cloud import states
 from app.cloud.errors import CloudError
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS cloud_channel_backfill (
+ channel_id TEXT PRIMARY KEY, account_revision INTEGER NOT NULL, rule_revision INTEGER NOT NULL,
+ cursor INTEGER NOT NULL, tip INTEGER NOT NULL, before_id INTEGER NOT NULL,
+ sealed TEXT NOT NULL, count INTEGER NOT NULL, updated REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS cloud_accounts (
  id TEXT PRIMARY KEY, provider TEXT NOT NULL, uid TEXT NOT NULL, name TEXT NOT NULL,
  sealed TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1, updated REAL NOT NULL,
@@ -340,6 +344,7 @@ def disconnect_account(account_id):
                     "(SELECT id FROM cloud_channels WHERE account_id=?)", (account_id,))
         con.execute("DELETE FROM cloud_public_channel_status WHERE channel_id IN "
                     "(SELECT id FROM cloud_channels WHERE account_id=?)", (account_id,))
+        con.execute('DELETE FROM cloud_channel_backfill WHERE channel_id IN (SELECT id FROM cloud_channels WHERE account_id=?)', (account_id,))
         con.execute("DELETE FROM cloud_channels WHERE account_id=?", (account_id,))
         con.execute("UPDATE cloud_inbox SET state='processed',result=? "
                     "WHERE account_id=? AND state='queued'",
@@ -376,6 +381,8 @@ def enqueue_sync_once(account_id, revision, source_cid, reconcile=True):
 def delete_channel(account_id, channel_id):
     """删除某个账号下的频道；account_id 参与条件，防止跨账号误删。"""
     with db() as con:
+        con.execute('DELETE FROM cloud_channel_backfill WHERE channel_id IN (SELECT id FROM cloud_channels WHERE id=? AND account_id=?)', (channel_id, account_id))
+        con.execute('DELETE FROM cloud_channel_cursors WHERE id IN (SELECT id FROM cloud_channels WHERE id=? AND account_id=?)', (channel_id, account_id))
         con.execute("DELETE FROM cloud_public_channel_status WHERE channel_id IN "
                     "(SELECT id FROM cloud_channels WHERE id=? AND account_id=?)", (channel_id, account_id))
         affected = con.execute(

@@ -679,10 +679,6 @@
     "morning",
     "read_emby_lib_cache"
   ],
-  "get_tmdb_scan_progress": [
-    "morning",
-    "get_tmdb_scan_progress"
-  ],
   "refresh_tmdb_scan": [
     "morning",
     "refresh_tmdb_scan"

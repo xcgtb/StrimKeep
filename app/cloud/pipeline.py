@@ -33,7 +33,8 @@ def prepare(generate=True):
 def status(account_id):
     """Local configuration checks only; no cloud mutation or network health claim."""
     config = settings.get()
-    roots = directories.get(account_id)["directories"]
+    directory_config = directories.get(account_id)
+    roots = directory_config['directories']
     checks = []
 
     def add(key, label, page, module, action):
@@ -64,5 +65,6 @@ def status(account_id):
     required = {"source", "target", "tmdb"} | ({"output"} if config["generate_strm_enabled"] else set())
     from app.cloud import emby_library
     return {"checks": checks, "emby_mappings": emby_library.mapping_status(account_id), "ready": all(c["ready"] for c in checks if c["key"] in required),
+            'directories': roots, 'directory_revision': directory_config['revision'],
             "generate": config["generate_strm_enabled"], "public_url": config["public_url"],
             "output_root": config["output_root"], "naming_style": config["naming_style"]}

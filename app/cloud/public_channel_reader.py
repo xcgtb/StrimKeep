@@ -20,7 +20,7 @@ from urllib.parse import urlencode
 
 import httpx
 
-from app.cloud import events, receiving, store
+from app.cloud import events, receiving, store, channel_network
 from app.cloud.errors import CloudError
 
 _POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="public-channel")
@@ -160,12 +160,18 @@ def _http_page(channel: str, before: int | None = None, *, transport=None) -> by
         raise PublicPageError("公开频道用户名无效")
     # Never take a hostname or path from an arbitrary message / user URL.
     url = "https://t.me/s/" + channel + ("?" + urlencode({"before": before}) if before else "")
-    if transport is None:
+    from app.cloud import channel_network
+    options = channel_network.http_options()
+    if transport is not None:
+        options['proxy'] = None  # Explicit in-process test transport owns all I/O.
+    if transport is None and not options['proxy']:
         _public_dns()
     try:
         with httpx.Client(timeout=httpx.Timeout(15, connect=5), follow_redirects=False,
-                          trust_env=False, transport=transport, headers={"Accept": "text/html", "User-Agent": "StrimKeepPublicPreview/1.0"}) as client:
+                          **options, transport=transport, headers={"Accept": "text/html", "User-Agent": "StrimKeepPublicPreview/1.0"}) as client:
             with client.stream("GET", url) as response:
+                if response.status_code == 407:
+                    raise PublicPageError('Telegram 代理认证失败，请检查代理用户名和密码', 300)
                 if response.status_code == 429:
                     raw = response.headers.get("Retry-After", "")
                     wait = min(86400, max(60, int(raw))) if raw.isdigit() else 1800
@@ -184,11 +190,12 @@ def _http_page(channel: str, before: int | None = None, *, transport=None) -> by
                 return bytes(chunks)
     except PublicPageError:
         raise
-    except (httpx.TimeoutException, httpx.NetworkError, httpx.ProtocolError) as exc:
-        raise PublicPageError("Telegram 公开网页连接失败或超时") from exc
+    except (httpx.TimeoutException, httpx.NetworkError, httpx.ProtocolError, httpx.ProxyError) as exc:
+        label = '代理连接' if options['proxy'] else '直接连接'
+        raise PublicPageError('Telegram 公开网页' + label + '失败或超时，请检查服务连接中的代理与容器网络') from None
 
 
-def fetch_messages(channel: str, *, cursor: int = 0, initialized=False, history_limit=20, transport=None):
+def fetch_messages(channel: str, *, cursor: int = 0, initialized=False, history_limit=20, transport=None, before=None):
     """Return a *complete bounded* interval or fail without advancing cursor.
 
     If the newest content cannot be traced backwards to the old cursor within
@@ -197,9 +204,17 @@ def fetch_messages(channel: str, *, cursor: int = 0, initialized=False, history_
     if not _USERNAME.fullmatch(channel):
         raise PublicPageError("公开频道用户名无效")
     limit = min(100, max(0, int(history_limit)))
-    found, before, seen = {}, None, set()
+    found, seen = {}, set()
+    started = time.monotonic()
     reached = False
+    def interrupted(reason, next_before):
+        error = PublicPageError(reason)
+        if initialized and found:
+            error.partial = {'messages': list(found.values()), 'tip': max([cursor, *seen]), 'before': next_before}
+        return error
     for _ in range(_MAX_PAGES):
+        if time.monotonic() - started > 40:
+            raise interrupted('本轮频道补读达到时间上限，将分批继续', before)
         page = parse_html(_http_page(channel, before, transport=transport), channel)
         if not page:
             if initialized and cursor > 0 and not reached:
@@ -227,10 +242,10 @@ def fetch_messages(channel: str, *, cursor: int = 0, initialized=False, history_
         if not initialized and (limit == 0 or len(found) >= limit):
             break
         if len(seen) >= _MAX_MESSAGES or (initialized and len(found) >= _MAX_MESSAGES):
-            raise PublicPageError("频道未读消息超过单轮 200 条上限，未推进游标，请缩短轮询周期")
+            raise interrupted('频道未读消息超过单轮 200 条上限，将分批补读', oldest)
         before = oldest
     else:
-        raise PublicPageError("频道翻页超过 10 页上限，未推进游标以避免漏单")
+        raise interrupted('频道翻页超过 10 页上限，将分批补读', before)
     if initialized and cursor and not reached:
         # Public HTML can omit/deletes older posts. Never present this as a
         # lossless continuous feed; require manual review instead of skipping.
@@ -242,6 +257,7 @@ def fetch_messages(channel: str, *, cursor: int = 0, initialized=False, history_
     return records, tip
 
 
+@channel_network.probe
 def preview(account_id, address: str, limit: int = 20, *, transport=None):
     if not store.account(account_id):
         raise CloudError("115 账号不存在", 404)
@@ -250,12 +266,15 @@ def preview(account_id, address: str, limit: int = 20, *, transport=None):
         raise CloudError("免登录仅支持公开频道用户名，不支持 -100 ID 或邀请链接", 409)
     if type(limit) is not int or not 0 <= limit <= 100:
         raise CloudError("预览条数必须在 0–100 之间")
+    started = time.monotonic()
     messages, _ = fetch_messages(channel, history_limit=limit, transport=transport)
     def links(message):
         values = receiving.LINK.findall(message['text'])
         values.extend(e['url'] for e in message['entities'] if receiving.LINK.fullmatch(e['url']))
         return list(dict.fromkeys(v for v in values if v.lower().startswith(('https://115.com/s/', 'https://www.115.com/s/', 'https://115cdn.com/s/', 'https://www.115cdn.com/s/'))))[:20]
+    from app.cloud.channel_network import describe
     return {"channel": channel, "mode": "public_web", "count": len(messages),
+            'network': describe(), 'elapsed_ms': int((time.monotonic()-started)*1000),
             "messages": [{"message_id": m["message_id"], "date": m["date"],
                           "text": m["text"][:1200], "links": links(m)} for m in messages]}
 
@@ -292,9 +311,20 @@ def poll_one():
     rid, aid, account_rev, rule_rev, raw, cursor, initialized = row
     rule = json.loads(raw)
     try:
+        from app.cloud import channel_recovery
+        pending = channel_recovery.load(rid, account_rev, rule_rev, cursor)
         channel = rule["address"].removeprefix("@")
-        rows, tip = fetch_messages(channel, cursor=int(cursor), initialized=bool(initialized),
-                                   history_limit=rule["history_limit"])
+        try:
+            rows, tip = fetch_messages(channel, cursor=int(cursor), initialized=bool(initialized),
+                                       history_limit=rule["history_limit"], **({'before': pending['before']} if pending else {}))
+        except PublicPageError as error:
+            if getattr(error, 'partial', None):
+                channel_recovery.stage(rid, aid, account_rev, rule_rev, cursor, pending, error.partial)
+                return True
+            raise
+        if pending:
+            rows = sorted({m['message_id']: m for m in pending['messages'] + rows}.values(), key=lambda m: m['message_id'])
+            tip = max(tip, pending['tip'])
         # Network and parsing are complete. Commit all messages and cursor as one
         # transaction; changed account/rule/cursor invalidate this result.
         with store.db() as con:
@@ -302,6 +332,8 @@ def poll_one():
                                   "COALESCE(s.initialized,0) FROM cloud_channels c JOIN cloud_accounts a "
                                   "ON a.id=c.account_id LEFT JOIN cloud_channel_cursors s ON s.id=c.id WHERE c.id=? AND c.account_id=?", (rid, aid)).fetchone()
             if not current or current[0] != rule_rev or current[2] != account_rev or current[3:] != (cursor, initialized) or not json.loads(current[1]).get("enabled") or json.loads(current[1]).get("mode") != "public_web":
+                return True
+            if pending and not channel_recovery.matches(con, rid, pending):
                 return True
             # Stable per-rule scope; no Bot token dependency or fake Bot identity.
             chat_id = -(10**12 + int(hashlib.sha256(channel.encode()).hexdigest()[:12], 16))
@@ -323,8 +355,11 @@ def poll_one():
                         "VALUES(?,?,?,?,0) ON CONFLICT(channel_id) DO UPDATE SET last_success=excluded.last_success,"
                         "last_check=excluded.last_check,last_count=excluded.last_count,failures=0",
                         (rid, time.time(), time.time(), len(rows)))
+            con.execute('DELETE FROM cloud_channel_backfill WHERE channel_id=?', (rid,))
         events.emit("channel", "公开频道检查完成："+rule["name"]+" · 新消息 "+str(len(rows)))
-    except PublicPageError as error:
+    except CloudError as error:
+        if not isinstance(error, PublicPageError):
+            error = PublicPageError(str(error), 300)
         _save_failure(rid, rule_rev, account_rev, error, time.time())
     except Exception:
         _save_failure(rid, rule_rev, account_rev, PublicPageError("公开频道抓取出现异常，请检查网页结构与网络"), time.time())

@@ -48,6 +48,7 @@ def record_failure(state_dir, operation, error):
     now = time.time()
     key = str(state_dir)
     code, message = _reason(error)
+    should_log = False
     with _LOCK:
         state = _STATES.setdefault(key, {'issues': OrderedDict(), 'last_recovered_at': None})
         _STATES.move_to_end(key)
@@ -60,12 +61,16 @@ def record_failure(state_dir, operation, error):
                  'last_at': now, 'count': (old['count'] if old else 0) + 1,
                  '_logged_at': old['_logged_at'] if old else 0}
         if not old or old['code'] != code or now - issue['_logged_at'] >= LOG_INTERVAL:
-            _LOG.warning('存储异常 [%s]: %s', operation, message)
+            should_log = True
             issue['_logged_at'] = now
         issues[operation] = issue
         issues.move_to_end(operation)
         while len(issues) > MAX_ISSUES:
             issues.popitem(last=False)
+    # Logging may write SQLite and update diagnostics. Never hold this lock
+    # while entering the handler/database lock in another thread.
+    if should_log:
+        _LOG.warning('存储异常 [%s]: %s', operation, message)
 
 
 def record_success(state_dir, operation):

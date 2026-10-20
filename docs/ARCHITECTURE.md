@@ -1,7 +1,7 @@
 # StrimKeep 架构
 
 > 本文以源码为准。若与代码不符，改文档，不要改代码来迁就文档。
-> 最后核对：v1.5.19 基线及复审修复（未发布）/ 2026-10-19
+> 最后核对：v1.6.3 基线及频道链路修复（未发布）/ 2026-10-20
 
 ---
 
@@ -147,10 +147,13 @@ enqueue
 | `app/cloud/states.py` | **业务任务状态词表**：`JOB_STATES`、`JOB_STATE_LABELS`、`ACTIVE/TERMINAL_JOB_STATES` |
 | `app/cloud/pacing.py` | **频道轮询节奏**（纯计算、无依赖）：`next_poll_delay`、`flood_wait_seconds`、`ChannelFloodWait` |
 | `app/cloud/channel_reader.py` | 频道读取：Telegram 会话、增量游标、限流退避、积压排空 |
+| `app/cloud/channel_network.py` | 频道公共代理路由、无敏感信息的连接诊断、只读检查并发上限 |
+| `app/cloud/channel_recovery.py` | 加密历史暂存、修订核验、暂停规则读取位置预览与确认 |
+| `app/domain/workflow_progress.py` | 根据持久步骤与入库回执汇总阶段证据，零 IO |
 | `app/cloud/store.py` | 云端域全部表结构与访问函数 |
 | `app/storage.py` / `state_store.py` | SQLite 事务、计划存档、缓存、旧 JSON 迁移 |
 | `app/config.py` | 配置读写、环境变量覆盖 |
-| `app/engine.py` / `compat.py` | **兼容导出层**（207 个旧名字），见第七节 |
+| `app/engine.py` / `compat.py` | **兼容导出层**（206 个旧名字），见第七节 |
 | `app/morning.py` `governance.py` `subscribe.py` `wash.py` `bot.py` `ingest.py` `stats.py` `tmdb.py` `emby.py` `lib.py` `core.py` | 根目录业务模块：片库健康、治理执行、追更、洗版、Bot、入库、报表、外部服务 |
 
 账号断开的未完成任务检查与删除在 `store.disconnect_account()` 的同一写事务内完成；同时移除账号服务凭证、频道及游标，未投递接收记录标记已处理并写明断开原因，任务历史保留。接收与开关互斥忽略历史孤儿账号；捕获消息在入库前再次核对账号。规则启停在写事务内重新核对账号修订和规则内容。取消未启动任务写入 `stopped`，历史 `cancelled` 仍可读取。
@@ -186,9 +189,9 @@ STRM 全量扫描由 `scheduler` 调用 `cloud/strm_scan.tick()`，从已保存�
 
 ## 七、兼容导出层（迁移中的结构）
 
-`app/engine.py`（362 行）+ `app/compat.py`（88 行）把 **207 个旧名字**重新导出，让老测试与 CLI 继续用 `engine.xxx`。
+`app/engine.py`（362 行）+ `app/compat.py`（88 行）把 **206 个旧名字**重新导出，让老测试与 CLI 继续用 `engine.xxx`。
 
-这是绞杀者模式的垫片，**不是设计目标**。`dev/tests/test_architecture_boundaries.py` 锁住了这 207 个导出。
+这是绞杀者模式的垫片，**不是设计目标**。`dev/tests/test_architecture_boundaries.py` 锁住了这 206 个导出。
 
 **纪律：**
 
@@ -239,3 +242,12 @@ STRM 全量扫描由 `scheduler` 调用 `cloud/strm_scan.tick()`，从已保存�
 - `app/cloud/inventory.py` 复用 `workflow.walk()` 与适配器完整分页，扫描受现有 20,000 文件/目录上限约束，超限失败并要求缩小目录。TMDB 只读取明确类型与编号，按 `(kind,id)` 复用，单轮最多 200 个唯一编号。
 - 新任务类型 `inventory` 复用 `cloud_jobs.state`、步骤、停止与进度。`cloud_inventory_items` 以 `(job_id,cid)` 保存目录记录；单事务核验账号修订/停止信号后写入，列表只选当前授权修订下、相同账号/扫描根的最近成功任务。写入后若任务失败或停止，仍不发布该批结果。账号断开时移除库存记录，保留原任务历史。
 - `CloudInventory.vue` 嵌入文件管理，不新增侧栏层级。`useInventorySource.ts` 只在内存选择已连接账号及数字目录，后续预览/同步仍走原服务端校验和确认；不自动写入目录配置。库存计数是作品目录数，季集是文件名观察值，不承诺整剧完整或 Emby 已入库。
+
+## 频道补读与日志事务（v1.6.3 后未发布）
+
+- `channel_network` 为公开网页和 Telethon 统一决定代理路由；只读检查通过两个并发许可限制网络等待，不持有 SQLite 锁进行网络请求。
+- `channel_recovery` 使用 `cloud_channel_backfill` 加密暂存有界历史区间，以账号、规则、原游标及暂存令牌核验并发；完整覆盖后由 reader 一次性提交收件箱与主游标。暂停规则重新定位必须先预览，再提交五分钟有效且修订匹配的确认令牌。
+- `receiving` 新保存规则通过内部 pipeline_version 标记明确启用后续整理；执行前核对归档目录修订，再复用原转存持久任务。旧规则不自动激活。`pipeline.status` 只读返回已有账号目录，前端没有新增第二套处理配置。
+- `workflow_progress` 仅汇总任务族持久步骤与 Emby 入库回执，缺少步骤证据时不宣称阶段成功；业务状态仍来自 cloud_jobs。
+- `runtime_logs` 的缓冲锁和 Handler 锁共用 storage._LOCK，避免日志查询与事务内日志相互等待；事务内写日志复用活动连接，不提交外层事务。storage_status 在释放自身诊断锁后才记录日志。
+- 频道消息加密可接收调用方连接，只查询账号是否存在，避免打开嵌套事务导致游标与收件箱提前提交。

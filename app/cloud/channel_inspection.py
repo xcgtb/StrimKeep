@@ -1,7 +1,7 @@
 """Read-only channel inspection. Never captures inbox records or advances cursors."""
 import asyncio
 
-from app.cloud import receiving, channel_reader, credentials, services, store
+from app.cloud import receiving, channel_reader, credentials, services, store, channel_network
 from app.cloud.errors import CloudError
 from app.domain import telegram_intake
 
@@ -42,6 +42,7 @@ def evaluate(rule, message):
     return result
 
 
+@channel_network.probe
 def inspect(account_id, channel_id):
     rule = next((row for row in receiving.channels(account_id) if row['id'] == channel_id), None)
     if rule is None:
@@ -67,6 +68,8 @@ def inspect(account_id, channel_id):
     try:
         if rule['mode'] == 'public_web':
             from app.cloud import public_channel_reader
+            from app.cloud.channel_network import describe
+            check('网络路径', None, describe()['label'])
             messages, _ = public_channel_reader.fetch_messages(rule['address'].lstrip('@'), history_limit=5)
             check('读取频道', True, f'从公开预览读取最近 {len(messages)} 条消息；网页可能不包含全部内容')
         elif rule['mode'] == 'user':

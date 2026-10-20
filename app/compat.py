@@ -60,7 +60,7 @@ ENGINE_EXPORTS = (
      'gap_report action_emby_library build_morning_report send_morning_report _live_series_episodes '
      '_resync_series_entry _patch_all_caches refresh_mapping_cache_after_ingest '
      'patch_emby_lib_cache_after_series_delete patch_emby_lib_cache_after_movie_delete save_emby_lib_cache '
-     'read_emby_lib_cache get_tmdb_scan_progress refresh_tmdb_scan _refresh_tmdb_scan scan_exempt_matches', None),
+     'read_emby_lib_cache refresh_tmdb_scan _refresh_tmdb_scan scan_exempt_matches', None),
     ('stats',
      '_recompute_all_stats action_library_stats _load_strm_count_disk _save_strm_count_disk '
      '_strm_count_bg_refresh _get_strm_counts invalidate_stats_cache invalidate_media_caches', None),

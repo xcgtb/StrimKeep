@@ -11,11 +11,15 @@ const props = defineProps<{
   archive: string;
   count: number;
   revision: number;
+  continuous?: boolean;
 }>();
 const state = useRequest<Data>();
 const mapping = useRequest<Data>();
 const cloud = useCloud();
 const config = computed(() => object(state.data.value?.settings));
+const archiveDirectory = computed(
+  () => props.archive || String(object(object(mapping.data.value?.directories).target).name || ''),
+);
 const output = computed(() =>
   String(config.value[props.share ? 'share_output_root' : 'output_root'] || '尚未配置'),
 );
@@ -44,7 +48,9 @@ watch(
         <span class="eyebrow">{{ share ? 'SHARE TO LIBRARY' : 'RESOURCE ROUTE' }}</span>
         <h2>{{ share ? '分享来源，直接生成播放库' : '接收之后，资源去哪里' }}</h2>
       </div>
-      <span class="module-tag">{{ count ? `已选 ${count} 项` : '范围待选择' }}</span>
+      <span class="module-tag">{{
+        continuous ? '按后续匹配消息处理' : count ? `已选 ${count} 项` : '范围待选择'
+      }}</span>
     </header>
     <div class="route-destinations">
       <article>
@@ -64,7 +70,11 @@ watch(
         <span>02</span
         ><small>{{ share ? 'NAS 分享库 STRM' : organize ? '115 整理归档目录' : '后续整理' }}</small
         ><strong>{{
-          share ? output : organize ? archive || '尚未配置归档目录' : '保留在接收目录，按需整理'
+          share
+            ? output
+            : organize
+              ? archiveDirectory || '尚未配置归档目录'
+              : '保留在接收目录，按需整理'
         }}</strong>
         <p>
           {{
@@ -95,6 +105,14 @@ watch(
         </p>
       </article>
     </div>
+    <p v-if="organize" class="muted-text">
+      使用当前账号已保存的处理方案：{{
+        config.naming_style === 'template' ? '自定义命名模板' : '标准命名'
+      }}
+      · <RouterLink to="/organize/workspace">修改归档目录</RouterLink> ·
+      <RouterLink to="/organize/naming">修改命名与分类</RouterLink> ·
+      <RouterLink to="/media/strm">修改 STRM 输出</RouterLink>
+    </p>
     <p v-if="state.error.value" class="inline-error">{{ state.error.value }}</p>
     <p v-if="mapping.error.value" class="inline-error">
       Emby 映射读取失败：{{ mapping.error.value }}

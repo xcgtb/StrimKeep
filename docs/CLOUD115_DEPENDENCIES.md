@@ -26,3 +26,5 @@ p115oss LICENSE        8b1ba204bb69a0ade2bfcf65ef294a920f6bb361b317dba43c7ef29d9
 分享免转存（2026-10-15）：继续使用锁定的 p115client 0.0.9.7.2，不升级依赖。核对已安装 SDK `share_snap` 和 `share_download_url` 实现，并参考[作者接口文档](https://p115client.readthedocs.io/en/latest/reference/module/client.html)。下载参数为 share_code/receive_code/file_id，UA 通过请求 headers 传入，返回 P115URL 后校验文件 ID/大小/可用 SHA1；这与个人文件的 download_url/pickcode 分开，不调用 share_receive。接口自动回归不等同于真实分享/CDN 验证，见[本批验收](MY_DRIVE_SHARE_STRM_ACCEPTANCE.md)。
 
 资源接收与维护（2026-10-15）：核对锁定SDK的 `clouddownload_task_add_url` / `upload_file_init` / `user_points_sign_post` / `recyclebin_list` / `recyclebin_clean` 方法及参数，继续Cookie操作，不引入新依赖或AppID。秒传随机分段挑战无法由前128KiB哈希推导，缺少所需数据时明确停止；云下载为异步请求。[Telegram Bot API](https://core.telegram.org/bots/api#update) 的 channel_post 接入现有长轮询，绑定保存时校验过的实际频道ID；本批Bot模式不提供用户会话/任意频道历史读取。详见[接收与维护验收](MY_DRIVE_RECEIVING_ACCEPTANCE.md)。
+
+频道代理（2026-10-20，未发布）：启用 httpx[socks]==0.28.1，固定 socksio==1.0.0 与 python-socks[asyncio]==3.1.1，为公开网页和 Telethon 提供 SOCKS 支持。沿用其余 115 依赖版本；HTTPX 走显式代理参数，Telethon 接收 python-socks 代理字典。完整锁定见 requirements-cloud115.txt。

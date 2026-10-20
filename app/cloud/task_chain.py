@@ -60,6 +60,11 @@ def read(job_id):
             f"SELECT state,count(*) FROM cloud_steps WHERE job_id IN ({marks}) AND "
             "(step_key LIKE 'notification%' OR step_key LIKE 'poster:%') GROUP BY state", ids).fetchall()
         recoveries = dict(con.execute(f'SELECT origin_id,job_id FROM cloud_recovery_requests WHERE origin_id IN ({marks})',ids).fetchall())
+        stage_rows = con.execute(
+            "SELECT CASE WHEN step_key='receive' THEN 'transfer' WHEN step_key LIKE 'rename:%' THEN 'naming' "
+            "WHEN step_key LIKE 'move:%' THEN 'organize' ELSE 'strm' END,state,count(*) FROM cloud_steps "
+            f"WHERE job_id IN ({marks}) AND (step_key='receive' OR step_key LIKE 'rename:%' OR step_key LIKE 'move:%' "
+            "OR step_key LIKE 'publication:%' OR step_key LIKE 'share_replace:%') GROUP BY 1,2", ids).fetchall()
     states = {r[0]:r[2] for r in rows}
     jobs = [dict(zip(('id','kind','state','message','created','updated'), r),
                  label=LABELS.get(r[1],r[1]), parent_id=parents.get(r[0]), resolved_by=recoveries.get(r[0]) if states.get(recoveries.get(r[0])) in ('queued','running','success') else None) for r in rows]
@@ -74,7 +79,9 @@ def read(job_id):
     state = 'needs_review' if review or any(counts.get(k,0) for k in ('timeout','stale')) else 'running' if pending else 'stopped' if stopped else 'waiting' if waiting or external else 'success'
     if truncated:
         state = 'partial'
+    from app.domain.workflow_progress import summarize
     return {'root_id':root, 'selected_id':job_id, 'state':state, 'jobs':jobs,
+            'stages': summarize(stage_rows, counts),
             'ingestion':counts, 'notifications':dict(notifications), 'truncated':truncated,
             'message':'任务较多，仅显示已加载范围，请分批查看' if truncated else '部分环节需要核实' if state=='needs_review' else '正在处理后续任务' if pending else
                       '流程包含已取消或停止的环节，未完成全部处理；已有入库回执单独保留' if state=='stopped' else

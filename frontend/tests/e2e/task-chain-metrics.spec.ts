@@ -26,6 +26,7 @@ test('task chain navigates between related receipts without leaving stale detail
   await page.goto('/#/tasks?job=job-a');
   const flow = page.getByRole('region', { name: '完整任务链' });
   await expect(flow.getByText('2 已确认')).toBeVisible();
+  await flow.getByText(/关联任务与执行回执/).click();
   await flow.getByRole('link', { name: '查看', exact: true }).click();
   await expect(page).toHaveURL(/job=job-b/);
   await expect(

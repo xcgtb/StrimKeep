@@ -35,7 +35,7 @@ def test_channel_direct_to_its_directory_then_separate_organizer(receiving):
     # Ordinary bot shares remain under 3; the channel explicitly saves under 1.
     receiving.remote.files['4']['parent_id']='3'
     receiving.remote.files['5']['parent_id']='3'
-    rule=channel(receiving,target_cid='1',organize=True)
+    rule=channel(receiving,target_cid='1',organize=False)
     assert intake.allowed_message('anything',rule)[0]
     ids=intake.capture(msg('https://115.com/s/abcdef123',channel=True),'token',channel=True)
     assert len(ids)==1

@@ -2,7 +2,7 @@
 """系统：健康 / 任务查询 / 仪表盘 / 一致性 / 缓存 / Bot 状态"""
 import time, threading
 from fastapi import APIRouter, Depends, HTTPException
-from app import overview, readiness, stats
+from app import overview, readiness, stats, morning
 
 try:
     from app.routers.deps import auth, engine, bot, tasks, _current_task_dict, APP_VERSION
@@ -85,7 +85,7 @@ def api_runtime_status():
              'cancel_requested': current.cancel_event.is_set()} if current else None)
     return {'status': 'success', 'ts': time.time(), 'version': APP_VERSION,
             'bot': bot.status(), 'storage': storage.storage_health(), 'task': task,
-            'comparison': engine.get_tmdb_scan_progress(), 'memory': _memory_status(),
+            'comparison': morning.get_tmdb_scan_progress(), 'memory': _memory_status(),
             'readiness': readiness.snapshot(), 'statistics': stats.scan_status()}
 
 

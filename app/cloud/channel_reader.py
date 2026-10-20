@@ -26,7 +26,8 @@ def get(account_id):
 def _client(secret):
     from telethon import TelegramClient
     from telethon.sessions import StringSession
-    return TelegramClient(StringSession(secret.get("session", "")), int(secret["api_id"]), secret["api_hash"],
+    from app.cloud.channel_network import telegram_proxy
+    return TelegramClient(StringSession(secret.get("session", "")), int(secret["api_id"]), secret["api_hash"], proxy=telegram_proxy(),
                           connection_retries=0, request_retries=0, flood_sleep_threshold=0, timeout=12)
 
 

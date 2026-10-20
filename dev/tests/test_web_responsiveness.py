@@ -89,3 +89,40 @@ def test_library_stream_does_not_wait_on_storage_in_event_loop(monkeypatch):
             await response.body_iterator.aclose()
 
     asyncio.run(exercise())
+
+
+def test_log_reader_and_logging_inside_channel_transaction_finish(tmp_path):
+    script = r'''
+import os,sys,threading,logging
+from pathlib import Path
+from contextlib import contextmanager
+os.environ['AGENT_DATA'] = sys.argv[1]
+from app import storage,runtime_logs
+runtime_logs.install()
+entered,finished,attempted=threading.Event(),threading.Event(),threading.Event()
+original=storage._transaction
+@contextmanager
+def observed():
+    if threading.current_thread().name == 'log-reader': entered.set()
+    with original() as con: yield con
+storage._transaction=observed
+def reader():
+    attempted.set()
+    runtime_logs.read()
+    finished.set()
+with storage._transaction():
+    t=threading.Thread(target=reader,name='log-reader',daemon=True)
+    t.start()
+    assert attempted.wait(1)
+    entered.wait(.2)
+    logging.getLogger('strimkeep').warning('channel transaction diagnostic')
+assert finished.wait(2), 'logging and channel transaction deadlocked'
+t.join(1)
+assert runtime_logs.read()['logs']
+print('log operations completed')
+'''
+    result = subprocess.run([sys.executable, '-c', script, str(tmp_path)],
+                            cwd=Path(__file__).resolve().parents[2],
+                            capture_output=True, text=True, timeout=8)
+    assert result.returncode == 0, result.stderr
+    assert 'log operations completed' in result.stdout

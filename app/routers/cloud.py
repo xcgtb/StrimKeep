@@ -377,6 +377,20 @@ def channel_enabled(account_id: str, channel_id: str, body: dict):
     return {"status": "success", "channel": call(receiving.set_channel_enabled, account_id, channel_id, body['enabled'], body['revision'])}
 
 
+@router.post('/accounts/{account_id}/channels/{channel_id}/position/preview')
+def channel_position_preview(account_id: str, channel_id: str):
+    from app.cloud import channel_recovery
+    return {'status': 'success', **call(channel_recovery.preview, account_id, channel_id)}
+
+
+@router.post('/accounts/{account_id}/channels/{channel_id}/position/apply')
+def channel_position_apply(account_id: str, channel_id: str, body: dict):
+    if set(body) != {'token', 'confirmed'}:
+        raise HTTPException(400, '请提供读取位置预览和确认')
+    from app.cloud import channel_recovery
+    return {'status': 'success', **call(channel_recovery.apply, account_id, channel_id, body['token'], body['confirmed'])}
+
+
 @router.get("/accounts/{account_id}/maintenance")
 def maintenance_config(account_id:str):
     from app.cloud import maintenance

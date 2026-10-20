@@ -159,8 +159,10 @@ def channels(account_id):
                   for r in con.execute("SELECT p.channel_id,p.last_success,p.last_check,p.last_count,p.failures,"
                                        "COALESCE(c.cursor,0),COALESCE(c.next_poll,0) "
                                        "FROM cloud_public_channel_status p LEFT JOIN cloud_channel_cursors c ON c.id=p.channel_id")}
+        backfill = dict(con.execute('SELECT channel_id,count FROM cloud_channel_backfill WHERE channel_id IN (SELECT id FROM cloud_channels WHERE account_id=?)', (account_id,)).fetchall())
     return [{"id": r[0], "revision": r[1], **json.loads(r[2]), "reader_status":statuses.get(r[0], ""),
-             "public_status": public.get(r[0], {})} for r in rows]
+             "public_status": {**public.get(r[0], {}), 'backfill_count': backfill.get(r[0], 0)},
+             'organize_effective': bool(json.loads(r[2]).get('pipeline_version') == 1 and json.loads(r[2]).get('organize'))} for r in rows]
 
 
 def save_channel(account_id, value):
@@ -181,8 +183,6 @@ def save_channel(account_id, value):
         raise CloudError("转存动作需选择接收目录")
     if type(data["organize"]) is not bool:
         raise CloudError("频道整理开关必须为布尔值")
-    # Legacy field is accepted but channel intake and organizer remain independent.
-    data["organize"] = False
     if type(expected) is not int or not re.fullmatch(r"[a-f0-9]{32}",cid) or not isinstance(data["name"], str) or not 1 <= len(data["name"]) <= 80 or any(type(data[k]) is not bool for k in ("enabled", "organize", "auto_transfer")):
         raise CloudError("请填写频道名称和有效开关")
     for k in ("include", "exclude", "regex", "tmdb_ids", "kinds", "countries", "genres"):
@@ -217,8 +217,14 @@ def save_channel(account_id, value):
         from app.cloud import channel_reader
         if not channel_reader.get(account_id)["connected"]:
             raise CloudError("转发到其他机器人需要先登录 Telegram 用户会话", 409)
-    if data["organize"] and not directories.get(account_id)["directories"]["target"]:
-        raise CloudError("自动整理需先保存整理归档目录",409)
+    if data['organize'] and not transfer_action:
+        raise CloudError('自动整理仅适用于转存到个人网盘的处理方式', 409)
+    if data['organize']:
+        directory_config = directories.get(account_id)
+        if not directory_config['directories']['target']:
+            raise CloudError('自动整理需先保存整理归档目录', 409)
+        data['directory_revision'] = directory_config['revision']
+    data['pipeline_version'] = 1
     if data["mode"] not in ("bot", "user", "public_web") or type(data["history_limit"]) is not int or not 0 <= data["history_limit"] <= 1000 or type(data["poll_seconds"]) is not int or not 30 <= data["poll_seconds"] <= 3600:
         raise CloudError("频道模式或历史条数（0–1000）/轮询秒数（30–3600）无效")
     if data["mode"] == "public_web" and (not data["address"].startswith("@") or data["history_limit"] > 100 or data["poll_seconds"] < 300):
@@ -255,9 +261,10 @@ def save_channel(account_id, value):
         if old and (json.loads(old[1]).get("address") != data["address"] or json.loads(old[1]).get("mode","bot") != data["mode"]):
             con.execute("DELETE FROM cloud_channel_cursors WHERE id=?",(cid,))
             con.execute("DELETE FROM cloud_public_channel_status WHERE channel_id=?",(cid,))
+        con.execute('DELETE FROM cloud_channel_backfill WHERE channel_id=?', (cid,))
         data["start_after"] = json.loads(old[1]).get("start_after",0) if old and json.loads(old[1])["enabled"] and data["enabled"] else int(time.time())
         con.execute("INSERT INTO cloud_channels VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,payload=excluded.payload,account_revision=excluded.account_revision,updated=excluded.updated", (cid,account_id,account["revision"],expected+1,store.encode(data),time.time()))
-    return {"id":cid,"revision":expected+1,**data}
+    return {"id":cid,"revision":expected+1,**{k:v for k,v in data.items() if k not in ('pipeline_version', 'directory_revision')}}
 
 
 def set_channel_enabled(account_id, channel_id, enabled, revision):
@@ -276,6 +283,7 @@ def set_channel_enabled(account_id, channel_id, enabled, revision):
             con.execute('UPDATE cloud_channels SET revision=revision+1,payload=?,updated=? WHERE id=? AND account_id=?', (store.encode(data), time.time(), channel_id, account_id))
             return {'id': channel_id, 'revision': revision + 1, **data}
     # Enabling still performs all original account, target and reader checks.
+    data['organize'] = bool(data.get('pipeline_version') == 1 and data.get('organize'))
     return save_channel(account_id, {**{key: value for key, value in data.items() if key in CHANNEL_FIELDS},
                                      'id': channel_id, 'revision': revision, 'enabled': True})
 
@@ -445,7 +453,9 @@ def run(job_id,payload):
                     result["observed"] = [{"channel": cfg["name"], "message": events.clean(message["text"][:500]),
                                             "reason": "自动处理已关闭；仅记录消息"}]
                     return result
-                source,target,organize="channel",cfg.get("target_cid"),False
+                source,target,organize="channel",cfg.get("target_cid"),bool(cfg.get('pipeline_version') == 1 and cfg.get('organize'))
+                if organize and directories.get(payload['account_id'])['revision'] != cfg.get('directory_revision'):
+                    raise CloudError('频道绑定的整理目录已变化，请重新保存频道处理方案；未提交转存', 409)
                 result['channel'] = cfg['name']
                 result['action'] = cfg.get('action', 'transfer')
                 if cfg.get('action') == 'forward' and cfg.get('forward_target', 'self') != 'self':
@@ -549,7 +559,7 @@ def record_channel(con, rid, aid, arev, rev, rule, msg, token_scope):
         return
     key = hashlib.sha256(store.encode([token_scope,msg["chat"]["id"],msg["message_id"],rid]).encode()).hexdigest()
     payload = {"account_id":aid,"account_revision":arev,"channel_id":rid,"channel_revision":rev,"rule":rule,
-               "sealed_message":credentials.seal({"text":text,"entities":entities})}
+               "sealed_message":credentials.seal({"text":text,"entities":entities}, con=con)}
     con.execute("INSERT OR IGNORE INTO cloud_inbox(id,event_key,account_id,source,payload,state,created) VALUES(?,?,?,?,?,'queued',?)", (store.ident(),key,aid,"channel",store.encode(payload),time.time()))
 
 
