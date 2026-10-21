@@ -17,7 +17,7 @@ import core  # noqa: E402
 from domain import quality  # noqa: E402
 
 ALLOWED_STDLIB = {'re', 'typing', 'dataclasses', 'enum', 'functools', 'collections', 'itertools',
-                  'math', 'datetime', '__future__'}
+                  'math', 'datetime', '__future__', 'json', 'hashlib'}
 
 
 def _imports(path):

@@ -51,6 +51,9 @@ def _reset_libs():
             shutil.rmtree(root)
         root.mkdir(parents=True, exist_ok=True)
     engine._invalidate_lib_cache()
+    # Recreating fixture roots changes inode identity. Reset their saved scan
+    # identities too, rather than making filesystem inode reuse decide results.
+    _state.remove(engine.STATE_DIR / 'strm_directory_counts.json')
 
 
 def _patch_strategy(monkeypatch_dict):

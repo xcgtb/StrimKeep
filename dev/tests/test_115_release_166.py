@@ -172,7 +172,8 @@ def test_sync_never_mixes_output_roots_in_one_run(cloud, monkeypatch, tmp_path):
     result = store.job(jid)
     assert result['state'] == 'needs_review'
     assert len(result['result']['generated']) == 1
-    assert result['result']['errors']
+    assert len(result['result']['skipped']) == 1
+    assert '变化' in result['result']['skipped'][0]['reason']
     assert not list(other.rglob('*.strm'))
 
 
