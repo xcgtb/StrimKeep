@@ -3,10 +3,6 @@
     "core",
     "esc"
   ],
-  "parse_season_dir": [
-    "core",
-    "parse_season_dir"
-  ],
   "get_ep": [
     "core",
     "get_ep"

@@ -75,9 +75,10 @@ def test_probe_failure_guidance_is_not_source_or_cookie_guidance():
         assert row['page'] == 'organize' and 'Cookie' not in row['suggestion']
 
 
-def test_manual_tv_identity_keeps_parent_season_and_probe_failure_receipt(cloud, monkeypatch):
+@pytest.mark.parametrize('folder,season', [('Season 02', 2), ('Specials', 0)])
+def test_manual_tv_identity_keeps_parent_season_and_probe_failure_receipt(cloud, monkeypatch, folder, season):
     monkeypatch.setattr(recognition, 'tmdb', lambda: Catalog())
-    cloud.remote.files['1']['name'] = 'Season 02'
+    cloud.remote.files['1']['name'] = folder
     cloud.remote.files['4']['name'] = 'E03.mkv'
     settings.save({'ffprobe_enabled': True})
     monkeypatch.setattr(media_probe, 'extract', Mock(side_effect=CloudError('ffprobe 读取失败，保留源文件', 502, code='probe_exit', stage='probe')))
@@ -86,7 +87,7 @@ def test_manual_tv_identity_keeps_parent_season_and_probe_failure_receipt(cloud,
     row = preview['skipped'][0]
     assert row['override'] == choice and row['stage'] == 'probe'
     assert row['recognition']['tmdb_id'] == '44'
-    assert row['recognition']['season'] == 2 and row['recognition']['episode'] == 3
+    assert row['recognition']['season'] == season and row['recognition']['episode'] == 3
     assert not cloud.remote.writes
 
 

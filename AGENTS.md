@@ -27,7 +27,7 @@ Never auto-replay an `uncertain` write. Stop at a safe boundary and leave it for
 
 ## Compatibility exports are frozen, not extended
 
-`app/engine.py` + `app/compat.py` re-export 204 legacy names so old tests and CLIs keep working. This is a strangler shim, not a target design. `dev/tests/test_architecture_boundaries.py` locks the contract.
+`app/engine.py` + `app/compat.py` re-export 203 legacy names so old tests and CLIs keep working. This is a strangler shim, not a target design. `dev/tests/test_architecture_boundaries.py` locks the contract.
 
 - New code must import the owning module directly. **Do not add exports to `engine`.**
 - Each feature PR should leave the export count **net lower**: delete the legacy names your change no longer needs, and delete their lines in the boundary test with them.

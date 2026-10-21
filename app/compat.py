@@ -11,7 +11,7 @@ from importlib import import_module
 # previous engine imports; private names are intentionally part of this contract.
 ENGINE_EXPORTS = (
     ('core',
-     'esc parse_season_dir get_ep title_key governance_title_key analyze_season_episodes '
+     'esc get_ep title_key governance_title_key analyze_season_episodes '
      'parse_emby_library quality_label RE_SXXEXX', None),
     ('logger',
      '', 'logger'),
