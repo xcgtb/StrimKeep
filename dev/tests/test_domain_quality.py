@@ -17,7 +17,8 @@ import core  # noqa: E402
 from domain import quality  # noqa: E402
 
 ALLOWED_STDLIB = {'re', 'typing', 'dataclasses', 'enum', 'functools', 'collections', 'itertools',
-                  'math', 'datetime', '__future__', 'json', 'hashlib'}
+                  'math', 'datetime', '__future__', 'json', 'hashlib',
+                  'ipaddress'}  # Address parsing/classification is pure computation, no DNS or sockets.
 
 
 def _imports(path):

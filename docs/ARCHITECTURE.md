@@ -145,6 +145,7 @@ enqueue
 | `app/scheduler.py` | 定时编排（`TICK_SEC=30`，启动延迟 15 秒） |
 | `app/cloud/automatic_runs.py` | 自动读取失败冷却、等价活跃扫描检查、跨任务失败通知回执 |
 | `app/domain/automatic_runs.py` | 自动执行与失败通知的稳定身份计算，零 IO |
+| `app/domain/network_addresses.py` | 固定 Telegram 域名的公网/Fake-IP 地址分类，纯地址计算；DNS 和 TLS 连接仍由公开频道读取流程执行 |
 | `app/cloud/jobs.py` | 任务编排：`enqueue` / `step` / `checkpoint` / `progress` / `execute` |
 | `app/cloud/states.py` | **业务任务状态词表**：`JOB_STATES`、`JOB_STATE_LABELS`、`ACTIVE/TERMINAL_JOB_STATES` |
 | `app/cloud/pacing.py` | **频道轮询节奏**（纯计算、无依赖）：`next_poll_delay`、`flood_wait_seconds`、`ChannelFloodWait` |

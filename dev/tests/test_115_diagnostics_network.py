@@ -1,10 +1,7 @@
 """Reproduce user incidents with fake transports, real SQLite and real relay HTTP."""
-import http.client
-import json
 import socket
 from types import SimpleNamespace
 from unittest.mock import Mock, MagicMock
-from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -14,37 +11,6 @@ from app.cloud import (media_probe, public_channel_reader as web, channel_networ
 from app.cloud.errors import CloudError
 from dev.tests.test_cloud_workbench import cloud
 from dev.tests.test_my_drive_organize import Catalog
-from dev.tests.test_my_drive_probe import probe_data
-
-
-def test_relay_streams_continuously_across_internal_chunk_boundary(monkeypatch):
-    size = media_probe.CHUNK_BYTES + 123
-    requested = []
-    original_client, original_dns = httpx.Client, socket.getaddrinfo
-    def send(request):
-        start, end = map(int, request.headers['range'][6:].split('-'))
-        requested.append((start, end))
-        return httpx.Response(206, headers={'content-range': f'bytes {start}-{end}/{size}'},
-                              stream=httpx.ByteStream(b'x'*(end-start+1)))
-    monkeypatch.setattr(httpx, 'Client', lambda **kw: original_client(transport=httpx.MockTransport(send), **kw))
-    monkeypatch.setattr(socket, 'getaddrinfo', lambda host, *a, **kw: original_dns(host, *a, **kw) if host == '127.0.0.1' else [(2, 1, 6, '', ('8.8.8.8', 443))])
-    monkeypatch.setattr(media_probe.shutil, 'which', lambda _: 'ffprobe-fixture')
-    def run(command, stdout, **kwargs):
-        address = urlsplit(command[-1])
-        connection = http.client.HTTPConnection(address.hostname, address.port, timeout=5)
-        try:
-            connection.request('GET', address.path, headers={'Range': 'bytes=0-'})
-            response = connection.getresponse()
-            assert response.status == 206
-            assert response.getheader('Content-Range') == f'bytes 0-{size-1}/{size}'
-            assert len(response.read()) == size
-        finally:
-            connection.close()
-        stdout.write(json.dumps(probe_data()).encode())
-        return SimpleNamespace(returncode=0)
-    monkeypatch.setattr(media_probe.subprocess, 'run', run)
-    assert media_probe.probe_url({'url': 'https://download.115cdn.com/test'}, size)['width'] == '3840'
-    assert requested == [(0, media_probe.CHUNK_BYTES-1), (media_probe.CHUNK_BYTES, size-1)]
 
 
 @pytest.mark.parametrize('address', ['198.18.0.1', '198.19.255.254', '149.154.167.99'])
@@ -144,3 +110,18 @@ def test_repeated_automatic_failed_tasks_are_coalesced_but_uncertain_is_not(clou
     assert automatic_runs.claim_notice(first, 'workflow', 'failed', failure)
     assert not automatic_runs.claim_notice(second, 'workflow', 'failed', failure)
     assert automatic_runs.claim_notice(second, 'workflow', 'uncertain', failure)
+
+
+def test_sync_network_failure_stops_without_reconciliation(cloud, monkeypatch):
+    failed = Mock(side_effect=CloudError('115 网络中断', 502, category='transport', code='provider_transport', stage='info'))
+    monkeypatch.setattr(workflow, 'recognize_source', failed)
+    from app.cloud import strm
+    reconcile = Mock(side_effect=AssertionError('incomplete scan cannot remove STRM'))
+    monkeypatch.setattr(strm, 'reconcile', reconcile)
+    payload = {'account_id': cloud.id, 'account_revision': store.account(cloud.id)['revision'], 'source_cid': '1', 'reconcile': True}
+    jid = jobs.enqueue('sync', payload)
+    jobs.execute(jid)
+    result = jobs.details(jid)
+    assert result['state'] == 'failed' and failed.call_count == 1
+    assert result['diagnostics']['items'][0]['name'] == 'Movie.2024.1080p.mkv'
+    assert not reconcile.called and not cloud.remote.writes

@@ -126,8 +126,11 @@ def for_job(job, offset=0, limit=30, category='', query=''):
             payload, receipt = json.loads(payload), json.loads(receipt)
             if not isinstance(receipt, dict) or not receipt.get('reason'):
                 continue
+            stage = receipt.get('stage')
+            if not stage or stage == 'prepare':
+                stage = {'receive': 'submit_transfer'}.get(key.split(':')[0], key.split(':')[0])
             failures.append({**receipt, 'file_id': payload.get('file_id', ''), 'name': payload.get('source_name') or payload.get('name') or '',
-                             'reason': receipt['reason'], 'stage': {'rename': '重命名', 'move': '移动归档', 'receive': '分享转存', 'mkdir': '创建目录'}.get(key.split(':')[0], '任务执行')})
+                             'reason': receipt['reason'], 'stage': stage, 'stage_label': STAGES.get(stage, '任务执行')})
         if failures:
             result = {'errors': failures}
     return report(result, job['state'], job['message'], offset, limit, category, query)
