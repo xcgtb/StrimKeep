@@ -126,3 +126,21 @@ def test_sync_network_failure_stops_without_reconciliation(cloud, monkeypatch):
     assert result['state'] == 'failed' and failed.call_count == 1
     assert result['diagnostics']['items'][0]['name'] == 'Movie.2024.1080p.mkv'
     assert not reconcile.called and not cloud.remote.writes
+
+
+def test_probe_cooldown_preserves_verified_identity_and_does_not_create_new_notice(cloud, monkeypatch):
+    from app.domain.automatic_runs import failure_signature
+    monkeypatch.setattr(recognition, 'tmdb', lambda: Catalog())
+    settings.save({'ffprobe_enabled': True})
+    probe = Mock(side_effect=CloudError('ffprobe 读取失败', 502, code='probe_exit', stage='probe'))
+    monkeypatch.setattr(media_probe, 'extract', probe)
+    jid = jobs.enqueue('workflow', {'account_id': cloud.id, 'rule_id': 'auto'})
+    token = events._JOB.set(jid)
+    try:
+        first = workflow.plan(cloud.id, '1', '2')
+        cached = workflow.plan(cloud.id, '1', '2')
+        assert first['skipped'][0]['recognition']['tmdb_id'] == '44'
+        assert failure_signature(first) == failure_signature(cached)
+        assert probe.call_count == 1
+    finally:
+        events._JOB.reset(token)
