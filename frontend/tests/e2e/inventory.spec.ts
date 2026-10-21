@@ -196,3 +196,65 @@ test('organize preview compares names and separates skipped and unidentified fil
   await expect(page.getByText('季集不明确', { exact: true })).toBeVisible();
   await noOverflow(page);
 });
+
+test('manual recognition shows applied identity even if media read fails and preserves edits', async ({
+  page,
+}) => {
+  await fixtures(page);
+  await directories(page);
+  let requests = 0;
+  await page.route('**/api/cloud/plans', (route) => {
+    requests++;
+    const override = route.request().postDataJSON().overrides['12'];
+    return fulfill(route, {
+      status: 'success',
+      plan: {
+        id: 'p1',
+        expires_in: 900,
+        items: override
+          ? []
+          : [
+              {
+                source: { id: '12', name: 'raw.S02E03.mkv' },
+                media: {
+                  kind: 'tv',
+                  title: '剧集乙',
+                  tmdb_id: '42',
+                  season: 2,
+                  episode: 3,
+                  name: '剧集乙.S02E03.mkv',
+                },
+              },
+            ],
+        skipped: override
+          ? [
+              {
+                file_id: '12',
+                name: 'raw.S02E03.mkv',
+                override,
+                recognition: { ...override, title: '剧集乙' },
+                code: 'probe_http_403',
+                stage_label: '媒体信息',
+                reason: '115 媒体读取返回 HTTP 403，保留源文件',
+              },
+            ]
+          : [],
+      },
+    });
+  });
+  await page.goto('/#/organize/workspace');
+  await page.getByRole('button', { name: '扫描并预览整理' }).click();
+  await page.getByRole('button', { name: '修正识别', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('combobox', { name: '类型', exact: true })).toHaveValue('tv');
+  await expect(dialog.getByLabel('指定季号')).toHaveValue('2');
+  await dialog.getByLabel('指定集号').fill('4');
+  await dialog.getByRole('button', { name: '采用此识别并重新预览' }).click();
+  await expect(page.getByText(/本页已保留 1 项人工修正/)).toBeVisible();
+  await expect(page.getByText(/作品已核实：剧集乙/)).toContainText('S02E04');
+  await expect(page.getByText('错误码：probe_http_403')).toBeVisible();
+  await page.getByRole('button', { name: '修正识别', exact: true }).click();
+  await expect(dialog.getByLabel('指定集号')).toHaveValue('4');
+  expect(requests).toBe(2);
+  await noOverflow(page);
+});

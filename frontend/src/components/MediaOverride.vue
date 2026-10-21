@@ -4,15 +4,15 @@ import { query, readData, records, type Data } from '../api/domain';
 import { useRequest } from '../composables/useRequest';
 import ModalDialog from './ModalDialog.vue';
 import EvidenceDetails from './EvidenceDetails.vue';
-const props = defineProps<{ fileId: string; name?: string }>();
+const props = defineProps<{ fileId: string; name?: string; initial?: Data }>();
 const emit = defineEmits<{ close: []; save: [value: { id: string; choice: Data }] }>();
-const search = ref(props.name || ''),
-  kind = ref('movie'),
-  year = ref(''),
-  season = ref<number | undefined>(),
-  episode = ref<number | undefined>(),
-  category = ref(''),
-  choice = ref<Data>(),
+const search = ref(String(props.initial?.title || props.name || '')),
+  kind = ref(String(props.initial?.kind || 'movie')),
+  year = ref(String(props.initial?.year || '')),
+  season = ref<number | undefined>(props.initial?.season as number | undefined),
+  episode = ref<number | undefined>(props.initial?.episode as number | undefined),
+  category = ref(String(props.initial?.category_override || '')),
+  choice = ref<Data | undefined>(props.initial?.tmdb_id ? props.initial : undefined),
   request = useRequest<Data>();
 watch([search, kind, year], () => {
   request.cancel();
@@ -35,8 +35,8 @@ function save() {
     choice: {
       kind: kind.value,
       tmdb_id: String(choice.value.tmdb_id || choice.value.id),
-      ...(kind.value === 'tv' && season.value !== undefined ? { season: season.value } : {}),
-      ...(kind.value === 'tv' && episode.value !== undefined ? { episode: episode.value } : {}),
+      ...(kind.value === 'tv' && Number.isInteger(season.value) ? { season: season.value } : {}),
+      ...(kind.value === 'tv' && Number.isInteger(episode.value) ? { episode: episode.value } : {}),
       ...(category.value ? { category: category.value } : {}),
     },
   });
@@ -44,7 +44,10 @@ function save() {
 </script>
 <template>
   <ModalDialog title="修正影视识别" @close="$emit('close')"
-    ><form class="filter-panel" @submit.prevent="load">
+    ><p class="muted-text">
+      修正用于当前页面的本批预览；核对并执行归档后才保存媒体身份。不会自动修改其他文件或定时任务。
+    </p>
+    <form class="filter-panel" @submit.prevent="load">
       <label>片名<input v-model="search" minlength="2" required /></label
       ><label
         >类型<select v-model="kind">
@@ -70,6 +73,10 @@ function save() {
       </button>
     </div>
     <div v-if="choice" class="form-grid">
+      <p>
+        当前选择：{{ choice.title || choice.name || 'TMDB 作品' }} · TMDB
+        {{ choice.tmdb_id || choice.id }}
+      </p>
       <label v-if="kind === 'tv'"
         >指定季号<input v-model.number="season" type="number" min="0" max="99" /></label
       ><label v-if="kind === 'tv'"

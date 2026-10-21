@@ -143,52 +143,73 @@ def probe_url(link, size):
                 self.send_error(416)
                 return
             start = int(match[1])
-            with lock:
-                state["requests"] += 1
-                if start >= size or state["remaining"] <= 0 or state["requests"] > 24 or time.monotonic() >= state["deadline"]:
-                    state['failure'] = state['failure'] or ('probe_budget', 'ffprobe 达到读取字节、请求次数或时间预算')
-                    self.send_error(416)
-                    return
-                end = min(int(match[2]) if match[2] else size-1, size-1, start+CHUNK_BYTES-1, start+state["remaining"]-1)
+            end = min(int(match[2]) if match[2] else size-1, size-1)
             if end < start:
                 self.send_error(416)
                 return
-            request_headers = {**headers, "Range": f"bytes={start}-{end}"}
+            with lock:
+                exhausted = state['remaining'] <= 0 or state['requests'] >= 24 or time.monotonic() >= state['deadline']
+            if exhausted:
+                failed('probe_budget', 'ffprobe 达到读取字节、请求次数或时间预算')
+                self.send_error(416)
+                return
             sent = False
             try:
                 self.connection.settimeout(10)
                 with httpx.Client(follow_redirects=False, trust_env=False, timeout=10) as client:
-                    with client.stream("GET", url, headers=request_headers) as response:
-                        expected = f"bytes {start}-{end}/{size}"
-                        valid = response.status_code == 206 and response.headers.get("content-range") == expected
-                        full = response.status_code == 200 and start == 0 and end == size-1
-                        if not (valid or full) or response.headers.get("content-encoding", "identity") != "identity":
-                            if response.status_code not in (200, 206):
-                                failed('probe_http_'+str(response.status_code), '115 媒体读取返回 HTTP '+str(response.status_code))
-                            else:
-                                failed('probe_range', '115 媒体响应的 Range 或编码与读取请求不符')
-                            self.send_error(502)
-                            return
-                        self.send_response(206)
-                        self.send_header("Content-Length", str(end-start+1))
-                        self.send_header("Content-Range", expected)
-                        self.send_header("Accept-Ranges", "bytes")
-                        self.send_header("Connection", "close")
-                        self.end_headers()
-                        sent = True
-                        left = end-start+1
-                        for chunk in response.iter_raw(65536):
+                    offset = start
+                    while offset <= end:
+                        # Reserve each upstream segment across concurrent ffprobe seeks.
+                        with lock:
+                            if state['remaining'] <= 0 or state['requests'] >= 24 or time.monotonic() >= state['deadline']:
+                                state['failure'] = state['failure'] or ('probe_budget', 'ffprobe 达到读取字节、请求次数或时间预算')
+                                if not sent:
+                                    self.send_error(416)
+                                return
+                            length = min(CHUNK_BYTES, end-offset+1, state['remaining'])
+                            state['remaining'] -= length
+                            state['requests'] += 1
+                        left = length
+                        try:
+                            segment_end = offset+length-1
+                            with client.stream("GET", url, headers={**headers, 'Range': f'bytes={offset}-{segment_end}'}) as response:
+                                expected = f"bytes {offset}-{segment_end}/{size}"
+                                valid = response.status_code == 206 and response.headers.get("content-range") == expected
+                                full = response.status_code == 200 and offset == 0 and segment_end == size-1
+                                if not (valid or full) or response.headers.get("content-encoding", "identity") != "identity":
+                                    if response.status_code not in (200, 206):
+                                        failed('probe_http_'+str(response.status_code), '115 媒体读取返回 HTTP '+str(response.status_code))
+                                    else:
+                                        failed('probe_range', '115 媒体响应的 Range 或编码与读取请求不符')
+                                    if not sent:
+                                        self.send_error(502)
+                                    return
+                                if not sent:
+                                    # The local response describes the requested range, NOT
+                                    # our internal 8 MiB fetch. Otherwise FFmpeg sees a false
+                                    # EOF before the MP4 tail / next Matroska element.
+                                    self.send_response(206)
+                                    self.send_header('Content-Length', str(end-start+1))
+                                    self.send_header('Content-Range', f'bytes {start}-{end}/{size}')
+                                    self.send_header('Accept-Ranges', 'bytes')
+                                    self.send_header('Connection', 'close')
+                                    self.end_headers()
+                                    sent = True
+                                for chunk in response.iter_raw(65536):
+                                    if time.monotonic() >= state['deadline'] or len(chunk) > left:
+                                        failed('probe_budget', 'ffprobe 达到读取预算或媒体响应超过请求范围')
+                                        return
+                                    left -= len(chunk)
+                                    self.wfile.write(chunk)
+                                    if not left:
+                                        break
+                                if left:
+                                    failed('probe_truncated', '115 媒体响应提前结束')
+                                    return
+                        finally:
                             with lock:
-                                if time.monotonic() >= state["deadline"] or len(chunk) > left or len(chunk) > state["remaining"]:
-                                    state['failure'] = state['failure'] or ('probe_budget', 'ffprobe 达到读取预算或媒体响应超过请求范围')
-                                    break
-                                state["remaining"] -= len(chunk)
-                            self.wfile.write(chunk)
-                            left -= len(chunk)
-                            if not left:
-                                break
-                        if left:
-                            failed('probe_truncated', '115 媒体响应提前结束')
+                                state['remaining'] += left
+                        offset += length
             except (BrokenPipeError, ConnectionResetError):
                 pass  # ffprobe may finish as soon as it has sufficient metadata.
             except Exception as error:
@@ -223,6 +244,8 @@ def probe_url(link, size):
                 'ffprobe 退出码 '+str(completed.returncode) if completed.returncode else 'ffprobe 输出超过限制')
             events.emit('probe', reason, level='WARNING', details={'code': code, 'stage': 'probe',
                 'count': state['requests'], 'size': MAX_BYTES-state['remaining'], 'reason': detail})
+            if code == 'probe_exit' and detail:
+                reason += '；媒体读取诊断：'+detail[:240]
             raise probe_error(code, reason)
         try:
             return summarize(json.loads(raw))

@@ -163,6 +163,7 @@ export interface Job {
   result?: unknown;
 }
 export interface Diagnostic {
+  code?: string;
   name: string;
   category: string;
   label: string;
