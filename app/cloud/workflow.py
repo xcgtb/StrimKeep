@@ -955,8 +955,14 @@ def sync(job_id, payload):
                 result['publication'].setdefault(media['directory'], {'published':0,'failed':0})['failed'] += 1
             from app.cloud import events
             events.emit('strm','生成跳过：'+row['name']+' · '+str(error),job_id,level='WARNING')
+            if error.uncertain or stops_batch(error.category):
+                result['errors'].append({'file_id': row['id'], 'name': row['name'], **error_diagnostic(error, 'organize')})
+                result['remaining'] = [{'file_id': r['id'], 'name': r['name']} for r in videos[index+1:]]
+                error.partial_result = result
+                raise
             result["skipped"].append(
-                {"file_id": row["id"], "name": row["name"], "reason": str(error)}
+                {"file_id": row["id"], "name": row["name"], **error_diagnostic(error, 'recognize'),
+                 'recognition': getattr(error, 'recognition', None)}
             )
         jobs.progress(job_id, len(videos), index + 1, "生成 STRM", row["name"])
     result['cleanup_enabled'] = payload.get('reconcile', config['strm_reconcile_enabled'])

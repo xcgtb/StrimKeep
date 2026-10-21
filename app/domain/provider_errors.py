@@ -28,7 +28,7 @@ def transport(method, type_names, status=None, write=False):
     name = next((n for n in type_names if re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]{0,63}', n)), 'Exception')
     code, category, reason = 'provider_exception', 'response', '接口调用异常（'+name+'），请按错误类型检查任务日志'
     if status is not None:
-        code, reason = 'provider_http_'+str(status), 'HTTP '+str(status)
+        code, category, reason = 'provider_http_'+str(status), 'transport', 'HTTP '+str(status)
         if status in (401, 403):
             category, reason = 'authorization', reason+'，账号授权失效或访问被拒绝，请检查 115 登录与网络'
         elif status == 429:
@@ -38,15 +38,15 @@ def transport(method, type_names, status=None, write=False):
         elif status == 404:
             category, reason = 'not_found', reason+'，接口或文件不存在'
     elif any('Timeout' in name for name in names):
-        code, reason = 'provider_timeout', '请求超时，请检查容器到 115 的连接'
+        code, category, reason = 'provider_timeout', 'transport', '请求超时，请检查容器到 115 的连接'
     elif 'gaierror' in names:
-        code, reason = 'provider_dns', 'DNS 解析失败，请检查容器 DNS'
+        code, category, reason = 'provider_dns', 'transport', 'DNS 解析失败，请检查容器 DNS'
     elif any('SSL' in name or 'Certificate' in name for name in names):
-        code, reason = 'provider_tls', 'TLS 证书校验失败，请检查系统时间与代理证书'
+        code, category, reason = 'provider_tls', 'transport', 'TLS 证书校验失败，请检查系统时间与代理证书'
     elif any('JSONDecode' in name or 'Decoding' in name for name in names):
         code, category, reason = 'provider_response', 'response', '响应格式异常，可能收到登录页、限流页或代理错误页'
     elif any('Proxy' in name for name in names):
-        code, reason = 'provider_proxy', '代理连接失败，请检查服务连接与容器代理'
+        code, category, reason = 'provider_proxy', 'transport', '代理连接失败，请检查服务连接与容器代理'
     elif names.intersection(('NetworkError', 'ConnectionError', 'ConnectError', 'OSError', 'ProtocolError', 'RemoteProtocolError')):
         code, category, reason = 'provider_transport', 'transport', '网络连接中断（'+name+'），请检查容器到 115 的连接'
     message = '115 '+label+'失败：'+reason
