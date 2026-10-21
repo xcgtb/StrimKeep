@@ -37,7 +37,8 @@ jobs:
         run: docker run --rm --network none -i --entrypoint python strimkeep:ci - < dev/checks/verify_release_startup.py
 
   vue3:
-    runs-on: ubuntu-latest
+    # Playwright 1.56 ships browser dependencies for this supported image.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6

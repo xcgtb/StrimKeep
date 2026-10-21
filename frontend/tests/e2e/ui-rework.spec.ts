@@ -23,7 +23,7 @@ test('organize hub retains the source-deletion confirmation before saving', asyn
   await expect.poll(() => state.writes.length).toBe(1);
   expect(state.writes[0]).toEqual({
     path: '/api/cloud/settings',
-    body: { official_delete_enabled: true },
+    body: { official_delete_enabled: true, _expected: { official_delete_enabled: false } },
   });
 });
 
@@ -42,6 +42,11 @@ test('STRM workspace saves its schedule, timezone and probe setting in place', a
   await expect
     .poll(() => state.writes.find((r) => r.path === '/api/cloud/settings')?.body)
     .toEqual({
+      _expected: {
+        strm_scan_cron: '',
+        strm_scan_timezone: 'Asia/Shanghai',
+        strm_block_feiniu_ua: false,
+      },
       strm_scan_cron: '0 3 * * *',
       strm_scan_timezone: 'UTC',
       strm_block_feiniu_ua: true,

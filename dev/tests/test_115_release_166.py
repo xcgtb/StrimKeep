@@ -89,17 +89,18 @@ def test_automatic_failure_cools_down_but_manual_preview_can_retry(cloud):
 
 
 def test_repeat_notices_are_merged_but_changed_errors_and_recovery_are_not(cloud):
-    job = {'id': 'first', 'payload': {'account_id': cloud.id, 'source_cid': '1', 'rule_id': 'a'}}
+    payload = {'account_id': cloud.id, 'source_cid': '1', 'rule_id': 'a'}
+    job = store.job(jobs.enqueue('workflow', payload))
     failed = {'skipped': [{'file_id': '4', 'reason': 'HTTP 403', 'sha1': 'A'*40}]}
     assert automatic_runs.claim_notice(job, 'workflow', 'needs_review', failed)
     assert automatic_runs.claim_notice(job, 'workflow', 'needs_review', failed)  # same-job delivery receipt owns retries
-    next_job = {**job, 'id': 'second', 'payload': {**job['payload'], 'rule_id': 'b'}}
+    next_job = store.job(jobs.enqueue('workflow', {**payload, 'rule_id': 'b'}))
     assert not automatic_runs.claim_notice(next_job, 'workflow', 'needs_review', failed)
     changed = {'skipped': failed['skipped']+[{'file_id': '5', 'reason': 'TMDB missing'}]}
     assert automatic_runs.claim_notice(next_job, 'workflow', 'needs_review', changed)
     assert automatic_runs.claim_notice(next_job, 'workflow', 'success', {})
-    assert automatic_runs.claim_notice({**job, 'id': 'third'}, 'workflow', 'needs_review', changed)
-    assert automatic_runs.claim_notice({'id': 'manual', 'payload': {}}, 'workflow', 'needs_review', changed)
+    assert automatic_runs.claim_notice(store.job(jobs.enqueue('workflow', payload)), 'workflow', 'needs_review', changed)
+    assert automatic_runs.claim_notice(store.job(jobs.enqueue('workflow', {})), 'workflow', 'needs_review', changed)
 
 
 def test_changed_settings_cannot_be_overwritten_by_stale_draft(cloud):
@@ -152,7 +153,10 @@ def test_sync_never_mixes_output_roots_in_one_run(cloud, monkeypatch, tmp_path):
     monkeypatch.setattr(strm, 'generate', change_after_first)
     jid = jobs.enqueue('sync', {'account_id': cloud.id, 'account_revision': store.account(cloud.id)['revision'], 'source_cid': '1', 'reconcile': False})
     jobs.execute(jid)
-    assert store.job(jid)['state'] == 'needs_review'
+    result = store.job(jid)
+    assert result['state'] == 'needs_review'
+    assert len(result['result']['generated']) == 1
+    assert result['result']['errors']
     assert not list(other.rglob('*.strm'))
 
 

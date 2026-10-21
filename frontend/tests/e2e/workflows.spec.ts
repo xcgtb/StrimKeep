@@ -277,7 +277,9 @@ test('cloud settings save only the edited field and retain full quality and nami
   await page.getByRole('button', { name: '保存 1 项修改' }).click();
   await page.getByLabel('我已核对上面的操作范围和影响').check();
   await page.getByRole('button', { name: '确认执行' }).click();
-  await expect.poll(() => body).toEqual({ output_root: '/strm/custom' });
+  await expect
+    .poll(() => body)
+    .toEqual({ output_root: '/strm/custom', _expected: { output_root: '/strm/local' } });
   await expect(page.getByRole('button', { name: '保存 0 项修改' })).toBeDisabled();
 });
 

@@ -19,6 +19,11 @@ test('schedule mode and cleanup scope are explicit before saving', async ({ page
   await expect
     .poll(() => state.writes[0]?.body)
     .toEqual({
+      _expected: {
+        strm_scan_cron: '',
+        strm_scan_start_mode: 'immediate',
+        strm_reconcile_enabled: true,
+      },
       strm_scan_cron: '0 4 * * *',
       strm_scan_start_mode: 'scheduled',
       strm_reconcile_enabled: false,
@@ -72,7 +77,11 @@ test('share quality settings save only their own rules and enablement', async ({
   await page.getByRole('button', { name: '确认执行', exact: true }).click();
   await expect
     .poll(() => state.writes[0]?.body)
-    .toEqual({ share_quality_enabled: true, share_quality_mode: 'upgrade' });
+    .toEqual({
+      share_quality_enabled: true,
+      share_quality_mode: 'upgrade',
+      _expected: { share_quality_enabled: false, share_quality_mode: 'preview' },
+    });
 });
 
 test('receive references the saved organizer archive without an editing picker', async ({

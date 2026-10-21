@@ -62,6 +62,7 @@ test('share output settings only update the share path and display the common ge
     .toBe(1);
   expect(state.writes.find((w) => w.path === '/api/cloud/settings')!.body).toEqual({
     share_output_root: '/strm/shared-films',
+    _expected: { share_output_root: '/strm/share' },
   });
 });
 

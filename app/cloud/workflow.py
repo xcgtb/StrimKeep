@@ -738,7 +738,7 @@ def transfer_submit(
                 "source_ids": ids,
                 "target_cid": target_cid,
                 "organize_target": organize_target,
-                "archive_revision": directory_revision,
+                "archive_revision": directory_revision if organize_target is not None else None,
                 "generate": bool(generate),
             },
             con,
@@ -1074,6 +1074,6 @@ def transfer_link(account_id, link, password, organize, expected_revision, reque
         if not revision or revision[0] != expected_revision or not account or account[0] != data["account_revision"]:
             raise CloudError("账号或转存目录在读取期间变化，请重新发起",409)
         con.execute("UPDATE cloud_plans SET state='share_queued' WHERE id=?",(first["preview_id"],))
-        jid=jobs.enqueue('transfer',{**data,"source_ids":[r["id"] for r in first["items"]],"target_cid":target["id"],"organize_target":archive["id"] if archive else None,"archive_revision":expected_revision,"generate":True},con)
+        jid=jobs.enqueue('transfer',{**data,"source_ids":[r["id"] for r in first["items"]],"target_cid":target["id"],"organize_target":archive["id"] if archive else None,"archive_revision":expected_revision if archive else None,"generate":True},con)
         con.execute("INSERT INTO cloud_transfer_requests VALUES(?,?,?,?,?)",(account_id,request_id,credentials.seal(intent),jid,time.time()))
     return jid

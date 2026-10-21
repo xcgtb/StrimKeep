@@ -14,9 +14,15 @@ def equivalent_active(con, kind, payload):
     return any(execution_key(kind, json.loads(r[0])) == key for r in rows)
 
 
+def job_payload(job_id):
+    # Public task summaries intentionally omit private payloads.
+    with store.db() as con:
+        row = con.execute('SELECT payload FROM cloud_jobs WHERE id=?', (job_id,)).fetchone()
+    return json.loads(row[0]) if row else {}
+
+
 def recognize(account_id, row, context, config, callback):
-    job = store.job(events._JOB.get()) if events._JOB.get() else None
-    automatic = bool(job and job['payload'].get('rule_id'))
+    automatic = bool(job_payload(events._JOB.get()).get('rule_id')) if events._JOB.get() else False
     account = store.account(account_id)
     fingerprint = digest([row, context, config, (account or {}).get('revision'), 1])
     now = time.time()
@@ -50,9 +56,10 @@ def recognize(account_id, row, context, config, callback):
 
 
 def claim_notice(job, kind, state, operation):
-    if not job or not job['payload'].get('rule_id'):
+    payload = job_payload(job['id']) if job else {}
+    if not payload.get('rule_id'):
         return True
-    scope = notice_scope(kind, job['payload'])
+    scope = notice_scope(kind, payload)
     signature = failure_signature(operation) if state == 'needs_review' else None
     with store.db() as con:
         if signature is None:

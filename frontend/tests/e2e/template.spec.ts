@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { fixtures, fulfill } from './fixtures';
+import defaults from './defaults.json' with { type: 'json' };
 
 test('light sidebar follows the final reference and dark mode switches the whole workspace', async ({
   page,
@@ -38,7 +39,13 @@ test('variable insertion preserves the caret and saves only the selected templat
   await page.getByLabel('我已核对上面的操作范围和影响').check();
   await page.getByRole('button', { name: '确认执行', exact: true }).click();
   expect(state.writes.filter((r) => r.path === '/api/cloud/settings')).toEqual([
-    { path: '/api/cloud/settings', body: { movie_file_template: '{title}{year}-{ext}' } },
+    {
+      path: '/api/cloud/settings',
+      body: {
+        movie_file_template: '{title}{year}-{ext}',
+        _expected: { movie_file_template: '{title}.{year}.{resolution}.{source}.{codec}{ext}' },
+      },
+    },
   ]);
 });
 
@@ -60,7 +67,8 @@ test('eight-dimensional ordering and switches save separately from seven-dimensi
   await page.getByRole('button', { name: '确认执行', exact: true }).click();
   const write = state.writes.find((r) => r.path === '/api/cloud/settings')!;
   const body = write.body as { quality8_rules: { key: string; enabled: boolean }[] };
-  expect(Object.keys(body)).toEqual(['quality8_rules']);
+  expect(Object.keys(body)).toEqual(['quality8_rules', '_expected']);
+  expect(write.body).toHaveProperty('_expected', { quality8_rules: defaults.cloud.quality8_rules });
   expect(body.quality8_rules).toHaveLength(8);
   expect(body.quality8_rules.find((r) => r.key === 'resolution')?.enabled).toBe(false);
   expect(body.quality8_rules[6]?.key).toBe('size');
