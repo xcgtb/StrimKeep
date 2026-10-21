@@ -8,7 +8,6 @@ Read, parse and bound the full history interval before committing any cursor.
 from __future__ import annotations
 
 import hashlib
-import ipaddress
 import json
 import re
 import socket
@@ -146,11 +145,14 @@ def parse_html(raw: bytes, channel: str):
 
 
 def _public_dns():
-    """Fixed hostname plus public DNS check; request client disables env proxies."""
+    """Allow fixed-host TLS through a known Fake-IP pool, never arbitrary LAN IPs."""
+    from app.domain.network_addresses import telegram_address
     try:
         addrs = socket.getaddrinfo(_HOST, 443, type=socket.SOCK_STREAM)
-        if not addrs or any(not ipaddress.ip_address(a[4][0]).is_global for a in addrs):
-            raise PublicPageError("Telegram 域名未解析到公共网络地址，已拒绝请求；当前使用直连，请检查运行容器的 DNS/Fake-IP，或在服务连接配置 HTTP 代理。公开网页读取不需要 TG API")
+        kinds = {telegram_address(a[4][0]) for a in addrs}
+        if not kinds or 'blocked' in kinds:
+            raise PublicPageError("Telegram 域名解析到了不支持的内网或保留地址；支持 198.18.0.0/15 Fake-IP。请检查容器 DNS，或在服务连接配置 HTTP/SOCKS 代理。公开网页读取不需要 TG API")
+        return 'fake_ip' if 'fake_ip' in kinds else 'public'
     except socket.gaierror as exc:
         raise PublicPageError("无法解析 Telegram 公开网页域名") from exc
 
@@ -164,10 +166,9 @@ def _http_page(channel: str, before: int | None = None, *, transport=None) -> by
     options = channel_network.http_options()
     if transport is not None:
         options['proxy'] = None  # Explicit in-process test transport owns all I/O.
-    if transport is None and not options['proxy']:
-        _public_dns()
+    dns_mode = _public_dns() if transport is None and not options['proxy'] else ''
     try:
-        with httpx.Client(timeout=httpx.Timeout(15, connect=5), follow_redirects=False,
+        with httpx.Client(timeout=httpx.Timeout(15, connect=5), follow_redirects=False, verify=True,
                           **options, transport=transport, headers={"Accept": "text/html", "User-Agent": "StrimKeepPublicPreview/1.0"}) as client:
             with client.stream("GET", url) as response:
                 if response.status_code == 407:
@@ -191,8 +192,10 @@ def _http_page(channel: str, before: int | None = None, *, transport=None) -> by
     except PublicPageError:
         raise
     except (httpx.TimeoutException, httpx.NetworkError, httpx.ProtocolError, httpx.ProxyError) as exc:
+        if dns_mode == 'fake_ip':
+            raise PublicPageError('已接受 Telegram Fake-IP 解析，但 HTTPS 连接失败（'+type(exc).__name__+'）；请确认代理 TUN 接管运行容器的流量，或在服务连接填写可达的 HTTP/SOCKS 代理。无需 TG API', 300) from None
         label = '代理连接' if options['proxy'] else '直接连接'
-        raise PublicPageError('Telegram 公开网页' + label + '失败或超时，请检查服务连接中的代理与容器网络') from None
+        raise PublicPageError('Telegram 公开网页' + label + '失败（'+type(exc).__name__+'），请检查服务连接中的代理与容器网络', 300) from None
 
 
 def fetch_messages(channel: str, *, cursor: int = 0, initialized=False, history_limit=20, transport=None, before=None):

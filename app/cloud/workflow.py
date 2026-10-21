@@ -6,7 +6,8 @@ import time
 from pathlib import PurePosixPath
 from app.cloud import store, jobs, recognition, settings, directories, categories, naming, file_filters, quality8
 from app.cloud.provider115 import for_account, numeric, parse_share
-from app.cloud.errors import CloudError, UnrecognizedMedia
+from app.cloud.errors import CloudError, UnrecognizedMedia, diagnostic as error_diagnostic
+from app.domain.provider_errors import stops_batch
 
 
 def verify_account(payload):
@@ -167,12 +168,14 @@ def recognize_source(account_id, provider, row, overrides, config, directory_cac
                 raise
             return {"status": "fallback", "fields": {}, "warning": str(error).replace("，保留源文件", "")+"；已按设置回退文件名解析"}
     choice = media_choice(account_id, row, overrides)
-    context = {} if choice else parent_context(provider, row, directory_cache if directory_cache is not None else {})
+    needs_parent = not choice or (choice.get('kind') == 'tv' and choice.get('season') is None)
+    context = parent_context(provider, row, directory_cache if directory_cache is not None else {}) if needs_parent else {}
     from app.cloud import automatic_runs
     media = automatic_runs.recognize(account_id, row, [choice, context], config,
         lambda: recognition.recognize(row["name"], choice, config, probe if config["ffprobe_enabled"] else None, context=context))
-    if context.get("tmdb_id") and not re.search(r"(?i)[\[{]tmdb-\d+[\]}]", row["name"]):
+    if context.get("parents"):
         media["recognition_context"] = context
+    if not choice and context.get("tmdb_id") and not re.search(r"(?i)[\[{]tmdb-\d+[\]}]", row["name"]):
         events.emit('recognize','父目录作品身份：'+context['directory']+' · TMDB '+context['tmdb_id'])
     with store.db() as con:
         prior = con.execute("SELECT payload FROM cloud_assets WHERE account_id=? AND file_id=? ORDER BY updated DESC LIMIT 1", (account_id, row["id"])).fetchone()
@@ -238,11 +241,17 @@ def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, j
                 raise CloudError("两个文件将生成相同名称，请选择版本或修正作品", 409)
             paths.add(path)
             related = related_companions(files, row, config)
-            items.append({"source": row, "media": media, "followers": related})
+            items.append({"source": row, "media": media, "followers": related,
+                          "override": (overrides or {}).get(row['id'])})
         except CloudError as error:
             events.emit('recognize','跳过：'+row['name']+' · '+str(error),job_id,level='WARNING')
-            entry = {"file_id": row["id"], "name": row["name"], "reason": str(error),
-                     "sha1": row.get('sha1', ''), "size": row.get('size', 0), "code": error.code}
+            entry = {"file_id": row["id"], "name": row["name"], **error_diagnostic(error, 'recognize'),
+                     "sha1": row.get('sha1', ''), "size": row.get('size', 0),
+                     "override": (overrides or {}).get(row['id']), "recognition": getattr(error, 'recognition', None)}
+            if error.uncertain or stops_batch(error.category):
+                error.partial_result = {'skipped': skipped, 'errors': [entry],
+                    'remaining': [{'file_id': r['id'], 'name': r['name']} for r in videos[index+1:]]}
+                raise
             if isinstance(error, UnrecognizedMedia) and unknown_cid and str(unknown_cid) != str(source_cid):
                 with store.db() as con:
                     bound = con.execute("SELECT 1 FROM cloud_assets WHERE account_id=? AND file_id=? AND state IN ('active','publishing','needs_review')", (account_id, row["id"])).fetchone()
@@ -584,12 +593,13 @@ def organize(job_id, payload):
                 events.emit('organize','整理未完成：'+item['source']['name']+' · '+str(error),job_id,level='WARNING')
                 if hasattr(error, 'upgrades'):
                     result['upgrades'] = error.upgrades
-                if error.uncertain:
+                result["errors"].append(
+                    {"file_id": item["source"]["id"], "name": item['source']['name'], **error_diagnostic(error, 'organize')}
+                )
+                if error.uncertain or stops_batch(error.category):
+                    result['remaining'] = [{'file_id': i['source']['id'], 'name': i['source']['name']} for i in all_items[index+1:]]
                     error.partial_result = result
                     raise
-                result["errors"].append(
-                    {"file_id": item["source"]["id"], "reason": str(error)}
-                )
             finally:
                 if publisher:
                     publisher.skip(index)

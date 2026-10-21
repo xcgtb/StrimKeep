@@ -28,7 +28,7 @@ const source = ref(''),
   unknownName = ref(''),
   generate = ref(true),
   overrides = ref<Record<string, Data>>({}),
-  fixing = ref<{ id: string; name: string }>(),
+  fixing = ref<{ id: string; name: string; initial: Data }>(),
   plan = ref<Data>(),
   confirm = ref(''),
   job = ref(''),
@@ -90,6 +90,26 @@ const visibleCandidates = computed(() =>
 );
 const previewLabel = (status: unknown) =>
   status === 'planned' ? '待整理' : status === 'skipped' ? '已跳过' : '待识别';
+const correctionCount = computed(() => Object.keys(overrides.value).length);
+function editRecognition(row: Data) {
+  const id = String(object(row.source).id || row.file_id);
+  fixing.value = {
+    id,
+    name: String(object(row.source).name || row.name),
+    initial: {
+      ...object(row.media),
+      ...object(row.recognition),
+      ...object(overrides.value[id]),
+      category_override: overrides.value[id]?.category || object(row.media).category_override,
+    },
+  };
+}
+async function correct(value: { id: string; choice: Data }) {
+  overrides.value[value.id] = value.choice;
+  fixing.value = undefined;
+  invalidate();
+  await load();
+}
 function episodeLabel(media: Data) {
   if (media.kind !== 'tv' || media.season == null || media.episode == null) return '';
   return `S${String(media.season).padStart(2, '0')}E${String(media.episode).padStart(2, '0')}`;
@@ -213,6 +233,17 @@ watch(
     :uncertain="op.uncertain.value"
     :receipt="op.receipt.value"
   />
+  <p v-if="correctionCount" class="notice-bar" role="status">
+    本页已保留 {{ correctionCount }} 项人工修正。
+    {{
+      preview.loading.value
+        ? '正在用修正重新预览…'
+        : plan
+          ? '请查看下方每项的应用结果；确认整理后才执行归档。'
+          : '尚未取得新的预览结果；修正仍保留，可再次扫描预览。'
+    }}
+    刷新或离开本页后需重新设置，定时任务不会采用未执行的修正。
+  </p>
   <div v-if="cloud.id" class="organize-layout">
     <section class="panel organize-main">
       <header class="section-heading">
@@ -405,19 +436,24 @@ watch(
               >
             </p>
           </template>
-          <p v-if="row.reason" class="warning-text">{{ row.reason }}</p>
+          <p v-if="row.override" class="muted-text">
+            {{
+              row.previewStatus === 'planned' ? '人工修正已应用到本次预览' : '本次已提交人工修正'
+            }}： {{ object(row.override).kind === 'tv' ? '剧集' : '电影' }} · TMDB
+            {{ object(row.override).tmdb_id }}
+            {{ episodeLabel(object(row.override)) }}
+          </p>
+          <p v-if="object(row.recognition).tmdb_id" class="muted-text">
+            作品已核实：{{ object(row.recognition).title }} · TMDB
+            {{ object(row.recognition).tmdb_id }}
+            {{ episodeLabel(object(row.recognition)) }}；后续媒体读取失败，修正作品无需重复提交。
+          </p>
+          <p v-if="row.reason" class="warning-text">
+            {{ row.stage_label ? `${row.stage_label}：` : '' }}{{ row.reason }}
+          </p>
+          <small v-if="row.code">错误码：{{ row.code }}</small>
         </div>
-        <button
-          class="button small"
-          @click="
-            fixing = {
-              id: String(object(row.source).id || row.file_id),
-              name: String(object(row.source).name || row.name),
-            }
-          "
-        >
-          修正识别
-        </button>
+        <button class="button small" @click="editRecognition(row)">修正识别</button>
       </article>
     </div>
     <details>
@@ -475,15 +511,9 @@ watch(
     v-if="fixing"
     :file-id="fixing.id"
     :name="fixing.name"
+    :initial="fixing.initial"
     @close="fixing = undefined"
-    @save="
-      (v) => {
-        overrides[v.id] = v.choice;
-        fixing = undefined;
-        invalidate();
-        load();
-      }
-    "
+    @save="correct"
   />
 </template>
 

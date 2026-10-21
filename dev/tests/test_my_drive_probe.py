@@ -170,12 +170,26 @@ def test_probe_setting_change_invalidates_preview(cloud):
     assert not cloud.remote.writes
 
 
-def test_real_ffprobe_reads_mp4_via_range_relay_without_exposing_headers(tmp_path, monkeypatch):
+@pytest.mark.parametrize('tail_padding', [False, True])
+def test_real_ffprobe_reads_mp4_via_range_relay_without_exposing_headers(tmp_path, monkeypatch, tail_padding):
     if not shutil.which("ffprobe") or not shutil.which("ffmpeg"):
         pytest.skip("ffmpeg tooling absent")
     movie = tmp_path/"fixture.mp4"
     subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=320x240:r=25", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(movie)], check=True, timeout=15)
     contents = movie.read_bytes()
+    if tail_padding:
+        # Keep chunk offsets valid: pad AFTER mdat, immediately before tail moov.
+        # Models multi-GB MP4s whose metadata is far beyond the first 8 MiB.
+        import struct
+        offset = 0
+        while contents[offset+4:offset+8] != b'moov':
+            length = struct.unpack('>I', contents[offset:offset+4])[0]
+            assert length >= 8
+            offset += length
+            assert offset < len(contents)
+        padding = media_probe.CHUNK_BYTES + 65536
+        contents = contents[:offset] + struct.pack('>I4s', padding, b'free') + bytes(padding-8) + contents[offset:]
+        assert len(contents) > media_probe.CHUNK_BYTES
     requests = []
     original_client = httpx.Client
     def send(request):

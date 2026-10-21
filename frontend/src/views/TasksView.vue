@@ -476,6 +476,7 @@ useActivityUpdates(async () => {
         </div>
         <h4>{{ item.name }}</h4>
         <p>{{ item.reason }}</p>
+        <small v-if="item.code">错误码：{{ item.code }}</small>
         <div v-if="item.rule" class="path-box">命中规则：{{ item.rule }}</div>
         <div v-if="item.path" class="path-box">{{ item.path }}</div>
         <div class="suggestion">处理建议：{{ item.suggestion }}</div>

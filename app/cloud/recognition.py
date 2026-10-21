@@ -167,7 +167,14 @@ def recognize(name, override=None, naming_config=None, probe=None, context=None)
             raise CloudError("TMDB 季集响应格式异常，保留源文件", 502, code='tmdb_episode_schema', stage='tmdb_episode')
         if not episode_detail.get("id") or episode_detail.get("season_number") != season or episode_detail.get("episode_number") != episode:
             raise UnrecognizedMedia("TMDB 季集信息无法核实，请检查季集号后重新预览")
-    information = probe() if callable(probe) else (probe or {"status": "filename", "fields": {}})
+    try:
+        information = probe() if callable(probe) else (probe or {"status": "filename", "fields": {}})
+    except CloudError as error:
+        # The work/episode has already been verified; a later media-read failure
+        # must not hide that receipt or suggest repeating the TMDB correction.
+        error.recognition = {'title': title, 'year': year, 'kind': kind,
+                             'tmdb_id': tmdb_id, 'season': season, 'episode': episode}
+        raise
     probe_fields = information.get("fields", {})
     for target, source in (("screen_size", "resolution"), ("video_codec", "video_codec"), ("audio_codec", "audio_codec")):
         if probe_fields.get(source):

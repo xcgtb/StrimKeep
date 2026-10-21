@@ -4,6 +4,7 @@ Original result lists remain authoritative. Historical results are normalized on
 read, so upgrading can explain old skipped files without rerunning a task.
 """
 from app.cloud import events
+from app.cloud.errors import STAGES
 
 LABELS = {'error': '执行异常', 'skipped': '识别或执行跳过', 'warning': '提示',
           'filtered': '规则过滤', 'retained': '版本保留', 'unknown': '待识别'}
@@ -13,7 +14,18 @@ def operation(result):
     return result.get('organization') if isinstance(result.get('organization'), dict) else result
 
 
-def guidance(reason, category):
+def guidance(reason, category, code='', uncertain=False):
+    if uncertain:
+        return '结果待核实', '先在任务步骤和 115 核对已提交操作的实际结果；不要重复提交，也不要仅靠修正识别重跑。', 'jobs', ''
+    if code.startswith('probe_') or any(word in reason for word in ('ffprobe', '媒体信息', '探测')):
+        advice = '媒体读取失败不等于作品识别错误。检查任务中的探测错误码和网络后重新预览；如接受仅用文件名信息，可在媒体探测设置中选择失败时回退文件名。'
+        if code in ('probe_http_401', 'probe_http_403'):
+            advice = '115 下载地址被拒绝；检查账号下载权限和容器网络后重新预览以重新取链，修改 TMDB 不能解决下载权限问题。'
+        elif code == 'probe_budget':
+            advice = '媒体头信息未能在 32 MiB / 30 秒预算内读出；可手动重试，或明确选择探测失败时回退文件名，避免反复自动扫描。'
+        return '媒体信息', advice, 'organize', 'naming'
+    if code.startswith('provider_') and not any(word in reason for word in ('授权', '登录')):
+        return '115 连接', '按错误类型检查容器 DNS、网络、代理或 115 限流；连接恢复后重新预览。修正 TMDB 作品不能修复 115 请求错误。', 'settings', ''
     if any(word in reason for word in ('分享已取消', '分享不存在', '分享已过期', '分享不存在或已删除')):
         return '读取分享', '重新获取有效的 115 分享链接，原分享失效不代表转存程序故障。', 'resources', 'receive'
     if '提取码错误' in reason:
@@ -34,8 +46,6 @@ def guidance(reason, category):
         return 'STRM 输出', '核对 NAS 输出位置、挂载和写入权限，再从 STRM 页面重新预览同步。', 'strm', 'strm-output'
     if any(word in reason for word in ('源文件', '变化', '不存在', '移动结果', '指纹')):
         return '来源核验', '查看来源文件的当前名称与位置，确认后重新预览；已核实转存的资源无需重复转存。', 'files', ''
-    if any(word in reason for word in ('ffprobe', '媒体信息', '探测')):
-        return '媒体信息', '核对媒体探测设置和文件可读性，再重新预览；已完成的归档不需要回滚。', 'organize', 'naming'
     if 'Emby' in reason:
         return 'Emby 联动', '核对入库连接和路径映射，再刷新入库记录；生成 STRM 不等于已确认入库。', 'playback', 'emby'
     return '任务执行', '先核对文件与下面的具体原因，再修正配置并重新预览；结果未知的远端操作先核实，避免重复提交。', 'jobs', ''
@@ -62,10 +72,12 @@ def items(result):
             if identity in seen:
                 continue
             seen.add(identity)
-            stage, suggestion, page, module = guidance(reason, actual)
+            code = events.clean(entry.get('code') or '')
+            stage, suggestion, page, module = guidance(reason, actual, code, entry.get('uncertain', False))
             rows.append({'category': actual, 'label': LABELS[actual], 'file_id': fid,
                          'name': name or ('文件 ID '+fid if fid else '任务级记录'),
-                         'reason': reason, 'stage': events.clean(entry.get('stage_label') or entry.get('stage') or stage),
+                         'reason': reason, 'stage': events.clean(entry.get('stage_label') or STAGES.get(entry.get('stage'), entry.get('stage')) or stage),
+                         'code': code,
                          'suggestion': suggestion, 'page': page, 'module': module,
                          'path': events.clean(entry.get('path') or entry.get('source_path') or ''),
                          'rule': events.clean(entry.get('rule') or ''),
@@ -114,7 +126,7 @@ def for_job(job, offset=0, limit=30, category='', query=''):
             payload, receipt = json.loads(payload), json.loads(receipt)
             if not isinstance(receipt, dict) or not receipt.get('reason'):
                 continue
-            failures.append({'file_id': payload.get('file_id', ''), 'name': payload.get('source_name') or payload.get('name') or '',
+            failures.append({**receipt, 'file_id': payload.get('file_id', ''), 'name': payload.get('source_name') or payload.get('name') or '',
                              'reason': receipt['reason'], 'stage': {'rename': '重命名', 'move': '移动归档', 'receive': '分享转存', 'mkdir': '创建目录'}.get(key.split(':')[0], '任务执行')})
         if failures:
             result = {'errors': failures}
@@ -130,4 +142,4 @@ def emit_result(job_id, result, state, message):
                     details={'event': 'diagnostic', 'status': 'blocked' if row['attention'] else 'skipped',
                              'source_name': row['name'], 'file_id': row['file_id'], 'reason': row['reason'],
                              'suggestion': row['suggestion'], 'category': row['label'], 'stage': row['stage'],
-                             'rule': row['rule']})
+                             'rule': row['rule'], 'code': row.get('code', '')})

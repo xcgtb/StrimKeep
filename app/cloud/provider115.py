@@ -21,9 +21,9 @@ def sdk():
 
 def checked(response, method=''):
     if not isinstance(response, dict) or response.get("state") not in (True, 1):
-        from app.domain.provider_errors import classify
+        from app.domain.provider_errors import classify, operation
         info = classify(response if isinstance(response, dict) else {}, method)
-        stage = 'read_share' if method.startswith('share_') and method != 'share_receive' else 'submit_transfer' if method == 'share_receive' else ''
+        stage = operation(method)[0]
         raise CloudError(info['message'], 502, code=info['code'], category=info['category'], stage=stage)
     return response
 
@@ -173,17 +173,23 @@ class Provider115:
             for value in exc.args:
                 if isinstance(value, dict) and value.get("state") in (False, 0):
                     checked(value, method)
-            raise CloudError(
-                (
-                    "115 写入结果待核实，请查看任务记录"
-                    if write
-                    else "115 请求失败，请检查账号或稍后重试"
-                ),
-                502,
-                uncertain=write,
-                category="write_unknown" if write else "transport",
-                stage="submit_transfer" if method == "share_receive" else "read_share" if method.startswith("share_") else "",
-            ) from None
+            from app.domain.provider_errors import transport
+            from app.cloud import events
+            names, status, cause = [], None, exc
+            for _ in range(6):
+                if cause is None:
+                    break
+                names.extend(t.__name__ for t in type(cause).__mro__)
+                candidate = getattr(getattr(cause, 'response', None), 'status_code', None)
+                if type(candidate) is int and 100 <= candidate <= 599:
+                    status = candidate
+                cause = cause.__cause__ or cause.__context__
+            info = transport(method, names, status, write)
+            events.emit('organize', info['message'], level='WARNING', details={
+                'stage': info['stage'], 'code': info['code'], 'category': info['category'],
+                'reason': type(exc).__name__, 'uncertain': write})
+            raise CloudError(info['message'], 502, uncertain=write, code=info['code'],
+                             category=info['category'], stage=info['stage']) from None
 
     def profile(self):
         response = self.call("user_my")

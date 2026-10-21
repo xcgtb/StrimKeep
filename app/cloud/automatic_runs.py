@@ -60,7 +60,9 @@ def claim_notice(job, kind, state, operation):
     if not payload.get('rule_id'):
         return True
     scope = notice_scope(kind, payload)
-    signature = failure_signature(operation) if state == 'needs_review' else None
+    if state == 'failed' and not operation.get('errors'):
+        operation = {**operation, 'errors': [{'reason': job.get('message') or '任务失败'}]}
+    signature = failure_signature(operation) if state in ('needs_review', 'failed') else None
     with store.db() as con:
         if signature is None:
             con.execute('DELETE FROM cloud_notice_incidents WHERE scope=?', (scope,))

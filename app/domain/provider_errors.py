@@ -1,6 +1,59 @@
 """Safe provider diagnostics. Never echo provider messages, URLs or credentials."""
 import re
 
+OPERATIONS = {'user_my': ('account', '核验账号'), 'fs_files': ('list', '读取目录'),
+              'fs_file': ('info', '读取文件信息'), 'fs_file_skim': ('info', '读取文件信息'),
+              'fs_mkdir': ('mkdir', '创建目录'), 'fs_rename': ('rename', '重命名'),
+              'fs_move': ('move', '移动归档'), 'fs_delete': ('delete', '删除文件')}
+
+
+def stops_batch(category):
+    return category in ('authorization', 'verification_required', 'rate_limit', 'transport', 'response')
+
+
+def operation(method):
+    if method == 'share_receive':
+        return 'submit_transfer', '提交转存'
+    if method.startswith('share_'):
+        return 'read_share', '读取分享'
+    if method.startswith('download'):
+        return 'download', '获取下载地址'
+    return OPERATIONS.get(method, ('provider', '调用 115 接口'))
+
+
+def transport(method, type_names, status=None, write=False):
+    """Classify only exception TYPE names and HTTP status, never exception text."""
+    stage, label = operation(method)
+    names = set(type_names)
+    name = next((n for n in type_names if re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]{0,63}', n)), 'Exception')
+    code, category, reason = 'provider_exception', 'response', '接口调用异常（'+name+'），请按错误类型检查任务日志'
+    if status is not None:
+        code, reason = 'provider_http_'+str(status), 'HTTP '+str(status)
+        if status in (401, 403):
+            category, reason = 'authorization', reason+'，账号授权失效或访问被拒绝，请检查 115 登录与网络'
+        elif status == 429:
+            category, reason = 'rate_limit', reason+'，请求过于频繁，请等待后重试'
+        elif status >= 500:
+            reason += '，115 服务或代理暂时不可用'
+        elif status == 404:
+            category, reason = 'not_found', reason+'，接口或文件不存在'
+    elif any('Timeout' in name for name in names):
+        code, reason = 'provider_timeout', '请求超时，请检查容器到 115 的连接'
+    elif 'gaierror' in names:
+        code, reason = 'provider_dns', 'DNS 解析失败，请检查容器 DNS'
+    elif any('SSL' in name or 'Certificate' in name for name in names):
+        code, reason = 'provider_tls', 'TLS 证书校验失败，请检查系统时间与代理证书'
+    elif any('JSONDecode' in name or 'Decoding' in name for name in names):
+        code, category, reason = 'provider_response', 'response', '响应格式异常，可能收到登录页、限流页或代理错误页'
+    elif any('Proxy' in name for name in names):
+        code, reason = 'provider_proxy', '代理连接失败，请检查服务连接与容器代理'
+    elif names.intersection(('NetworkError', 'ConnectionError', 'ConnectError', 'OSError', 'ProtocolError', 'RemoteProtocolError')):
+        code, category, reason = 'provider_transport', 'transport', '网络连接中断（'+name+'），请检查容器到 115 的连接'
+    message = '115 '+label+'失败：'+reason
+    if write:
+        message += '；写入结果待核实，请先检查任务步骤和网盘实际状态，不要重复提交'
+    return {'stage': stage, 'code': code, 'category': category, 'message': message}
+
 
 def classify(response, method=''):
     code = next((str(response[k]) for k in ('errno', 'errNo', 'errcode', 'errCode', 'code', 'msg_code')
