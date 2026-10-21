@@ -27,6 +27,22 @@ def test_malformed_link_does_not_hide_valid_following_resource():
     assert len(errors) == 1
 
 
+@pytest.mark.parametrize('direct', [False, True])
+def test_partial_parse_errors_survive_web_submission(receiving, direct):
+    text = 'magnet:?xt=invalid\n'+MAGNET
+    if direct:
+        jid = intake.receive(receiving.id, text, 1, store.ident(), confirmed=True)
+    else:
+        plan = intake.preview(receiving.id, text)
+        assert len(plan['errors']) == 1
+        jid = intake.apply(plan['id'], True)
+    jobs.execute(jid)
+    job = store.job(jid)
+    assert job['state'] == 'needs_review'
+    assert len(job['result']['accepted']) == len(job['result']['errors']) == 1
+    assert receiving.remote.offline_add.call_count == 1
+
+
 def test_one_known_share_failure_does_not_block_later_resource(receiving, monkeypatch):
     monkeypatch.setattr(receiving.remote, 'share_page', Mock(side_effect=CloudError('分享失效', 404)))
     plan = intake.preview(receiving.id, 'https://115.com/s/abcdef1\n'+MAGNET)

@@ -131,6 +131,7 @@ def preview(account_id, text, organize=False):
     if not items:
         raise CloudError("没有找到支持的资源链接")
     payload = make_payload(account_id, items, organize=organize)
+    payload['parse_errors'] = errors
     workflow.verify_account(payload)
     pid = store.ident()
     with store.db() as con:
@@ -446,7 +447,7 @@ def verify_source(payload):
 
 
 def run(job_id,payload):
-    result={"accepted":[],"errors":[],"child_jobs":[]}
+    result={"accepted":[],"errors":list(payload.get('parse_errors', [])),"child_jobs":[]}
     stage = "prepare"
     try:
         verify_source(payload)
@@ -607,10 +608,12 @@ def receive(account_id, text, expected_revision, request_id, confirmed=False, or
         old = prior(con)
     if old:
         return old
-    items = extract(text)
+    errors = []
+    items = extract(text, errors=errors)
     if not items:
         raise CloudError('没有找到支持的资源链接')
     payload = make_payload(account_id,items,organize=organize)
+    payload['parse_errors'] = errors
     if payload['directory_revision'] != expected_revision:
         raise CloudError('保存目录已变化，请刷新后重新提交',409)
     workflow.verify_account(payload)
