@@ -160,7 +160,7 @@ def test_sync_never_mixes_output_roots_in_one_run(cloud, monkeypatch, tmp_path):
     settings.save({'nfo_enabled': False, 'artwork_enabled': False})
     other = tmp_path/'other'
     other.mkdir()
-    cloud.remote.files['6'] = {**cloud.remote.info('4'), 'id': '6', 'name': 'Other.2024.mkv'}
+    cloud.remote.files['6'] = {**cloud.remote.info('4'), 'id': '6', 'name': 'Movie.2024.720p.mkv'}
     original = strm.generate
     def change_after_first(*args, **kwargs):
         result = original(*args, **kwargs)
