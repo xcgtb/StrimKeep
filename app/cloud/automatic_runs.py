@@ -33,7 +33,10 @@ def recognize(account_id, row, context, config, callback):
         error = json.loads(old[0])
         events.emit('recognize', '已知读取失败处于冷却期，保留源文件；可在整理预览中手动重试',
                     details={'file_id': row['id'], 'status': 'cooldown', 'code': error['code']})
-        raise CloudError(error['message'], error['status'], code=error['code'], stage=error['stage'])
+        cached = CloudError(error['message'], error['status'], code=error['code'], stage=error['stage'], category=error.get('category', ''))
+        if error.get('recognition'):
+            cached.recognition = error['recognition']
+        raise cached
     try:
         result = callback()
     except CloudError as error:
@@ -43,7 +46,8 @@ def recognize(account_id, row, context, config, callback):
             attempts = min((old[1] if old else 0) + 1, 8)
             delay = min(300 * 2 ** (attempts - 1), 3600)
             record = {'message': events.clean(str(error)), 'status': error.status,
-                      'code': error.code, 'stage': error.stage}
+                      'code': error.code, 'stage': error.stage, 'category': error.category,
+                      'recognition': getattr(error, 'recognition', None)}
             with store.db() as con:
                 con.execute('INSERT INTO cloud_scan_failures VALUES(?,?,?,?,?,?,?) ON CONFLICT(account_id,file_id) DO UPDATE SET '
                             'fingerprint=excluded.fingerprint,payload=excluded.payload,attempts=excluded.attempts,next_retry=excluded.next_retry,updated=excluded.updated',
