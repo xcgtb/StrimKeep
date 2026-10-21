@@ -4,6 +4,7 @@ import json
 import re
 import time
 from pathlib import PurePosixPath
+from app.core import parse_season_dir
 from app.cloud import store, jobs, recognition, settings, directories, categories, naming, file_filters, quality8
 from app.cloud.provider115 import for_account, numeric, parse_share
 from app.cloud.errors import CloudError, UnrecognizedMedia, diagnostic as error_diagnostic
@@ -137,9 +138,9 @@ def parent_context(provider, row, cache):
             raise CloudError("来源父目录身份异常", 409)
         context["parents"].append({k: folder[k] for k in ("id", "parent_id", "name", "is_dir")})
         name = folder["name"]
-        season = re.fullmatch(r"(?i)(?:Season\s*|S)(\d{1,2})", name) or re.fullmatch(r"第\s*(\d{1,2})\s*季", name)
-        if season and "season" not in context:
-            context["season"] = int(season[1])
+        season = parse_season_dir(name)
+        if season is not None and "season" not in context:
+            context["season"] = season
         identities = set(re.findall(r"(?i)[\[{]tmdb-(\d+)[\]}]", name))
         if len(identities) > 1:
             raise UnrecognizedMedia("父目录包含多个 TMDB 身份，请人工核对")

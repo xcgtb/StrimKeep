@@ -156,7 +156,7 @@ enqueue
 | `app/cloud/store.py` | 云端域全部表结构与访问函数 |
 | `app/storage.py` / `state_store.py` | SQLite 事务、计划存档、缓存、旧 JSON 迁移 |
 | `app/config.py` | 配置读写、环境变量覆盖 |
-| `app/engine.py` / `compat.py` | **兼容导出层**（204 个旧名字），见第七节 |
+| `app/engine.py` / `compat.py` | **兼容导出层**（203 个旧名字），见第七节 |
 | `app/morning.py` `governance.py` `subscribe.py` `wash.py` `bot.py` `ingest.py` `stats.py` `tmdb.py` `emby.py` `lib.py` `core.py` | 根目录业务模块：片库健康、治理执行、追更、洗版、Bot、入库、报表、外部服务 |
 
 账号断开的未完成任务检查与删除在 `store.disconnect_account()` 的同一写事务内完成；同时移除账号服务凭证、频道及游标，未投递接收记录标记已处理并写明断开原因，任务历史保留。接收与开关互斥忽略历史孤儿账号；捕获消息在入库前再次核对账号。规则启停在写事务内重新核对账号修订和规则内容。取消未启动任务写入 `stopped`，历史 `cancelled` 仍可读取。
@@ -192,9 +192,9 @@ STRM 全量扫描由 `scheduler` 调用 `cloud/strm_scan.tick()`，从已保存�
 
 ## 七、兼容导出层（迁移中的结构）
 
-`app/engine.py`（362 行）+ `app/compat.py`（88 行）把 **204 个旧名字**重新导出，让老测试与 CLI 继续用 `engine.xxx`。
+`app/engine.py`（362 行）+ `app/compat.py`（88 行）把 **203 个旧名字**重新导出，让老测试与 CLI 继续用 `engine.xxx`。
 
-这是绞杀者模式的垫片，**不是设计目标**。`dev/tests/test_architecture_boundaries.py` 锁住了这 204 个导出。
+这是绞杀者模式的垫片，**不是设计目标**。`dev/tests/test_architecture_boundaries.py` 锁住了这 203 个导出。
 
 **纪律：**
 
