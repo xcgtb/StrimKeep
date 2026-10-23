@@ -20,7 +20,7 @@ def verify_account(payload):
     return provider
 
 
-def walk(provider, cid, limit=20000, exclude=None, job_id=None, directory_rows=None, source_ids=None):
+def walk(provider, cid, limit=20000, exclude=None, job_id=None, directory_rows=None, source_ids=None, initial_rows=None):
     from app.cloud import events
     queue = [numeric(cid)]
     seen = set()
@@ -35,7 +35,7 @@ def walk(provider, cid, limit=20000, exclude=None, job_id=None, directory_rows=N
             raise CloudError("目录过大，请选择更具体的目录", 413)
         started = time.monotonic()
         events.emit('organize','开始读取目录：'+parent,job_id,details={'event':'directory_read','status':'started','parent_id':parent})
-        rows = provider.list(parent)
+        rows = initial_rows if parent == str(cid) and initial_rows is not None else provider.list(parent)
         if parent == str(cid) and source_ids is not None:
             selected = set(source_ids)
             rows = [r for r in rows if r["id"] in selected]
@@ -803,7 +803,7 @@ def _transfer(job_id, payload):
             error.stage = "submit_transfer"
             raise
         try:
-            return transfer_receipt(provider, payload, intent, job_id)
+            return await_transfer_receipt(provider, payload, intent, job_id)
         except CloudError as error:
             # Receive has already returned; a read failure cannot prove no write.
             raise CloudError(str(error), error.status, uncertain=True, code=error.code, category=error.category, stage="verify_transfer") from None
@@ -872,21 +872,52 @@ def transfer_receipt(provider, payload, intent, job_id):
         names = {r["name"] for r in payload["items"] if r["id"] in payload["source_ids"]}
         rows = [r for r in rows if r["id"] not in before and r["name"] in names]
     mapping = receipt_mapping(payload, rows)
-    files = walk(provider, container["id"], source_ids=[r["id"] for r in rows])
+    # Use the listing that was actually matched, rather than immediately reading
+    # the root a second time (which can return an older 115 directory snapshot).
+    files = walk(provider, container["id"], source_ids=[r["id"] for r in rows], initial_rows=rows)
     if not files:
-        raise CloudError("目标没有可核实文件，请检查转存内容", 409, uncertain=True)
+        raise CloudError("转存目录暂未显示文件，请稍后只读核实原任务", 409, uncertain=True, code="transfer_receipt_pending")
     for file in files:
         store.save_file(payload["account_id"], file)
     return {**intent, "files": files, "mapping": mapping}
 
 
+# At most 60 seconds of backoff, in addition to the bounded provider read times.
+# This retries only verification reads after a successful receive response.
+TRANSFER_RECEIPT_DELAYS = (1, 2, 4, 8, 15, 30)
+
+
+def _transfer_receipt_pause(job_id, seconds, error):
+    until = time.monotonic() + seconds
+    while True:
+        # A write was sent but not verified: stopping must leave it reconcilable,
+        # not turn it into a safely stopped or automatically replayable operation.
+        if jobs.stopping(job_id):
+            raise error
+        remaining = until - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(1, remaining))
+
+
+def await_transfer_receipt(provider, payload, intent, job_id):
+    for attempt in range(len(TRANSFER_RECEIPT_DELAYS) + 1):
+        try:
+            return transfer_receipt(provider, payload, intent, job_id)
+        except CloudError as error:
+            if error.code != "transfer_receipt_pending" or attempt == len(TRANSFER_RECEIPT_DELAYS) or jobs.stopping(job_id):
+                raise
+            jobs.progress(job_id, len(payload["source_ids"]), 0,
+                          "核验转存结果，等待115目录更新", str(error))
+            _transfer_receipt_pause(job_id, TRANSFER_RECEIPT_DELAYS[attempt], error)
+
+
 def receipt_mapping(payload, received):
     """Verify the selected top-level receipt, keeping share IDs distinct from account IDs."""
     expected = [x for x in payload["items"] if x["id"] in payload["source_ids"]]
-    if len(received) != len(expected):
-        raise CloudError("目标数量尚未与预览一致，请稍后核实", 409, uncertain=True)
     remaining = list(received)
     mapping = []
+    missing = []
     for source in expected:
         matches = [
             x
@@ -901,6 +932,9 @@ def receipt_mapping(payload, received):
                 )
             )
         ]
+        if not matches and not any(x["name"] == source["name"] for x in remaining):
+            missing.append(source)
+            continue
         if len(matches) != 1:
             raise CloudError(
                 "目标内容不唯一或与分享不符，保留待核实状态", 409, uncertain=True
@@ -908,6 +942,14 @@ def receipt_mapping(payload, received):
         target = matches[0]
         remaining.remove(target)
         mapping.append({"source_id": source["id"], "target_id": target["id"]})
+    if remaining:
+        raise CloudError("目标内容不唯一或与分享不符，保留待核实状态", 409, uncertain=True)
+    if missing:
+        raise CloudError(
+            "目标数量尚未与预览一致（已核实 %d/%d 项），请稍后只读核实原任务；不要重复转存"
+            % (len(mapping), len(expected)),
+            409, uncertain=True, code="transfer_receipt_pending",
+        )
     return mapping
 
 

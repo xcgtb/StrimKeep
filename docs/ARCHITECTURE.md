@@ -169,6 +169,8 @@ STRM 全量扫描由 `scheduler` 调用 `cloud/strm_scan.tick()`，从已保存�
 
 `emby_library.mapping_status()` 只读展示每个连接实际使用的 personal_root/share_root、NAS 根与映射示例，比较反代识别根以提示差异；不把本地路径推算当作远端入库成功。`workflow.transfer_from_saved()` 校验接收页引用的已保存归档目录并冻结目录修订，转存前及继续整理前重新核对；有已核实转存结果时保留在异常回执中。
 
+`workflow.await_transfer_receipt()` 仅在转存请求成功返回、目标内容暂未全部可见时退避重读回执，间隔为 1/2/4/8/15/30 秒，另计适配器读取耗时。文件名、类型、大小与 SHA1 仍须唯一匹配；歧义、指纹冲突和接口错误立即保留待核实状态。根目录扫描复用同次已匹配列表，避免二次读取旧快照。停止等待或等待耗尽不重发转存，保留 `receive` 持久步骤用于原有只读核实及确认后继续整理。
+
 云任务执行槽占用期间，工作线程每两秒继续执行只读调度与持久化排队（频道读取、接收派发、维护排期和自动规则），实际远端写入仍在当前独占任务结束后串行执行。Emby 入库检查沿用原独立轮询。
 | `app/emby_events.py` `overview.py` `activity_stream.py` `runtime_logs.py` | 事件、总览、活动流、运行日志 |
 
