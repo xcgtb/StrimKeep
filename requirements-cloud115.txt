@@ -10,7 +10,7 @@ call_sleep==0.0.1
 certifi==2026.7.22
 cffi==2.1.1
 click==8.5.0
-cryptography==46.0.7
+cryptography==50.0.2
 ed2k==0.0.2.2
 errno2==0.0.5
 fastapi==0.142.2
