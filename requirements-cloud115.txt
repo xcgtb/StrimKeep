@@ -13,7 +13,7 @@ click==8.5.0
 cryptography==50.0.2
 ed2k==0.0.2.2
 errno2==0.0.5
-fastapi==0.142.2
+fastapi==0.150.0
 filelock==4.2.4
 glob_pattern==0.0.2
 guessit==4.4.0
