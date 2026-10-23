@@ -1,5 +1,22 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, type Route } from '@playwright/test';
 import { fixtures, fulfill } from './fixtures';
+
+async function mockPreview(page: Page, build: (route: Route) => unknown) {
+  let response: unknown;
+  let count = 0;
+  await page.route('**/api/cloud/plans/scan', async (route) => {
+    response = build(route);
+    count++;
+    return fulfill(route, { status: 'success', job_id: String(count).padStart(32, 'a') }, 202);
+  });
+  await page.route(/\/api\/cloud\/jobs\/a+[0-9]+$/, (route) =>
+    fulfill(route, {
+      status: 'success',
+      job: { state: 'success', kind: 'organize_preview', result: { plan_id: 'p1' } },
+    }),
+  );
+  await page.route('**/api/cloud/plans/p1', (route) => fulfill(route, response));
+}
 
 const works = [
   {
@@ -156,31 +173,29 @@ test('organize preview compares names and separates skipped and unidentified fil
 }) => {
   await fixtures(page);
   await directories(page);
-  await page.route('**/api/cloud/plans', (r) =>
-    fulfill(r, {
-      status: 'success',
-      plan: {
-        id: 'p1',
-        expires_in: 900,
-        items: [
-          {
-            source: { id: '12', name: 'raw.S00E01.mkv' },
-            media: {
-              title: '剧集乙',
-              kind: 'tv',
-              tmdb_id: '42',
-              season: 0,
-              episode: 1,
-              directory: '剧集/剧集乙/Season00',
-              name: '剧集乙.S00E01.mkv',
-            },
+  await mockPreview(page, () => ({
+    status: 'success',
+    plan: {
+      id: 'p1',
+      expires_in: 900,
+      items: [
+        {
+          source: { id: '12', name: 'raw.S00E01.mkv' },
+          media: {
+            title: '剧集乙',
+            kind: 'tv',
+            tmdb_id: '42',
+            season: 0,
+            episode: 1,
+            directory: '剧集/剧集乙/Season00',
+            name: '剧集乙.S00E01.mkv',
           },
-        ],
-        skipped: [{ file_id: '13', name: 'old.mkv', reason: '保留已有版本' }],
-        unknown_items: [{ source: { id: '15', name: 'unknown.mkv' }, reason: '季集不明确' }],
-      },
-    }),
-  );
+        },
+      ],
+      skipped: [{ file_id: '13', name: 'old.mkv', reason: '保留已有版本' }],
+      unknown_items: [{ source: { id: '15', name: 'unknown.mkv' }, reason: '季集不明确' }],
+    },
+  }));
   await page.goto('/#/organize/workspace');
   await page.getByRole('button', { name: '扫描并预览整理' }).click();
   await expect(page.getByText('原文件', { exact: true })).toHaveCount(3);
@@ -203,10 +218,10 @@ test('manual recognition shows applied identity even if media read fails and pre
   await fixtures(page);
   await directories(page);
   let requests = 0;
-  await page.route('**/api/cloud/plans', (route) => {
+  await mockPreview(page, (route) => {
     requests++;
     const override = route.request().postDataJSON().overrides['12'];
-    return fulfill(route, {
+    return {
       status: 'success',
       plan: {
         id: 'p1',
@@ -240,7 +255,7 @@ test('manual recognition shows applied identity even if media read fails and pre
             ]
           : [],
       },
-    });
+    };
   });
   await page.goto('/#/organize/workspace');
   await page.getByRole('button', { name: '扫描并预览整理' }).click();

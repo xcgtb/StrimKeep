@@ -39,7 +39,7 @@ def request_stop(job_id):
         row = con.execute("SELECT kind,state,payload FROM cloud_jobs WHERE id=?", (job_id,)).fetchone()
         if not row:
             raise CloudError("任务不存在", 404)
-        if row[0] not in ("organize", "workflow", "transfer", "sync", "share_strm", "intake", "channel", "inventory"):
+        if row[0] not in ("organize", "workflow", "transfer", "sync", "share_strm", "intake", "channel", "inventory", "organize_preview"):
             raise CloudError("此任务不支持停止整理", 409)
         if row[1] not in ("queued", "running", "stopped"):
             raise CloudError("任务已结束，请查看结果", 409)
@@ -68,7 +68,7 @@ def request_stop(job_id):
 
 
 def enqueue(kind, payload, con=None, *, parent_id=None):
-    if kind not in ("transfer", "organize", "sync", "workflow", "categories", "publish", "share_strm", "intake", "channel", "maintenance", "inventory"):
+    if kind not in ("transfer", "organize", "sync", "workflow", "categories", "publish", "share_strm", "intake", "channel", "maintenance", "inventory", "organize_preview"):
         raise CloudError("任务类型不受支持")
     job_id = store.ident()
     now = time.time()
@@ -204,6 +204,8 @@ def _execute(job_id):
         if result.get("stopped"):
             state = "stopped"
         message = "已在安全边界停止" if state == "stopped" else "部分项目需要处理" if state == "needs_review" else "任务完成"
+        if row[0] == 'organize_preview' and state != 'stopped':
+            message = '扫描预览完成，请核对结果后确认整理；尚未移动文件'
         if state == "success" and row[0] in ("intake", "channel"):
             accepted = result.get('accepted', [])
             message = ('命令消息已发送，等待目标机器人处理' if all(i.get('kind') == 'forward' for i in accepted) else
@@ -245,7 +247,7 @@ def _execute(job_id):
 
 
 def notify(job_id, kind, state, message):
-    if kind == 'inventory':
+    if kind in ('inventory', 'organize_preview'):
         return  # Read-only catalogue refresh is not an organization/ingestion notice.
     from app.cloud import settings, notifications, diagnostics
 
@@ -327,6 +329,10 @@ def details(job_id):
     result["steps"] = [
         {"step": r[0], "state": r[1], "result": json.loads(r[2])} for r in rows
     ]
+    if result['kind'] == 'organize_preview':
+        with store.db() as con:
+            payload = con.execute('SELECT payload FROM cloud_jobs WHERE id=?', (job_id,)).fetchone()
+        result['preview_input'] = json.loads(payload[0])
     from app.cloud import replacement
     result['upgrades'] = replacement.summary(job_id)
     store.attach_job_activity(result)

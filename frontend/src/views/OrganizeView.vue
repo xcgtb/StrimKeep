@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue';
+import { ref, watch, computed, nextTick } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { request } from '../api/client';
 import { useInventorySource } from '../composables/useInventorySource';
 import { useCloud } from '../stores/cloud';
@@ -16,6 +17,8 @@ import EvidenceDetails from '../components/EvidenceDetails.vue';
 import OperationState from '../components/OperationState.vue';
 import MediaOverride from '../components/MediaOverride.vue';
 const inventorySource = useInventorySource();
+const route = useRoute(),
+  router = useRouter();
 const cloud = useCloud(),
   op = useOperation(() => cloud.id),
   preview = useRequest<Data>(),
@@ -33,6 +36,13 @@ const source = ref(''),
   confirm = ref(''),
   job = ref(''),
   jobState = ref<Data>();
+const previewJob = ref(''),
+  previewState = ref<Data>(),
+  previewBusy = computed(
+    () =>
+      preview.loading.value || ['queued', 'running'].includes(String(previewState.value?.state)),
+  );
+let restoringPreview = false;
 const directoryCards = [
   {
     key: 'source',
@@ -115,19 +125,35 @@ function episodeLabel(media: Data) {
   return `S${String(media.season).padStart(2, '0')}E${String(media.episode).padStart(2, '0')}`;
 }
 function invalidate() {
+  if (restoringPreview) return;
   preview.cancel();
+  previewJob.value = '';
+  previewState.value = undefined;
   plan.value = undefined;
   previewFilter.value = '';
   previewSearch.value = '';
   confirm.value = '';
   op.reconcile();
 }
-watch([source, target, unknown, generate], invalidate);
-async function defaults() {
+function clearPreviewLink() {
+  if (route.query.account === cloud.id && route.query.preview_job) {
+    const { preview_job: _, ...query } = route.query;
+    void router.replace({ query });
+  }
+}
+watch([source, target, unknown], () => {
+  if (restoringPreview) return;
+  invalidate();
+  clearPreviewLink();
+});
+async function defaults(resumeSaved = false) {
   if (!cloud.id) return;
   const aid = cloud.id;
   const r = await config.run((signal) => readData(accountPath(aid, 'directories'), signal));
   if (r && aid === cloud.id) {
+    const resume =
+      resumeSaved === true && route.query.account === aid ? route.query.preview_job : undefined;
+    restoringPreview = true;
     const d = object(r.directories);
     source.value = String(object(d.source).id || '');
     sourceName.value = String(object(d.source).name || '');
@@ -139,7 +165,30 @@ async function defaults() {
     targetName.value = String(object(d.target).name || '');
     unknown.value = String(object(d.unknown).id || '');
     unknownName.value = String(object(d.unknown).name || '');
+    await nextTick();
+    restoringPreview = false;
+    if (typeof resume === 'string' && /^[a-f0-9]{32}$/.test(resume)) {
+      await restorePreview(resume, aid);
+    }
   }
+}
+async function restorePreview(id: string, aid: string) {
+  const r = await preview.run((signal) => readData(`/api/cloud/jobs/${id}`, signal));
+  const row = object(r?.job),
+    payload = object(row.preview_input);
+  if (!r || aid !== cloud.id || row.kind !== 'organize_preview' || payload.account_id !== aid)
+    return;
+  restoringPreview = true;
+  for (const key of ['source', 'target', 'unknown'] as const) {
+    const value = String(payload[`${key}_cid`] || '');
+    if (directoryValues.value[key].value !== value) directoryNames.value[key].value = value;
+    directoryValues.value[key].value = value;
+  }
+  overrides.value = object(payload.overrides) as Record<string, Data>;
+  await nextTick();
+  restoringPreview = false;
+  previewState.value = row;
+  previewJob.value = id;
 }
 async function saveDirectories() {
   if (!config.data.value) return;
@@ -157,10 +206,12 @@ async function saveDirectories() {
 }
 async function load() {
   plan.value = undefined;
+  previewJob.value = '';
+  previewState.value = undefined;
+  const aid = cloud.id;
   const r = await preview.run((signal) =>
-    request<Data>('/api/cloud/plans', {
+    request<Data>('/api/cloud/plans/scan', {
       method: 'POST',
-      timeoutMs: 120000,
       signal,
       body: {
         account_id: cloud.id,
@@ -171,7 +222,23 @@ async function load() {
       },
     }),
   );
-  if (r) plan.value = object(r.plan);
+  if (r && aid === cloud.id) {
+    previewState.value = { state: 'queued' };
+    previewJob.value = String(r.job_id);
+    await router.replace({
+      query: { ...route.query, account: aid, preview_job: previewJob.value },
+    });
+  }
+}
+async function previewDone(row: Data) {
+  const id = previewJob.value,
+    pid = object(row.result).plan_id;
+  if (!pid || !['success', 'needs_review'].includes(String(row.state))) return;
+  const r = await preview.run((signal) => readData(`/api/cloud/plans/${pid}`, signal));
+  if (r && previewJob.value === id) plan.value = object(r.plan);
+}
+async function stopPreview() {
+  await op.run(() => writeData(`/api/cloud/jobs/${previewJob.value}/stop`, { confirmed: true }));
 }
 async function execute() {
   const action = confirm.value;
@@ -193,14 +260,16 @@ async function execute() {
   if (r) {
     job.value = String(r.job_id);
     confirm.value = '';
-    plan.value = undefined;
+    invalidate();
+    clearPreviewLink();
   }
 }
 watch(
   () => cloud.id,
-  () => {
+  async () => {
     config.cancel();
     invalidate();
+    restoringPreview = true;
     source.value = '';
     target.value = '';
     unknown.value = '';
@@ -210,7 +279,9 @@ watch(
     targetName.value = '';
     unknownName.value = '';
     fixing.value = undefined;
-    void defaults();
+    await nextTick();
+    restoringPreview = false;
+    void defaults(true);
   },
   { immediate: true },
 );
@@ -228,7 +299,7 @@ watch(
     ><strong>识别 → 八维洗版 → 命名归档 → STRM → Emby 入库</strong>
   </div>
   <OperationState
-    :busy="preview.loading.value || op.busy.value"
+    :busy="previewBusy || op.busy.value"
     :error="preview.error.value || op.error.value"
     :uncertain="op.uncertain.value"
     :receipt="op.receipt.value"
@@ -236,7 +307,7 @@ watch(
   <p v-if="correctionCount" class="notice-bar" role="status">
     本页已保留 {{ correctionCount }} 项人工修正。
     {{
-      preview.loading.value
+      previewBusy
         ? '正在用修正重新预览…'
         : plan
           ? '请查看下方每项的应用结果；确认整理后才执行归档。'
@@ -262,7 +333,7 @@ watch(
             { name: '确认归档', note: '提交任务' },
           ]"
           :key="step.name"
-          :class="{ active: i === (fixing ? 2 : job ? 3 : plan || preview.loading.value ? 1 : 0) }"
+          :class="{ active: i === (fixing ? 2 : job ? 3 : plan || previewBusy ? 1 : 0) }"
         >
           <span>{{ i + 1 }}</span>
           <div>
@@ -288,7 +359,7 @@ watch(
             :account-id="cloud.id"
             :label="card.title"
             hide-label
-            :disabled="op.busy.value || op.uncertain.value || preview.loading.value"
+            :disabled="op.busy.value || op.uncertain.value || previewBusy"
             @selected="(value) => selectDirectory(card.key, value)"
           />
           <p>{{ card.description }}</p>
@@ -317,8 +388,8 @@ watch(
       <div class="action-row">
         <button
           class="button"
-          :disabled="op.busy.value || op.uncertain.value || preview.loading.value"
-          @click="defaults"
+          :disabled="op.busy.value || op.uncertain.value || previewBusy"
+          @click="defaults()"
         >
           <RotateCcw :size="14" />撤销目录修改</button
         ><button
@@ -342,13 +413,13 @@ watch(
             !source ||
             !target ||
             source === target ||
-            preview.loading.value ||
+            previewBusy ||
             op.busy.value ||
             op.uncertain.value
           "
           @click="load"
         >
-          扫描并预览整理</button
+          {{ previewBusy ? '扫描预览进行中…' : '扫描并预览整理' }}</button
         ><button
           class="button"
           :disabled="!target || op.busy.value || op.uncertain.value"
@@ -379,6 +450,33 @@ watch(
       </div>
     </aside>
   </div>
+  <section v-if="previewJob" class="organize-current-job">
+    <p class="notice-bar">
+      扫描只生成预览。完成后核对下方文件，再点击「确认整理」执行改名和移动；刷新本页可恢复进度。
+    </p>
+    <button
+      v-if="previewBusy"
+      class="button"
+      :disabled="op.busy.value || op.uncertain.value"
+      @click="stopPreview"
+    >
+      停止扫描预览
+    </button>
+    <TaskReceipt
+      :key="previewJob"
+      :id="previewJob"
+      @update="(value) => (previewState = value)"
+      @done="previewDone"
+    />
+    <button
+      v-if="preview.error.value && object(previewState?.result).plan_id"
+      class="button"
+      :disabled="preview.loading.value"
+      @click="previewDone(previewState || {})"
+    >
+      重新读取预览结果
+    </button>
+  </section>
   <section v-if="plan" class="panel preview-panel">
     <header class="section-heading">
       <div>
@@ -387,10 +485,14 @@ watch(
       </div>
       <button
         class="button primary"
-        :disabled="op.busy.value || op.uncertain.value"
+        :disabled="
+          op.busy.value ||
+          op.uncertain.value ||
+          (!records(plan.items).length && !records(plan.unknown_items).length)
+        "
         @click="confirm = 'apply'"
       >
-        核对并整理
+        确认整理（改名并移动）
       </button>
     </header>
     <div class="preview-toolbar">

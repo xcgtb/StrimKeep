@@ -444,6 +444,19 @@ def create_plan(body: PlanInput):
     }
 
 
+@router.post('/plans/scan', status_code=202)
+def scan_plan(body: PlanInput):
+    from app.cloud import plan_preview
+    return {'status': 'success', 'job_id': call(plan_preview.start, body.account_id,
+            body.source_cid, body.target_cid, body.model_dump()['overrides'], body.unknown_cid)}
+
+
+@router.get('/plans/{plan_id}')
+def read_plan(plan_id: str):
+    from app.cloud import plan_preview
+    return {'status': 'success', 'plan': call(plan_preview.read, plan_id)}
+
+
 @router.post("/plans/apply", status_code=202)
 def apply_plan(body: ApplyInput):
     return {

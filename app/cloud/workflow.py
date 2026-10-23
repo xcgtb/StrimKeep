@@ -195,11 +195,13 @@ def recognize_source(account_id, provider, row, overrides, config, directory_cac
     return replacement.decorate(row, media, config, previous)
 
 
-def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, job_id=None, source_ids=None):
+def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, job_id=None, source_ids=None, expected_revision=None):
     started = time.monotonic()
     account = store.account(account_id)
     if not account:
         raise CloudError("请先扫码登录", 409)
+    if expected_revision is not None and account['revision'] != expected_revision:
+        raise CloudError('账号授权已变化，请重新预览', 409)
     provider = for_account(account_id)
     _directory(provider, source_cid)
     _directory(provider, target_cid)
@@ -287,6 +289,10 @@ def plan(account_id, source_cid, target_cid, overrides=None, unknown_cid=None, j
         "quality_held": quality_held,
     }
     with store.db() as con:
+        current = con.execute('SELECT revision FROM cloud_accounts WHERE id=?', (account_id,)).fetchone()
+        if not current or current[0] != account['revision']:
+            raise CloudError('扫描期间账号授权变化，请重新扫描预览', 409)
+        jobs.checkpoint(job_id)
         con.execute(
             "INSERT INTO cloud_plans VALUES(?,?,?,?,?,?)",
             (
@@ -1047,6 +1053,9 @@ def refresh_emby():
 
 
 def run(job_id, kind, payload):
+    if kind == 'organize_preview':
+        from app.cloud import plan_preview
+        return plan_preview.run(job_id, payload)
     if kind == 'inventory':
         from app.cloud import inventory
         return inventory.run(job_id, payload)

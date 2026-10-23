@@ -171,6 +171,8 @@ STRM 全量扫描由 `scheduler` 调用 `cloud/strm_scan.tick()`，从已保存�
 
 `workflow.await_transfer_receipt()` 仅在转存请求成功返回、目标内容暂未全部可见时退避重读回执，间隔为 1/2/4/8/15/30 秒，另计适配器读取耗时。文件名、类型、大小与 SHA1 仍须唯一匹配；歧义、指纹冲突和接口错误立即保留待核实状态。根目录扫描复用同次已匹配列表，避免二次读取旧快照。停止等待或等待耗尽不重发转存，保留 `receive` 持久步骤用于原有只读核实及确认后继续整理。
 
+手动整理页面通过 `POST /api/cloud/plans/scan` 立即取得 `organize_preview` 持久任务，`cloud/plan_preview.py` 复用现有队列及 `workflow.plan()`，不在 HTTP 请求中等待整批媒体探测。相同账号、来源及选项的活跃预览复用一个任务；不同选项冲突时等待或停止原任务。任务详情只为此类型返回 `preview_input`，结果记录 `plan_id`，由 `GET /api/cloud/plans/{plan_id}` 核对账号修订、待确认状态与有效期后读取。Vue 使用原 `TaskReceipt` 显示进度与停止入口，URL 保留账号和预览任务 ID，刷新或从任务中心返回可恢复目录、人工修正及结果；确认整理仍由原 `workflow.apply()` 提交写任务。预览不发送归档/入库通知，不自动移动文件；服务重启中断的扫描沿用任务队列的待处理语义，不重放未知操作。
+
 云任务执行槽占用期间，工作线程每两秒继续执行只读调度与持久化排队（频道读取、接收派发、维护排期和自动规则），实际远端写入仍在当前独占任务结束后串行执行。Emby 入库检查沿用原独立轮询。
 | `app/emby_events.py` `overview.py` `activity_stream.py` `runtime_logs.py` | 事件、总览、活动流、运行日志 |
 

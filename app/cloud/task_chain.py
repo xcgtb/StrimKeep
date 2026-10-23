@@ -3,6 +3,7 @@ from app.cloud import store
 from app.cloud.errors import CloudError
 
 LABELS = {'intake':'资源接收', 'channel':'频道接收', 'transfer':'分享转存',
+          'organize_preview':'整理扫描预览',
           'organize':'识别与归档', 'workflow':'整理流程', 'sync':'STRM 同步',
           'publish':'延时发布', 'share_strm':'分享 STRM', 'categories':'分类目录', 'maintenance':'目录维护'}
 

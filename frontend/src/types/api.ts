@@ -143,6 +143,7 @@ export type JobState =
   | 'cancelled'
   | 'stopped';
 export interface Job {
+  preview_input?: { account_id: string };
   id: string;
   kind: string;
   state: JobState;

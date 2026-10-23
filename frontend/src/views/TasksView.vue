@@ -65,6 +65,7 @@ const rows = computed(() =>
 );
 const kinds: Record<string, string> = {
   inventory: '盘内库存扫描',
+  organize_preview: '整理扫描预览',
   transfer: '分享转存',
   organize: '整理归档',
   workflow: '接收与整理',
@@ -348,6 +349,15 @@ useActivityUpdates(async () => {
       <EvidenceDetails :value="detail.data.value.job.upgrades" />
     </details>
     <div v-if="detail.data.value?.job" class="action-row">
+      <RouterLink
+        v-if="detail.data.value.job.kind === 'organize_preview'"
+        class="button primary"
+        :to="{
+          path: '/organize/workspace',
+          query: { account: detail.data.value.job.preview_input?.account_id, preview_job: jobId },
+        }"
+        >查看整理预览</RouterLink
+      >
       <button
         v-if="detail.data.value.job.state === 'queued'"
         class="button"
@@ -367,19 +377,22 @@ useActivityUpdates(async () => {
             'intake',
             'channel',
             'inventory',
+            'organize_preview',
           ].includes(detail.data.value.job.kind)
         "
         class="button"
         @click="action = 'stop'"
       >
         {{
-          detail.data.value.job.kind === 'inventory'
-            ? '停止库存扫描'
-            : detail.data.value.job.kind === 'channel'
-              ? '安全停止并暂停频道'
-              : detail.data.value.job.kind === 'intake'
-                ? '安全停止当前接收'
-                : '安全停止并暂停规则'
+          detail.data.value.job.kind === 'organize_preview'
+            ? '停止扫描预览'
+            : detail.data.value.job.kind === 'inventory'
+              ? '停止库存扫描'
+              : detail.data.value.job.kind === 'channel'
+                ? '安全停止并暂停频道'
+                : detail.data.value.job.kind === 'intake'
+                  ? '安全停止当前接收'
+                  : '安全停止并暂停规则'
         }}
       </button>
       <button
