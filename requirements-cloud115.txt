@@ -14,7 +14,7 @@ cryptography==46.0.7
 ed2k==0.0.2.2
 errno2==0.0.5
 fastapi==0.142.2
-filelock==4.1.1
+filelock==4.2.4
 glob_pattern==0.0.2
 guessit==4.4.0
 h11==0.16.0
