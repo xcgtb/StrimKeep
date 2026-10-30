@@ -41,7 +41,7 @@ packaging==26.3
 pillow==12.3.0
 posixpatht==0.0.4
 propcache==0.5.4
-pycparser==3.11
+pycparser==3.12
 pycryptodome==3.24.1
 pydantic==2.14.1
 pydantic_core==2.50.1
