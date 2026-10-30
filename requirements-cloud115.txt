@@ -79,7 +79,7 @@ sqlparse==0.6.0
 starlette==1.8.0
 typing-inspection==0.4.4
 typing_extensions==4.16.0
-urllib3-future==2.25.902
+urllib3-future==2.25.903
 urllib3_future_request==0.0.2
 uvicorn==0.54.0
 uvloop==0.23.0
