@@ -1,6 +1,6 @@
 # Vue 3 is compiled inside the build stage; the NAS needs no Node installation.
 # Do not use checked-in static assets as the source of truth for released images.
-FROM node:24-bookworm-slim AS frontend_builder
+FROM node:26-bookworm-slim AS frontend_builder
 WORKDIR /build/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
