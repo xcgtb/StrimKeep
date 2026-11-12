@@ -7,6 +7,7 @@ import asyncio
 import json
 import sqlite3
 
+from strimkeep.jobs import install as install_jobs
 from strimkeep.notifications import Notifications
 
 
@@ -14,6 +15,9 @@ class Store:
     def __init__(self, conn):
         self.db = conn
         self.events = []
+        # 生产环境由 organizer 调 jobs.install(store) 挂上 store.jobs，
+        # 这里补上，否则通知结项路径会 AttributeError。
+        install_jobs(self)
 
     def get(self, key, default=None):
         return default
@@ -27,7 +31,7 @@ def make_db(stage, notify_state='pending'):
     conn.row_factory = sqlite3.Row
     conn.executescript('''
         CREATE TABLE organize_jobs(id INTEGER PRIMARY KEY, state TEXT, stage TEXT, message TEXT,
-                                   notify_state TEXT, config TEXT);
+                                   notify_state TEXT, config TEXT, created REAL, updated REAL);
         CREATE TABLE organize_items(id INTEGER PRIMARY KEY, job_id INTEGER, state TEXT, plan TEXT);
         CREATE TABLE notifications(id INTEGER PRIMARY KEY, at REAL, level TEXT, job_id INTEGER,
                                    event_key TEXT, title TEXT, message TEXT, read_at REAL,
@@ -38,7 +42,8 @@ def make_db(stage, notify_state='pending'):
         CREATE TABLE strm_reported_items(job_id INTEGER, item_id INTEGER);
         CREATE TABLE telegram_message_refs(event_key TEXT, chat_id TEXT, message_id INTEGER, photo INTEGER, edited TEXT, attempts INTEGER, next_try REAL);
     ''')
-    conn.execute("INSERT INTO organize_jobs VALUES (218,'completed',?, '', ?, ?)",
+    conn.execute("INSERT INTO organize_jobs(id,state,stage,message,notify_state,config) "
+                 "VALUES (218,'completed',?, '', ?, ?)",
                  (stage, notify_state, json.dumps({'job_kind': 'organize'})))
     conn.execute("INSERT INTO organize_items VALUES (1,218,'done',?)",
                  (json.dumps({'relative_path': '媒体库/电影/x/x.strm', 'details': {'id': 1},

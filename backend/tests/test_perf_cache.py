@@ -34,10 +34,10 @@ def test_tmdb_details_and_episodes_are_cached(tmp_path):
         await engine.tmdb('tv/1/season/1/episode/1')
         await engine.tmdb('tv/1/season/1/episode/1')
         assert len(seen) == 2
-        # 语言由服务端固定，不进缓存键，避免中英文各存一份。
+        # 语言参与缓存键：同一部片的中英文各存一份（调用方可以按需取不同语言）。
         await engine.tmdb('movie/1', {'language': 'en-US'})
-        assert len(seen) == 2
-        assert store.db.execute('SELECT count(*) FROM tmdb_cache').fetchone()[0] == 2
+        assert len(seen) == 3
+        assert store.db.execute('SELECT count(*) FROM tmdb_cache').fetchone()[0] == 3
         await http.aclose()
         store.close()
 

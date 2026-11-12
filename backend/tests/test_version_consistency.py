@@ -30,7 +30,7 @@ def test_frontend_package_version_matches_backend_version():
 
 
 def test_readme_heading_matches_backend_version():
-    heading = re.search(r'(?m)^# StrimKeep ([\w.\-]+)$',
+    heading = re.search(r'(?m)^#\s*(?:🎬\s*)?StrimKeep\s+([\w.\-]+)$',
                         (ROOT / 'README.md').read_text(encoding='utf-8'))
     assert heading and heading.group(1) == __version__
 

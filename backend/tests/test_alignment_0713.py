@@ -101,7 +101,7 @@ def test_cancelled_job_is_not_pushed_to_bot(tmp_path):
         store.db.execute("INSERT INTO organize_jobs(id,state,config,created,updated,notify_state) "
                          "VALUES(99,'cancelled','{}',0,0,'queued')")
     notifications = Notifications(store, httpx.AsyncClient())
-    asyncio.run(notifications._job({'id': 99, 'state': 'cancelled'}))
+    asyncio.run(notifications._job({'id': 99, 'state': 'cancelled', 'stage': '', 'config': '{}'}))
     assert store.db.execute('SELECT count(*) FROM notifications').fetchone()[0] == 0
     assert store.db.execute('SELECT notify_state FROM organize_jobs WHERE id=99').fetchone()[0] == 'not_needed'
     asyncio.run(notifications.http.aclose())

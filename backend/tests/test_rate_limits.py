@@ -86,7 +86,8 @@ def test_rate_limit_text_trips_cooldown_and_rejects_immediately(tmp_path):
             await cloud.call(denied)
         assert exc.value.code == 'RATE_LIMITED'
         assert cloud.throttle_scale == pytest.approx(2.0)               # 间隔翻倍
-        assert cloud.rate_limit_until - clock() == pytest.approx(60)    # 首次冷却 60 秒
+        # 冷却从触发时刻起算，之后内部还有一次退避 sleep，所以区间给宽一点
+        assert 60 <= cloud.rate_limit_until - clock() < 120    # 首次冷却约 60 秒
 
         with pytest.raises(CloudError) as again:
             await cloud.call(denied)

@@ -54,7 +54,7 @@ def test_gap_switch_excludes_automatic_plan_until_enabled(tmp_path,monkeypatch):
     app,admin,path,db=setup_app(tmp_path,monkeypatch); store=app.state.organizer.store
     values={'organize_config':{'library_dir_name':'cloud'},'inventory_config':{'single_gaps':False}}
     store.get=lambda key,default=None:values.get(key,default)
-    async def build(body,ttl=900): return {'plan_id':'test','actions':[]}
+    async def build(body,ttl=900,reuse=None): return {'plan_id':'test','actions':[]}
     app.state.inventory_build_delete_plan=build
     monkeypatch.setattr(api,'governance_preview',lambda *a,**kw:{'scan_complete':True,'single':[],'blocked':[],'dual':[{'kind':'tv','tmdb_id':12,'season':1,'winner':'cloud','action_kind':'shr','action_reason':'incomplete_delete_share','incomplete_sides':['share']}]})
     install_inventory(app,store,admin)
