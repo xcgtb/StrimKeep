@@ -40,115 +40,75 @@
 
 ---
 
-## 🐳 Docker 快速部署（推荐）
+## 🐳 Docker 部署
 
-### 📋 系统要求
+三步就够。
 
-准备一台可以运行 Docker 的 NAS 或 Linux 设备，安装 Docker 20.10+ 和 Docker Compose 2.x。
-需要 115 网盘与 TMDB 的网络可达；用到 Telegram 通知或频道监控时，容器还要能访问 Telegram API。
-
-### 1. 准备目录
+### 1. 建两个目录
 
 ```bash
 mkdir -p /vol1/1000/strimkeep/data /vol1/1000/strimkeep/strm
-cd /vol1/1000/strimkeep
 ```
 
-### 2. 创建 `docker-compose.yml`
+### 2. 建 `docker-compose.yml`
 
 ```yaml
 services:
   strimkeep:
     image: ghcr.io/xcgtb/strimkeep:latest
     container_name: strimkeep
-    network_mode: host  # 推荐 host 模式：面板 9000、Emby 回调、播放地址都能直接访问
+    network_mode: host
     environment:
-      # --- 基础配置 ---
       - TZ=Asia/Shanghai
-      # 必填：面板登录密码（至少 12 位）。把等号后面填上你的密码，不要留空
-      - ADMIN_PASSWORD=
-      # 面板登录用户名，一般不用改
       - ADMIN_USERNAME=admin
-      # 可选：/metrics 访问令牌，留空 = 不校验
-      - STRIMKEEP_METRICS_TOKEN=
+      - ADMIN_PASSWORD=        # ← 填登录密码，至少 12 位（留空容器直接退出）
     volumes:
-      # 数据库与日志持久化，右侧固定为 /data
-      # 左侧换成你自己的目录（飞牛一般是 /vol1/1000/...）
-      - /vol1/1000/strimkeep/data:/data
-      # STRM 输出目录：右侧固定为 /strm，左侧换成你的目录
-      # Emby 要挂载同一份（详见下方可选的 Emby 段落）
-      - /vol1/1000/strimkeep/strm:/strm
-    restart: always
-    # 停止时给整理任务 30 秒收尾，避免留下半截文件
-    stop_grace_period: 30s
-    # 健康检查：面板 /health/ready 返回 200 才算健康
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/health/ready', timeout=3)\""]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 40s
-    # 日志轮转：最多保留 3 个 10MB 文件
-    logging:
-      driver: json-file
-      options:
-        max-file: "3"
-        max-size: 10m
-
-  # --- 可选：连 Emby 一起装 ---
-  # 用不到就把本段整段删掉；要用就在启动命令后加 --profile emby
-  emby_strimkeep:
-    profiles: ["emby"]
-    container_name: emby_strimkeep
-    image: emby/embyserver:latest
-    environment:
-      - TZ=Asia/Shanghai
-      - UID=0
-      - GID=0
-    ports:
-      - "8096:8096"  # Emby 网页端口
-    volumes:
-      # Emby 配置与缓存
-      - /vol1/1000/strimkeep/emby:/config
-      # 和上面的 STRM 目录保持一致（左侧必须相同）
-      - /vol1/1000/strimkeep/strm:/media
-    restart: always
+      - /vol1/1000/strimkeep/data:/data    # 数据库/配置，丢了无法恢复
+      - /vol1/1000/strimkeep/strm:/strm    # STRM 输出，Emby 库指这里
+    restart: unless-stopped
 ```
 
-### 3. 改这几处
+只需要改两处：`ADMIN_PASSWORD=` 后面填密码；两个 `/vol1/1000/strimkeep/...` 换成你的目录
+（右侧的 `/data`、`/strm` 不要改）。
 
-| 配置 | 填写说明 |
-|---|---|
-| `ADMIN_PASSWORD=` | **必填**：等号后面填自己的面板登录密码，至少 12 位（留空时容器启动即退出，日志会提示） |
-| `/vol1/1000/strimkeep/data:/data` | 左侧换成你的**数据目录**，右侧保持 `/data`；里面是 `state.db`、`master.key` 与日志，更新和迁移时保留该目录 |
-| `/vol1/1000/strimkeep/strm:/strm` | 左侧换成你的 **STRM 输出目录**，右侧保持 `/strm`；Emby 要挂载同一份输出内容 |
-| `ADMIN_USERNAME=admin` | 可选：登录用户名，一般不用改 |
-| `STRIMKEEP_METRICS_TOKEN=` | 可选：采集 `/metrics` 时填令牌，留空不校验 |
-| `image: …:latest` | 可选：想固定版本就写 `:3.0.2` |
-
-### 4. 启动
+### 3. 启动
 
 ```bash
 docker compose up -d
 ```
 
-浏览器打开 `http://NAS_IP:9000`，用 `admin` + 你设置的密码登录。
-首次进入后在面板里登录 115 账号，再配整理与治理规则，**环境变量只用来启动服务**。
-需要连 Emby：`docker compose --profile emby up -d`。
-需要连 Emby：`docker compose --profile emby up -d`。
+打开 `http://NAS的IP:9000`，用户名 `admin` + 你填的密码登录。
 
-### 📁 数据持久化
+> 想固定版本：把 `:latest` 改成 `:3.0.2`（可用 tag 见 Releases）。
 
-| 目录 | 内容 | 说明 |
-|---|---|---|
-| `/vol1/1000/strimkeep/data` | `state.db`、`master.key`、日志 | 库状态与凭据密文，**丢了无法恢复** |
-| `/vol1/1000/strimkeep/strm` | 生成的 STRM 媒体树 | 同时挂给 Emby |
+### 要 Emby 一起装？
 
-备份（两者必须成对）：
-```bash
-tar -czf strimkeep-backup-$(date +%Y%m%d).tar.gz \
-  /vol1/1000/strimkeep/data /vol1/1000/strimkeep/strm
+把下面这段追加到 `docker-compose.yml` 末尾，`docker compose up -d` 即可：
+
+```yaml
+  emby_strimkeep:
+    image: emby/embyserver:latest
+    container_name: emby_strimkeep
+    environment:
+      - TZ=Asia/Shanghai
+      - UID=0
+      - GID=0
+    ports:
+      - "8096:8096"                      # Emby 网页端口，按需改
+    volumes:
+      - /vol1/1000/strimkeep/emby:/config
+      - /vol1/1000/strimkeep/strm:/media # 必须和上面的 /strm 挂同一份
+    restart: unless-stopped
 ```
+
+### 升级 / 备份
+
+```bash
+docker compose pull && docker compose up -d                 # 升级（回滚就把版本号改回去）
+tar -czf strimkeep-backup-$(date +%Y%m%d).tar.gz data strm  # 备份，两者必须成对
+```
+
+`data` 里有 `state.db`、`master.key` 与日志，丢了无法恢复；`strm` 可以重新生成，但 Emby 要重扫。
 
 ---
 
