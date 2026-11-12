@@ -164,7 +164,7 @@ def _seed_share_rows(client, rows):
             rel = '分享STRM待整理/' + name + '.strm'
             path = strm_root / rel
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text('https://media.example/play/share/' + sid + '?token=x\n', encoding='utf-8')
+            path.write_text('https://media.example/play115/share/' + sid + '?token=x\n', encoding='utf-8')
             store.db.execute(
                 'INSERT OR REPLACE INTO share_strms(id,share_code,receive_code,file_id,pickcode,name,strm_path,token_hash,revoked,created) '
                 "VALUES(?,?,?,?,?,?,?,?,0,?)",

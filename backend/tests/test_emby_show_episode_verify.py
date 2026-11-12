@@ -14,7 +14,7 @@ def test_tv_verification_uses_paginated_show_episodes_and_identity(tmp_path):
         # 201 entries ensure the match is found only after a second page.
         episodes = [
             {'Id': str(n), 'Path': '/media/share/E%03d.strm' % n,
-             'MediaSources': [{'Path': 'http://nas:9000/play/share/id%03d/video.mkv' % n}]}
+             'MediaSources': [{'Path': 'http://nas:9000/play115/share/id%03d/video.mkv' % n}]}
             for n in range(201)
         ]
         # This exact path must not be accepted for a different playback identity.

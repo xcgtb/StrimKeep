@@ -43,6 +43,16 @@ class EmptyDirectoryCleanup:
         with self.engine.store.db:
             self.engine.store.db.executemany('DELETE FROM directory_cache WHERE account_id=? AND id=?',[(account,e['source']['id']) for e in state.get('entries',[]) if e.get('state')=='confirmed'])
 
+    async def gone(self, cid):
+        """目录是否已经从 115 上消失（用来区分「读不到」和「已经不存在」）。"""
+        check = getattr(self.cloud, 'live_file_exists', None)
+        if not callable(check):
+            return False
+        try:
+            return not await check(cid)
+        except CloudError:
+            return False
+
     async def candidates(self, job_id, config, rows):
         """列出可回收的空目录候选；读不到的目录只跳过，不拖垮整轮清理。
 
@@ -93,6 +103,11 @@ class EmptyDirectoryCleanup:
             except CloudError as exc:
                 if exc.code not in ('DIRECTORY_CHANGED', 'INCOMPLETE_LIST', 'DIRECTORY_UNAVAILABLE'):
                     raise
+                if exc.code == 'DIRECTORY_UNAVAILABLE' and await self.gone(cid):
+                    # 目录已经不存在了：上一轮清掉、或别人删了，目标都已达成。
+                    # 记成「读取失败」会让任务一直挂在「部分未完成」，而实际没有东西要清。
+                    self.engine.store.event('organize', f'任务 {job_id}：清理目录 {cid} 已不存在，跳过。')
+                    continue
                 self.engine.store.event('organize', f'任务 {job_id}：清理目录 {cid} 读取失败（{exc.code}）。')
                 skipped += 1
                 continue
@@ -112,6 +127,9 @@ class EmptyDirectoryCleanup:
                 except CloudError as exc:
                     if exc.code not in ('DIRECTORY_CHANGED', 'INCOMPLETE_LIST', 'DIRECTORY_UNAVAILABLE'):
                         raise
+                    if exc.code == 'DIRECTORY_UNAVAILABLE' and await self.gone(parent):
+                        self.engine.store.event('organize', f'任务 {job_id}：清理目录 {candidate} 的父目录已不存在，跳过。')
+                        continue
                     self.engine.store.event('organize', f'任务 {job_id}：清理目录 {candidate} 的父目录读取失败（{exc.code}）。')
                     skipped += 1
                     continue

@@ -255,7 +255,7 @@ def test_emby_series_queries_once_and_confirms_every_episode(tmp_path):
             if req.url.params.get('IncludeItemTypes')=='Series':
                 assert req.url.params['AnyProviderIdEquals']=='tmdb.10'
                 return httpx.Response(200,json={'Items':[{'Id':'series10'}]})
-            assert req.url.params['ParentId']=='series10'
+            assert req.url.path.endswith('/Shows/series10/Episodes'), str(req.url)
             return httpx.Response(200,json={'Items':[{'Path':'/mount/'+t['relative']} for t in targets]})
         async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as api:
             engine.emby.http=api;await engine.emby.tick(time.time()+31)
@@ -284,7 +284,7 @@ def test_emby_public_progress_hides_delivery_payload_and_credentials(tmp_path, m
     app,jid=api_setup(tmp_path,monkeypatch)
     payload={'connection':'private-hash','targets':[{'confirmed':True,'pid':'private-pid','relative':'hidden.strm'},{'confirmed':False}]}
     with app.state.store.db:
-        app.state.store.db.execute('INSERT INTO emby_deliveries VALUES(?,?,?,?,?,?,?)',(jid,'accepted',json.dumps(payload),1,time.time(),time.time()+1800,'后台核对中'))
+        app.state.store.db.execute('INSERT INTO emby_deliveries(job_id,state,payload,attempts,next_due,deadline,message) VALUES(?,?,?,?,?,?,?)',(jid,'accepted',json.dumps(payload),1,time.time(),time.time()+1800,'后台核对中'))
     with TestClient(app) as client:
         assert client.get('/api/v1/tasks').status_code==401
         client.post('/api/v1/auth/login',json={'username':'admin','password':'test-password-1234'})

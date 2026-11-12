@@ -23,21 +23,33 @@ def test_offline_completion_without_organize_does_not_enqueue(tmp_path):
     """只落盘的离线提交：产物出现后只标记完成，不建整理任务。"""
     import asyncio
     from types import SimpleNamespace
-    from strimkeep.cloud115 import CloudError
     from strimkeep.offline_api import OfflinePostProcess
     from strimkeep.store import Store
 
     class Cloud:
         async def offline_tasks(self, page=1, size=20):
-            return {'data': [{'info_hash': 'abc123', 'file_id': '1001', 'name': 'a.mkv', 'percentDone': 100}]}, None
+            # 115 的 file_id 是「保存到哪个目录」，产物文件 ID 在 delete_file_id 里。
+            return {'data': [{'info_hash': 'abc123', 'delete_file_id': '1001',
+                              'name': 'a.mkv', 'percentDone': 100}]}, None
 
-        async def children(self, cid):
-            return [{'id': '1001', 'name': 'a.mkv', 'is_dir': False}]
+        async def file(self, file_id):
+            return {'id': file_id, 'name': 'a.mkv', 'is_dir': False, 'parent_id': '123'}
 
     async def run():
         store = Store(tmp_path / 'data', 'admin', 'test-password-1234')
-        post = OfflinePostProcess(SimpleNamespace(store=store, cloud=Cloud(),
-                                                  tasks=SimpleNamespace(), engine=None))
+        notified = []
+
+        async def publish(**kwargs):
+            notified.append(kwargs.get('key'))
+
+        async def scan_scope_allows(cids):
+            return True
+
+        # OfflinePostProcess 的第一个参数就是 engine，store / 通知都从它身上取。
+        engine = SimpleNamespace(store=store, cloud=Cloud(), tasks=SimpleNamespace(),
+                                 notifications=SimpleNamespace(publish=publish),
+                                 scan_scope_allows=scan_scope_allows)
+        post = OfflinePostProcess(engine)
         with store.db:
             sid = store.db.execute(
                 "INSERT INTO offline_submissions(urls,target_cid,target_label,before_ids,submitted_at,"
@@ -45,9 +57,10 @@ def test_offline_completion_without_organize_does_not_enqueue(tmp_path):
         row = store.db.execute('SELECT * FROM offline_submissions WHERE id=?', (sid,)).fetchone()
         await post.check(row)
         row = store.db.execute('SELECT * FROM offline_submissions WHERE id=?', (sid,)).fetchone()
-        assert row['state'] == 'completed'
+        assert row['state'] == 'completed', dict(row)
         assert row['organize_job_id'] is None
         assert store.db.execute('SELECT count(*) FROM organize_jobs').fetchone()[0] == 0
+        assert notified == ['offline_done:%d' % sid]
         store.close()
 
     asyncio.run(run())

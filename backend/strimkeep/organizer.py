@@ -2998,12 +2998,22 @@ class Organizer:
             # 失败标记只对「还没结束」的条目生效：条目重跑成功后 plan 里可能还留着上一次
             # 的 failure / blocks_job（plan 是合并写的），拿全部条目判 blocking 会让任务
             # 永远挂在「部分未完成」。本地导出失败 → 重跑成功就是现场例子。
-            unfinished = [json.loads(r['plan']) for r in self.store.db.execute(
-                "SELECT plan FROM organize_items WHERE job_id=? AND state NOT IN ('done','skipped','recycled')",
-                (job_id,))]
-            # 等着分流到未识别目录（pending）是正常流程，不是失败：未识别本身已经
-            # 是「正常结果」口径，别再借 failure 把它拉回「部分未完成」。
-            failed_plans = [p for p in unfinished if p.get('failure') and not p.get('pending')]
+            # 但 skipped 不能一律放过：身份校验失败、未识别文件转移未完成都记成
+            # skipped + failure（文件还留在盘上、没入库），任务不能报「已完成」。
+            unfinished = self.store.db.execute(
+                "SELECT state,plan FROM organize_items WHERE job_id=? AND state NOT IN ('done','recycled')",
+                (job_id,)).fetchall()
+            failed_plans = []
+            for item in unfinished:
+                plan = json.loads(item['plan'])
+                if not plan.get('failure'):
+                    continue
+                # 分流到未识别目录且成功了（条目 state 是 pending）：文件已经在未识别目录里，
+                # 是「正常结果」口径，不拉回「部分未完成」。同一个 pending 标记却留在
+                # skipped 上的，说明分流没做完，文件还在盘上，必须拦住。
+                if plan.get('pending') and item['state'] != 'skipped':
+                    continue
+                failed_plans.append(plan)
             warnings = (any(p.get('warnings') for p in plans) or bool(cleanup['warning'])
                         or bool(failed_plans) or bool(tail))
             merged_subtitles = any(s.get('ready') for p in plans for s in p.get('wash', {}).get('duplicate', {}).get('subtitles', []))

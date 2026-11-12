@@ -61,7 +61,9 @@ class MemoryCloud:
 
     async def directory(self, cid):
         if cid not in self.nodes or not self.nodes[cid]['is_dir']:
-            raise CloudError('目录不存在。')
+            # 与真实 115 一致：目录不在时报 DIRECTORY_UNAVAILABLE，清理逻辑按这个码
+            # 跳过单个目录，而不是把整轮空目录清理判成失败。
+            raise CloudError('目录不存在。', 'DIRECTORY_UNAVAILABLE', 409)
         chain = [cid]
         while cid != '0':
             cid = self.nodes[cid]['parent_id']

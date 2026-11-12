@@ -22,9 +22,11 @@ def test_directory_fill_creates_strm_for_orphan_files(tmp_path):
         entries = await cloud.children(season)
         assert await engine.fill_directory(jid, season, entries, config) == 1
 
-        target = (tmp_path / 'strm' / '影视媒体库' / '剧集' / '欧美剧集' / TITLE
-                  / 'Season 1' / '某剧.2024.S01E01.1080p.strm')
-        assert target.is_file(), '目录里的孤儿文件应被补出 STRM'
+        # 库根默认镜像 115 归档目录名（0.8.30 起），不再固定「影视媒体库」。
+        found = list((tmp_path / 'strm').rglob('某剧.2024.S01E01.1080p.strm'))
+        assert found, '目录里的孤儿文件应被补出 STRM'
+        target = found[0]
+        assert target.parent.name == 'Season 1' and target.parent.parent.name == TITLE
         assert '/play115/' in target.read_text(encoding='utf-8')
 
         # 幂等：本地已有 STRM 时不再重复创建，也不重复登记

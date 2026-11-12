@@ -58,8 +58,32 @@ def test_immediate_cleanup_is_skipped_only_after_confirmed_missing():
         async def live_file_exists(self, cid):
             return False
 
+    # 活体查询确认已不存在：没有东西可清，静默跳过，不记「读取失败」。
     assert run(Missing(), ['X']) == ([], '')
-    assert '读取失败' in run(Missing(), [])[1]
+    assert run(Missing(), []) == ([], '')
+
+
+def test_unreadable_directory_still_warns_when_it_may_exist():
+    class Flaky(FakeCloud):
+        async def directory(self, cid):
+            raise CloudError('目录不可读取', 'DIRECTORY_UNAVAILABLE', 409)
+
+        async def live_file_exists(self, cid):
+            return True
+
+    assert '读取失败' in run(Flaky(), [])[1]
+
+
+def test_directory_whose_absence_cannot_be_confirmed_still_warns():
+    class Unknown(FakeCloud):
+        async def directory(self, cid):
+            raise CloudError('目录不可读取', 'DIRECTORY_UNAVAILABLE', 409)
+
+        async def live_file_exists(self, cid):
+            raise CloudError('查询失败', 'CLOUD_UNAVAILABLE', 502)
+
+    # 核实不了「是否已不存在」就不能静默，必须留警告让人去看。
+    assert '读取失败' in run(Unknown(), [])[1]
 
 
 def test_immediate_cleanup_checks_live_state_without_reading_deleted_directory():
