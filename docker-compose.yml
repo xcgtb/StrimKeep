@@ -1,51 +1,50 @@
-name: strimkeep
+# StrimKeep —— 飞牛 NAS 部署文件
+#
+# 怎么用（就在这个目录执行）：
+#   docker compose pull            # 拉 GHCR 上最新的发布镜像
+#   docker compose up -d           # 启动
+#   docker compose logs -f         # 看日志
+#
+# 镜像：ghcr.io/xcgtb/strimkeep:latest（想固定版本就改成 :3.0.2 这样）
+# 口令：写在同一目录的 .env 里（ADMIN_PASSWORD=你的密码），这里只引用变量，不写死
 
-# 默认拉 GHCR 上发布的镜像（ghcr.io/xcgtb/strimkeep:latest），不构建源码。
-# 要从源码构建：docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
-# 路径、口令、令牌走 .env（缺失时执行 bash start.sh 会引导生成）。
 services:
-  # 可选：把 Emby 也交给 compose 管。不用的话整段删掉，只保留 strimkeep。
-  emby_strimkeep:
-    container_name: emby_strimkeep
-    image: emby/embyserver:latest
-    environment:
-      - TZ=${TZ:-Asia/Shanghai}
-      - UID=${EMBY_UID:-0}
-      - GID=${EMBY_GID:-0}
-    ports:
-      - "${EMBY_PORT:-8096}:8096"
-    volumes:
-      - ${EMBY_CONFIG_DIR:-./emby}:/config
-      - ${STRIMKEEP_STRM_DIR:-./strm}:/media
-    restart: unless-stopped
-
   strimkeep:
     image: ghcr.io/xcgtb/strimkeep:latest
     container_name: strimkeep
-    # host 网络：反代端口、Webhook 回调都要能被局域网/播放器直接访问
+    # 用宿主机网络：9000 端口直接对外，反代、播放器、Emby 回调都能连上
     network_mode: host
     init: true
-    environment:
-      - TZ=${TZ:-Asia/Shanghai}
-      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-changeme}
-      - STRIMKEEP_METRICS_TOKEN=${STRIMKEEP_METRICS_TOKEN:-}
-      # 「媒体信息写入 Emby」用：可选。不填就只生成 sidecar，不写 Emby 库
-      - STRIMKEEP_EMBY_LIBRARY_DB=${STRIMKEEP_EMBY_LIBRARY_DB:-}
-      - STRIMKEEP_EMBY_STRM_MOUNT=${STRIMKEEP_EMBY_STRM_MOUNT:-}
-    volumes:
-      - ${STRIMKEEP_DATA_DIR:-./data}:/data
-      - ${STRIMKEEP_STRM_DIR:-./strm}:/strm
-      # 可选：Emby 的 data 目录（写媒体信息时才需要；不写就删掉这行）
-      - ${EMBY_DATA_DIR:-./emby-data}:/emby-data
     restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      - TZ=Asia/Shanghai
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}                                  # 值在 .env
+      - STRIMKEEP_METRICS_TOKEN=${STRIMKEEP_METRICS_TOKEN:-}              # 可选：/metrics 口令
+      - STRIMKEEP_EMBY_LIBRARY_DB=${STRIMKEEP_EMBY_LIBRARY_DB:-}          # 可选：写 Emby 媒体信息
+      - STRIMKEEP_EMBY_STRM_MOUNT=${STRIMKEEP_EMBY_STRM_MOUNT:-}          # 可选：同上
+    volumes:
+      - ./data:/data                 # 数据库、配置、锁文件（备份就备份这个目录）
+      - ./strm:/strm                 # 生成的 STRM 文件，Emby 库指到这个目录
+      - ./emby/data:/emby-data        # 可选：写 Emby 媒体信息时才需要，不用就删
     logging:
       driver: json-file
       options:
-        max-file: "3"
         max-size: 10m
-    stop_grace_period: 30s
+        max-file: "3"
 
-networks:
-  default:
-    name: strimkeep_default
+  # 可选：让 compose 一起管 Emby。你现在是单独跑的，不想管就整段删掉。
+  emby_strimkeep:
+    image: emby/embyserver:latest
+    container_name: emby_strimkeep
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai
+      - UID=0
+      - GID=0
+    ports:
+      - "8100:8096"                  # 换成你想要的端口
+    volumes:
+      - ./emby:/config               # Emby 自己的配置
+      - ./strm:/media                # 媒体库目录 = StrimKeep 生成的 STRM
