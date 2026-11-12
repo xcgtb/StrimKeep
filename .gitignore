@@ -34,3 +34,6 @@ tools/acc/
 /core
 /backend/core
 /backend/core.[0-9]*
+
+# 内部文档（工作日志、发布记录、审计、架构约定），只留本机
+docs-internal/
