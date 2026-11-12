@@ -8,7 +8,7 @@
     python scripts/version.py 0.7.1      # 改版本：写 __init__，再刷其它落点
 
 落点：__init__.py（唯一来源）、frontend/package.json、frontend/package-lock.json、
-      docker-compose.yml 的镜像 tag、README.md 首行标题。
+      docker-compose.yml 的发布通道（ghcr 发布镜像 + dev 本地镜像）、README.md 首行标题。
 scripts/deploy_config.py 不落版本，运行时从 __init__.py 读。
 """
 import re
@@ -19,7 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'backend' / 'strimkeep' / '__init__.py'
 VERSION_RE = re.compile(r"__version__\s*=\s*'([^']+)'")
 IMAGE_RE = re.compile(r"(?m)^(\s*image:\s*strimkeep(?:-dev)?:)(\S+)[ \t]*$")
-README_RE = re.compile(r"(?m)^# StrimKeep ([\w.\-]+)$")
+PUBLISHED_RE = re.compile(r"(?m)^\s*image:\s*ghcr\.io/xcgtb/strimkeep:(\S+)\s*$")
+DEV_RE = re.compile(r"(?m)^\s*image:\s*strimkeep:(\S+)\s*$")
+README_RE = re.compile(r"(?m)^#\s*(?:\U0001F3AC\s*)?StrimKeep\s+([\w.\-]+)$")
 FIELD_RE = re.compile(r'("version"\s*:\s*")([^"]+)(")')
 
 # (文件, 只取前几处 version) —— package-lock 后面全是依赖版本，不能一起动。
@@ -50,13 +52,15 @@ def _rewrite(path, pattern, repl, write, limit=0):
 
 
 def compose_drift(version, write=False):
-    path = ROOT / 'docker-compose.yml'
-    old, new = _rewrite(path, IMAGE_RE, lambda m: m.group(1) + version, write)
-    tags = [m.group(2) for m in IMAGE_RE.finditer(old)]
-    if not tags:
-        return ['docker-compose.yml 里找不到 strimkeep 镜像 tag']
-    stale = [tag for tag in tags if tag != version]
-    return [f'docker-compose.yml 镜像 tag 是 {stale}'] if stale else []
+    """默认 compose 跟随 GHCR 发布通道（latest），版本号只落在 dev 之外的元数据里。"""
+    drift = []
+    published = PUBLISHED_RE.findall((ROOT / 'docker-compose.yml').read_text(encoding='utf-8'))
+    if published != ['latest']:
+        drift.append(f'docker-compose.yml 应引用 ghcr.io/xcgtb/strimkeep:latest，实际 {published}')
+    dev = DEV_RE.findall((ROOT / 'docker-compose.dev.yml').read_text(encoding='utf-8'))
+    if dev != ['dev']:
+        drift.append(f'docker-compose.dev.yml 应为 strimkeep:dev，实际 {dev}')
+    return drift
 
 
 def packages_drift(version, write=False):
@@ -75,7 +79,7 @@ def packages_drift(version, write=False):
 
 def readme_drift(version, write=False):
     path = ROOT / 'README.md'
-    old, _ = _rewrite(path, README_RE, lambda m: f'# StrimKeep {version}', write, 1)
+    old, _ = _rewrite(path, README_RE, lambda m: f'# \U0001F3AC StrimKeep {version}', write, 1)
     match = README_RE.search(old)
     if match and match.group(1) != version:
         return [f'README.md 标题是 {match.group(1)}']
@@ -124,7 +128,7 @@ def main(argv):
             print('  -', item)
         return 1
     print(f'已刷成 {version}：__init__.py、package.json、package-lock.json、'
-          f'docker-compose.yml、README.md')
+          f'docker-compose.yml 通道、README.md')
     return 0
 
 

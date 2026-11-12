@@ -230,7 +230,8 @@ backend/tests/              后端测试（pytest）
 frontend/src/               前端源码（Vue 3 + TS）
 docs/operations/            运维文档：备份恢复、指标、告警
 scripts/                    构建、部署、校验、运维脚本
-docker-compose.yml          源码构建部署（开发用）
+docker-compose.yml          默认部署：拉 GHCR 发布镜像 `ghcr.io/xcgtb/strimkeep:latest`
+docker-compose.dev.yml      源码构建覆盖：本地 build，镜像打 `strimkeep:dev`
 ```
 
 关键约束（改代码前请先读）：STRM 身份写在文件里，台账只做来源索引；

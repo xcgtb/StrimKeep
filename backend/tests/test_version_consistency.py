@@ -13,12 +13,18 @@ from strimkeep import __version__
 
 
 ROOT = Path(__file__).resolve().parents[2]
-IMAGE = re.compile(r'(?m)^\s*image:\s*strimkeep(?:-dev)?:(\S+)\s*$')
+IMAGE = re.compile(r'(?m)^\s*image:\s*(\S*strimkeep\S*)\s*$')
 
 
-def test_compose_image_tag_matches_backend_version():
-    tags = IMAGE.findall((ROOT / 'docker-compose.yml').read_text(encoding='utf-8'))
-    assert tags == [__version__], f'compose 镜像 tag {tags} 与后端 {__version__} 不一致'
+def test_default_compose_pulls_published_image():
+    refs = IMAGE.findall((ROOT / 'docker-compose.yml').read_text(encoding='utf-8'))
+    assert refs == ['ghcr.io/xcgtb/strimkeep:latest'], f'默认 compose 应跟随发布镜像，实际 {refs}'
+
+
+def test_dev_compose_builds_local_image():
+    text = (ROOT / 'docker-compose.dev.yml').read_text(encoding='utf-8')
+    assert IMAGE.findall(text) == ['strimkeep:dev']
+    assert re.search(r'(?m)^\s*build:\s*\.\s*$', text), '源码构建覆盖文件必须带 build: .'
 
 
 def test_frontend_package_version_matches_backend_version():

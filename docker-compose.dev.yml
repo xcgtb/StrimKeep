@@ -1,0 +1,7 @@
+# 源码构建覆盖：把 strimkeep 换成从当前目录构建的本地镜像 `strimkeep:dev`。
+# 用法：docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# 默认的 docker-compose.yml 用的是 GHCR 发布镜像，不需要本文件。
+services:
+  strimkeep:
+    image: strimkeep:dev
+    build: .

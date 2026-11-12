@@ -1,8 +1,8 @@
 name: strimkeep
 
-# 源码构建用：从当前目录构建镜像（开发 / 本机部署）。
-# 只想起服务、不构建源码 → 用 docker-compose.install.yml（拉取镜像，三步安装）。
-# 路径、口令、令牌走 .env（首次执行 bash start.sh 会自动生成 .env）。
+# 默认拉 GHCR 上发布的镜像（ghcr.io/xcgtb/strimkeep:latest），不构建源码。
+# 要从源码构建：docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# 路径、口令、令牌走 .env（缺失时执行 bash start.sh 会引导生成）。
 services:
   # 可选：把 Emby 也交给 compose 管。不用的话整段删掉，只保留 strimkeep。
   emby_strimkeep:
@@ -20,8 +20,7 @@ services:
     restart: unless-stopped
 
   strimkeep:
-    image: strimkeep:3.0.1
-    build: .
+    image: ghcr.io/xcgtb/strimkeep:latest
     container_name: strimkeep
     # host 网络：反代端口、Webhook 回调都要能被局域网/播放器直接访问
     network_mode: host

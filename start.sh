@@ -13,6 +13,6 @@ if ! grep -Eq "^ADMIN_PASSWORD=['\"]?.{12,}['\"]?[[:space:]]*$" .env; then
   echo '.env 里的 ADMIN_PASSWORD 至少 12 位（当前缺失或过短）。' >&2
   exit 1
 fi
-docker compose config -q
-docker compose up -d --build --wait --wait-timeout 90 strimkeep
-docker compose ps
+docker compose -f docker-compose.yml -f docker-compose.dev.yml config -q
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build --wait --wait-timeout 90 strimkeep
+docker compose -f docker-compose.yml -f docker-compose.dev.yml ps
