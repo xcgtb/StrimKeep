@@ -49,13 +49,23 @@
 
 ## 快速开始
 
-### 方式一：拉取镜像（推荐，不需要源码）
+### 方式一：一键安装（推荐，不需要源码）
 
 ```bash
 mkdir strimkeep && cd strimkeep
+curl -fsSLO https://raw.githubusercontent.com/xcgtb/StrimKeep/main/install.sh
 curl -fsSLO https://raw.githubusercontent.com/xcgtb/StrimKeep/main/docker-compose.install.yml
-curl -fsSL  https://raw.githubusercontent.com/xcgtb/StrimKeep/main/.env.example -o .env
-# 改 .env：至少 ADMIN_PASSWORD、STRIMKEEP_DATA_DIR、STRIMKEEP_STRM_DIR
+sh install.sh
+```
+
+脚本只问三个问题：**登录密码**、数据目录、STRM 目录（后两个直接回车用默认），
+然后自动拉镜像、启动、等健康检查，最后打印访问地址。
+
+不想用脚本也可以手动两步：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/xcgtb/StrimKeep/main/.env.example -o .env
+vi .env                     # 只改 ADMIN_PASSWORD 这一行
 docker compose -f docker-compose.install.yml up -d
 ```
 
@@ -63,34 +73,44 @@ docker compose -f docker-compose.install.yml up -d
 固定版本：`.env` 里写 `STRIMKEEP_VERSION=0.9.150`（默认 `latest`）。
 
 > 镜像在 GHCR：`ghcr.io/xcgtb/strimkeep`。公开仓库的镜像拉取不需要登录；
-> 如果你的仓库是私有的，先 `docker login ghcr.io -u <用户名>`。
+> 如果仓库改成私有，先 `docker login ghcr.io -u <用户名>`。
 
 ### 方式二：源码构建
 
 ```bash
 git clone https://github.com/xcgtb/StrimKeep.git
 cd StrimKeep
-cp .env.example .env        # 改管理员口令与目录
+cp .env.example .env        # 只改 ADMIN_PASSWORD
 docker compose up -d --build
 ```
 
 ### 打开面板
 
-`http://<主机>:9000`，用 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 登录。
+`http://<主机>:9000`，用户名 `admin`，密码就是 `.env` 里那个。
 健康检查：`curl -s http://127.0.0.1:9000/health/ready`。
 可选一并托管 Emby：`docker compose -f docker-compose.install.yml --profile emby up -d`。
 
-### 主要环境变量
+### 配置：其实只需要一个密码
+
+**必填（只有这一项）**
 
 | 变量 | 说明 |
 |---|---|
-| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | 面板账号，口令至少 12 位 |
-| `STRIMKEEP_DATA_DIR` | 数据目录（`state.db`、`master.key`、日志），**必须持久化并备份** |
-| `STRIMKEEP_STRM_DIR` | STRM 输出目录，同时挂给 Emby |
-| `STRIMKEEP_METRICS_TOKEN` | `/metrics` 访问令牌，留空则不校验 |
-| `EMBY_*` | 可选：把 Emby 一并交给 compose，或注入媒体信息到 Emby 库 |
+| `ADMIN_PASSWORD` | 面板登录密码，至少 12 位 |
 
-其余 115 账号、整理规则、治理规则都在面板里配置，保存后写入 `settings` 表（敏感字段加密）。
+**其余全部有默认值，不写就能用**
+
+| 变量 | 默认 | 什么时候才要改 |
+|---|---|---|
+| `STRIMKEEP_DATA_DIR` | `./data` | 数据（`state.db`、密钥、日志）想放到别的盘 |
+| `STRIMKEEP_STRM_DIR` | `./strm` | STRM 想直接输出到 Emby 挂载的目录 |
+| `ADMIN_USERNAME` | `admin` | 想换登录名 |
+| `STRIMKEEP_VERSION` | `latest` | 想固定某个版本，例如 `0.9.150` |
+| `TZ` | `Asia/Shanghai` | 时区不是东八区 |
+| `STRIMKEEP_METRICS_TOKEN` | 空 | 要采集 `/metrics` 又不想裸奔 |
+
+> 115 账号、转存/整理/洗版/治理规则**全部在面板里配**，保存进数据库，
+> 不需要碰环境变量。数据目录与 STRM 目录必须**成对备份**（`state.db` 与 `master.key` 丢了就无法解密凭据）。
 
 ---
 
@@ -115,6 +135,7 @@ docs/operations/     运维文档：备份恢复、指标、告警
 scripts/             构建、部署、校验、运维脚本
 docker-compose.yml          源码构建部署
 docker-compose.install.yml  拉取镜像安装（配合 .env）
+install.sh                  一键安装脚本（问三个问题）
 ```
 
 关键设计约束（改动前请先读）：

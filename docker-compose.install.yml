@@ -1,40 +1,31 @@
 name: strimkeep
 
-# 拉取即装：不需要源码，不需要构建。
+# 拉取即装（不需要源码）。三种用法：
 #
-#   1) 下载本文件与配置模板
-#      curl -fsSLO https://raw.githubusercontent.com/xcgtb/StrimKeep/main/docker-compose.install.yml
-#      curl -fsSL  https://raw.githubusercontent.com/xcgtb/StrimKeep/main/.env.example -o .env
-#   2) 改 .env（至少 ADMIN_PASSWORD、两个目录）
-#   3) docker compose -f docker-compose.install.yml up -d
+#   1) 最省事：sh install.sh         ← 问三个问题，自动生成 .env 并启动
+#   2) 手动：  cp .env.example .env  →  只改 ADMIN_PASSWORD  →  docker compose -f docker-compose.install.yml up -d
+#   3) 完全不建 .env：ADMIN_PASSWORD=你的密码 docker compose -f docker-compose.install.yml up -d
 #
-# 升级：docker compose -f docker-compose.install.yml pull
-#       docker compose -f docker-compose.install.yml up -d
+# 升级：docker compose -f docker-compose.install.yml pull && docker compose -f docker-compose.install.yml up -d
 
 services:
   strimkeep:
-    # 版本：默认 latest，可写具体版本，例如 STRIMKEEP_VERSION=0.9.150
-    image: ghcr.io/${STRIMKEEP_OWNER:-xcgtb}/strimkeep:${STRIMKEEP_VERSION:-latest}
-    container_name: strimkeep
-    # host 网络：反代端口、Emby 回调、播放地址都要能被局域网/播放器直接访问。
-    # 不支持 host 网络的环境（如 Docker Desktop）改成下面两行并删掉 network_mode：
-    #   ports: ["${STRIMKEEP_PORT:-9000}:9000"]
+    # 固定版本就在 .env 里写 STRIMKEEP_VERSION=0.9.150；默认 latest
+    image: ghcr.io/xcgtb/strimkeep:${STRIMKEEP_VERSION:-latest}
+    container_name: ${STRIMKEEP_CONTAINER_NAME:-strimkeep}
+    # host 网络：反代端口、Emby 回调、播放地址都要能被局域网直接访问。
+    # Docker Desktop 之类不支持 host 网络的环境，改成 ports: ["9000:9000"] 并删掉这行
     network_mode: host
     init: true
     environment:
-      - TZ=${TZ:-Asia/Shanghai}
-      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?请在 .env 里设置 ADMIN_PASSWORD（至少 12 位）}
-      - STRIMKEEP_METRICS_TOKEN=${STRIMKEEP_METRICS_TOKEN:-}
-      - STRIMKEEP_EMBY_LIBRARY_DB=${STRIMKEEP_EMBY_LIBRARY_DB:-}
-      - STRIMKEEP_EMBY_STRM_MOUNT=${STRIMKEEP_EMBY_STRM_MOUNT:-}
+      TZ: ${TZ:-Asia/Shanghai}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?请先设置 ADMIN_PASSWORD（至少 12 位），或直接运行 sh install.sh}
+      STRIMKEEP_METRICS_TOKEN: ${STRIMKEEP_METRICS_TOKEN:-}
     volumes:
-      # state.db / master.key / 日志：必须持久化，且与 strm 成对备份
+      # 只有这两个是必须的：数据（state.db/密钥/日志）+ STRM 输出
       - ${STRIMKEEP_DATA_DIR:-./data}:/data
-      # 生成的 STRM 媒体树，同时挂给 Emby
       - ${STRIMKEEP_STRM_DIR:-./strm}:/strm
-      # 可选：写媒体信息到 Emby 时才需要
-      - ${EMBY_DATA_DIR:-./emby-data}:/emby-data
     restart: unless-stopped
     stop_grace_period: 30s
     healthcheck:
@@ -49,15 +40,15 @@ services:
         max-file: "3"
         max-size: 10m
 
-  # 可选：一并托管 Emby。默认不启动，需要时加 --profile emby
+  # 可选：连 Emby 一起装（docker compose ... --profile emby up -d）
   emby_strimkeep:
     profiles: ["emby"]
     container_name: emby_strimkeep
     image: emby/embyserver:latest
     environment:
-      - TZ=${TZ:-Asia/Shanghai}
-      - UID=${EMBY_UID:-0}
-      - GID=${EMBY_GID:-0}
+      TZ: ${TZ:-Asia/Shanghai}
+      UID: ${EMBY_UID:-0}
+      GID: ${EMBY_GID:-0}
     ports:
       - "${EMBY_PORT:-8096}:8096"
     volumes:

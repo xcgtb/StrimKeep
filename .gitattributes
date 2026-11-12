@@ -1,0 +1,4 @@
+# 统一 LF，避免 Windows 上编辑过的脚本在 Linux 里报 $'\r' 语法错误
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
