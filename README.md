@@ -66,8 +66,8 @@ services:
     environment:
       # --- 基础配置 ---
       - TZ=Asia/Shanghai
-      # 必填：面板登录密码（至少 12 位）。把下面这行改成  - ADMIN_PASSWORD=你的密码
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?请把这一行改成 - ADMIN_PASSWORD=你的密码（至少 12 位）}
+      # 必填：面板登录密码（至少 12 位）。把等号后面填上你的密码，不要留空
+      - ADMIN_PASSWORD=
       # 面板登录用户名，一般不用改
       - ADMIN_USERNAME=admin
       # 可选：/metrics 访问令牌，留空 = 不校验
@@ -120,7 +120,7 @@ services:
 
 | 配置 | 填写说明 |
 |---|---|
-| `ADMIN_PASSWORD=…` | **必填**：自己设置的面板登录密码，至少 12 位；直接把整行改成 `- ADMIN_PASSWORD=你的密码` |
+| `ADMIN_PASSWORD=` | **必填**：等号后面填自己的面板登录密码，至少 12 位（留空时容器启动即退出，日志会提示） |
 | `/vol1/1000/strimkeep/data:/data` | 左侧换成你的**数据目录**，右侧保持 `/data`；里面是 `state.db`、`master.key` 与日志，更新和迁移时保留该目录 |
 | `/vol1/1000/strimkeep/strm:/strm` | 左侧换成你的 **STRM 输出目录**，右侧保持 `/strm`；Emby 要挂载同一份输出内容 |
 | `ADMIN_USERNAME=admin` | 可选：登录用户名，一般不用改 |
@@ -198,9 +198,8 @@ docker compose ps                            # 容器在不在
 curl -s http://127.0.0.1:9000/health/ready   # 应用健康
 docker compose logs -f                       # 看日志
 ```
-- 提示 `ADMIN_PASSWORD` 未设置：把 yml 里那一行改成 `- ADMIN_PASSWORD=你的密码`
+- 容器启动即退出、日志写「首次启动请设置 ADMIN_USERNAME 和至少 12 位的 ADMIN_PASSWORD」：把 yml 里的 `- ADMIN_PASSWORD=` 等号后面补上密码
 - `9000` 被占用：把 `network_mode: host` 改成 `ports: ["9100:9000"]`
-- 密码短于 12 位：容器会反复重启，日志里会写原因
 
 ### 提示「网盘源文件未登记，无法删除」
 说明本地有 STRM、但台账查不到它对应的 115 文件。分享侧可以正常清理，
