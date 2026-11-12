@@ -20,7 +20,7 @@ services:
     restart: unless-stopped
 
   strimkeep:
-    image: strimkeep:0.9.150
+    image: strimkeep:3.0.0
     build: .
     container_name: strimkeep
     # host 网络：反代端口、Webhook 回调都要能被局域网/播放器直接访问
