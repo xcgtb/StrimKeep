@@ -224,7 +224,10 @@ def install_inventory_operations(app, store, admin):
         """进程重启/超时后卡在 executing 的计划：标为失败，页面不再显示"执行中"。"""
         import time as _time
         now = _time.time()
-        for row in store.db.execute("SELECT key,value FROM meta WHERE key LIKE 'inventory-plan:%'"):
+        # 只挑「执行中」的计划：以前是把每一条计划的 JSON 都解析一遍。
+        for row in store.db.execute(
+                "SELECT key,value FROM meta WHERE key LIKE 'inventory-plan:%' "
+                "AND json_valid(value) AND json_extract(value,'$.state')='executing'"):
             try:
                 value = json.loads(row['value'])
             except (TypeError, ValueError):
@@ -247,36 +250,49 @@ def install_inventory_operations(app, store, admin):
     @app.get('/api/v1/inventory-plans', dependencies=[Depends(admin)])
     async def plan_history():
         sweep_stale_plans()
-        result = []
-        for row in store.db.execute("SELECT key,value FROM meta WHERE key LIKE 'inventory-plan:%'"):
+        # 只取最近 20 条，字段直接在 SQL 里取：以前是把全部计划的 JSON 解析两遍、
+        # 逐条再查两次库。现场 52 条计划 / 32MB，打开库存页就把事件循环堵到
+        # 看门狗打印堆栈（实测 1.15 秒纯解析 + 100 多次查询）。
+        rows = store.db.execute(
+            "SELECT key, "
+            " json_extract(value, '$.created') AS created, "
+            " json_extract(value, '$.state') AS state, "
+            " json_extract(value, '$.message') AS message, "
+            " COALESCE(json_array_length(json_extract(value, '$.snapshot.actions')), 0) AS total, "
+            " COALESCE(json_array_length(json_extract(value, '$.progress')), 0) AS done "
+            "FROM meta WHERE key LIKE 'inventory-plan:%' "
+            "AND json_valid(value) AND json_type(value, '$.snapshot') = 'object' "
+            "ORDER BY COALESCE(json_extract(value, '$.created'), 0) DESC LIMIT 20").fetchall()
+        modes = {}
+        for row in store.db.execute("SELECT key,value FROM meta WHERE key LIKE 'inventory-plan-mode:%'"):
             try:
-                value = json.loads(row['value'])
-                if not isinstance(value, dict) or not isinstance(value.get('snapshot'), dict):
-                    continue
-                pid = row['key'].split(':', 1)[1]
-                value = _load(store.db, pid)
-                progress = value.get('progress', [])
-                actions = value['snapshot'].get('actions', [])
-                mode_row = store.db.execute('SELECT value FROM meta WHERE key=?',
-                                            ('inventory-plan-mode:' + pid,)).fetchone()
-                mode = ''
-                if mode_row:
-                    try:
-                        mode = str((json.loads(mode_row['value']) or {}).get('mode') or '')
-                    except (TypeError, ValueError):
-                        mode = ''
-                labels = {'manual': '手动清理', 'dual': '双库洗版', 'single': '单库清理',
-                          'governance': '双库治理'}
-                message = str(value.get('message') or '')
-                if 'too many values to unpack' in message:
-                    # 旧版本核查异常（已修复），别让用户看到这种看不懂的报错。
-                    message = '旧版本核查异常（已在 0.9.136 修复），请重新生成计划。'
-                result.append({'plan_id': pid, 'state': value.get('state', 'unknown'), 'mode': mode,
-                               'mode_label': labels.get(mode, '旧计划'),
-                               'count': len(actions) if isinstance(actions, list) else 0,
-                               'done': len(progress) if isinstance(progress, list) else 0,
-                               'created': value.get('created', 0), 'error': message})
-            except (ValueError, TypeError, KeyError):
+                modes[row['key'].split(':', 1)[1]] = str((json.loads(row['value']) or {}).get('mode') or '')
+            except (TypeError, ValueError):
                 continue
-        result.sort(key=lambda item: item['created'] if isinstance(item['created'], (int, float)) else 0, reverse=True)
-        return {'items': result[:20]}
+        # 进度明细另存表时按计划汇总一次；以前是每条计划单独查一遍。
+        extra_progress = {}
+        if store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                            "AND name='inventory_plan_progress'").fetchone():
+            for row in store.db.execute('SELECT plan_id, count(*) FROM inventory_plan_progress '
+                                        'GROUP BY plan_id'):
+                extra_progress[row[0]] = row[1]
+        labels = {'manual': '手动清理', 'dual': '双库洗版', 'single': '单库清理',
+                  'governance': '双库治理'}
+        result = []
+        for row in rows:
+            pid = row['key'].split(':', 1)[1]
+            # 与 _load 的口径一致：非 32 位十六进制编号不是合法计划，列表里不出现。
+            if len(pid) != 32 or any(char not in '0123456789abcdef' for char in pid):
+                continue
+            mode = modes.get(pid, '')
+            message = str(row['message'] or '')
+            if 'too many values to unpack' in message:
+                # 旧版本核查异常（已修复），别让用户看到这种看不懂的报错。
+                message = '旧版本核查异常（已在 0.9.136 修复），请重新生成计划。'
+            created = row['created'] if isinstance(row['created'], (int, float)) else 0
+            result.append({'plan_id': pid, 'state': row['state'] or 'unknown', 'mode': mode,
+                           'mode_label': labels.get(mode, '旧计划'),
+                           'count': int(row['total'] or 0),
+                           'done': int(row['done'] or 0) + extra_progress.get(pid, 0),
+                           'created': created, 'error': message})
+        return {'items': result}

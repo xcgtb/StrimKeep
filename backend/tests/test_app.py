@@ -245,6 +245,11 @@ def test_share_playback_without_token_and_legacy_url_keeps_ua_and_revoke(client,
         app.state.cloud.calls.append((file_id,code,password,ua))
         return 'https://cdn.example/shared.mkv', {}
     app.state.cloud.share_url_download=share_url
+    # 这条记录模拟「老版本写下的分享 STRM」：文件必须在盘上。否则盘面核对
+    # （output_reconcile，GRACE 内不动；created=1 早就过了宽限期）会把它标成撤销，
+    # 用例就随机拿到 403——这是用例自己的夹具不自洽，不是接口的问题。
+    (app.state.strms / 'x.strm').write_text(
+        'http://nas:9000/play115/share/' + sid + '/x.mkv', encoding='utf-8')
     with app.state.store.db:
         app.state.store.db.execute("INSERT INTO share_strms(id,share_code,receive_code,file_id,pickcode,name,strm_path,token_hash,revoked,created) VALUES(?,?,?,?,?,?,?,?,0,?)", (sid,'abc','1234','999','','x.mkv','x.strm','legacy-hash',1))
     for suffix in ('','?token=old-token','/视频.S01E01.mkv'):

@@ -257,7 +257,10 @@ def test_webhook_token_is_generated_server_side():
 
 def test_compose_has_no_hardcoded_password():
     compose = (ROOT / 'docker-compose.yml').read_text(encoding='utf-8')
-    assert 'ADMIN_PASSWORD=${ADMIN_PASSWORD:' in compose
+    # 只要求「引用环境变量」：模板用 ${ADMIN_PASSWORD}，老写法是 ${ADMIN_PASSWORD:-默认值}，
+    # 两种都算合格；这条原本写死了带冒号的写法，改模板就误报。
+    assert ('ADMIN_PASSWORD=${ADMIN_PASSWORD}' in compose
+            or 'ADMIN_PASSWORD=${ADMIN_PASSWORD:' in compose), compose[:200]
     assert 'zzx1234567890' not in compose
 
 
