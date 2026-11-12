@@ -1,12 +1,9 @@
-# StrimKeep —— 飞牛 NAS 部署文件
+# StrimKeep —— 开发/源码构建用（不是给你的部署文件）
 #
-# 怎么用（就在这个目录执行）：
-#   docker compose pull            # 拉 GHCR 上最新的发布镜像
-#   docker compose up -d           # 启动
-#   docker compose logs -f         # 看日志
-#
-# 镜像：ghcr.io/xcgtb/strimkeep:latest（想固定版本就改成 :3.0.2 这样）
-# 口令：写在同一目录的 .env 里（ADMIN_PASSWORD=你的密码），这里只引用变量，不写死
+# 自己部署：照 README「情况 B」的模板，在你自己的目录建一份 docker-compose.yml，
+#           值全部写死（含 ADMIN_PASSWORD），不引用变量、不需要 .env。
+# 源码构建：docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# 本文件里的口令/令牌从同目录 .env 读，只给开发自测用。
 
 services:
   strimkeep:
