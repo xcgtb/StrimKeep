@@ -56,8 +56,6 @@ cd /vol1/1000/strimkeep
 ### 2. 创建 `docker-compose.yml`
 
 ```yaml
-version: '3'
-
 services:
   strimkeep:
     image: ghcr.io/xcgtb/strimkeep:latest
@@ -125,7 +123,7 @@ services:
 | `/vol1/1000/strimkeep/strm:/strm` | 左侧换成你的 **STRM 输出目录**，右侧保持 `/strm`；Emby 要挂载同一份输出内容 |
 | `ADMIN_USERNAME=admin` | 可选：登录用户名，一般不用改 |
 | `STRIMKEEP_METRICS_TOKEN=` | 可选：采集 `/metrics` 时填令牌，留空不校验 |
-| `image: …:latest` | 可选：想固定版本就写 `:3.0.0` |
+| `image: …:latest` | 可选：想固定版本就写 `:0.9.150` |
 
 ### 4. 启动
 
@@ -217,7 +215,7 @@ docker compose pull
 docker compose up -d
 ```
 
-固定版本：把 yml 里 `image:` 改成 `ghcr.io/xcgtb/strimkeep:3.0.0`（可用 tag 见 Releases）。
+固定版本：把 yml 里 `image:` 改成 `ghcr.io/xcgtb/strimkeep:0.9.150`（可用 tag 见 Releases）。
 回滚：版本号改回上一个，再 `pull && up -d`；数据库向下兼容上一版即可直接回退。
 
 ---
