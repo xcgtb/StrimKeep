@@ -1,0 +1,30 @@
+.git
+.env
+.venv
+runtime
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+**/*.db
+**/*.db-*
+**/*.key
+backend/tests
+docs
+
+# 前端在镜像内构建；忽略仓库里的旧产物，避免改了 src 仍在跑旧包
+frontend/dist
+
+data
+strm
+
+.deploy-*
+docker-compose*.yml
+scripts
+
+# Keep local data and one-off tools out of the build context.
+emby
+tools
+local-patches
+**/*.log
+**/*.bak-*
+**/*.zip

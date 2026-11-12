@@ -1,0 +1,36 @@
+.env
+.venv/
+runtime/
+node_modules/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.db
+*.db-*
+*.key
+frontend/dist/
+
+# 运行时数据：库状态（state.db / master.key）、媒体库、Emby 配置
+data/
+strm/
+emby/
+
+# 部署备份：含 state.db 与媒体库快照，绝不能进仓库
+backups/
+
+# 升级前的旧配置副本 / 打补丁前的一次性快照
+*.before-*
+*.bak-*
+local-patches/
+local-patches/backup-*/
+
+# 临时验收脚本可能包含本地账号
+tools/acc/
+
+# 日志
+*.log
+
+# 崩溃转储（0.8.20 定位 SIGSEGV 时在仓库里留下过 180MB 的 core 文件）
+/core
+/backend/core
+/backend/core.[0-9]*

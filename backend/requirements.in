@@ -1,0 +1,9 @@
+fastapi==0.161.1
+uvicorn==0.54.0
+httpx[http2,socks]==0.28.1
+httpx_request==0.1.9.1
+cryptography==50.0.2
+p115client==0.0.9.7.2
+qrcode[pil]==8.2
+croniter==6.0.0
+telethon==1.45.0

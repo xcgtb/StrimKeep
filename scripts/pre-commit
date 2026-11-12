@@ -1,0 +1,12 @@
+#!/bin/sh
+# 提交前确认没有明文口令/令牌（只扫已暂存内容）。
+# 安装：cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$root" || exit 0
+if command -v python3 >/dev/null 2>&1; then
+  python3 scripts/check_secrets.py --staged || exit 1
+elif command -v python >/dev/null 2>&1; then
+  python scripts/check_secrets.py --staged || exit 1
+else
+  echo "跳过口令检查：找不到 python" >&2
+fi
