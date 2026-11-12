@@ -49,15 +49,36 @@
 
 ## 快速开始
 
+### 方式一：拉取镜像（推荐，不需要源码）
+
 ```bash
-git clone <本仓库>
+mkdir strimkeep && cd strimkeep
+curl -fsSLO https://raw.githubusercontent.com/xcgtb/StrimKeep/main/docker-compose.install.yml
+curl -fsSL  https://raw.githubusercontent.com/xcgtb/StrimKeep/main/.env.example -o .env
+# 改 .env：至少 ADMIN_PASSWORD、STRIMKEEP_DATA_DIR、STRIMKEEP_STRM_DIR
+docker compose -f docker-compose.install.yml up -d
+```
+
+升级：`docker compose -f docker-compose.install.yml pull && docker compose -f docker-compose.install.yml up -d`
+固定版本：`.env` 里写 `STRIMKEEP_VERSION=0.9.150`（默认 `latest`）。
+
+> 镜像在 GHCR：`ghcr.io/xcgtb/strimkeep`。公开仓库的镜像拉取不需要登录；
+> 如果你的仓库是私有的，先 `docker login ghcr.io -u <用户名>`。
+
+### 方式二：源码构建
+
+```bash
+git clone https://github.com/xcgtb/StrimKeep.git
 cd StrimKeep
 cp .env.example .env        # 改管理员口令与目录
 docker compose up -d --build
 ```
 
-打开 `http://<主机>:9000`，用 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 登录。
+### 打开面板
+
+`http://<主机>:9000`，用 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 登录。
 健康检查：`curl -s http://127.0.0.1:9000/health/ready`。
+可选一并托管 Emby：`docker compose -f docker-compose.install.yml --profile emby up -d`。
 
 ### 主要环境变量
 
@@ -92,6 +113,8 @@ backend/tests/       后端测试（pytest）
 frontend/src/        前端源码（Vue 3 + TS）
 docs/operations/     运维文档：备份恢复、指标、告警
 scripts/             构建、部署、校验、运维脚本
+docker-compose.yml          源码构建部署
+docker-compose.install.yml  拉取镜像安装（配合 .env）
 ```
 
 关键设计约束（改动前请先读）：
