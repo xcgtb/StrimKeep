@@ -45,32 +45,14 @@
 准备一台可以运行 Docker 的 NAS 或 Linux 设备，安装 Docker 20.10+ 和 Docker Compose 2.x。
 需要 115 网盘与 TMDB 的网络可达；用到 Telegram 通知或频道监控时，容器还要能访问 Telegram API。
 
-### 1. 下载编排文件（只要这一个 yml）
+### 1. 准备目录
 
 ```bash
-mkdir -p /vol1/1000/strimkeep && cd /vol1/1000/strimkeep
-curl -fsSLO https://raw.githubusercontent.com/xcgtb/StrimKeep/main/deploy/docker-compose.yml
+mkdir -p /vol1/1000/strimkeep/data /vol1/1000/strimkeep/strm
+cd /vol1/1000/strimkeep
 ```
 
-### 2. 填密码（只改这一处）
-
-```bash
-# 把 = 后面换成你自己的密码（至少 12 位）
-sed -i 's|^- ADMIN_PASSWORD=$|- ADMIN_PASSWORD=你的密码|' docker-compose.yml
-```
-不想用命令就手工编辑：把 `- ADMIN_PASSWORD=` 的等号后面补上密码。
-
-### 3. 启动
-
-```bash
-docker compose up -d
-```
-
-浏览器打开 `http://NAS_IP:9000`，用户名 `admin`，密码就是第 2 步填的那个。
-首次进入后在面板里登录 115 账号，再配整理与治理规则，**环境变量只用来启动服务**。
-需要连 Emby：`docker compose --profile emby up -d`。
-
-### 📄 这个 yml 里有什么（不用改别的）
+### 2. 创建 `docker-compose.yml`
 
 ```yaml
 services:
@@ -131,7 +113,7 @@ services:
     restart: always
 ```
 
-### 📋 各项含义（只有需要换目录时才动）
+### 3. 改这几处
 
 | 配置 | 填写说明 |
 |---|---|
@@ -141,6 +123,16 @@ services:
 | `ADMIN_USERNAME=admin` | 可选：登录用户名，一般不用改 |
 | `STRIMKEEP_METRICS_TOKEN=` | 可选：采集 `/metrics` 时填令牌，留空不校验 |
 | `image: …:latest` | 可选：想固定版本就写 `:3.0.0` |
+
+### 4. 启动
+
+```bash
+docker compose up -d
+```
+
+浏览器打开 `http://NAS_IP:9000`，用 `admin` + 你设置的密码登录。
+首次进入后在面板里登录 115 账号，再配整理与治理规则，**环境变量只用来启动服务**。
+需要连 Emby：`docker compose --profile emby up -d`。
 需要连 Emby：`docker compose --profile emby up -d`。
 
 ### 📁 数据持久化
@@ -236,7 +228,6 @@ backend/tests/              后端测试（pytest）
 frontend/src/               前端源码（Vue 3 + TS）
 docs/operations/            运维文档：备份恢复、指标、告警
 scripts/                    构建、部署、校验、运维脚本
-deploy/docker-compose.yml   安装用编排文件（拉取镜像，只需填密码）
 docker-compose.yml          源码构建部署（开发用）
 ```
 
