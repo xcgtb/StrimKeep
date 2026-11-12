@@ -11,6 +11,9 @@ class TransferConfig(BaseModel):
     target_label:str=Field(default='',max_length=500)
     bot_target_cid:str|None=Field(default=None,max_length=24)
     bot_target_label:str|None=Field(default=None,max_length=500)
+    # 影视探索是独立入口：可以单独指定转存目录，留空就跟随上面的 Web 转存目录。
+    explore_cid:str=Field(default='',max_length=24)
+    explore_label:str=Field(default='',max_length=500)
     auto_organize:bool=False          # Web 转存：落盘后是否立即整理
     bot_auto_organize:bool=False      # Telegram 转存：同上（分开设置）
     bot_enabled:bool=False
@@ -61,6 +64,9 @@ def install_transfer(app,store,admin,job_public):
         if body.bot_target_cid is not None and body.bot_target_cid:
             if not body.bot_target_cid.isdigit() or int(body.bot_target_cid)<=0:raise HTTPException(422,'请选择一个非根目录作为机器人转存目标。')
             await app.state.cloud.directory(body.bot_target_cid)
+        if body.explore_cid:
+            if not body.explore_cid.isdigit() or int(body.explore_cid)<=0:raise HTTPException(422,'请选择一个非根目录作为影视探索转存目标。')
+            await app.state.cloud.directory(body.explore_cid)
         if body.bot_enabled:
             n=store.get('notification_config',{})
             if not n.get('telegram_enabled') or not n.get('bot_token'):raise HTTPException(409,'请先在通知页启用 Telegram 并保存 Bot Token。')

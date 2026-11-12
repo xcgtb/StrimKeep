@@ -79,7 +79,7 @@ async function findResources(item:any){
   await Promise.all([loadTransferTarget(),searchResources()])
 }
 async function loadTransferTarget(){
-  try{const data=await props.api('/transfer/config');transferTarget.value=data.config||null;targetError.value='';return transferTarget.value}
+  try{const data=await props.api('/transfer/config');const cfg=data.config||{};transferTarget.value={...cfg,target_cid:cfg.explore_cid||cfg.target_cid||'',target_label:cfg.explore_label||cfg.target_label||''};targetError.value='';return transferTarget.value}
   catch(e){transferTarget.value=null;targetError.value=(e as Error).message;return null}
 }
 function canTransfer(item:any){return item.provider==='115'&&(!!item.share_url||(item.source==='re0'&&item.link_type==='share'&&!!item.slug))}
@@ -102,7 +102,7 @@ async function transferResource(item:any){
   if(resourceBusy.value||item.resolveUncertain||item.transferUncertain||item.transferSubmitted)return
   resourceBusy.value=true;resourceError.value=''
   const target=await loadTransferTarget()
-  if(!target?.target_cid){resourceBusy.value=false;resourceError.value='请先在「链接转存」设置 StrimKeep 的 115 目标目录。';return}
+  if(!target?.target_cid){resourceBusy.value=false;resourceError.value='请先在「资源入库 → 保存目录」给影视探索设置 115 转存目录。';return}
   const label=target.target_label||`目录 ID ${target.target_cid}`
   const follow=target.auto_organize?'转存核实后自动进入整理。':'转存后需要手动整理或由定时扫描跟进。'
   try{await ElMessageBox.confirm(`${pointNotice(item)}\n目标：${label}（ID ${target.target_cid}）。${follow}\n确认后将获取链接并提交转存。`, '转存到 115', {confirmButtonText:'确认转存',cancelButtonText:'取消',type:'warning'})}catch{resourceBusy.value=false;return}
