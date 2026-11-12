@@ -8,238 +8,234 @@
   <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
 </p>
 
-一句话：**把 115 网盘的影视资源整理成 Emby 能直接收录的 STRM 库，并且能跟分享库对照着治理。**
-
-```
-115 转存 / 离线 / 频道监控  →  TMDB 识别 + 规范命名  →  生成 STRM  →  Emby 收录
-                                      ↓
-                       片库映射（缺哪集、画质如何）→ 双库治理（先出计划，逐文件核验后清理）
-```
+<p align="center">
+  <strong>面向 NAS 的 STRM 双库影视管理与治理面板：115 转存 / 离线 / 频道监控 → TMDB 识别洗版 → 生成 STRM → Emby 收录 → 片库映射与双库治理</strong>
+</p>
 
 ---
 
-## 🚀 怎么跑起来
+## 🌟 项目特色
 
-### 情况 A：你已经有这套在跑（升级 / 换版本）
+### ✨ 核心功能
 
-在**放 docker-compose.yml 的那个目录**执行三条命令就完事：
+- 🔗 **115 分享转存** - 粘贴分享链接（支持 `?password=` 提取码），批量转存到指定目录
+- ⚡ **离线下载** - 磁力 / ED2K / 直链提交，跟踪进度与产物
+- 📡 **Telegram 频道监控** - 公开频道预览页或私密频道（用户会话，只读消息），关键词过滤后分流落盘
+- 🎬 **影视整理洗版** - TMDB 识别 → 规范目录 `剧名 (年份) {tmdb-id}/Season N/`，7 维画质比较选优，字幕/NFO/海报随片落盘
+- 🔗 **STRM 生成与同步** - 输出 302 播放地址 STRM，**身份写在文件里**，改名换库都不需要同步登记表
+- 🧹 **失效清理** - 逐条核对网盘文件仍存在才删，三层保护，附事件留痕
+- 🖼️ **片库映射** - 按 Emby 媒体库分类，7 种状态（完整 / 缺集 / 超集 / 在更 / 待对照 / 已入库 / 待核实），缺集对照与海报墙
+- 🧭 **影视探索** - TMDB 搜索与详情、演员/相关推荐，看中的资源可以直接转存入库
+- 🔔 **追更订阅与入库通知** - 分享监控与频道订阅跟踪更新，入库/失败通过 Telegram 通知
+- ⚖️ **双库治理** - 本地库 vs 分享库逐季逐集比画质与集数，残次品（前序缺失 / 中间断层）逐侧清理，多季保护、库内多版本去重
+- 🛡️ **计划即快照** - 生成计划时记录每个文件的 SHA-256 / 大小 / mtime / inode 与来源指纹，执行前逐作品核对、逐文件核验，任何变化立即停止
+- 📊 **运维配套** - 任务中心、事件日志、`/metrics` 指标、Telegram 通知
 
-```bash
-cd /vol1/1000/strimkeep          # 换成你自己建 yml 的目录
-docker compose pull              # 拉最新发布镜像（ghcr.io/xcgtb/strimkeep:latest）
-docker compose up -d             # 用新镜像重建容器
-docker compose logs -f           # 想确认起没起来就看日志，Ctrl+C 退出
-```
+### 🏗️ 技术架构
 
-确认活没活：
+- **后端**：Python 3.12 + FastAPI + SQLite（单进程，无外部数据库）
+- **前端**：Vue 3 + Element Plus + Vite（镜像内已含构建产物，运行不需要 Node）
+- **部署**：单镜像 + Docker Compose
+- **集成**：115 网盘 API、Emby、Telegram（Bot 与用户会话）、TMDB
 
-```bash
-curl -s http://127.0.0.1:9000/health/ready
-# {"status":"ready","version":"3.0.2","stage":5}
-```
+---
 
-> **仓库里那个 `docker-compose.yml` 不是给你部署用的**，它只服务源码构建（`docker-compose.dev.yml` 配合）。
-> 自己部署永远只用下面「情况 B」这份模板——**值全部写死，不引用任何变量、不需要 `.env`**。
-> 模板里加了新东西（比如新的可选环境变量），升级时照样能直接用，这正是拿模板自测的意义。
+## 🐳 Docker 快速部署（推荐）
 
-### 情况 B：第一次装（还没有任何目录）
+### 📋 系统要求
 
-1）建两个目录（`data` 存数据库，`strm` 存生成的播放文件）：
+准备一台可以运行 Docker 的 NAS 或 Linux 设备，安装 Docker 20.10+ 和 Docker Compose 2.x。
+需要 115 网盘与 TMDB 的网络可达；用到 Telegram 通知或频道监控时，容器还要能访问 Telegram API。
+
+### 1. 准备目录
 
 ```bash
 mkdir -p /vol1/1000/strimkeep/data /vol1/1000/strimkeep/strm
 cd /vol1/1000/strimkeep
 ```
 
-2）在这个目录新建 `docker-compose.yml`，整段照抄：
+### 2. 创建 `docker-compose.yml`
 
 ```yaml
 services:
   strimkeep:
     image: ghcr.io/xcgtb/strimkeep:latest
     container_name: strimkeep
-    network_mode: host          # 面板 9000、Emby 回调、播放地址都能直接访问
+    network_mode: host  # 推荐 host 模式：面板 9000、Emby 回调、播放地址都能直接访问
+    environment:
+      # --- 基础配置 ---
+      - TZ=Asia/Shanghai
+      # 必填：面板登录密码（至少 12 位）。把等号后面填上你的密码，不要留空
+      - ADMIN_PASSWORD=
+      # 面板登录用户名，一般不用改
+      - ADMIN_USERNAME=admin
+      # 可选：/metrics 访问令牌，留空 = 不校验
+      - STRIMKEEP_METRICS_TOKEN=
+    volumes:
+      # 数据库与日志持久化，右侧固定为 /data
+      # 左侧换成你自己的目录（飞牛一般是 /vol1/1000/...）
+      - /vol1/1000/strimkeep/data:/data
+      # STRM 输出目录：右侧固定为 /strm，左侧换成你的目录
+      # Emby 要挂载同一份（详见下方可选的 Emby 段落）
+      - /vol1/1000/strimkeep/strm:/strm
+    restart: always
+    # 停止时给整理任务 30 秒收尾，避免留下半截文件
+    stop_grace_period: 30s
+    # 健康检查：面板 /health/ready 返回 200 才算健康
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/health/ready', timeout=3)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    # 日志轮转：最多保留 3 个 10MB 文件
+    logging:
+      driver: json-file
+      options:
+        max-file: "3"
+        max-size: 10m
+
+  # --- 可选：连 Emby 一起装 ---
+  # 用不到就把本段整段删掉；要用就在启动命令后加 --profile emby
+  emby_strimkeep:
+    profiles: ["emby"]
+    container_name: emby_strimkeep
+    image: emby/embyserver:latest
     environment:
       - TZ=Asia/Shanghai
-      - ADMIN_USERNAME=admin
-      - ADMIN_PASSWORD=         # ← 只改这一行：等号后面填登录密码（至少 12 位）
+      - UID=0
+      - GID=0
+    ports:
+      - "8096:8096"  # Emby 网页端口
     volumes:
-      - /vol1/1000/strimkeep/data:/data     # 左侧换成你的数据目录，右侧固定 /data
-      - /vol1/1000/strimkeep/strm:/strm     # 左侧换成你的 STRM 目录，右侧固定 /strm
-    restart: unless-stopped
-    stop_grace_period: 30s
+      # Emby 配置与缓存
+      - /vol1/1000/strimkeep/emby:/config
+      # 和上面的 STRM 目录保持一致（左侧必须相同）
+      - /vol1/1000/strimkeep/strm:/media
+    restart: always
 ```
 
-3）启动：
+### 3. 改这几处
+
+| 配置 | 填写说明 |
+|---|---|
+| `ADMIN_PASSWORD=` | **必填**：等号后面填自己的面板登录密码，至少 12 位（留空时容器启动即退出，日志会提示） |
+| `/vol1/1000/strimkeep/data:/data` | 左侧换成你的**数据目录**，右侧保持 `/data`；里面是 `state.db`、`master.key` 与日志，更新和迁移时保留该目录 |
+| `/vol1/1000/strimkeep/strm:/strm` | 左侧换成你的 **STRM 输出目录**，右侧保持 `/strm`；Emby 要挂载同一份输出内容 |
+| `ADMIN_USERNAME=admin` | 可选：登录用户名，一般不用改 |
+| `STRIMKEEP_METRICS_TOKEN=` | 可选：采集 `/metrics` 时填令牌，留空不校验 |
+| `image: …:latest` | 可选：想固定版本就写 `:3.0.2` |
+
+### 4. 启动
 
 ```bash
 docker compose up -d
 ```
 
-4）浏览器打开 `http://NAS的IP:9000`，用户名 `admin`，密码就是你刚填的那个。
+浏览器打开 `http://NAS_IP:9000`，用 `admin` + 你设置的密码登录。
+首次进入后在面板里登录 115 账号，再配整理与治理规则，**环境变量只用来启动服务**。
+需要连 Emby：`docker compose --profile emby up -d`。
+需要连 Emby：`docker compose --profile emby up -d`。
 
-> 密码少于 12 位或留空时，容器会启动即退出，日志里会直接写原因。
+### 📁 数据持久化
 
-### 一句话记住
-
-- **部署 = 你自己目录里那份模板**（就是上面「情况 B」的 yml），密码直接写在里面
-- **仓库里的 `docker-compose.yml` = 开发用**，只跟 `docker-compose.dev.yml` 一起做源码构建，跟你的部署无关
-
-两种都行，差的只是「密码写哪儿」，跑起来的服务完全一样。
-
----
-
-## 🧭 第一次登录后，按这个顺序做
-
-左边菜单从上到下就是这个顺序，建议照着走一遍：
-
-| 步骤 | 去哪 | 干什么 |
+| 目录 | 内容 | 说明 |
 |---|---|---|
-| 1 | **115 网盘** | 扫码或账号登录你的 115（只存密文，登录态可续） |
-| 2 | **系统设置 → 服务连接** | 填 TMDB API Key；要用 Emby 就填 Emby 地址 + API Key |
-| 3 | **系统设置 → 资源来源** | 设置转存 / 离线的**落盘目录**（115 上的目录） |
-| 4 | **影视整理** | 选一个目录 → 预览识别结果 → 执行，得到 `剧名 (年份) {tmdb-id}/Season N/` 这种规范结构 |
-| 5 | **STRM 管理** | 生成 STRM（播放走 302 跳转，不占本地空间），再让 Emby 扫库 |
-| 6 | **库存管理** | 平时看「片库映射」查缺集与画质；要清理就进「双库治理」 |
+| `/vol1/1000/strimkeep/data` | `state.db`、`master.key`、日志 | 库状态与凭据密文，**丢了无法恢复** |
+| `/vol1/1000/strimkeep/strm` | 生成的 STRM 媒体树 | 同时挂给 Emby |
 
-### 1. 登录 115 网盘
-
-菜单 **115 网盘**：扫码或填 Cookie 登录。这一页还能看签到状态和回收站（删错了从这里捞）。
-
-### 2. 填服务连接
-
-菜单 **系统设置 → 服务连接**：
-
-- **TMDB API Key**：必填，影视识别靠它（themoviedb.org 账号设置里免费申请）
-- **Emby**：地址（如 `http://192.168.1.10:8096`）+ API Key（Emby 后台 → 高级 → API 密钥）
-- 要通知就顺带填 **系统设置 → Telegram 通知**
-
-### 3. 设置落盘目录
-
-菜单 **系统设置 → 资源来源**：转存、离线、频道监控各自落到 115 的哪个目录。
-三类来源**各自独立**决定「落盘后是否立即整理」，默认只落盘、不自动整理。
-
-### 4-5. 转存 → 整理 → STRM → Emby
-
-1. **资源入库**：粘贴分享链接（支持 `?password=` 提取码）/ 磁力 / ED2K / 直链，提交
-2. **任务中心**：看进度，失败原因也写在这里
-3. **影视整理**：选目录 → 预览（先给你看 TMDB 匹配和改名计划）→ 执行
-4. **STRM 管理**：生成 STRM
-5. Emby 里把媒体库指到 **`strm` 目录**（不是 `data`），扫库就能看到片
-
-STRM 的身份信息**写在文件里**，以后改名、换目录、换 Emby 库路径，都不用再维护登记表。
-
-### 6. 日常：片库映射 + 双库治理
-
-菜单 **库存管理**，三个页签：
-
-| 页签 | 干什么 |
-|---|---|
-| **片库映射** | 按 Emby 媒体库分类，直接标 `完整 / 缺集 / 超集 / 在更 / 待对照 / 已入库 / 待核实`，点开看逐季逐集 |
-| **双库治理** | 本地库和分享库对照画质与集数，找出该清的残次品 |
-| **目录残留清理** | 清掉目录里剩下的空壳、孤儿文件 |
-
----
-
-## ⚖️ 双库治理怎么用（有安全阀，别怕点错）
-
-```
-扫描双库 → 勾选要处理的项 → 生成计划 → 看计划里的文件清单 → 执行
-```
-
-- **生成计划**时给每个文件记指纹（SHA-256 / 大小 / mtime / inode + 来源指纹）
-- **执行**前逐作品、逐文件核对；只要有一个文件变了、或发现新文件，**立刻停**并说明原因
-- 计划有上限：一次最多 100 部 / 1000 个文件
-- 清理**可回滚**：网盘侧进 115 回收站，分享侧回到原分享
-
-三种典型情况：
-
-| 情况 | 处理 |
-|---|---|
-| 分享库画质更好 | 删本地那份，改挂分享 |
-| 本地更全 | 删分享那份 |
-| 残次品（前序缺失 / 中间断层） | 只清残的那一侧，不动另一侧 |
-
----
-
-## 📥 三类资源怎么进来
-
-| 来源 | 在哪 | 说明 |
-|---|---|---|
-| **分享转存** | 资源入库 | 粘贴分享链接，支持提取码，批量转存 |
-| **离线下载** | 资源入库 | 磁力 / ED2K / 直链，跟踪进度与产物 |
-| **频道监控** | 频道监控 | 公开频道预览页或私密频道（用户会话，只读），关键词过滤后分流落盘 |
-
----
-
-## 🆙 升级 / 回滚 / 备份
-
-```bash
-cd /vol1/1000/测试/StrimKeep
-docker compose pull && docker compose up -d      # 跟最新版
-```
-
-固定版本：把 yml 里 `image:` 改成 `ghcr.io/xcgtb/strimkeep:3.0.2`（可选 tag 见 Releases）。
-回滚：版本号改回上一个再 `pull && up -d`，数据库向下兼容上一版，可直接退。
-
-备份（`data` 与 `strm` **成对**备份）：
-
+备份（两者必须成对）：
 ```bash
 tar -czf strimkeep-backup-$(date +%Y%m%d).tar.gz \
-  /vol1/1000/测试/StrimKeep/data /vol1/1000/测试/StrimKeep/strm
+  /vol1/1000/strimkeep/data /vol1/1000/strimkeep/strm
 ```
-
-| 目录 | 里面是什么 | 丢了会怎样 |
-|---|---|---|
-| `data` | `state.db`、`master.key`、日志 | 库状态与凭据密文没了，**无法恢复** |
-| `strm` | 生成的 STRM 媒体树 | 重新生成即可，但要 Emby 重扫 |
 
 ---
 
-## 🐛 常见问题
+## 💻 使用指南
 
-**打不开面板**
+### 🎯 首次配置
 
+1. 打开面板 → **设置 → 115 网盘** → 扫码或账号登录
+2. **整理设置**：确认归档目录、命名规则、画质规则（默认已可用）
+3. 需要 Emby 时：填 Emby 地址与 API Key（可选反代）
+
+### 📥 资源入库
+
+- **转存**：粘贴分享链接 → 选择目标目录 → 转存
+- **离线**：磁力 / ED2K / 直链 → 提交 → 任务中心看进度
+- **频道监控**：添加频道 + 关键词规则，支持「公开预览页」或「用户会话」
+- 三类来源各自决定「落盘后是否立即整理」，默认只落盘
+
+### 🎬 影视整理
+
+扫描目录 → 预览识别结果（TMDB 匹配、重命名计划）→ 执行整理。
+洗版规则可调分辨率/编码/HDR 等 7 个维度的优先级，平局策略可配。
+
+### 🔗 STRM 与 Emby
+
+生成 STRM 后 Emby 扫描即可收录；播放走 302 跳转，不占本地空间。
+同步与失效清理在「STRM 同步」页，删除前会逐条确认文件仍在网盘上。
+
+### 🖼️ 片库映射
+
+按 Emby 媒体库分类展示两库作品，状态直接标出缺集/超集/在更；点开可看逐季逐集对照。
+
+### ⚖️ 双库治理
+
+1. **扫描双库** → 页面列出可清理项（分享择优删本地 / 本地更全删分享 / 残次品 / 库内多版本）
+2. 勾选要处理的项 → **生成计划**（此时记录每个文件的指纹）
+3. 核对计划里的文件清单 → **执行**；执行中任何文件变化都会立即停止
+
+
+---
+
+## 🐛 故障排除
+
+### 打不开面板
 ```bash
 docker compose ps                            # 容器在不在
-curl -s http://127.0.0.1:9000/health/ready   # 应用活没活
-docker compose logs -f                       # 日志
+curl -s http://127.0.0.1:9000/health/ready   # 应用健康
+docker compose logs -f                       # 看日志
 ```
+- 容器启动即退出、日志写「首次启动请设置 ADMIN_USERNAME 和至少 12 位的 ADMIN_PASSWORD」：把 yml 里的 `- ADMIN_PASSWORD=` 等号后面补上密码
+- `9000` 被占用：把 `network_mode: host` 改成 `ports: ["9100:9000"]`
 
-- 起来就退出、日志写「首次启动请设置 … 至少 12 位的 ADMIN_PASSWORD」→ 把密码补齐
-- `9000` 被占用 → 把 `network_mode: host` 换成 `ports: ["9100:9000"]`
+### 提示「网盘源文件未登记，无法删除」
+说明本地有 STRM、但台账查不到它对应的 115 文件。分享侧可以正常清理，
+网盘侧需要先补齐登记（重新整理该作品或走「STRM 同步」），系统不会猜着删。
 
-**治理页看不到作品，显示「静默期」**：刚入库 15 分钟内的作品不进治理清单，到点自动进。
-
-**提示「网盘源文件未登记，无法删除」**：本地有 STRM、台账查不到对应的 115 文件。分享侧照常可清；
-网盘侧要先补登记（重新整理该作品，或走「STRM 管理」同步），系统不会猜着删。
-
-**约 141 个没带 `{tmdb-id}` 的分享 STRM 不进片库映射**：有意的——它们是要清掉的对象，不做映射。
-
-**全选只选了本页**：列表分页时「全选」= 选本页，跨页要翻着勾，或直接用筛选后的批量操作。
+### 治理页出现「静默期」
+作品刚入库 15 分钟内不进治理清单，卡片上会写「还剩 N 分钟」，时间到自动进。
 
 ---
 
-## 🗂 目录结构（想改代码再看）
-
-```
-backend/strimkeep/          后端：转存、离线、频道、整理、STRM、库存、治理、Emby、通知
-backend/tests/              后端测试（pytest，1575 个用例）
-frontend/src/               前端源码（Vue 3 + TS）
-docs/operations/            运维文档：备份恢复、指标、告警
-scripts/                    构建、部署、校验脚本
-docker-compose.yml          开发用：拉 GHCR 镜像（部署请用 README 里的模板）
-docker-compose.dev.yml      源码构建覆盖：本地 build，镜像打 strimkeep:dev
-```
-
-三条不能破的约定：STRM 身份写在文件里，台账只做来源索引；删除必须有证据（计划快照 + 逐文件核验）；
-库存来自目录扫描，单个文件的问题不影响整页。
-
-源码构建（改代码时用）：
+## 🚀 版本更新
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+docker compose pull
+docker compose up -d
 ```
+
+固定版本：把 yml 里 `image:` 改成 `ghcr.io/xcgtb/strimkeep:3.0.2`（可用 tag 见 Releases）。
+回滚：版本号改回上一个，再 `pull && up -d`；数据库向下兼容上一版即可直接回退。
+
+---
+
+## 📄 目录结构
+
+```
+backend/strimkeep/          后端模块：转存、离线、频道、整理、STRM、库存、治理、Emby、通知
+backend/tests/              后端测试（pytest）
+frontend/src/               前端源码（Vue 3 + TS）
+docs/operations/            运维文档：备份恢复、指标、告警
+scripts/                    构建、部署、校验、运维脚本
+docker-compose.yml          默认部署：拉 GHCR 发布镜像 `ghcr.io/xcgtb/strimkeep:latest`
+docker-compose.dev.yml      源码构建覆盖：本地 build，镜像打 `strimkeep:dev`
+```
+
+关键约束（改代码前请先读）：STRM 身份写在文件里，台账只做来源索引；
+删除必须有证据（计划快照 + 逐文件核验）；库存来自目录扫描，单个文件的问题不影响整页。
 
 ---
 
@@ -252,3 +248,8 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 <p align="center">
   <strong>🎉 一套面板，把两套库管明白</strong>
 </p>
+
+<p align="center">
+  如果这个项目对你有帮助，给个 ⭐ Star 支持一下
+</p>
+
