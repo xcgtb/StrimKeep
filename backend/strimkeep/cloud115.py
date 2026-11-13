@@ -387,11 +387,16 @@ class Cloud115:
             await self.sleep(wait)
 
     async def call(self, method, *args, _scope: str = 'generic', _kind: str = 'read', _batch: int = 0,
-                   _channel: str = '', **kwargs):
+                   _channel: str = '', _parents: tuple | None = None, **kwargs):
         playing = playback_request.get()
         if _kind == 'write':
             # 写之前就清：万一响应丢失（结果未知），后续读也不能用旧清单。
-            self._children_memo.clear()
+            # 给了 _parents 就只清这几个目录：以前每次写都清整棵树，同一批整理里
+            # 分类/地区/作品目录被反复重读（现场：36 个文件却 656 次目录读取）。
+            if _parents is None:
+                self._children_memo.clear()
+            else:
+                self.forget_children(_parents)
         if not playing:
             self.ledger['read' if _kind == 'read' else 'write'] += 1
             self.ledger['scope'][_scope] = self.ledger['scope'].get(_scope, 0) + 1
@@ -521,7 +526,7 @@ class Cloud115:
         # 离线任务永远是后台写，即使调用方继承了播放请求的 context。
         token = playback_request.set(False)
         try:
-            return await self.call(submit, _scope='offline', _kind='write')
+            return await self.call(submit, _scope='offline', _kind='write', _parents=())
         finally:
             playback_request.reset(token)
 
@@ -682,6 +687,39 @@ class Cloud115:
         rows = (await self._children(cid))[0]
         self._children_memo[key] = rows
         return rows
+
+    def forget_children(self, cids):
+        """只丢掉这些目录的缓存（写操作后按实际影响面失效）。"""
+        for cid in cids or ():
+            self._children_memo.pop(self.scope_key(cid), None)
+
+    def affected_parents(self, file_ids):
+        """从目录缓存里找出「装着这些文件」的目录 ID。
+
+        写操作只能影响文件所在目录与明确的目标目录；分类、地区这些上层目录读了
+        还能继续用。缓存里查不到时返回空，调用方按未知范围处理。
+        """
+        wanted = {str(fid) for fid in file_ids or () if fid not in (None, '')}
+        if not wanted:
+            return ()
+        found = []
+        for key, rows in self._children_memo.items():
+            if any(str(entry.get('id')) in wanted for entry in rows):
+                found.append(key[1])
+        return tuple(found)
+
+    def write_parents(self, file_ids, *extra):
+        """写操作的失效范围：文件所在目录 + 明确的目标目录（去重）。
+
+        缓存里找不到这些文件时返回 None —— 调用方按「未知范围」处理，退回整棵清空。
+        安全优先：宁可多读几次，也不能拿一份不知道会不会过期的清单去判「文件还在」。
+        """
+        found = self.affected_parents(file_ids)
+        if not found and any(fid not in (None, '') for fid in file_ids or ()):
+            return None
+        cids = list(found)
+        cids.extend(str(cid) for cid in extra if cid not in (None, ''))
+        return tuple(dict.fromkeys(cids))
 
     async def _children(self, cid, page_size=1000):
         # 大目录要多翻 5 倍请求，正好撞 WAF 的读预算。
@@ -903,12 +941,14 @@ class Cloud115:
         return result
 
     async def mkdir(self, parent_id, name):
-        return await self.call(self.client().fs_mkdir, name, pid=parent_id, _kind='write')
+        return await self.call(self.client().fs_mkdir, name, pid=parent_id, _kind='write',
+                               _parents=(str(parent_id),))
 
     async def rename(self, file_id, name):
         self.count_op('改名')
         # fs_rename(dict) expects already encoded field names; use tuple contract.
-        return await self.call(self.client().fs_rename, (file_id, name), _kind='write')
+        return await self.call(self.client().fs_rename, (file_id, name), _kind='write',
+                               _parents=self.write_parents([file_id]))
 
     async def rename_many(self, items):
         """按文件 ID 批量改名；分批串行提交，结果由调用方逐项核查。"""
@@ -918,10 +958,11 @@ class Cloud115:
             raise ValueError('重命名需要互不相同的文件 ID。')
         last = None
         client = self.client()
+        parents = self.write_parents([fid for fid, _ in pairs])
         for start in range(0, len(pairs), 50):
             # 不标记 _batch：每次请求仍按用户设置的普通写入间隔执行。
             last = await self.call(client.fs_rename, pairs[start:start + 50],
-                                   _scope='file', _kind='write')
+                                   _scope='file', _kind='write', _parents=parents)
         return last
 
     async def move(self, file_id, parent_id):
@@ -929,7 +970,8 @@ class Cloud115:
         # SDK documents that the server defaults to destructive replacement.
         # Always request keep_both; organizer also checks names and file identity.
         return await self.call(self.client().fs_move, {'fid': file_id, 'pid': parent_id,
-            'conflict_policy': json.dumps({str(file_id): {'action': 'keep_both'}})}, _kind='write')
+            'conflict_policy': json.dumps({str(file_id): {'action': 'keep_both'}})}, _kind='write',
+            _parents=self.write_parents([file_id], parent_id))
 
     async def move_many(self, file_ids, parent_id):
         """对齐：一次 /open/ufile/move，file_ids 逗号分隔 + to。"""
@@ -939,7 +981,8 @@ class Cloud115:
             raise ValueError('批量移动需要互不相同的文件 ID。')
         return await self.call(self.client().fs_move_open,
                                {'file_ids': ','.join(ids), 'to_cid': str(parent_id)},
-                               _scope='file', _kind='write', _batch=len(ids))
+                               _scope='file', _kind='write', _batch=len(ids),
+                               _parents=self.write_parents(ids, parent_id))
 
     async def sign(self):
         """115 每日签到。
@@ -975,7 +1018,7 @@ class Cloud115:
         115 的清空需要安全密钥；用户在账号安全里关掉它时传任意 6 位数字即可。
         """
         return await self.call(self.client().recyclebin_clean, password,
-                                 _scope='maintenance', _kind='write')
+                                 _scope='maintenance', _kind='write', _parents=())
 
     async def recycle_files(self, limit_pages=None):
         """Strict complete listing used as positive evidence, never as missing-file inference.
@@ -1124,7 +1167,8 @@ class Cloud115:
         # One explicit ID. Empty directories use the separate guarded entry point.
         # Never purge or clean the recycle bin.
         return await self.call(self.client().fs_delete, {'fid': str(file_id), 'pid': str(parent_id), 'ignore_warn': 0},
-                               _scope='file', _kind='write')
+                               _scope='file', _kind='write',
+                               _parents=self.write_parents([file_id], parent_id))
 
     async def recycle_many(self, file_ids, parent_id):
         self.count_op('删除', len(file_ids))
@@ -1141,10 +1185,13 @@ class Cloud115:
         if len(set(ids)) != len(ids) or not all(i.isdigit() for i in ids) or not str(parent_id).isdigit():
             raise CloudError('批量回收的文件 ID 无效或重复。', 'RECYCLE_UNVERIFIED', 409)
         # 真机验证：115 的 /rb/delete 不认逗号 fid（回 errno 231011 且不删），必须用 fid[i]。
+        parents = self.write_parents(ids, parent_id)
+
         async def send(targets):
             return await self.call(self.client().fs_delete_open,
                                    {'file_ids': ','.join(targets)},
-                                   _scope='file', _kind='write', _batch=len(targets))
+                                   _scope='file', _kind='write', _batch=len(targets),
+                                   _parents=parents)
 
         try:
             return await send(ids)
@@ -1199,7 +1246,7 @@ class Cloud115:
             offset=len(items)
 
     async def share_receive(self,secret,items,dest):
-        return await self.call(self.client().share_receive,{**secret,'file_id':','.join(x['id'] for x in items),'cid':dest},_scope='share',_kind='write')
+        return await self.call(self.client().share_receive,{**secret,'file_id':','.join(x['id'] for x in items),'cid':dest},_scope='share',_kind='write',_parents=(str(dest),))
 
     async def share_url_download(self, file_id, share_code, receive_code, user_agent):
         """获取分享直链；播放请求按账号、分享、文件和 UA 短暂缓存并合并并发。"""

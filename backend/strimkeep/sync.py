@@ -621,9 +621,23 @@ class Sync:
         account = self.engine.index.account(config)
         sources = set(config.get('source_cids') or [])
         missing = []
+        listings = {}
         for old in self.store.db.execute('SELECT * FROM output_registry WHERE account_id=? AND active=1', (account,)).fetchall():
-            if not sources.intersection(json.loads(old['trail'])):
+            trail = json.loads(old['trail'])
+            if not sources.intersection(trail):
                 continue
+            # 先看该文件所在目录的清单（同一次同步里已读过、有缓存）：命中即「源文件还在」。
+            # 以前每个台账行都打一次存在性查询，库一大就是几千次请求。
+            parent = str(trail[-1]) if trail else ''
+            if parent and hasattr(self.cloud, 'children'):
+                if parent not in listings:
+                    try:
+                        listings[parent] = {str(entry.get('id')) for entry in await self.cloud.children(parent)}
+                    except CloudError:
+                        listings[parent] = None      # 目录读不到：退回逐条确认，不据此判失效
+                ids = listings[parent]
+                if ids is not None and str(old['file_id']) in ids:
+                    continue
             if await self.cloud.live_file_exists(old['file_id']):
                 continue
             for rel in json.loads(old['files']):
@@ -631,8 +645,11 @@ class Sync:
                     missing.append({'account_id': account, 'file_id': old['file_id'], 'relative_path': rel})
         dedup = {json.dumps(m, ensure_ascii=False, sort_keys=True) for m in missing}
         missing = [json.loads(x) for x in sorted(dedup)]
-        self.store.set_many({'stale_strms': json.dumps(missing, ensure_ascii=False)})
-        if missing:
+        previous = self.store.get('stale_strms') or '[]'
+        current = json.dumps(missing, ensure_ascii=False)
+        self.store.set_many({'stale_strms': current})
+        # 同一批失效重复出现时不再每轮都写一条：只在结果变化时提醒。
+        if missing and current != previous:
             self.store.event('strm_sync', '失效 STRM 检测：发现 %d 条本地 strm 的网盘源文件已消失，已在 STRM 管理页列出（只标记未删除）。' % len(missing))
 
     async def stale_cleanup(self):
@@ -754,6 +771,10 @@ class Sync:
             self.cloud.reset_ledger()
         try:
             await self._run(jid, config, sweep=sweep)
+            if config.get('stale_detect'):
+                # 全量扫描后做差集（只标记不删除）。这条链路以前只有测试在调，
+                # 打开开关也不会执行——现在真的接进同步流程。
+                await self.stale_check(jid, config)
         finally:
             if hasattr(self.cloud, 'use_scope'):
                 self.cloud.use_scope(self.engine.current_account(), jid)

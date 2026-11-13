@@ -147,3 +147,46 @@ def test_manual_cleanup_preserves_file_edited_during_cloud_check(tmp_path):
         assert not cleaned and len(rest)==1 and path.read_text()=='changed while waiting'
         store.close()
     asyncio.run(run())
+
+class ListingCloud(FakeCloud):
+    """带目录清单的替身：模拟 Cloud115 的 children 缓存。"""
+
+    def __init__(self, live, listing):
+        super().__init__(live)
+        self.listing = listing
+        self.children_calls = []
+        self.exists_calls = []
+
+    async def children(self, cid):
+        self.children_calls.append(str(cid))
+        return [{'id': fid, 'name': 'x', 'is_dir': False} for fid in self.listing.get(str(cid), [])]
+
+    async def live_file_exists(self, fid):
+        self.exists_calls.append(fid)
+        return await super().live_file_exists(fid)
+
+
+def test_stale_check_reads_each_directory_once_before_per_file_probe(tmp_path):
+    """清单里还在的文件不该再打存在性查询；同目录只读一次。"""
+    async def run():
+        store = make_store(tmp_path, {'1001': ['影视媒体库/剧集/国产剧集/剧名/Season 1/剧名.S01E03.strm'],
+                                      '1002': ['影视媒体库/剧集/国产剧集/剧名/Season 1/剧名.S01E04.strm']})
+        cloud = ListingCloud(live=set(), listing={'100': ['1001']})
+        sync = Sync(FakeSyncEngine(store, tmp_path / 'strm', cloud))
+
+        await sync.stale_check(1, {'source_cids': ['100'], 'stale_detect': True})
+
+        stale = json.loads(store.get('stale_strms') or '[]')
+        assert [s['file_id'] for s in stale] == ['1002']
+        assert cloud.children_calls == ['100'], '同目录只读一次'
+        assert cloud.exists_calls == ['1002'], '清单里已有的文件不该再查存在性'
+
+        # 结果没变时不再重复写事件
+        events = [r[0] for r in store.db.execute(
+            "SELECT message FROM events WHERE message LIKE '%失效 STRM 检测%'").fetchall()]
+        await sync.stale_check(1, {'source_cids': ['100'], 'stale_detect': True})
+        again = [r[0] for r in store.db.execute(
+            "SELECT message FROM events WHERE message LIKE '%失效 STRM 检测%'").fetchall()]
+        assert len(events) == len(again) == 1, (events, again)
+        store.close()
+    asyncio.run(run())
