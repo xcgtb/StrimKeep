@@ -57,18 +57,48 @@ class ResolveInput(BaseModel):
     source: str = Field(pattern='^re0$')
 
 
+# 资源卡要能看清「这个版本到底是什么」，上游给的备注等字段必须原样同步过来：
+# remark 是发布者写的版本说明（字幕、修复、来源片源都在这句里），以前被白名单丢掉，
+# 界面上就只剩标题和体积，根本判断不了资源详情。
+TEXT_FIELDS = ('title', 'source', 'provider', 'provider_label', 'resolution', 'size', 'release_group',
+               'link_type', 'validate_status', 'quality', 'slug', 'sharer', 'remark', 'message_text',
+               'message_body', 'published_at', 'resource_specification', 'validate_message',
+               'validation_label', 'channel_title')
+LIST_FIELDS = ('resource_spec_tags', 'technical_tags', 'subtitle_languages', 'subtitle_types',
+               'resolution_tags', 'source_tags', 'supported_targets')
+FLAG_FIELDS = ('is_unlocked', 'is_official', 'dolby_vision', 'validation_known', 'unlocked_users_known')
+SPEC_KEYS = ('resource_pix', 'web_source', 'resource_type', 'resource_effect', 'audio_encode',
+             'resource_team')
+
+
 def clean_item(item):
     if not isinstance(item, dict):
         return None
     result = {}
-    for key in ('title', 'source', 'provider', 'provider_label', 'resolution', 'size', 'release_group', 'link_type', 'validate_status', 'quality', 'slug', 'sharer'):
+    for key in TEXT_FIELDS:
         value = item.get(key)
-        result[key] = str(value)[:300] if isinstance(value, (str, int, float)) else ''
-    result['is_unlocked'] = item.get('is_unlocked') is True
-    points = item.get('unlock_points') if item.get('points_known') is True else None
-    for key in ('resource_spec_tags', 'technical_tags', 'subtitle_languages'):
+        result[key] = (str(value)[:300]
+                       if isinstance(value, (str, int, float)) and not isinstance(value, bool) else '')
+    for key in FLAG_FIELDS:
+        result[key] = item.get(key) is True
+    for key in LIST_FIELDS:
         raw = item.get(key)
         result[key] = [str(x)[:80] for x in raw[:12] if isinstance(x, str)] if isinstance(raw, list) else []
+    specs = item.get('resource_specs')
+    result['resource_specs'] = ({k: specs[k][:80] for k in SPEC_KEYS
+                                 if isinstance(specs.get(k), str) and specs[k]}
+                                if isinstance(specs, dict) else {})
+    episode = item.get('episode') if isinstance(item.get('episode'), dict) else {}
+    result['episode'] = {}
+    for key in ('season_num', 'episode_num', 'end_episode_num'):
+        if type(episode.get(key)) is int and 0 <= episode[key] <= 10000:
+            result['episode'][key] = episode[key]
+    for key in ('kind', 'confidence'):
+        if isinstance(episode.get(key), str):
+            result['episode'][key] = episode[key][:40]
+    count = item.get('unlocked_users_count')
+    result['unlocked_users_count'] = count if type(count) is int and 0 <= count <= 10_000_000 else None
+    points = item.get('unlock_points') if item.get('points_known') is True else None
     result['unlock_points'] = points if type(points) in (int, float) and 0 <= points <= 100000 else None
     # Only links already present in a result can be queued. Never call the
     # provider's copy-link endpoint, which may unlock resources at a cost.
