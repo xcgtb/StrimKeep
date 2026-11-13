@@ -383,3 +383,36 @@ def test_sync_adds_new_subtitle_to_unchanged_video(tmp_path):
         assert path.with_suffix('.chs.srt').is_file()
         await http.aclose(); store.close()
     asyncio.run(scenario())
+
+
+def test_incremental_detects_moved_file_even_when_identity_is_unchanged(tmp_path):
+    async def scenario():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        cloud.add_video(name='Movie.2024.mkv')['sha1'] = 'A' * 40
+        first = new_job(store, sync_config()); await engine.run_job(first)
+        old = engine.root / engine.outputs.get('1', '1000')['relative_path']
+        folder = (await cloud.mkdir('100', 'new-folder'))['cid']
+        cloud.nodes['1000']['parent_id'] = folder
+        config = {**sync_config(), 'mode': 'incremental', 'incremental_since': 1}
+        second = new_job(store, config); await engine.run_job(second)
+        assert engine.job(second)['state'] == 'completed', dict(engine.job(second))
+        current = engine.root / engine.outputs.get('1', '1000')['relative_path']
+        assert current != old and current.is_file() and not old.exists()
+        assert current.parent.name == 'new-folder'
+        await http.aclose(); store.close()
+    asyncio.run(scenario())
+
+
+def test_explicit_full_sync_does_not_use_unchanged_shortcut(tmp_path):
+    async def scenario():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        cloud.add_video(name='Movie.2024.mkv')['sha1'] = 'A' * 40
+        first = new_job(store, sync_config()); await engine.run_job(first)
+        async def forbidden(*args):
+            raise AssertionError('full sync must check the source')
+        engine.sync.unchanged = forbidden
+        config = {**sync_config(), '_force_full': True, 'trust_scan': False, 'mode': 'full'}
+        second = new_job(store, config); await engine.run_job(second)
+        assert engine.job(second)['state'] == 'completed', dict(engine.job(second))
+        await http.aclose(); store.close()
+    asyncio.run(scenario())

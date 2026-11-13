@@ -364,46 +364,10 @@ class Sync:
         config['output_changed'] = True
         self.engine.update_job(jid, config=dumps(config))
 
-    def unchanged_since(self, account, source, since):
-        """增量同步的快速跳过判定：上次同步之后没变、且本地输出都还在。
-
-        这三个条件缺一不可：只看登记时间会漏掉「本地文件被删/被改」的残输出，
-        所以本地输出缺失一律不跳过，让它走完整核对。
-        """
-        try:
-            since = float(since or 0)
-        except (TypeError, ValueError):
-            return False
-        if since <= 0:
-            return False
-        row = self.engine.outputs.get(account, source['id'])
-        if not row or not row['active'] or float(row['updated'] or 0) < since:
-            return False
-        try:
-            previous = json.loads(row['source'])
-            files = json.loads(row['files'])
-        except (TypeError, ValueError, KeyError):
-            return False
-        if not isinstance(files, dict) or not files:
-            return False
-        if (previous.get('name') != source.get('name')
-                or previous.get('size') != source.get('size')
-                or str(previous.get('sha1', '')).upper() != str(source.get('sha1', '')).upper()):
-            return False
-        for relative in files:
-            if not self.engine.outputs.path(relative).is_file():
-                return False
-        return True
-
     async def process(self, jid, row, config):
         from .core import atomic_write, dumps, UncertainState
         source, plan = json.loads(row['original']), json.loads(row['plan'])
         account = self.engine.index.account(config)
-        if self.unchanged_since(account, source, config.get('incremental_since')):
-            # 增量同步：上次同步之后没变化、本地输出齐全 —— 不重读云端详情、不重写文件。
-            self.engine.update_item(row['id'], state='done', step='增量同步：文件未变化，跳过',
-                                    message='上次同步之后没有变化，已跳过。')
-            return
         # 清单即事实：本轮扫描刚用 children_verified 读过 id/name/size/sha1/pickcode，
         # 未变化的文件再发 file()+path_info() 只是重复劳动（每条两跳网络 + 限流），
         # 这正是全量同步慢的主因。仅在「扫描在 15 分钟内 + 指纹完全一致」时跳过回查。
@@ -1270,7 +1234,7 @@ class Sync:
                 self.engine.update_job(jid,stage='同步：'+json.loads(row['original'])['name'])
                 next_progress = now + 1.0
             async with self.engine.publication_gate:
-                plan = await self.unchanged(json.loads(row['original']), config)
+                plan = None if config.get('_force_full') else await self.unchanged(json.loads(row['original']), config)
                 self.engine.boundary(jid)
                 if plan:
                     repair = plan.pop('_sync_trail_repair', None)
