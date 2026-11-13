@@ -673,3 +673,22 @@ def test_report_announces_the_emby_gap_once_per_window(tmp_path):
         assert worker.report(now=now) is None                       # 没有缺口就安静
         await http.aclose(); store.close()
     asyncio.run(run())
+
+def test_emby_media_info_retry_logs_only_first_and_give_up(tmp_path):
+    """8 次退避重试不该刷 8 条同样的日志：保留第一次和放弃那一次。"""
+    async def run():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        worker = engine.emby.media_info
+        conn = digest('http://emby|test-key')
+        with store.db:
+            store.db.execute('INSERT INTO native_media_info_queue(job_id,item_id,target,connection) '
+                             'VALUES(?,?,?,?)', (7, 'i1', json.dumps({'relative': 'a/a.strm'}), conn))
+        for _ in range(3):
+            row = store.db.execute('SELECT * FROM native_media_info_queue').fetchone()
+            worker._defer_emby(dict(row), 'Emby 还没扫描到这条 STRM')
+        messages = [r[0] for r in store.db.execute(
+            "SELECT message FROM events WHERE message LIKE '%Emby 端媒体信息未取得%'").fetchall()]
+        assert len(messages) == 1 and '第 1/' in messages[0], messages
+        await http.aclose()
+        store.close()
+    asyncio.run(run())

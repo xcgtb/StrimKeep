@@ -231,9 +231,10 @@ class NativeMediaInfo:
                 'UPDATE native_media_info_queue SET emby_state=?,emby_attempts=?,emby_next_due=? '
                 'WHERE job_id=? AND item_id=?',
                 (state, attempts, time.time() + delay, row['job_id'], row['item_id']))
-        self._event(f'任务 {row["job_id"]}：Emby 端媒体信息未取得（第 {attempts}/{self.EMBY_MAX_ATTEMPTS} 次，'
-                    f'{str(reason)[:60]}），'
-                    + ('已停止追踪，本地媒体信息不受影响。' if state == 'gave_up' else '稍后重试。'))
+        if attempts == 1 or state == 'gave_up':
+            self._event(f'任务 {row["job_id"]}：Emby 端媒体信息未取得（第 {attempts}/{self.EMBY_MAX_ATTEMPTS} 次，'
+                        f'{str(reason)[:60]}），'
+                        + ('已停止追踪，本地媒体信息不受影响。' if state == 'gave_up' else '稍后重试。'))
 
     @staticmethod
     def _video_streams(item):
@@ -453,9 +454,11 @@ class NativeMediaInfo:
             with self.store.db:
                 self.store.db.execute('UPDATE native_media_info_queue SET attempts=?,next_due=?,state=? WHERE job_id=? AND item_id=?',
                     (attempts,time.time()+min(600,30*2**(attempts-1)),'failed' if attempts>=self.MAX_ATTEMPTS else 'queued',row['job_id'],row['item_id']))
-            self._event(f'任务 {row["job_id"]}：原生媒体信息提取未确认（第 {attempts}/{self.MAX_ATTEMPTS} 次，'
-                        f'{type(exc).__name__}: {str(exc)[:80]}），'
-                        + ('已停止重试。' if attempts>=self.MAX_ATTEMPTS else '稍后重试。'))
+            # 8 次退避重试每次都写一条，同样的内容会刷 8 条：只留第一次和最后一次。
+            if attempts == 1 or attempts >= self.MAX_ATTEMPTS:
+                self._event(f'任务 {row["job_id"]}：原生媒体信息提取未确认（第 {attempts}/{self.MAX_ATTEMPTS} 次，'
+                            f'{type(exc).__name__}: {str(exc)[:80]}），'
+                            + ('已停止重试。' if attempts>=self.MAX_ATTEMPTS else '稍后重试。'))
 
     def _event(self, message):
         """同一条事件在 NOTICE_SECONDS 内只写一次。

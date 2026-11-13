@@ -323,3 +323,35 @@ def test_offline_partial_match_and_missing_file_id_do_not_claim_other_items(tmp_
         assert store.db.execute('SELECT count(*) FROM organize_jobs').fetchone()[0] == 0
         store.close()
     asyncio.run(run())
+
+def test_first_transient_cloud_failure_is_silent_in_logs(tmp_path):
+    """115 传输抖动会自愈：首次失败只更新任务中心，不写日志；复发时才记一条。"""
+    store, engine, http = make_engine(tmp_path)
+    stage = 'CLOUD_UNAVAILABLE，保留未完成文件并稍后重试'
+    first = insert_job(store, 'running', ORGANIZE)
+    engine.halt(first, 'needs_review', '115 请求未完成，请检查登录、网络或接口限制后重试。', stage, quiet=True)
+    assert not store.db.execute("SELECT 1 FROM events WHERE message LIKE '%CLOUD_UNAVAILABLE%'").fetchone()
+    job = engine.job(first)
+    assert job['state'] == 'needs_review' and '115 请求未完成' in job['message']
+    second = insert_job(store, 'running', {**ORGANIZE, 'auto_retry_count': 1})
+    engine.halt(second, 'needs_review', '115 请求未完成，请检查登录、网络或接口限制后重试。', stage)
+    assert store.db.execute("SELECT 1 FROM events WHERE message LIKE '%CLOUD_UNAVAILABLE%'").fetchone()
+    asyncio.run(http.aclose())
+    store.close()
+
+
+def test_first_transient_requeue_writes_no_log_line(tmp_path):
+    """同一批抖动原本会写两条日志（失败 + 重排）：首次重排也不再记。"""
+    store, engine, http = make_engine(tmp_path)
+    now = time.time()
+    stage = 'CLOUD_UNAVAILABLE，保留未完成文件并稍后重试'
+    jid = insert_job(store, 'needs_review', ORGANIZE, stage=stage, updated=now - 1000)
+    assert engine.auto_retry_stalled(now) == [jid]
+    assert not store.db.execute("SELECT 1 FROM events WHERE message LIKE '%重新排队%'").fetchone()
+    with store.db:
+        store.db.execute("UPDATE organize_jobs SET state='needs_review', stage=?, updated=? WHERE id=?",
+                         (stage, now - 1000, jid))
+    assert engine.auto_retry_stalled(now) == [jid]
+    assert store.db.execute("SELECT 1 FROM events WHERE message LIKE '%重新排队%'").fetchone()
+    asyncio.run(http.aclose())
+    store.close()

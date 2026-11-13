@@ -309,8 +309,13 @@ class Organizer:
                 stage='外部限制解除，自动重试（%d/%d）' % (tries + 1, self.AUTO_RETRY_MAX),
                 message='检测到外部限制已解除，任务自动重新排队；已完成步骤不会重复执行。',
                 config=dumps(config))
-            self.store.event('schedule', '任务 %d：外部限制解除，已自动重新排队（第 %d/%d 次）。'
-                             % (row['id'], tries + 1, self.AUTO_RETRY_MAX))
+            transient = ('CLOUD_UNAVAILABLE' in str(row['stage'] or '')
+                         or 'TMDB 请求失败' in str(row['stage'] or ''))
+            # 抖动引起的首次重排也只是心跳级别的信息：任务中心已经显示「自动重试（1/5）」，
+            # 日志中心留到第二次仍失败再记，避免同一次抖动写出两条噪音。
+            if not transient or tries >= 1:
+                self.store.event('schedule', '任务 %d：外部限制解除，已自动重新排队（第 %d/%d 次）。'
+                                 % (row['id'], tries + 1, self.AUTO_RETRY_MAX))
             requeued.append(row['id'])
         return requeued
 
@@ -370,7 +375,7 @@ class Organizer:
             # 留痕失败不能反过来影响整理主流程。
             pass
 
-    def halt(self, job_id, state, message, stage='等待核查'):
+    def halt(self, job_id, state, message, stage='等待核查', quiet=False):
         current = self.job(job_id)['state']
         self.update_job(job_id, state=current if current in ('paused', 'cancelled') else state,
                         message=message, stage=stage)
@@ -378,7 +383,10 @@ class Organizer:
         # 「等待核查」，点进去每个文件却还是「发现文件」，看起来像任务没启动。
         # 这里一并落库，并把失败原因写到条目上。
         self.jobs.mark_discovered_as_review(job_id, stage, message)
-        self.store.event('organize', f'任务 {job_id} / {stage}：{message}')
+        # quiet：传输层抖动（超时/连接重置）会自动退避重排并自愈，首次失败不该刷日志；
+        # 任务中心的 stage/message 仍然如实显示，日志只在复发或放弃时才值得看。
+        if not quiet:
+            self.store.event('organize', f'任务 {job_id} / {stage}：{message}')
 
     def boundary(self, job_id):
         """文件边界的三个校验：磁盘余量、任务仍在运行、115 账号未变。
@@ -3075,7 +3083,12 @@ class Organizer:
                 self.halt(job_id, 'needs_review', str(exc), '115 限流冷却，稍后自动重排')
             elif exc.code in ('TMDB_UNAVAILABLE', 'CLOUD_UNAVAILABLE'):
                 label = 'TMDB 请求失败' if exc.code == 'TMDB_UNAVAILABLE' else 'CLOUD_UNAVAILABLE'
-                self.halt(job_id, 'needs_review', str(exc), label + '，保留未完成文件并稍后重试')
+                try:
+                    retries = int(json.loads(self.job(job_id)['config'] or '{}').get('auto_retry_count') or 0)
+                except (ValueError, TypeError):
+                    retries = 0
+                self.halt(job_id, 'needs_review', str(exc), label + '，保留未完成文件并稍后重试',
+                          quiet=retries == 0)
             else:
                 self.halt(job_id, 'waiting_login' if exc.code in ('LOGIN_REQUIRED', 'LOGIN_INVALID') else 'needs_review', str(exc), '等待登录' if exc.code in ('LOGIN_REQUIRED', 'LOGIN_INVALID') else '等待核查')
         except (UncertainState, NeedsReview) as exc:
