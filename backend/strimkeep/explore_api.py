@@ -1,6 +1,7 @@
 """TMDB 影视探索：热门/分类浏览 + 入库状态角标（以 Emby 媒体库为准）。"""
 import hashlib
 import json
+import re
 import time
 from datetime import date, timedelta
 from collections import OrderedDict
@@ -202,15 +203,26 @@ def install_explore(app, store, admin):
             sort = 'popular'
         if sort not in SORTS:
             raise HTTPException(422, '筛选条件不适用于当前作品类型。')
-        if q and q.strip() and (selected or genre or year or region or sort != 'popular'):
-            raise HTTPException(422, '名称搜索暂不支持组合筛选，请清除筛选条件后搜索。')
+        if q and q.strip() and (selected or genre or region or sort != 'popular'):
+            raise HTTPException(422, '名称搜索请先清除类型 / 地区 / 榜单筛选，年份可以保留。')
         if sort == 'trending' and (selected or genre or year or region):
             raise HTTPException(422, 'TMDB 趋势榜暂不支持组合筛选，请选择其他排序。')
         params = {'page': page}
         date_field = 'primary_release_date' if kind == 'movie' else 'first_air_date'
-        if q and q.strip():
+        query = (q or '').strip()
+        if query:
+            # 「沙丘 2021」「沙丘 (2021)」这类输入：把年份拆出来当筛选条件。
+            # 整串丢给 TMDB 搜索基本必然 0 结果——现场反馈的「带年份就搜不到」。
+            match = re.search(r'[\(（\[]?\s*((?:19|20)\d{2})\s*[\)）\]]?$', query)
+            if match:
+                trimmed = query[:match.start()].strip()
+                if trimmed:
+                    if year is None:
+                        year = int(match.group(1))
+                    query = trimmed
+        if query:
             path = 'search/' + kind
-            params['query'] = q.strip()
+            params['query'] = query
             params['include_adult'] = 'false'
         elif sort == 'trending':
             path = 'trending/' + kind + '/week'
@@ -242,31 +254,44 @@ def install_explore(app, store, admin):
             params['primary_release_year' if kind == 'movie' else 'first_air_date_year'] = year
 
         import asyncio, math
-        # Translate arbitrary page sizes into TMDB's fixed 20-item pages.
-        # Round offsets before fetching, then slice: 30-item pages otherwise
-        # silently skip ten works at each boundary.
-        offset = (page - 1) * per_page
-        if offset >= 10000:
-            return {'items': [], 'page': page, 'total_pages': min(500, math.ceil(10000 / per_page))}
-        base = offset // 20 + 1
-        skip = offset % 20
-        pages_needed = min(501 - base, max(1, math.ceil((skip + per_page) / 20)))
-        pages = await asyncio.gather(*(tmdb(path, {**params, 'page': base + i})
-                                       for i in range(pages_needed)))
-        merged = []
-        for data in pages:
-            merged += data.get('results') or []
-        seen = set()
-        results = []
-        for item in merged[skip:skip + per_page]:
-            if not isinstance(item, dict) or 'id' not in item or item['id'] in seen:
-                continue
-            seen.add(item['id'])
-            results.append(item)
-        total = pages[0].get('total_results')
-        if type(total) is not int or total < 0:
-            total = (pages[0].get('total_pages') or 1) * 20
-        total_pages = max(1, min(500, math.ceil(min(total, 10000) / per_page)))
+        year_key = 'primary_release_year' if kind == 'movie' else 'first_air_date_year'
+
+        async def collect(params):
+            """按 per_page 换算成 TMDB 的 20 条一页，取回本页切片。"""
+            # Translate arbitrary page sizes into TMDB's fixed 20-item pages.
+            # Round offsets before fetching, then slice: 30-item pages otherwise
+            # silently skip ten works at each boundary.
+            offset = (page - 1) * per_page
+            if offset >= 10000:
+                return [], 0, min(500, math.ceil(10000 / per_page)), True
+            base = offset // 20 + 1
+            skip = offset % 20
+            pages_needed = min(501 - base, max(1, math.ceil((skip + per_page) / 20)))
+            pages = await asyncio.gather(*(tmdb(path, {**params, 'page': base + i})
+                                           for i in range(pages_needed)))
+            merged = []
+            for data in pages:
+                merged += data.get('results') or []
+            seen = set()
+            collected = []
+            for item in merged[skip:skip + per_page]:
+                if not isinstance(item, dict) or 'id' not in item or item['id'] in seen:
+                    continue
+                seen.add(item['id'])
+                collected.append(item)
+            total = pages[0].get('total_results')
+            if type(total) is not int or total < 0:
+                total = (pages[0].get('total_pages') or 1) * 20
+            return collected, total, max(1, min(500, math.ceil(min(total, 10000) / per_page))), False
+
+        results, total, total_pages, beyond_limit = await collect(params)
+        if beyond_limit:
+            return {'items': [], 'page': page, 'total_pages': total_pages}
+        # 带年份一条都没有时放宽一次：手输年份错一年、或片子跨年上映，
+        # 不该直接给一片空白（现场「带年份就搜不到」）。
+        if query and year and not results:
+            relaxed = {key: value for key, value in params.items() if key != year_key}
+            results, total, total_pages, beyond_limit = await collect(relaxed)
 
         # Emby 为准（在不在媒体库），集数与总集数只查当前页里在库的剧集
         emby_idx, emby_complete = await emby_tmdb_index()

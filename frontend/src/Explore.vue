@@ -47,7 +47,19 @@ function applyYear(){
   else yearInput.value=year.value?String(year.value):''
 }
 function go(p:number){if(p<1||p>totalPages.value||p===page.value)return;page.value=p;load()}
-function doSearch(){activeQuery.value=searchInput.value.trim();page.value=1;load()}
+function doSearch(){
+  // 「沙丘 2021」「沙丘 (2021)」：把年份拆到筛选条件里，搜索词只留片名。
+  // 整串丢给 TMDB 基本搜不到（用户反馈的现场），而且年份会显示在筛选项上，看得见。
+  let text=searchInput.value.trim()
+  const match=text.match(/[\(（\[]?\s*((?:19|20)\d{2})\s*[\)）\]]?$/)
+  if(match){const trimmed=text.slice(0,match.index).trim();if(trimmed){text=trimmed;const guess=Number(match[1]);if(year.value!==guess){year.value=guess;yearInput.value=String(guess)}}}
+  // 名称搜索和后端筛选冲突会 422，这里直接把冲突的筛选项清掉，避免「点搜索报错/没结果」。
+  if(genre.value!==undefined)genre.value=undefined
+  if(region.value)region.value=''
+  if(sort.value!=='popular')sort.value='popular'
+  searchInput.value=text
+  activeQuery.value=text;page.value=1;load()
+}
 function clearSearch(){if(!activeQuery.value)return;searchInput.value='';activeQuery.value='';page.value=1;load()}
 
 const yearOptions=computed(()=>{
