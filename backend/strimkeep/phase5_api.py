@@ -1,6 +1,7 @@
 """Phase-five admin endpoints. All mutations share session/CSRF authorization."""
 import asyncio
 import json
+import os
 import re
 import secrets
 import time
@@ -34,6 +35,10 @@ class SyncRunInput(Input):
     source_cids: list[str] = Field(default_factory=list, max_length=20)
     since: float | None = Field(default=None, ge=0)
     dry_run: bool = False    # 只按台账估算影响面，不入队、不读云端
+
+
+class UnidentifiedCleanupInput(Input):
+    paths: list[str] = Field(min_length=1, max_length=500)
 
 
 class ScheduleConfig(Input):
@@ -76,84 +81,77 @@ def install_phase5(app,store,admin,job_public):
 
     @app.get('/api/v1/strm/audit',dependencies=[Depends(admin)])
     async def strm_audit(limit:int=Query(20,ge=1,le=200)):
-        """STRM 体检：哪些是本项目管的、哪些是别的工具写的、哪些登记了却没文件。
-
-        现场踩过的坑：另一条 STRM 产线在同一个库里也写 STRM（/play/share/<id>/<下划线名>），
-        它们不进我们的台账，却在 Emby 里制造重复条目；台账里也有几条文件已经没了。
-        只读，不改任何文件。
-        """
+        """登记检查只提供线索，不推断未登记文件的来源。"""
+        from .share_service import UNIDENT_NAME, PENDING_NAME
         def scan():
-            root=Path(engine().root)
-            heads={}
-            for path in root.rglob('*.strm'):
-                rel=path.relative_to(root).as_posix()
-                try: heads[rel]=path.read_text(encoding='utf-8')[:200]
-                except (OSError,UnicodeError): heads[rel]=''
-            managed={r['relative_path'] for r in store.db.execute("SELECT relative_path FROM playbacks WHERE revoked=0")}
-            managed|={r['strm_path'] for r in store.db.execute("SELECT strm_path FROM share_strms WHERE revoked=0")}
-            external=sorted(rel for rel in heads if rel not in managed)
-            missing=sorted(rel for rel in managed if rel not in heads)
-            def kind(head):
-                if '/play115/' in head: return 'ours'
-                if '/play/share/' in head: return 'legacy'
-                return 'unknown'
-            return {'total':len(heads),'managed':len(heads)-len(external),
-                    'external_total':len(external),
-                    'external':[{'path':rel,'kind':kind(heads[rel])} for rel in external[:limit]],
-                    'missing_total':len(missing),'missing':missing[:limit]}
+            root = Path(engine().root)
+            files = {p.relative_to(root).as_posix() for p in root.rglob('*.strm') if p.is_file() and not p.is_symlink()}
+            managed = {r[0] for r in store.db.execute('SELECT relative_path FROM playbacks WHERE revoked=0')}
+            managed |= {r[0] for r in store.db.execute('SELECT strm_path FROM share_strms WHERE revoked=0')}
+            special = {p for p in files if p.split('/', 1)[0] in (UNIDENT_NAME, PENDING_NAME)}
+            unknown = sorted(files - managed - special)
+            missing = sorted(managed - files)
+            return {'total':len(files), 'managed':len(files & managed),
+                    'external_total':len(unknown), 'external':[{'path':p, 'kind':'unknown'} for p in unknown[:limit]],
+                    'missing_total':len(missing), 'missing':missing[:limit],
+                    'unidentified_total':sum(p.startswith(UNIDENT_NAME + '/') for p in special),
+                    'pending_total':sum(p.startswith(PENDING_NAME + '/') for p in special)}
         return await asyncio.to_thread(scan)
 
     @app.post('/api/v1/strm/audit/cleanup',dependencies=[Depends(admin)])
     async def strm_audit_cleanup():
-        """清理残次品：非本项目的 STRM + 台账里文件已经不在的登记。
+        raise HTTPException(410, '旧版自动清理已停用，请在分享未识别目录中选择需要清理的 STRM。')
 
-        只动两类：
-        1. 内容不是 /play115/ 的外部 STRM（另一条产线或旧工具留下的，路径变更时没收管）；
-        2. 登记在 playbacks / share_strms 里、但磁盘上已经没有的输出（置撤销）。
-        本项目格式（/play115/）的 STRM 一个都不删，哪怕没登记——那多半是台账丢了。
-        """
-        def run():
-            from .fsops import purge_strm
-            root=Path(engine().root)
-            heads={}
-            for path in root.rglob('*.strm'):
-                rel=path.relative_to(root).as_posix()
-                try: heads[rel]=path.read_text(encoding='utf-8')[:200]
-                except (OSError,UnicodeError): heads[rel]=''
-            managed={r['relative_path'] for r in store.db.execute("SELECT relative_path FROM playbacks WHERE revoked=0")}
-            managed|={r['strm_path'] for r in store.db.execute("SELECT strm_path FROM share_strms WHERE revoked=0")}
-            removed, kept, failed = [], [], []
-            for rel in sorted(heads):
-                if rel in managed:
-                    continue
-                if '/play115/' in heads[rel]:
-                    kept.append(rel)
-                    continue
+    def unidentified_files():
+        from .share_service import UNIDENT_NAME
+        root = Path(engine().root) / UNIDENT_NAME
+        if root.is_symlink() or not root.is_dir():
+            return []
+        found = []
+        for parent, dirs, files in os.walk(root, followlinks=False):
+            dirs[:] = [name for name in dirs if not (Path(parent) / name).is_symlink()]
+            for name in files:
+                path = Path(parent) / name
+                if path.suffix.lower() == '.strm' and not path.is_symlink() and path.is_file():
+                    found.append(path.relative_to(Path(engine().root)).as_posix())
+        return sorted(found)
+
+    @app.get('/api/v1/strm/unidentified',dependencies=[Depends(admin)])
+    async def list_unidentified():
+        files = await asyncio.to_thread(unidentified_files)
+        return {'total':len(files), 'items':files[:500]}
+
+    @app.post('/api/v1/strm/unidentified/cleanup',dependencies=[Depends(admin)])
+    async def cleanup_unidentified(body: UnidentifiedCleanupInput):
+        from .share_service import UNIDENT_NAME
+        from .internal_delete import remember
+        root = Path(engine().root)
+        prefix = UNIDENT_NAME + '/'
+        requested = list(dict.fromkeys(body.paths))
+        for rel in requested:
+            parts = rel.split('/')
+            if (not rel.startswith(prefix) or len(parts) < 2 or any(p in ('', '.', '..') or '\\' in p or '\0' in p for p in parts)
+                    or Path(parts[-1]).suffix.lower() != '.strm'):
+                raise HTTPException(422, '只能选择分享STRM未识别目录中的 STRM 文件。')
+        removed, failed = [], []
+        async with engine().publication_gate:
+            for rel in requested:
+                path = root.joinpath(*rel.split('/'))
                 try:
-                    purge_strm(root/rel, root, store=store)
+                    if any(part.is_symlink() for part in [root / UNIDENT_NAME, *list(path.parents)[:-1]] if part != root):
+                        raise ValueError('符号链接')
+                    if not path.is_file() or path.is_symlink() or not path.resolve().is_relative_to((root / UNIDENT_NAME).resolve()):
+                        raise ValueError('文件不存在或路径不安全')
+                    if store.db.execute('SELECT 1 FROM share_strms WHERE revoked=0 AND strm_path=? UNION SELECT 1 FROM playbacks WHERE revoked=0 AND relative_path=? LIMIT 1', (rel, rel)).fetchone():
+                        raise ValueError('文件仍有有效登记')
+                    remember(store, [rel])
+                    path.unlink()
                     removed.append(rel)
-                except Exception:
+                except (OSError, ValueError, RuntimeError):
                     failed.append(rel)
-            revoked_playbacks, revoked_shares = 0, 0
-            with store.db:
-                for row in store.db.execute("SELECT id,relative_path FROM playbacks WHERE revoked=0").fetchall():
-                    if not (root/row['relative_path']).is_file():
-                        store.db.execute('UPDATE playbacks SET revoked=1 WHERE id=?', (row['id'],))
-                        revoked_playbacks += 1
-                for row in store.db.execute("SELECT id,strm_path FROM share_strms WHERE revoked=0").fetchall():
-                    if not (root/row['strm_path']).is_file():
-                        store.db.execute('UPDATE share_strms SET revoked=1 WHERE id=?', (row['id'],))
-                        revoked_shares += 1
-            return {'removed':len(removed),'kept':len(kept),'failed':len(failed),
-                    'revoked_playbacks':revoked_playbacks,'revoked_shares':revoked_shares,
-                    'samples':removed[:10]}
-        result=await asyncio.to_thread(run)
-        if result['removed'] or result['revoked_playbacks'] or result['revoked_shares']:
-            store.event('strm_sync',
-                        f"STRM 体检清理：删除非本项目 STRM {result['removed']} 个，"
-                        f"撤销悬空登记 {result['revoked_playbacks']+result['revoked_shares']} 条"
-                        f"（网盘库 {result['revoked_playbacks']} / 分享库 {result['revoked_shares']}）。")
-        return result
+        if removed:
+            store.event('strm_sync', f'清理分享未识别 STRM：删除 {len(removed)} 个本地文件。')
+        return {'removed':len(removed), 'failed':failed}
 
     @app.post('/api/v1/strm/stale/cleanup',dependencies=[Depends(admin)])
     async def stale_cleanup():

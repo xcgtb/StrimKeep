@@ -199,7 +199,7 @@ def test_strm_audit_separates_our_strms_from_foreign_and_missing(tmp_path,monkey
         data=c.get('/api/v1/strm/audit').json()
         assert data['total']==2 and data['managed']==1
         assert data['external_total']==1
-        assert data['external'][0]=={'path':'媒体库/电影/foreign.strm','kind':'legacy'}
+        assert data['external'][0]=={'path':'媒体库/电影/foreign.strm','kind':'unknown'}
         assert data['missing_total']==1 and data['missing']==['媒体库/电影/gone.strm']
 
 
@@ -221,22 +221,45 @@ def test_stale_unconfirmed_deliveries_get_archived_after_a_week(tmp_path,monkeyp
         assert states[1]=='archived' and states[2]=='unconfirmed'
 
 
-def test_strm_audit_cleanup_removes_foreign_strms_and_stale_ledger_rows(tmp_path,monkeypatch):
-    """只删非本项目的 STRM 和悬空登记；本项目格式的（哪怕没登记）一个都不删。"""
+def test_unidentified_listing_and_selected_cleanup_preserve_other_files(tmp_path,monkeypatch):
+    app=console_app(tmp_path,monkeypatch)
+    with TestClient(app) as c:
+        assert c.get('/api/v1/strm/unidentified').status_code==401
+        login(c)
+        root=app.state.strms
+        folder=root/'分享STRM未识别'/'作品'
+        folder.mkdir(parents=True)
+        (folder/'one.strm').write_text('http://x/play115/share/one',encoding='utf-8')
+        (folder/'two.strm').write_text('http://x/play115/share/two',encoding='utf-8')
+        (folder/'one.nfo').write_text('keep',encoding='utf-8')
+        (root/'分享STRM待整理').mkdir()
+        (root/'分享STRM待整理'/'pending.strm').write_text('pending',encoding='utf-8')
+        listing=c.get('/api/v1/strm/unidentified').json()
+        assert listing['total']==2
+        audit=c.get('/api/v1/strm/audit').json()
+        assert audit['external_total']==0 and audit['unidentified_total']==2 and audit['pending_total']==1
+        assert c.post('/api/v1/strm/unidentified/cleanup',json={'paths':['分享STRM未识别/../分享STRM待整理/pending.strm']}).status_code==422
+        result=c.post('/api/v1/strm/unidentified/cleanup',json={'paths':['分享STRM未识别/作品/one.strm']})
+        assert result.status_code==200 and result.json()['removed']==1
+        assert not (folder/'one.strm').exists()
+        assert (folder/'two.strm').is_file() and (folder/'one.nfo').is_file()
+        assert (root/'分享STRM待整理'/'pending.strm').is_file()
+        assert c.post('/api/v1/strm/audit/cleanup').status_code==410
+
+
+def test_unidentified_cleanup_rejects_symlinks_and_active_records(tmp_path,monkeypatch):
     app=console_app(tmp_path,monkeypatch)
     with TestClient(app) as c:
         login(c)
-        store,root=app.state.store,app.state.strms
-        (root/'媒体库/电影').mkdir(parents=True,exist_ok=True)
-        (root/'媒体库/电影/ours.strm').write_text('http://x/play115/abc/def/sha/1/name.mkv',encoding='utf-8')
-        (root/'媒体库/电影/foreign.strm').write_text('http://x/play/share/abc/name.mkv',encoding='utf-8')
-        (root/'媒体库/电影/unregistered-ours.strm').write_text('http://x/play115/zzz',encoding='utf-8')
-        with store.db:
-            for pid,rel in (('p1','媒体库/电影/ours.strm'),('p2','媒体库/电影/gone.strm')):
-                store.db.execute("INSERT INTO playbacks(id,file_id,pickcode,name,relative_path,token_hash,revoked,created) VALUES(?,?,?,?,?,?,0,?)",(pid,'f'+pid,'','x',rel,'h',0))
-        r=c.post('/api/v1/strm/audit/cleanup').json()
-        assert r['removed']==1 and r['revoked_playbacks']==1
-        assert not (root/'媒体库/电影/foreign.strm').exists()
-        assert (root/'媒体库/电影/ours.strm').is_file()
-        assert (root/'媒体库/电影/unregistered-ours.strm').is_file()
-        assert store.db.execute("SELECT revoked FROM playbacks WHERE id='p2'").fetchone()[0]==1
+        root=app.state.strms
+        folder=root/'分享STRM未识别'
+        folder.mkdir()
+        (folder/'active.strm').write_text('keep',encoding='utf-8')
+        with app.state.store.db:
+            app.state.store.db.execute("INSERT INTO playbacks(id,file_id,pickcode,name,relative_path,token_hash,revoked,created) VALUES(?,?,?,?,?,?,0,?)",('p','f','','x','分享STRM未识别/active.strm','h',0))
+        result=c.post('/api/v1/strm/unidentified/cleanup',json={'paths':['分享STRM未识别/active.strm']}).json()
+        assert result['removed']==0 and result['failed'] and (folder/'active.strm').exists()
+        external=tmp_path/'outside'; external.mkdir(); (external/'outside.strm').write_text('keep')
+        (folder/'link').symlink_to(external,target_is_directory=True)
+        result=c.post('/api/v1/strm/unidentified/cleanup',json={'paths':['分享STRM未识别/link/outside.strm']}).json()
+        assert result['removed']==0 and (external/'outside.strm').exists()

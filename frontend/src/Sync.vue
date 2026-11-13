@@ -20,7 +20,7 @@ const outputRoot=ref(''),directCid=ref(''),savedBase=ref('')
 const config=ref<any>({inherit_video_extensions:true,video_extensions:[],metadata_extensions:[],min_video_size_mb:0,generate_nfo:false,generate_images:false,emby_media_info:false,stale_detect:false,webhook_token:'',deep_delete_dry_run:true,cleanup_empty:true,source_cids:[] as string[],directory_labels:{} as Record<string,string>,notify_emby:true,full_scan:true,cleanup_missing:true}),base=ref('')
 const schedule=ref<ScheduleDraft>(scheduleDraft({},'sync')),baseline=ref(''),scheduleBaseline=ref(''),ready=ref(false),configured=ref(false)
 const picker=ref(''),busy=ref(false),error=ref(''),query=ref(''),nextDue=ref<number>(),latest=ref<any>(null)
-const audit=ref<any>(null)
+const unidentified=ref<any>(null),selectedUnidentified=ref<string[]>([])
 const selectedRoots=ref<string[]>([])
 
 const snapshot=()=>JSON.stringify({config:config.value,base:base.value})
@@ -54,10 +54,11 @@ await ElMessageBox.alert(rows.join('<br/>'),'深度删除链路自检',{dangerou
 
 const rewriteMsg=ref('')
 const cleanupMsg=ref('')
-async function checkStrm(){await run(async()=>{audit.value=await props.api('/strm/audit?limit=20')})}
-async function cleanStrm(){
-  try{await ElMessageBox.confirm('将删除「非本项目」的 STRM（内容不是 /play115/ 格式的），并撤销台账里文件已经不在的登记。本项目的 STRM 一个都不删。','清理 STRM 残次品',{confirmButtonText:'开始清理',cancelButtonText:'取消'})}catch{return}
-  await run(async()=>{const r:any=await props.api('/strm/audit/cleanup','POST',{});ElMessage.success(`已删除 ${r.removed} 个非本项目 STRM，撤销 ${r.revoked_playbacks+r.revoked_shares} 条悬空登记`);audit.value=await props.api('/strm/audit?limit=20')})
+async function loadUnidentified(){await run(async()=>{unidentified.value=await props.api('/strm/unidentified');selectedUnidentified.value=[]})}
+async function cleanupUnidentified(){
+  if(!selectedUnidentified.value.length)return
+  try{await ElMessageBox.confirm(`将删除勾选的 ${selectedUnidentified.value.length} 个飞牛本地分享未识别 STRM。不会删除网盘源文件、NFO 或图片。`,'清理分享未识别 STRM',{confirmButtonText:'删除所选 STRM',cancelButtonText:'取消',type:'warning'})}catch{return}
+  await run(async()=>{const r:any=await props.api('/strm/unidentified/cleanup','POST',{paths:[...selectedUnidentified.value]});unidentified.value=await props.api('/strm/unidentified');selectedUnidentified.value=[];if(r.failed.length)ElMessage.warning(`已删除 ${r.removed} 个，${r.failed.length} 个未删除，请刷新列表检查`);else ElMessage.success(`已删除 ${r.removed} 个本地 STRM`)})
 }
 
 async function cleanupPlaybacks(){await run(async()=>{const r:any=await props.api('/playbacks/cleanup','POST',{});cleanupMsg.value=r.message||`已清理 ${r.removed} 条`;ElMessage.success(cleanupMsg.value)})}
@@ -96,24 +97,13 @@ useVisiblePolling(async()=>{if(!busy.value){await refreshJob();if(!dirty.value){
 <div v-if="latest" class="task-peek"><span>最近任务 #{{latest.id}}</span><strong>{{taskPresentation(latest).title}}</strong><el-button text type="primary" @click="emit('navigate','tasks')">查看任务进度 →</el-button></div>
 </SettingCard>
 <SettingCard title="手动同步来源目录" description="保存可手动同步的目录；勾选本次要处理的目录及其子目录。" :summary="`${config.source_cids.length} 个手动同步目录`" :icon="FolderOpened" :query="query" keywords="115 来源 源目录 文件夹 范围" default-open>
-<div v-for="id in config.source_cids" :key="id" class="directory-item"><el-checkbox v-model="selectedRoots" :value="id" :disabled="busy">{{label(id)}}</el-checkbox><el-button text :disabled="busy" @click="config.source_cids=config.source_cids.filter((x:string)=>x!==id)">移除</el-button></div><el-button :disabled="busy" @click="picker='manual'">选择来源目录</el-button><div class="strm-field"><el-input v-model="directCid" placeholder="也可直接输入115目录 CID" :disabled="busy" @keyup.enter="addCid"/><el-button :disabled="busy" @click="addCid">添加 CID</el-button></div><p class="hint">手动同步只处理勾选的目录；定时目录单独设置。来源 CID：{{config.source_cids.join('、')||'尚未选择'}}。生成位置：{{outputRoot||'读取中'}}。这是 StrimKeep 容器内路径，宿主机位置由 Docker 挂载决定。</p><p class="hint">已整理的归档保持媒体库结构；其他目录输出到“StrimKeep同步”。</p><div class="workflow-switch-row"><span>全量同步后自动清理失效的本地 STRM</span><el-switch v-model="config.cleanup_missing"/></div><p class="hint">开启后，仅在完整扫描并再次确认网盘源文件已删除或移出所选范围时，清理本项目登记且内容未被修改的本地输出；不会删除 115 网盘文件。关闭后只同步新增和变更，已有失效条目保留在本地。</p>
+<div v-for="id in config.source_cids" :key="id" class="directory-item"><el-checkbox v-model="selectedRoots" :value="id" :disabled="busy">{{label(id)}}</el-checkbox><el-button text :disabled="busy" @click="config.source_cids=config.source_cids.filter((x:string)=>x!==id)">移除</el-button></div><el-button :disabled="busy" @click="picker='manual'">选择来源目录</el-button><div class="strm-field"><el-input v-model="directCid" placeholder="也可直接输入115目录 CID" :disabled="busy" @keyup.enter="addCid"/><el-button :disabled="busy" @click="addCid">添加 CID</el-button></div><p class="hint">手动同步只处理勾选的目录；定时目录单独设置。来源 CID：{{config.source_cids.join('、')||'尚未选择'}}。生成位置：{{outputRoot||'读取中'}}。这是 StrimKeep 容器内路径，宿主机位置由 Docker 挂载决定。</p><p class="hint">已整理的归档保持媒体库结构；其他目录输出到“StrimKeep同步”。</p><div class="workflow-switch-row"><span>同步后自动清理失效的本地 STRM</span><el-switch v-model="config.cleanup_missing"/></div><p class="hint">开启后，增量或全量同步完成完整扫描，并再次确认网盘源文件已删除或移出所选范围时，清理本项目登记且内容未被修改的本地输出；不会删除 115 网盘文件。关闭后只同步新增和变更，已有失效条目保留在本地。</p>
 </SettingCard>
 <SettingCard title="播放地址" description="播放器访问 StrimKeep 的基础地址，写入 STRM。" :summary="base||'尚未配置播放地址'" :icon="Connection" :query="query" keywords="URL 域名 端口 IP 公网 局域网 302" default-open><el-form label-position="top"><el-form-item label="StrimKeep 播放基础地址"><el-input v-model="base" :disabled="busy" placeholder="http://strimkeep.example.com:9000"/></el-form-item></el-form><div class="button-row" style="margin:10px 0"><el-button :disabled="busy||!base" @click="rewrite">按当前地址重写全部本地 STRM</el-button><span v-if="rewriteMsg" class="hint" style="margin:0">{{rewriteMsg}}</span><el-button :disabled="busy" @click="rollbackRewrite">回滚上次重写</el-button><el-button :disabled="busy" @click="cleanupPlaybacks">清理未被引用的播放身份</el-button><span v-if="cleanupMsg" class="hint" style="margin:0">{{cleanupMsg}}</span></div><p class="hint">改完地址保存后，点上面的按钮可以把所有 STRM 的入口批量换成新地址：只改本地文件与台账，不读云端、不动网盘。换 IP、加域名、内网切公网时用它，不必整库重扫。</p></SettingCard>
-<SettingCard title="STRM 体检" description="对一遍本地 STRM：本项目管理多少、多少是别的工具写的、有没有登记了却没文件的。" :summary="audit?`共 ${audit.total} 个 · 非本项目 ${audit.external_total} · 台账悬空 ${audit.missing_total}`:'还没检查'" :icon="DocumentChecked" :query="query" keywords="STRM 体检 孤儿 台账 外部 重复 一致性" :default-open="false">
-  <div class="button-row" style="margin:0 0 10px"><el-button :disabled="busy" @click="checkStrm">开始检查</el-button><el-button type="danger" plain :disabled="busy||!audit||(!audit.external_total&&!audit.missing_total)" @click="cleanStrm">清理残次品</el-button><span class="hint" style="margin:0">检查只读；清理只删「非本项目」的 STRM 与悬空登记</span></div>
-  <template v-if="audit">
-    <p class="hint" style="margin:0 0 8px">本地共 {{audit.total}} 个 STRM，其中本项目登记 {{audit.managed}} 个。</p>
-    <div v-if="audit.external_total">
-      <p style="margin:0 0 4px"><b>非本项目 STRM：{{audit.external_total}} 个</b>（另一条 STRM 产线或旧工具写的，不进我们的台账，但会和我们的文件一起被 Emby 收录，容易产生重复条目）</p>
-      <p v-for="item in audit.external" :key="item.path" class="hint wrap" style="margin:0 0 2px">{{item.kind==='legacy'?'旧格式':'其它'}} · {{item.path}}</p>
-      <p v-if="audit.external_total>audit.external.length" class="hint">…仅显示前 {{audit.external.length}} 条</p>
-    </div>
-    <div v-if="audit.missing_total" style="margin-top:10px">
-      <p style="margin:0 0 4px"><b>台账有、文件不在：{{audit.missing_total}} 个</b>（登记还在但磁盘上没了；不影响播放，只让统计偏大）</p>
-      <p v-for="path in audit.missing" :key="path" class="hint wrap" style="margin:0 0 2px">{{path}}</p>
-    </div>
-    <p v-if="!audit.external_total && !audit.missing_total" class="hint" style="margin:0">✓ 台账与磁盘一致，没有外部 STRM。</p>
-  </template>
+<SettingCard title="分享未识别 STRM" description="查看本机未识别的分享 STRM，选择不再需要的文件清理。" :summary="unidentified?`共 ${unidentified.total} 个`:'点击查看文件'" :icon="DocumentChecked" :query="query" keywords="STRM 分享 未识别 清理 删除" :default-open="false">
+  <div class="button-row"><el-button :disabled="busy" @click="loadUnidentified">查看未识别文件</el-button><el-button :disabled="busy||!unidentified?.items.length" @click="selectedUnidentified=[...unidentified.items]">全选当前列表</el-button><el-button :disabled="busy||!selectedUnidentified.length" @click="selectedUnidentified=[]">取消选择</el-button><el-button type="danger" plain :disabled="busy||!selectedUnidentified.length" @click="cleanupUnidentified">清理所选（{{selectedUnidentified.length}}）</el-button></div>
+  <p class="hint">只删除勾选的本地 STRM，保留网盘源文件、NFO 和图片。未识别文件可能是本程序生成的，不代表外部文件。</p>
+  <template v-if="unidentified"><p class="hint">{{unidentified.total?`共 ${unidentified.total} 个，当前显示 ${unidentified.items.length} 个`:'没有未识别 STRM'}}</p><p v-if="unidentified.total>unidentified.items.length" class="hint">每次最多显示 500 个，清理后可再次查看。</p><div v-for="path in unidentified.items" :key="path" class="directory-item"><el-checkbox v-model="selectedUnidentified" :value="path" :disabled="busy">{{path}}</el-checkbox></div></template>
 </SettingCard>
 <SettingCard title="STRM 生成过滤与附属文件" description="与整理格式分开控制；分享 STRM 自动继承这里的生成规则。" :icon="DocumentChecked" :query="query" keywords="扩展名 过滤 视频 元数据 字幕 大小 阈值" default-open>
 <div class="workflow-switch-row"><strong>视频扩展名沿用影视整理</strong><el-switch v-model="config.inherit_video_extensions" :disabled="busy"/></div>
@@ -130,7 +120,6 @@ useVisiblePolling(async()=>{if(!busy.value){await refreshJob();if(!dirty.value){
 
 <SettingCard title="深度删除（Emby Webhook 联动）" description="配置 Emby 删除事件的联动与预演。" :summary="config.webhook_token?'令牌已生成':'尚未生成令牌'" :icon="Connection" :query="query" keywords="Webhook 删除 令牌 预演 Emby" :default-open="false"><p class="hint" style="margin:0 0 12px">在 Emby 里删除电影/单集时自动删除网盘文件（进回收站可还原）和本地 strm。需要配置 <b>Emby 的 Webhook 插件</b>（不是第三方插件的通知），按以下步骤配置：</p><el-form label-position="top" :disabled="busy"><el-form-item label="第一步：点「生成令牌」，点完自动保存"><div class="channel-dir"><el-button type="primary" :disabled="busy||!ready" @click="genToken">{{config.webhook_token?'重新生成':'生成令牌'}}</el-button><el-input v-model="config.webhook_token" readonly style="max-width:260px" placeholder="点生成"/><span v-if="config.webhook_token" class="hint" style="margin:0">✓ 已自动保存</span></div></el-form-item><el-form-item label="第二步：复制下方 Webhook 地址"><div class="channel-dir"><el-input :model-value="webhookUrl" type="textarea" :rows="3" readonly aria-label="完整 Webhook 地址" placeholder="配置播放地址后自动出现"/><el-button :disabled="!webhookUrl" @click="copyUrl">一键复制</el-button></div><p class="hint" style="margin:4px 0 0">自动使用上方配置的播放地址（Emby 播放 strm 时就在用这个地址，必然可达）。内网填 <code>http://你的NAS地址:9000</code>，公网填域名——配好播放地址后这里自动跟上，无需手动改。</p></el-form-item><el-form-item label="第三步：在 Emby 里配置 Webhook 通知"><div style="font-size:13px;line-height:2;color:var(--text)"><p style="margin:0">Emby 控制台 → 通知 → 添加通知 → 选 <b>Webhook</b>：</p><p style="margin:2px 0 0">① URL 粘贴上面复制的地址<br/>② 请求方法：<b>POST</b><br/>③ 内容类型：<b>application/json</b>（不要选 multipart）<br/>④ 事件类型只勾：<b>Item Removed（项目已删除）</b><br/>⑤ 保存</p></div></el-form-item><el-form-item label="第四步：预演验证（先开着，确认无误后关闭）"><el-switch v-model="config.deep_delete_dry_run"/><p class="hint" style="margin:4px 0 0">预演只记录将删什么。去 Emby 删个测试文件，实时日志里看到命中正确后关掉再保存。</p></el-form-item><el-form-item label="第五步（可选）：链路自检"><div class="channel-dir"><el-button :disabled="busy" @click="selftest">自检</el-button><span class="hint" style="margin:0">不碰 Emby 也能验证：用台账里的真实路径跑一遍匹配，只读、永远不删</span></div></el-form-item></el-form><p class="hint">之后你在 Emby 里删除电影、单集、整季或整部剧集，Emby Webhook 就会发事件过来：网盘库 → 本地 strm + NFO 删除 + 网盘文件进 115 回收站（可还原）；分享库 → 只删本地 strm。整理或转存运行时后台队列会自动让路，等它们结束再继续删。</p></SettingCard>
 <SettingCard title="通知 Emby 入库" description="本批输出有变化后通知 Emby，并检查入库结果。" :summary="config.notify_emby?'自动通知已开启':'自动通知已关闭'" :icon="Bell" :query="query" keywords="通知 Emby 扫描 入库" :default-open="false"><div class="workflow-switch-row"><div><strong>同步后通知 Emby</strong><p>只通知本批新增、改名和删除路径，无变化不发送；核对超时只刷新命中的目标库。</p></div><el-switch v-model="config.notify_emby" :disabled="busy" aria-label="同步后通知 Emby"/></div></SettingCard>
-<SettingCard title="同步范围与失效清理" description="完整清单与云端状态核实后，维护本地受管输出。" summary="只清理所选输出范围内的 STRM，保留 NFO 和图片" :icon="DocumentChecked" :query="query" keywords="字幕 删除 清理 输出 Token 规则" :default-open="false"></SettingCard>
 <p v-if="query" class="search-caption">仅显示匹配的设置卡片；清空搜索可查看全部。</p>
 <DirectoryPicker v-if="picker" :api="api" @select="select" @close="picker=''"/>
 </div></template>
