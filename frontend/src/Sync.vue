@@ -97,7 +97,7 @@ useVisiblePolling(async()=>{if(!busy.value){await refreshJob();if(!dirty.value){
 <template><div class="workflow-page">
 <WorkflowToolbar v-model:query="query" title="STRM 生成" :dirty="dirty" :busy="busy" :ready="ready" @save="save"/>
 <el-alert v-if="error" :title="error" type="error" show-icon class="global-error"/>
-<SettingCard title="STRM 同步任务" description="每个任务单独设置目录、增量或全量和定时；保存后可一键执行。" :icon="VideoPlay" :query="query" keywords="增量 全量 目录 同步 任务 定时 AV 影视" default-open>
+<SettingCard title="STRM 同步任务" description="每个任务可添加多个目录，单独设置增量或全量和定时。" :icon="VideoPlay" :query="query" keywords="增量 全量 目录 同步 任务 定时 电影 剧集" default-open>
 <SyncProfiles :api="api" @navigate="emit('navigate',$event)"/>
 <p class="hint">生成位置：{{outputRoot||'读取中'}}（容器内路径）；已整理归档沿用媒体库结构，其他目录位于“StrimKeep同步”。</p>
 <div class="workflow-switch-row"><span>同步后自动清理失效的本地 STRM</span><el-switch v-model="config.cleanup_missing"/></div><p class="hint">开启后，增量或全量同步完整扫描并确认源文件已删除或移出范围时，清理本项目登记且未被修改的本地输出，不删除网盘文件。关闭后保留失效条目。修改开关后点击页面顶部“保存修改”。</p>

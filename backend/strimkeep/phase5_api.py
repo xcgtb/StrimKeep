@@ -43,8 +43,10 @@ class UnidentifiedCleanupInput(Input):
 
 class SyncProfileInput(Input):
     name: str = Field(min_length=1, max_length=80)
-    source_cid: str = Field(pattern=r'^[1-9]\d{0,23}$')
-    source_label: str = Field(min_length=1, max_length=300)
+    source_cid: str = Field(default='', max_length=24)
+    source_label: str = Field(default='', max_length=300)
+    source_cids: list[str] = Field(default_factory=list, max_length=20)
+    source_labels: dict[str,str] = Field(default_factory=dict, max_length=20)
     mode: str = Field(pattern='^(incremental|full)$')
     enabled: bool = False
     frequency: str = Field(default='daily', pattern='^(daily|weekly|interval|cron)$')
@@ -226,10 +228,13 @@ def install_phase5(app,store,admin,job_public):
     @app.post('/api/v1/sync/profiles', dependencies=[Depends(admin)])
     async def create_sync_profile(body: SyncProfileInput):
         validate_profile_schedule(body)
-        await validate_roots([body.source_cid])
+        roots = body.source_cids or [body.source_cid]
+        await validate_roots(roots)
+        if any(len(value) > 300 for value in body.source_labels.values()): raise HTTPException(422, '目录名称过长。')
+        labels = {cid:body.source_labels.get(cid) or (body.source_label if cid == body.source_cid else '') or cid for cid in roots}
         profiles = store.get('sync_profiles', [])
         if len(profiles) >= 30: raise HTTPException(422, '最多创建 30 个同步任务。')
-        profile = {'id': secrets.token_hex(8), **body.model_dump()}
+        profile = {'id': secrets.token_hex(8), **body.model_dump(), 'source_cids':roots, 'source_labels':labels, 'source_cid':roots[0], 'source_label':labels[roots[0]]}
         store.set_many({'sync_profiles': [*profiles, profile]})
         engine().tasks.tick_sync_profiles(time.time())
         return profile
@@ -237,10 +242,13 @@ def install_phase5(app,store,admin,job_public):
     @app.put('/api/v1/sync/profiles/{profile_id}', dependencies=[Depends(admin)])
     async def update_sync_profile(profile_id: str, body: SyncProfileInput):
         validate_profile_schedule(body)
-        await validate_roots([body.source_cid])
+        roots = body.source_cids or [body.source_cid]
+        await validate_roots(roots)
+        if any(len(value) > 300 for value in body.source_labels.values()): raise HTTPException(422, '目录名称过长。')
+        labels = {cid:body.source_labels.get(cid) or (body.source_label if cid == body.source_cid else '') or cid for cid in roots}
         profiles = store.get('sync_profiles', [])
         if not any(p['id'] == profile_id for p in profiles): raise HTTPException(404, '同步任务不存在。')
-        profile = {'id': profile_id, **body.model_dump()}
+        profile = {'id': profile_id, **body.model_dump(), 'source_cids':roots, 'source_labels':labels, 'source_cid':roots[0], 'source_label':labels[roots[0]]}
         store.set_many({'sync_profiles': [profile if p['id'] == profile_id else p for p in profiles]})
         with store.db: store.db.execute('DELETE FROM task_schedules WHERE kind=?', ('sync_profile:' + profile_id,))
         engine().tasks.tick_sync_profiles(time.time())

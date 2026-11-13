@@ -116,3 +116,26 @@ def test_migration_keeps_equivalent_existing_profile_without_duplicate(tmp_path,
     assert len(profiles) == 1 and profiles[0]['id'] == created['id']
     assert not store.get('schedule_config')['sync_enabled']
     client.__exit__(None, None, None)
+
+
+def test_profile_multiple_directories_manual_scheduled_and_edit(tmp_path, monkeypatch):
+    app, client = _client(tmp_path, monkeypatch)
+    body = {**profile('影视多目录','incremental'), 'source_cids':['100','200'],
+            'source_labels':{'100':'电影','200':'剧集'}}
+    created = client.post('/api/v1/sync/profiles', json=body)
+    assert created.status_code == 200, created.text
+    task = created.json()
+    assert task['source_cids'] == ['100','200']
+    immediate = client.post('/api/v1/sync/profiles/'+task['id']+'/run').json()
+    config = json.loads(app.state.store.db.execute('SELECT config FROM organize_jobs WHERE id=?', (immediate['id'],)).fetchone()[0])
+    assert config['source_cids'] == ['100','200'] and config['directory_labels']['200'] == '剧集'
+    scheduled = app.state.organizer.tasks.sync_profile_config(task)
+    assert scheduled['source_cids'] == ['100','200'] and scheduled['mode'] == 'incremental'
+    updated = {**body, 'mode':'full', 'source_cids':['200']}
+    assert client.put('/api/v1/sync/profiles/'+task['id'], json=updated).status_code == 200
+    result = client.post('/api/v1/sync/profiles/'+task['id']+'/run').json()
+    config = json.loads(app.state.store.db.execute('SELECT config FROM organize_jobs WHERE id=?', (result['id'],)).fetchone()[0])
+    assert config['source_cids'] == ['200'] and config['_force_full'] is True
+    assert client.post('/api/v1/sync/profiles', json={**body,'source_cids':['100','100']}).status_code == 422
+    assert client.post('/api/v1/sync/profiles', json={**body,'source_cid':'','source_cids':[]}).status_code == 422
+    client.__exit__(None, None, None)

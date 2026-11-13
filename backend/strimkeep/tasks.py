@@ -64,12 +64,13 @@ class Tasks:
         return {**config, 'job_kind': kind, 'account_id': account, 'playback_base': self.store.get('playback_base')}
 
     def sync_profile_config(self, profile):
-        roots = [profile['source_cid']]
+        roots = profile.get('source_cids') or [profile['source_cid']]
         incremental = profile['mode'] == 'incremental'
         config = self.config('strm_sync', roots, incremental=incremental)
         config['sync_profile_id'] = profile['id']
         config['sync_profile_name'] = profile['name']
-        config['directory_labels'] = {**config.get('directory_labels', {}), roots[0]: profile['source_label']}
+        labels = profile.get('source_labels') or {profile['source_cid']:profile.get('source_label', profile['source_cid'])}
+        config['directory_labels'] = {**config.get('directory_labels', {}), **labels}
         if not incremental:
             config.update({'full_scan': True, '_force_full': True, 'trust_scan': False, 'mode': 'full'})
         return config
@@ -102,7 +103,7 @@ class Tasks:
                 continue
             def same_schedule(profile):
                 if (not profile.get('enabled') or profile.get('mode') != 'incremental'
-                        or profile.get('source_cid') != str(cid)
+                        or str(cid) not in (profile.get('source_cids') or [profile.get('source_cid')])
                         or profile.get('timezone', 'Asia/Shanghai') != settings.get('timezone', 'Asia/Shanghai')):
                     return False
                 if settings.get('sync_mode') != 'cron':
