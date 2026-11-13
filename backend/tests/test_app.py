@@ -275,6 +275,10 @@ def test_share_playback_records_metrics_and_throttles_per_entry(client, app):
         return 'https://cdn.example/shared.mkv', {}
 
     app.state.cloud.share_url_download = share_url
+    # 盘面核对（output_reconcile）会把「文件不在盘上」的老记录标成撤销，
+    # 这里必须真的落一个 STRM，否则用例随机拿到 403。
+    (app.state.strms / 'y.strm').write_text(
+        'http://nas:9000/play115/share/' + sid + '/y.mkv', encoding='utf-8')
     with app.state.store.db:
         app.state.store.db.execute(
             "INSERT INTO share_strms(id,share_code,receive_code,file_id,pickcode,name,strm_path,token_hash,revoked,created)"

@@ -48,7 +48,6 @@ function onPicked(folder:any){
   else if(pickerKind.value==='magnet'){offline.value.magnet_cid=folder.id;offline.value.magnet_label=folder.name}
   else if(pickerKind.value==='ed2k'){offline.value.ed2k_cid=folder.id;offline.value.ed2k_label=folder.name}
   else if(pickerKind.value==='transfer'){transfer.value.target_cid=folder.id;transfer.value.target_label=folder.name}
-  else if(pickerKind.value==='explore'){transfer.value.explore_cid=folder.id;transfer.value.explore_label=folder.name}
   else{offline.value.target_cid=folder.id;offline.value.target_label=folder.name}
   routePick.value=null;pickerKind.value=''
 }
@@ -116,7 +115,6 @@ useVisiblePolling(async()=>{if(!busy.value)await refresh()},5000)
  <div class="post-row"><strong>Web</strong><el-switch v-model="transfer.auto_organize" :disabled="busy" aria-label="Web 分享转存后立即整理"/><el-switch v-model="offline.magnet_auto_organize" :disabled="busy" aria-label="Web 磁力整理"/><el-switch v-model="offline.ed2k_auto_organize" :disabled="busy" aria-label="Web ED2K 整理"/></div>
  <div class="post-row"><strong>机器人</strong><el-switch v-model="transfer.bot_auto_organize" :disabled="busy" aria-label="机器人分享转存后立即整理"/><el-switch v-model="offline.bot_magnet_auto_organize" :disabled="busy" aria-label="机器人磁力整理"/><el-switch v-model="offline.bot_ed2k_auto_organize" :disabled="busy" aria-label="机器人 ED2K 整理"/></div>
 </div>
-<div class="explore-target"><span>影视探索转存目录</span><strong>{{ transfer.explore_label||transfer.explore_cid||'跟随 Web 转存目录' }}</strong><el-button size="small" :disabled="busy" @click="pickerKind='explore'">选择目录</el-button><el-button v-if="transfer.explore_cid" size="small" text :disabled="busy" @click="transfer.explore_cid='';transfer.explore_label=''">改为跟随 Web</el-button></div>
 <p class="hint">影视探索里点「转存」时落到这个目录；留空就跟随「保存目录」里 Web 的 115 分享目录。机器人接收链接（启用与允许的用户 ID）在「系统设置 → Telegram 通知」里设置。</p>
 
 <div class="button-row"><el-button type="primary" :disabled="busy||!ready||!dirty" @click="save">保存设置</el-button><el-button :disabled="busy" @click="emit('navigate','system')">配置 Telegram 通知</el-button></div>
@@ -128,7 +126,7 @@ useVisiblePolling(async()=>{if(!busy.value)await refresh()},5000)
 <div v-if="submissions.length" class="button-row"><el-tag size="small" type="info">{{runningLabel}}</el-tag></div>
 </section>
 
-<DirectoryPicker v-if="pickerKind" :api="api" @picked="onPicked" @close="pickerKind='';routePick=null"/>
+<DirectoryPicker v-if="pickerKind" :api="api" @select="onPicked" @close="pickerKind='';routePick=null"/>
 </template>
 
 <style scoped>
@@ -158,7 +156,4 @@ useVisiblePolling(async()=>{if(!busy.value)await refresh()},5000)
 .post-row.post-head{background:transparent;padding:0 12px;font-size:12px;color:var(--muted)}
 .post-row strong{font-size:13px}
 @media(max-width:760px){.history-row{align-items:flex-start;flex-wrap:wrap}.history-main{flex-basis:65%}.history-main strong,.history-main span{white-space:normal;overflow-wrap:anywhere;line-height:1.5}}
-.explore-target{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:14px 0;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface-soft)}
-.explore-target strong{font-size:13px;font-weight:600}
-.explore-target span:first-child{font-size:13px;color:var(--muted);min-width:112px}
 </style>
