@@ -34,6 +34,12 @@ def bot_commands(store):
     return {name: bool(saved.get(name, True)) for name in BOT_COMMANDS}
 
 
+def sync_profile_revision(profile):
+    """Bind a button to the settings the user actually saw."""
+    raw = json.dumps(profile, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()[:10]
+
+
 class TelegramBot:
     def __init__(self,engine):
         self.engine,self.store,self.http=engine,engine.store,engine.http
@@ -50,7 +56,80 @@ class TelegramBot:
             self.task.cancel()
             await asyncio.gather(self.task,return_exceptions=True)
 
+    async def sync_menu(self, key, chat):
+        profiles = self.store.get('sync_profiles', []) or []
+        if not profiles:
+            await self.engine.notifications.publish(key, '🔄 STRM 同步',
+                '还没有同步任务。请先在网页的 STRM 生成页面创建任务。',
+                chat_override=str(chat['id']), force=True)
+            return
+        token = self.store.get('notification_config', {}).get('bot_token')
+        if not token: raise ValueError('Telegram 机器人尚未配置。')
+        buttons=[]
+        for profile in profiles[:30]:
+            ident=str(profile.get('id') or '')
+            if not re.fullmatch(r'[a-z0-9]{1,32}', ident): continue
+            mode='全量' if profile.get('mode') == 'full' else '增量'
+            label=str(profile.get('name') or '同步任务')[:42]
+            buttons.append([{'text':f'{label} · {mode}',
+                             'callback_data':f'sync:{ident}:{sync_profile_revision(profile)}'}])
+        if not buttons: raise ValueError('没有可执行的同步任务，请检查网页任务设置。')
+        response = await self.engine.notifications.send(token, 'sendMessage', {
+            'chat_id':str(chat['id']), 'text':'🔄 选择要立即执行的 STRM 同步任务：\n点击后按网页中保存的目录和方式执行，定时不变。',
+            'reply_markup':{'inline_keyboard':buttons}})
+        response.raise_for_status()
+        if not response.json().get('ok'): raise ValueError('任务菜单发送失败，请稍后重试。')
+
+    async def sync_callback(self, update, config, identity):
+        callback = update.get('callback_query') or {}
+        sender = callback.get('from') or {}; message = callback.get('message') or {}; chat = message.get('chat') or {}
+        if (sender.get('is_bot') or chat.get('type') != 'private'
+                or str(sender.get('id')) != config.get('allowed_user_id')
+                or str(chat.get('id')) != str(sender.get('id'))): return
+        callback_id = callback.get('id')
+        if not isinstance(callback_id, str) or not callback_id: return
+        token = self.store.get('notification_config', {}).get('bot_token')
+        if not token: return
+        async def answer(text):
+            try:
+                await self.http.post('https://api.telegram.org/bot'+token+'/answerCallbackQuery',
+                                     json={'callback_query_id':callback_id,'text':text[:180]},timeout=15)
+            except Exception:
+                pass
+        match = re.fullmatch(r'sync:([a-z0-9]{1,32}):([a-f0-9]{10})', str(callback.get('data') or ''))
+        if not match: return
+        if not bot_commands(self.store).get('sync', True):
+            await answer('同步指令已关闭。'); return
+        profile = next((p for p in (self.store.get('sync_profiles', []) or []) if p.get('id') == match[1]), None)
+        if not profile or sync_profile_revision(profile) != match[2]:
+            await answer('任务已删除或修改，请重新发送 /sync。'); return
+        marker='bot-sync-click:'+hashlib.sha256((identity+':'+callback_id).encode()).hexdigest()
+        with self.store.db:
+            cursor=self.store.db.execute('INSERT OR IGNORE INTO meta(key,value) VALUES(?,?)',
+                                         (marker,json.dumps({'at':time.time()})))
+        if not cursor.rowcount:
+            await answer('这次点击已处理。'); return
+        try:
+            details=self.engine.tasks.sync_profile_config(profile)
+            jid,merged=self.engine.tasks.enqueue(details)
+        except (ValueError, CloudError) as exc:
+            await answer('任务未入队，请查看消息。')
+            await self.engine.notifications.publish(f'bot:{identity}:{update["update_id"]}',
+                '⚠️ STRM 同步未提交',self._safe_error(exc),chat_override=str(chat['id']),force=True)
+            return
+        await answer('任务已加入队列。')
+        labels=details.get('directory_labels') or {}; roots=details.get('source_cids') or []
+        mode='全量同步' if details.get('mode')=='full' else '增量同步'
+        result=f'任务：{profile.get("name", "STRM 同步")}\n方式：{mode}\n队列：#{jid}'
+        if merged: result+='（已合并到等待中的相同任务）'
+        result+='\n目录：\n'+'\n'.join('• '+str(labels.get(cid) or cid) for cid in roots)
+        await self.engine.notifications.publish(f'bot:{identity}:{update["update_id"]}',
+            '🔄 STRM 同步已提交',result,chat_override=str(chat['id']),force=True,job_id=jid)
+
     async def handle(self,update,config,identity):
+        if isinstance(update.get('callback_query'), dict):
+            await self.sync_callback(update,config,identity)
+            return
         message=update.get('message',{})
         text=message.get('text') or message.get('caption') or ''
         for entity in message.get('entities',[])+message.get('caption_entities',[]):
@@ -68,7 +147,7 @@ class TelegramBot:
                 '🧲 发送磁力/电驴链接，或 /offline 加链接，即提交 115 离线下载。\n'
                 '/organize 立即整理影视（网盘转存的文件）\n'
                 '/shareorganize 立即整理待处理的分享 STRM\n'
-                '/sync 同步 STRM（网盘输出）\n'
+                '/sync 选择并立即执行 STRM 同步任务\n'
                 '/status 查看任务状态，/tasks 看最近任务\n'
                 '/sign 115 签到',
                 chat_override=str(chat['id']),force=True)
@@ -108,7 +187,10 @@ class TelegramBot:
             text=f'执行中：{counts.get("running",0)}\n等待执行：{counts.get("queued",0)}\n暂停：{counts.get("paused",0)}'
             await self.engine.notifications.publish(key,'📋 当前任务',text,chat_override=str(chat['id']),force=True)
             return
-        if command in ('/organize','/sync'):
+        if command == '/sync':
+            await self.sync_menu(key, chat)
+            return
+        if command == '/organize':
             try:
                 kind='organize' if command=='/organize' else 'strm_sync'
                 details=self.engine.tasks.config(kind)
@@ -257,6 +339,13 @@ class TelegramBot:
             detail=self._safe_error(exc)
             self.store.event('bot','TG 消息处理失败：%s'%detail[:160])
             chat=(update.get('message') or {}).get('chat') or {}
+            cb=update.get('callback_query') or {}
+            cbchat=(cb.get('message') or {}).get('chat') or {}
+            sender=cb.get('from') or {}
+            if (cbchat.get('type')=='private' and not sender.get('is_bot')
+                    and str(sender.get('id'))==config.get('allowed_user_id')
+                    and str(cbchat.get('id'))==str(sender.get('id'))):
+                chat=cbchat
             if chat.get('id'):
                 try:
                     await self.engine.notifications.publish(
@@ -283,7 +372,7 @@ class TelegramBot:
         # Ignore backlog on first activation. Never delete an existing webhook.
         response=await self.http.post('https://api.telegram.org/bot'+token+'/getUpdates',json={
             'offset':-1 if offset is None else offset,'limit':100,'timeout':0 if offset is None else 20,
-            'allowed_updates':['message','channel_post']},timeout=25)
+            'allowed_updates':['message','channel_post','callback_query']},timeout=25)
         response.raise_for_status();data=response.json()
         if self.store.get('transfer_config',{})!=config or self.store.get('notification_config',{}).get('bot_token')!=token:return False
         if not data.get('ok') or not isinstance(data.get('result'),list):raise ValueError('bot response')

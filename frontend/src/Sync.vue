@@ -84,8 +84,8 @@ function watermarkText(){
 async function startIncremental(){if(dirty.value||!selectedRoots.value.length)return;await run(async()=>{const r:any=await props.api('/sync/incremental','POST',{source_cids:[...selectedRoots.value]});latest.value=r;ElMessage.success(`增量同步任务 #${r.id} 已加入队列`);await loadSyncState()})}
 async function startFull(){
   if(dirty.value||!selectedRoots.value.length)return
-  try{await ElMessageBox.confirm('全量重建会重新读取所选云盘目录并逐文件核对，比增量慢；换过库根或改过命名口径之后才需要。','全量重建 STRM',{confirmButtonText:'开始全量',cancelButtonText:'取消',type:'warning'})}catch{return}
-  await run(async()=>{const r:any=await props.api('/sync/full','POST',{source_cids:[...selectedRoots.value]});latest.value=r;ElMessage.success(`全量重建任务 #${r.id} 已加入队列`);await loadSyncState()})
+  try{await ElMessageBox.confirm('全量同步会重新读取所选云盘目录并逐文件核对，比增量慢；换过库根或改过命名口径之后才需要。','全量同步 STRM',{confirmButtonText:'开始全量',cancelButtonText:'取消',type:'warning'})}catch{return}
+  await run(async()=>{const r:any=await props.api('/sync/full','POST',{source_cids:[...selectedRoots.value]});latest.value=r;ElMessage.success(`全量同步任务 #${r.id} 已加入队列`);await loadSyncState()})
 }
 async function canLeave(){if(!dirty.value)return true;try{await ElMessageBox.confirm('当前修改尚未保存，修改会暂存到当前页面，刷新网页前请记得保存。确定切换？','离开同步设置',{confirmButtonText:'暂存并切换',cancelButtonText:'继续编辑'});return true}catch{return false}}
 function beforeUnload(e:BeforeUnloadEvent){if(dirty.value&&route.name==='sync'){e.preventDefault();e.returnValue=''}}

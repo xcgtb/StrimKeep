@@ -7,6 +7,16 @@ def compact(value, limit=100):
     return text if len(text) <= limit else text[:limit - 1] + '…'
 
 
+def sync_task_context(config):
+    """Keep sync notifications attributable without guessing legacy task modes."""
+    lines=[]
+    name=compact(config.get('sync_profile_name'), 80)
+    if name: lines.append('任务：'+name)
+    mode={'incremental':'增量同步','full':'全量同步'}.get(config.get('mode'))
+    if mode: lines.append('方式：'+mode)
+    return '\n'.join(lines)+'\n' if lines else ''
+
+
 def channel_subject(text):
     """Extract a short post heading without forwarding share URLs or access codes."""
     for raw in str(text or '').splitlines():

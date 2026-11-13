@@ -9,7 +9,7 @@ from pathlib import Path
 
 import httpx
 from .cards import media_card
-from .message_templates import transfer_completed
+from .message_templates import transfer_completed, sync_task_context
 
 
 CATEGORY_DEFAULTS={'media':True,'metadata':True,'transfer':True,'strm_summary':True,'strm_files':True,'errors':True,'emby':False,'task':False,'general':True,'cloud':True,'silent':False}
@@ -460,7 +460,8 @@ class Notifications:
                 items=groups.get(cid,[]); detail=stats.get(cid) or {}
                 updated=sum(bool(p.get('output_changed')) for p,_ in items)
                 unfinished=sum(state!='done' for _,state in items)
-                lines=[f'目录 ID：{cid}', f'云盘目录：{detail.get("name") or labels.get(cid,cid)}']
+                lines=[sync_task_context(c).rstrip(), f'目录 ID：{cid}', f'云盘目录：{detail.get("name") or labels.get(cid,cid)}']
+                lines=[line for line in lines if line]
                 if detail.get('local_path'):lines.append('本地目录：'+detail['local_path'])
                 if c.get('sync_mode')=='cached':lines.append('扫描方式：复用近期清单（未重扫云端）')
                 elif detail:
@@ -495,7 +496,7 @@ class Notifications:
             changed=sum(bool(p.get('output_changed')) for p in plans)
             duration=max(0,float(row['updated'])-float(row['created']))
             await self.publish(f'strm:{row["id"]}:sync-summary','📦 STRM 同步结果',
-                f'选择目录：{len(c.get("source_cids") or [])} 个\n实际扫描范围：{len(roots)} 个\n核对视频：{len(plans)} 个\nSTRM 更新：{changed} 个\n清理本地：{c.get("sync_removed",0)} 个文件\n任务总耗时（含排队）：{duration:.2f} 秒',
+                sync_task_context(c)+('结果：完成\n' if state=='completed' else '结果：部分未完成\n')+f'选择目录：{len(c.get("source_cids") or [])} 个\n实际扫描范围：{len(roots)} 个\n核对视频：{len(plans)} 个\nSTRM 更新：{changed} 个\n清理本地：{c.get("sync_removed",0)} 个文件\n任务总耗时（含排队）：{duration:.2f} 秒',
                 job_id=row['id'],category='strm_summary')
         category='transfer' if kind=='transfer' or (kind=='organize' and json.loads(row['config']).get('transfer_parent') and empty and filtered.get('scanned')) else 'errors' if state in ('partial','needs_review','waiting_login') else 'task'
         message=row['message'] or row['stage']
