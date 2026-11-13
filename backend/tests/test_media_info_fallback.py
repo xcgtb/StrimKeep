@@ -96,3 +96,19 @@ def test_injector_factory_is_module_level():
     text = source.read_text(encoding='utf-8')
     assert 'def make_injector(' in text
     assert 'injector_for' not in text
+
+def test_fallback_cycle_skips_quietly_when_library_db_missing(tmp_path, monkeypatch):
+    """没配置 Emby 数据库路径时兜底要安静跳过，别再记「写入失败」。
+
+    现场：每次启动/到点都写一条「兜底写入媒体信息失败：emby_library_db 未配置」，
+    看起来像媒体信息写不进 Emby 的故障；其实这条链路是可选功能。
+    """
+    from strimkeep.media_info_api import inject_cycle
+
+    monkeypatch.delenv('STRIMKEEP_EMBY_LIBRARY_DB', raising=False)
+    db, strm_root = _library(tmp_path, with_sidecar=False)
+    store = Store(db)
+    store.values['emby_library_db'] = ''
+    stats = asyncio.run(inject_cycle(App(strm_root), store))
+    assert stats == {'ok': True, 'skipped': 'unconfigured'}
+    assert not store.events

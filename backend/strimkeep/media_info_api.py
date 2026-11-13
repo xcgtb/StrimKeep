@@ -123,6 +123,18 @@ def install_media_info(app, store, admin):
         return stats
 
 
+async def inject_cycle(app, store):
+    """兜底只跑一轮；没配置 Emby 数据库路径时安静跳过。
+
+    这条链路是可选功能：Emby 自己能探测 STRM 的媒体流时根本用不到它。
+    以前未配置也会抛 ValueError，由 inject_loop 记成「兜底写入媒体信息失败」，
+    现场把它当成媒体信息写入故障来查了。
+    """
+    if not library_db(store):
+        return {'ok': True, 'skipped': 'unconfigured'}
+    return await inject_once(app, store)
+
+
 async def inject_loop(app, store, tick=60.0):
     """媒体信息兜底：只在 cron 到点时扫一次「漏写的」，不掺和入库那条实时链路。
 
@@ -137,6 +149,7 @@ async def inject_loop(app, store, tick=60.0):
     from zoneinfo import ZoneInfo
 
     last_fire = 0.0
+    warned = False
     while True:
         due = False
         try:
@@ -153,8 +166,14 @@ async def inject_loop(app, store, tick=60.0):
             due = False
         if due:
             try:
-                stats = await inject_once(app, store)
-                if stats.get('ok') and stats.get('injected'):
+                stats = await inject_cycle(app, store)
+                if stats.get('skipped') == 'unconfigured':
+                    # 每个进程最多提示一次，且写成「未启用」而不是「失败」。
+                    if not warned:
+                        warned = True
+                        store.event('emby', '媒体信息兜底未启用：未配置 Emby 数据库路径'
+                                           '（可选功能，不影响入库与播放）。')
+                elif stats.get('ok') and stats.get('injected'):
                     store.event('emby', '兜底写入媒体信息：补 %d 条（%d 条流、%d 条章节）。'
                                 % (stats['injected'], stats['streams'], stats['chapters']))
                 elif stats.get('ok') and stats.get('failed'):
