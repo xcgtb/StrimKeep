@@ -215,10 +215,26 @@ class EmbyDelivery:
             return ''
         self.report_overlap(jid, folders)
         pending = [t for t in payload.get('targets', []) if not t.get('confirmed') and t.get('emby_path')]
-        missing = [t['emby_path'] for t in pending if not self.covered_by(folders, t['emby_path'])]
+        missing = [t for t in pending if not self.covered_by(folders, t['emby_path'])]
+        # 逐条标记，别因为一条目录没挂媒体库就把同批里已覆盖的作品一起判成未确认。
+        # 现场（分享入库）：综艺目录没加入 Emby 媒体库，同批的电影明明入库了，
+        # 整批却被判「Emby 入库未确认」，通知标题从「新片入库」降级成「整理完成」。
+        missing_ids = {id(t) for t in missing}
+        changed = False
+        for target in payload.get('targets', []):
+            uncovered = id(target) in missing_ids
+            if uncovered and not target.get('library_missing'):
+                target['library_missing'] = True; changed = True
+            elif not uncovered and target.get('library_missing'):
+                target.pop('library_missing', None); changed = True
+        if changed:
+            self.save(jid, payload=json.dumps(payload, ensure_ascii=False))
         if not missing:
             return ''
-        sample = '；'.join(missing[:3])
+        if len(missing) < len(payload.get('targets', [])):
+            return ''  # 同批还有能核对的目标：继续逐条核对，到点时按完成度给结论
+        # 整批都不在任何媒体库下：立刻说清楚，别白等一个确认窗口。
+        sample = '；'.join(t['emby_path'] for t in missing[:3])
         more = f'（另 {len(missing) - 3} 条）' if len(missing) > 3 else ''
         return (f'{len(missing)} 条 STRM 不在任何 Emby 媒体库下，扫描不会收录它们：{sample}{more}。'
                 '请把这些分类目录加入 Emby 媒体库后再同步。')
@@ -236,7 +252,9 @@ class EmbyDelivery:
         folders = await self.library_folders(url, key)
         if folders is None:
             return None, '媒体库列表读取失败'
-        pending = [t for t in payload.get('targets', []) if not t.get('confirmed') and t.get('emby_path')]
+        # 没挂媒体库的目标本来就不会被收录，不能因此放弃给其余目标刷新库。
+        pending = [t for t in payload.get('targets', []) if not t.get('confirmed')
+                   and t.get('emby_path') and not t.get('library_missing')]
         if not pending:
             return None, ''
         selected = {}
@@ -619,7 +637,8 @@ class EmbyDelivery:
             return None
         url, key = connection; headers = {'X-Emby-Token':key}; groups = {}
         for target in payload['targets']:
-            if target['confirmed']: continue
+            # 不在任何媒体库下的目标不会被收录，留给结论里说明，不去比对。
+            if target['confirmed'] or target.get('library_missing'): continue
             group = (target['kind'], target['tmdb'], target['title'])
             groups.setdefault(group, []).append(target)
         # Query each work once, not the entire library or once per episode.
@@ -702,13 +721,14 @@ class EmbyDelivery:
         task.add_done_callback(lambda done: (self.engine.notice_tasks.discard(done), None if done.cancelled() else done.exception()))
 
     @staticmethod
-    def deadline_state(progress):
+    def deadline_state(progress, missing=0):
         """到点时按实际完成度给结论，而不是一律「未确认」。"""
         if progress and progress['total']:
             total, confirmed = progress['total'], progress['confirmed']
+            uncovered = f'（其中 {missing} 条不在任何 Emby 媒体库下）' if missing else ''
             if confirmed and confirmed < total:
                 return ('partial',
-                        f'{confirmed}/{total} 条 STRM 已入库，{total - confirmed} 条在 30 分钟内未确认；'
+                        f'{confirmed}/{total} 条 STRM 已入库，{total - confirmed} 条在 30 分钟内未确认{uncovered}；'
                         '请在 Emby 核对这些路径的媒体库与扫描结果。', progress)
         return 'unconfirmed', '30 分钟内未确认本批 STRM 入库，请检查 Emby 挂载、媒体库与连接。', progress
 
@@ -744,7 +764,9 @@ class EmbyDelivery:
                     # 目标库刷新；结论仍取决于下面的逐条核对。
                     await self.maybe_scan(jid, json.loads(self.row(jid)['payload']), now)
             if now >= row['deadline']:
-                return await self.finish(jid, *self.deadline_state(progress))
+                current = json.loads(self.row(jid)['payload'])
+                missing = sum(1 for t in current.get('targets', []) if t.get('library_missing'))
+                return await self.finish(jid, *self.deadline_state(progress, missing))
             if row['state'] in ('pending','retrying','inflight'):
                 if row['attempts'] >= self.MAX_ATTEMPTS:
                     return await self.finish(jid, 'unconfirmed', 'Emby 扫描通知未确认；自动重试已达上限，请检查连接。', progress)

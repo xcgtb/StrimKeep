@@ -554,7 +554,7 @@ class Notifications:
                     token=cfg.get('bot_token')
                     if not token:
                         waiting=True;continue
-                    updated_title=notice['title'] if status=='verified' else notice['title'].replace('🎉 新片入库：','🎬 整理完成：')
+                    updated_title=notice['title'] if status in ('verified','partial') else notice['title'].replace('🎉 新片入库：','🎬 整理完成：')
                     content=clipped(updated_title+'\n'+updated,1000 if ref['photo'] else 4000)
                     payload={'chat_id':ref['chat_id'],'message_id':ref['message_id']}
                     payload['caption' if ref['photo'] else 'text']=content
@@ -616,7 +616,8 @@ class Notifications:
             targets=json.loads(delivery['payload']).get('targets',[]) if delivery else []
             confirmed={t.get('relative') for t in targets if t.get('confirmed')}
             if config.get('notify_emby') and latest and latest['notify_state'] in ('verified','partial','unconfirmed','failed','unknown','not_needed'):
-                status='verified' if all(p.get('relative_path') in confirmed for _,p in items) else 'unconfirmed'
+                hits=sum(1 for _,p in items if p.get('relative_path') in confirmed)
+                status='verified' if hits==len(items) else ('partial' if hits else 'unconfirmed')
             else:status='pending' if config.get('notify_emby') else ''
             heading,body,photo=media_card(items,shared=shared,transferred=bool(config.get('transfer_parent')),emby_status=status)
             event=f'media:{job["id"]}:{key[0]}:{key[1]}:{key[2]}'

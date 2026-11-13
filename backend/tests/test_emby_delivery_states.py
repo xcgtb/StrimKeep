@@ -6,6 +6,7 @@ import time
 import httpx
 import pytest
 
+from strimkeep.cards import media_card
 from strimkeep.emby import EmbyDelivery
 from strimkeep.organizer import Organizer
 from strimkeep.store import Store, digest
@@ -151,3 +152,48 @@ def test_overlap_is_reported_when_roots_contain_each_other(tmp_path):
         await http.aclose()
         store.close()
     asyncio.run(run())
+
+def test_uncovered_target_does_not_fail_the_covered_ones(tmp_path):
+    """现场：分享入库同批里综艺目录没挂 Emby 库，同批已入库的电影被连累判成未确认。"""
+    async def run():
+        routes = {
+            ('GET', '/Library/VirtualFolders'):
+                [{'Name': '影片', 'Locations': ['/strimkeep/影视媒体库/电影']}],
+            ('GET', '/Items'): {'Items': [
+                {'Path': '/strimkeep/影视媒体库/电影/A.strm',
+                 'MediaSources': [{'Path': 'http://nas:9000/play/p1/a'}]}], 'TotalRecordCount': 1},
+        }
+        store, engine, http, _ = make_engine(tmp_path, routes)
+        covered = target('p1', 'A')
+        # Mock 对任何查询都返回同一条电影条目，tv 分支会因为拿不到剧集 ID 抛错，
+        # 这里用电影类型验证「个别目标没挂库不影响同批其余目标」。
+        uncovered = target('p2', 'B', tmdb=2)
+        uncovered['emby_path'] = '/media/分享影视库/综艺/B.strm'
+        jid = insert_delivery(store, [covered, uncovered], [], state='accepted', attempts=1,
+                              deadline=time.time() + 600)
+        await engine.emby.tick()
+        row = engine.emby.row(jid)
+        payload = json.loads(row['payload'])
+        assert payload['targets'][0]['confirmed'] is True
+        assert payload['targets'][1].get('library_missing') is True
+        assert row['state'] != 'unconfirmed'
+        # 到点后按完成度给「部分」，并点明其中有不覆盖的条目
+        await engine.emby.tick(time.time() + 700)
+        row = engine.emby.row(jid)
+        assert row['state'] == 'partial', row['state']
+        assert '不在任何 Emby 媒体库下' in row['message']
+        await http.aclose(); store.close()
+    asyncio.run(run())
+
+
+def test_partial_emby_status_still_reads_as_new_arrival():
+    source = {'name': '拨乱行动.2026.2160p.WEB-DL.mkv', 'size': 1024 ** 3}
+    plan = {'hint': {'media_type': 'movie'},
+            'details': {'id': 1228834, 'title': '拨乱行动', 'release_date': '2026-01-01'},
+            'parts': ['电影', '欧美电影'], 'media': {'width': 3840, 'height': 2160}}
+    heading, body, _ = media_card([(source, plan)], shared=True, emby_status='partial')
+    assert heading.startswith('🎉 新片入库：'), heading
+    assert 'Emby 部分入库' in body
+    # 一条都没确认才写「整理完成」
+    heading, _, _ = media_card([(source, plan)], shared=True, emby_status='unconfirmed')
+    assert heading.startswith('🎬 整理完成：'), heading

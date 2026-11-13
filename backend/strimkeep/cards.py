@@ -85,7 +85,7 @@ def media_card(items,shared=False,transferred=False,emby_status='',other_items=(
     source,plan=items[0];details=plan.get('details',{});hint=plan.get('hint',{})
     title=line(details.get('title') or details.get('name') or '未命名作品',100)
     year=str(details.get('release_date') or details.get('first_air_date') or '')[:4]
-    heading=('🎉 新片入库：' if emby_status in ('verified','pending') else '🎬 整理完成：')+title+(f' ({year})' if year.isdigit() and len(year)==4 else '')
+    heading=('🎉 新片入库：' if emby_status in ('verified','pending','partial') else '🎬 整理完成：')+title+(f' ({year})' if year.isdigit() and len(year)==4 else '')
     lines=[];episodes=episode_range(items);season=hint.get('season')
     if episodes:lines.append('📺 本批：'+(f'S{season:02d} ' if isinstance(season,int) else '')+episodes)
     if hint.get('media_type')=='tv':
@@ -123,6 +123,7 @@ def media_card(items,shared=False,transferred=False,emby_status='',other_items=(
     lines.append('👥 组别：'+(line(' / '.join(dict.fromkeys(groups)),80) or '未知'))
     if emby_status=='pending':lines.append('⏳ 状态：Emby 入库待核实')
     elif emby_status=='verified':lines.append('✅ 状态：Emby 已入库')
+    elif emby_status=='partial':lines.append('⚠️ 状态：Emby 部分入库，未确认的条目请检查媒体库')
     elif emby_status=='unconfirmed':lines.append('⚠️ 状态：Emby 入库未确认，请检查媒体库')
     backdrop=details.get('backdrop_path');poster=backdrop or details.get('poster_path')
     photo=('https://image.tmdb.org/t/p/'+('w780' if backdrop else 'w500')+poster) if isinstance(poster,str) and re.fullmatch(r'/[A-Za-z0-9_-]+\.(?:jpg|png)',poster) else None
