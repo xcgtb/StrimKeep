@@ -1,6 +1,6 @@
-"""差分测试：我们的双库判定 vs 参考实现 1.2.12（原样收藏在 tests 里）。
+"""差分测试：我们的双库判定 vs 1.2.12 口径（规则副本收藏在 tests 里）。
 
-参考实现的纯规则模块 `app/domain/governance.py` 直接收录为
+1.2.12 口径的纯规则模块 `app/domain/governance.py` 直接收录为
 `reference_1212_governance.py`（无 IO、无依赖），这里用穷举/随机样例把两边的
 裁决结论逐一比对，任何一处分支漂移都会立刻失败。
 """
@@ -38,7 +38,7 @@ def ref_files(episode_rows, season=1):
 
 
 def ref_compare(share_rows, cloud_rows, tie_share_wins):
-    """用同一套比较函数跑参考实现，保证差异只来自裁决分支。"""
+    """用同一套比较函数跑1.2.12 口径，保证差异只来自裁决分支。"""
     return ref.season_compare(
         ref_files(share_rows), ref_files(cloud_rows),
         ep_of=lambda file: (file.season, file.episode),

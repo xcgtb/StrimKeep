@@ -1,6 +1,6 @@
 ﻿"""媒体信息接口：把本项目的 sidecar 写进 Emby 的 library.db。
 
-等价于装「神医助手」插件后它的入库动作，区别只在于从外部写：
+等价于服务端插件的入库动作，区别只在于从外部写：
 Emby 的公开 API 写不了 MediaStreams，它自己也不会重算 STRM（实测四种方式都是 0），
 所以只能直接写库。库路径默认 ``/emby-data/library.db``（docker-compose 里把 Emby 的
 data 目录挂进来），可用设置项 ``emby_library_db`` 或环境变量覆盖。

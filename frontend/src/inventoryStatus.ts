@@ -1,6 +1,6 @@
 const ONGOING = ['Returning Series', 'In Production', 'Planned', 'Pilot']
 
-/** 片库映射卡片状态：口径对齐参考实现 1.2.12（完整 / 缺集 / 超集 / 在更 / 待对照）。 */
+/** 片库映射卡片状态：口径对齐1.2.12 口径（完整 / 缺集 / 超集 / 在更 / 待对照）。 */
 export function inventoryCardStatus(item: any, entry: any): {text: string, tone: string, category: string, hint: string} {
   // 身份冲突优先：同一个 TMDB 号挂了两套不同目录，此时任何缺集/完整结论都不可信。
   if (item.identity_conflict) return {text: '身份冲突', tone: 'unknown', category: 'unknown',

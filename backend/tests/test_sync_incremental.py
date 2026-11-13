@@ -117,3 +117,64 @@ def test_sync_full_and_incremental_endpoints_snapshot_their_mode(tmp_path, monke
         assert body['watermark']['at'] == 1234.5
         assert body['last_job']['id'] == explicit.json()['id']
         assert body['running'] >= 1 and isinstance(body['stale_count'], int)
+
+def _client(tmp_path, monkeypatch, watermark=None):
+    monkeypatch.setenv('ADMIN_USERNAME', 'admin')
+    monkeypatch.setenv('ADMIN_PASSWORD', 'test-password-1234')
+    app = create_app(tmp_path / 'data', tmp_path / 'strm', FakeCloud)
+    client = TestClient(app)
+    client.__enter__()
+    login = client.post('/api/v1/auth/login', json={'username': 'admin', 'password': 'test-password-1234'})
+    client.headers['X-CSRF-Token'] = login.json()['csrf']
+    app.state.store.set_many({'sync_config': {'source_cids': ['100']},
+                              'playback_base': 'http://nas:9000',
+                              'cookie': 'UID=1; CID=t; SEID=t'})
+    if watermark is not None:
+        app.state.store.set_meta('sync_watermark', watermark)
+
+    async def fake_directory(cid):
+        return [{'id': str(cid), 'name': '目录%s' % cid}]
+
+    app.state.cloud.directory = fake_directory
+    return app, client
+
+
+def test_incremental_prefers_the_directory_watermark(tmp_path, monkeypatch):
+    app, client = _client(tmp_path, monkeypatch,
+                          watermark={'at': 100.0, 'job': 1, 'roots': {'100': 400.0}})
+    body = client.post('/api/v1/sync/incremental', json={'source_cids': ['100']}).json()
+    assert body['since'] == 400.0, '指定目录时应使用该目录自己的水位'
+    body = client.post('/api/v1/sync/incremental', json={}).json()
+    assert body['since'] == 100.0, '不指定目录时用全局水位'
+    client.__exit__(None, None, None)
+
+
+def test_dry_run_estimates_without_queueing(tmp_path, monkeypatch):
+    app, client = _client(tmp_path, monkeypatch, watermark={'at': 100.0, 'job': 1})
+    with app.state.store.db:
+        for index, updated in enumerate((90.0, 150.0, 160.0)):
+            app.state.store.db.execute(
+                'INSERT OR REPLACE INTO output_registry VALUES(?,?,?,?,?,?,?,?,1,?)',
+                ('1', 'f%d' % index, '{}', '["100"]', 'p%d' % index, 'c',
+                 '剧集/剧名/第%d集.strm' % index, '{}', updated))
+    before = app.state.store.db.execute('SELECT count(*) FROM organize_jobs').fetchone()[0]
+    body = client.post('/api/v1/sync/incremental', json={'dry_run': True}).json()
+    after = app.state.store.db.execute('SELECT count(*) FROM organize_jobs').fetchone()[0]
+    assert body['dry_run'] is True and body['changed'] == 2, body
+    assert after == before, '预演不该入队'
+    client.__exit__(None, None, None)
+
+
+def test_changes_lists_outputs_registered_after_the_watermark(tmp_path, monkeypatch):
+    app, client = _client(tmp_path, monkeypatch)
+    with app.state.store.db:
+        app.state.store.db.execute(
+            'INSERT OR REPLACE INTO output_registry VALUES(?,?,?,?,?,?,?,?,1,?)',
+            ('1', 'old', '{}', '["100"]', 'p-old', 'c', '剧集/旧.strm', '{}', 50.0))
+        app.state.store.db.execute(
+            'INSERT OR REPLACE INTO output_registry VALUES(?,?,?,?,?,?,?,?,1,?)',
+            ('1', 'new', '{}', '["100"]', 'p-new', 'c', '剧集/新.strm', '{}', 500.0))
+    body = client.get('/api/v1/sync/changes?since=100').json()
+    assert [item['file_id'] for item in body['items']] == ['new']
+    assert body['count'] == 1
+    client.__exit__(None, None, None)

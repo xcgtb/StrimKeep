@@ -42,7 +42,7 @@ class InventoryConfig(BaseModel):
     tie: Literal['cloud', 'share'] = 'cloud'
     single_quality: bool = False
     single_gaps: bool = False
-    # 决策模型（对应参考实现 strategy.decision）：quality_first / keep_local / keep_share
+    # 决策模型（对应1.2.12 口径 strategy.decision）：quality_first / keep_local / keep_share
     decision: Literal['quality_first', 'keep_local', 'keep_share'] = 'quality_first'
     # 特别篇策略：compare（比画质）/ delete（两库都删）/ ignore（不动）
     special_action: Literal['compare', 'delete', 'ignore'] = 'compare'
@@ -102,7 +102,7 @@ def install_inventory(app, store, admin):
     app.state.inventory_invalidate = invalidate_mapping_cache
 
     async def refresh_mapping():
-        """后台重扫：先让页面拿到上一份结果，扫完再替换（参考实现的 stale 语义）。"""
+        """后台重扫：先让页面拿到上一份结果，扫完再替换（1.2.12 口径的 stale 语义）。"""
         async with mapping_lock:
             if mapping_cache['refreshing']:
                 return

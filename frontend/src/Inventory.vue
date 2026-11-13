@@ -204,7 +204,7 @@ async function loadPage(refresh=false) {
     offset:String((page.value - 1) * pageSize.value), limit:String(pageSize.value),
     refresh:refresh ? '1' : '0'})
   try {
-    // 参考实现 1.2.12：过滤/计数/排序都在服务端算完再切片，卡片不含任何路径。
+    // 1.2.12 口径：过滤/计数/排序都在服务端算完再切片，卡片不含任何路径。
     const data = await props.api(`/inventory/mapping/page?${query}`)
     if (request !== pageRequest) return
     pageFallback.value = false
@@ -484,14 +484,14 @@ function openWork(row:any) {
 }
 async function inspect(item:any) {
   if (Date.now() < swipeSuppressClickUntil) return
-  // 多选模式下点卡片就是勾选/取消（参考实现 mappingBatchMode 的行为），
+  // 多选模式下点卡片就是勾选/取消（1.2.12 口径 mappingBatchMode 的行为），
   // 要开详情先退出多选。
   if (batchMode.value) { togglePicked(item, !picked(item)); return }
   const request = ++inspectRequest
   missingRequest++; missingBusy.value = false; detailError.value = ''
   selected.value = withFiles(item); season.value = 1; seasonResult.value = null; seasonError.value = ''; completeError.value = ''; missingResult.value = null; missingError.value = ''
   embyItems.value = []; embyError.value = ''; if (item.unidentified) return; void loadEmby(item)
-  // 列表卡片不含文件清单：详情单独按 id 取（参考实现 /api/emby/library/item）。
+  // 列表卡片不含文件清单：详情单独按 id 取（1.2.12 口径 /api/emby/library/item）。
   try {
     const detail = await props.api(`/inventory/mapping/item?kind=${item.kind}&tmdb_id=${item.tmdb_id}`)
     if (request !== inspectRequest || !selected.value || workKey(selected.value) !== workKey(item)) return

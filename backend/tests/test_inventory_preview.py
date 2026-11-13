@@ -1,4 +1,4 @@
-"""治理预览：逐条对齐参考实现（1.2.12）的双库判定。"""
+"""治理预览：逐条对齐1.2.12 口径（1.2.12）的双库判定。"""
 import pytest
 from strimkeep.inventory_preview import governance_preview
 from strimkeep.quality import public_policy
@@ -106,7 +106,7 @@ def test_keep_local_detail_does_not_misrepresent_quality_as_decision():
 
 
 def test_fewer_share_episodes_keeps_local():
-    """分享集数少于本地 → 集数优先，淘汰分享（参考实现 local_wins_fewer）。"""
+    """分享集数少于本地 → 集数优先，淘汰分享（1.2.12 口径 local_wins_fewer）。"""
     result = governance_preview(snap([file('l', 1, n, '1080p') for n in (1, 2, 3)],
                                      [file('s', 1, n, '2160p') for n in (1, 2)]), policy())
     assert actions(result)['local_wins_fewer']['action_kind'] == 'shr'
@@ -323,7 +323,7 @@ def test_quiet_gate_blocks_fresh_ingest_and_reports_remaining_minutes():
 def test_single_sided_season_residual_is_flagged_not_silent():
     """另一侧没有这一季：动作照给（用户规则），但必须标 single_side 并说明损失。
 
-    这是对 1.2.12 的一处有意差异：参考实现在 off 档对单边季静默跳过。
+    这是对 1.2.12 的一处有意差异：1.2.12 口径在 off 档对单边季静默跳过。
     """
     result = governance_preview(snap([file('l', 1, 1, '1080p')],
                                      [file('s', 2, 1, '2160p'), file('s', 2, 3, '2160p')]),

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Emby 深度删除联动：神医助手 deep.delete / Emby 原生 library.deleted 事件处理。
+"""Emby 深度删除联动：deep.delete Webhook 与 Emby 原生 library.deleted 事件处理。
 
 事件进来后只做三件事：解析 → 对齐台账 → **写进队列**，立刻返回（不再让 Emby 等我们删完）。
 真正的删除由后台 worker 按序执行，每条都回读确认，进度写进面板。
@@ -78,7 +78,7 @@ def _hits(rel, event_path, is_dir, candidates):
 
     目录事件只认「事件路径是条目的上级目录」这种严格关系：不能用末段目录名去
     模糊匹配——`Season 1` 这种通用目录名会把别的剧一起删掉。文件事件保留后缀
-    对齐，兼容 神医助手 直接发网盘路径的情况。
+    对齐，兼容外部直接发网盘路径的情况。
     """
     rel_norm = rel.strip('/')
     target = '/' + event_path.strip('/')

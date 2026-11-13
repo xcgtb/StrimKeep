@@ -312,7 +312,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         except Exception as exc:
             store.event('share', '分享 STRM 地址已保留，Emby 刷新将在下次启动时重试（%s）。' % type(exc).__name__)
         app.state.organizer.start()
-        # Emby 反代（对齐上游的「Emby 与飞牛反代」）：按规则起多台服务器，只转发 API 流量，
+        # Emby 反代（「Emby 与飞牛反代」页）：按规则起多台服务器，只转发 API 流量，
         # 并在 PlaybackInfo 里补 115 直链——视频由客户端直接向 CDN 取，不经过本机。
         app.state.emby_proxy = EmbyProxyManager(store, app.state.cloud, app.state.metrics)
         try:
@@ -1232,7 +1232,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
 
     @app.post('/api/v1/emby/webhook')
     async def emby_webhook(request: Request, token: str = Query('', max_length=400)):
-        """深度删除联动：接收 Emby 原生 / 神医助手的删除事件（令牌鉴权，默认关闭）。"""
+        """深度删除联动：接收 Emby 原生 / deep.delete 的删除事件（令牌鉴权，默认关闭）。"""
         secret = store.webhook_token()
         # 令牌可以放在查询串（Emby 的 Webhook 插件只认 URL），也接受请求头；
         # 头部方式不会落进反向代理日志，配置方支持时优先用头部。

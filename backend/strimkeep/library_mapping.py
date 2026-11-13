@@ -1,12 +1,12 @@
-"""片库映射的服务端分页/首屏/详情，判定口径抄自参考实现 1.2.12。
+"""片库映射的服务端分页/首屏/详情，判定口径与 1.2.12 一致。
 
-对应参考实现：
+对应1.2.12 口径：
   library_first_screen.py   首屏最多 48 张卡，按状态优先级排序，不下发路径
   library_pagination.py     过滤/排序/计数全部在服务端先算，再切 offset/limit
   library_response.py       Cache-Control: private, no-store（映射页不允许被缓存）
   routers/library.py        /preview、/page、/item 三个入口
 
-差异说明：参考实现的状态来自它自己的入库目录（cached_library_view），
+差异说明：1.2.12 口径的状态来自它自己的入库目录（cached_library_view），
 这里用 TMDB 对照结果的状态缓存（key: inventory-status:tv:<tmdb>），
 由现有的「缺集对照」接口在返回时写入；没有缓存的条目按 pending 处理，
 页面只对当前页的卡片请求对照，不整体扫库。
@@ -45,7 +45,7 @@ def path_categories(item, library_map=None):
     """目录分类：优先 Emby 媒体库名（按 TMDB 号匹配），否则退回目录关键词。
 
     library_map 形如 {'tv:123': '国产剧集'}，由 inventory_api 从 Emby 读取后传入；
-    为 None/空时退回参考实现的目录关键词规则，保证 Emby 不可用时筛选仍可用。
+    为 None/空时退回1.2.12 口径的目录关键词规则，保证 Emby 不可用时筛选仍可用。
     """
     if library_map:
         names = []
@@ -71,7 +71,7 @@ def path_categories(item, library_map=None):
 
 
 def no_store(response):
-    """映射页响应不允许被浏览器/反代缓存（参考实现 `_mapping_no_store`）。"""
+    """映射页响应不允许被浏览器/反代缓存（1.2.12 口径 `_mapping_no_store`）。"""
     if response is not None:
         response.headers.update(NO_STORE)
 
@@ -174,7 +174,7 @@ def card(item, store, library_map=None):
 
 
 def _sort_key(row):
-    """状态优先级 → 差异大的在前 → 标题字典序（参考实现 `_series_cmp`）。"""
+    """状态优先级 → 差异大的在前 → 标题字典序（1.2.12 口径 `_series_cmp`）。"""
     return (CATEGORY_PRIORITY.get(row['status'], 9), -abs(row['diff']),
             str(row['title'] or '').casefold(), int(row['tmdb_id'] or 0))
 
@@ -267,7 +267,7 @@ def _filtered(rows, media, status, scope, keyword, category='all'):
 
 
 def preview(snapshot, store, library_map=None):
-    """首屏：每类最多 48 张卡，第一屏就够渲染，不等全库（参考实现 `preview`）。"""
+    """首屏：每类最多 48 张卡，第一屏就够渲染，不等全库（1.2.12 口径 `preview`）。"""
     rows = catalogue(snapshot, store, library_map)
     return {'rows': rows[:PREVIEW_LIMIT],
             'tv': [row for row in rows if row['kind'] == 'tv'][:PREVIEW_LIMIT],
@@ -277,7 +277,7 @@ def preview(snapshot, store, library_map=None):
 
 def page(snapshot, store, *, media='tv', status='all', scope='all', keyword='',
          category='all', offset=0, limit=40, library_map=None):
-    """服务端分页：过滤与计数先算完再切片，计数是全局的（参考实现 `page`）。"""
+    """服务端分页：过滤与计数先算完再切片，计数是全局的（1.2.12 口径 `page`）。"""
     status = CATEGORY_ALIASES.get(status, status)
     if media not in MEDIA or status not in STATUS_FILTERS or scope not in SCOPES:
         raise ValueError('无效片库分页参数')

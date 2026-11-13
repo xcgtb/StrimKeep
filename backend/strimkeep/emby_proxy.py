@@ -2,12 +2,12 @@
 
 上游的快不来自 STRM 里写的地址，而来自反代：客户端连反代端口 → 反代带 API Key
 转发 Emby 接口 → 在 PlaybackInfo 的返回体里补上 ``MediaSources[*].DirectStreamUrl``，
-值是预先解析好的 115 CDN 直链。（2026-11-09 黑盒比对：同一部片直连上游 Emby 8096 与
+值是预先解析好的 115 CDN 直链。（2026-11-09 实测对比：同一部片直连上游 Emby 8096 与
 经反代 8097，两份响应逐字段对照，结构差异只有这一个字段，Path / Protocol /
 SupportsDirectPlay 一字未改。）客户端于是直接向 CDN 取流：视频不经过 Emby、不经过
 反代、也不经过 frp 隧道。本模块只转发 API 流量（KB 级），视频字节一个都不代理。
 
-形态对齐上游：**可以有多台反代服务器**，每台一条规则（名称 / 上游 / API Key / 端口 /
+形态与设置页一致：**可以有多台反代服务器**，每台一条规则（名称 / 上游 / API Key / 端口 /
 开关），各自独立监听、独立启停、独立播放记录；上游与 Key 留空即沿用「Emby 服务连接」。
 """
 import asyncio
@@ -453,7 +453,7 @@ class ProxyServer:
                     self.on_play(self, request, filled, outcome, ','.join(reasons)[:120])
                 except Exception:
                     pass
-        # 内容已重新序列化，长度与压缩信息不能照抄上游。
+        # 内容已重新序列化，长度与压缩信息要按本模块重新计算。
         return Response(json.dumps(payload, ensure_ascii=False).encode(),
                         status_code=200, media_type='application/json',
                         headers={'Cache-Control': 'private, no-store'})
@@ -657,7 +657,7 @@ class EmbyProxyManager:
         return removed
 
     def _migrate_legacy(self):
-        """把老的「单台配置」迁成一条规则：端口/开关照抄，上游与 Key 只在**确有差异**时才带过来。
+        """把老的「单台配置」迁成一条规则：端口/开关沿用，上游与 Key 只在**确有差异**时才带过来。
 
         老键（`emby_proxy_*`）从这之后就不再有读取方，直接删掉——留着只会让人以为改它们有效。
         """

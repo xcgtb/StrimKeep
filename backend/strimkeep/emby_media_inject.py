@@ -1,9 +1,8 @@
-"""把媒体信息写进 Emby 的 library.db（复刻神医助手「媒体信息持久化」的入库动作）。
+"""把媒体流信息写进 Emby 的 library.db（媒体信息持久化）。
 
 为什么走这条路：Emby 的公开 API 没有写 ``MediaStreams`` 的接口，而它自己也**不会**重算
 STRM 的媒体信息（2026-11-10 实测：Refresh(Default/FullRefresh)、Library/Media/Updated、
-touch + 全库扫描，四种方式之后 ``MediaStreams`` 都还是 0）。神医助手能做到是因为它是服务端
-插件，直接写库；本模块做的是同一件事，只是从外部写：
+touch + 全库扫描，四种方式之后 ``MediaStreams`` 都还是 0）。服务端插件可以直接写库；本模块从外部对同一个库文件写入，效果一致：
 
 - 读本项目已经生成好的 sidecar（``<名字>-media-info.json``，字段本身就是 Emby 的
   MediaStream 形状）；

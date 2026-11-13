@@ -318,7 +318,7 @@ def _to_dual(common, season, action, sp, lp, policy, tie, threshold, decision, m
 def _version_verdict(rows, policy):
     """库内多版本选取（1.2.12 `_dedupe_lib_versions` 的比较方式）。
 
-    参考实现用严格 `>` 逐个替换，完全打平保留先出现的那一份（这里先按文件名
+    1.2.12 口径用严格 `>` 逐个替换，完全打平保留先出现的那一份（这里先按文件名
     排序，结果与遍历顺序无关）。`tie=True` 表示有候选与保留项判不出高下，
     页面需要提示"按平局保留"。
     """
@@ -332,9 +332,9 @@ def _version_verdict(rows, policy):
 def _dedupe_candidates(item, sp, lp, covered, policy):
     """库内多版本（1.2.12 `_dedupe_lib_versions`）：同片/同集多份 → 各留最优。
 
-    粒度跟参考实现一致：
+    粒度跟1.2.12 口径一致：
       · 电影：同一作品一条（`lib.mov[key]` 多份 → 留最优）；
-      · 剧集：同一季一条，把该季所有重复集合并进来（参考实现 Act 的
+      · 剧集：同一季一条，把该季所有重复集合并进来（1.2.12 口径 Act 的
         `dup_eps`），而不是每集各出一条 —— 否则一季十几集重复会在列表里
         冒出十几行，用户根本看不出这是同一个问题。
     已被库间治理覆盖（整组删除）的标题跳过；S00 不参与。
@@ -518,7 +518,7 @@ def governance_preview(snapshot, policy, tie='cloud', threshold=0.9,
         #     同一季的「残次品」与「多季保护淘汰」必须同时给出，不能互相抵消。
         # 决策模型「保留本地／保留分享」不产生残次品动作（1.2.12 直接按决策取舍）。
         # 残次品（1.2.12 `_emit_season_residuals`）：两侧各自独立判定，谁不完整删谁。
-        # 与参考实现的一处**有意差异**：1.2.12 只对两侧都有的季判残次品；用户要求
+        # 与1.2.12 口径的一处**有意差异**：1.2.12 只对两侧都有的季判残次品；用户要求
         # 「另一侧没有这一季时也照样给出可执行的清理动作」。这种情况用 single_side
         # 标出来，并由 lost_episodes / clears_show 说明「删完这季就没了」，不静默吞掉。
         def _emit_residual_actions(sides):

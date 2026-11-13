@@ -1,4 +1,4 @@
-"""片库映射（服务端分页/首屏/详情）：对齐参考实现 1.2.12 的契约。"""
+"""片库映射（服务端分页/首屏/详情）：对齐1.2.12 口径 的契约。"""
 import pytest
 
 from strimkeep.library_mapping import (card, category_counts, detail, no_store, page,

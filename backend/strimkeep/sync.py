@@ -815,9 +815,16 @@ class Sync:
             # 增量水位只在本次真正跑完之后推进，而且记的是**开始**时间：
             # 扫描期间发生的改动下一轮还会被看到，不会漏。
             if str(self.engine.job(jid)['state'] or '') in ('completed', 'partial'):
+                # 除了全局水位，还按同步目录各记一份：多根同步时，某个根没跑过就
+                # 不能拿另一个根的水位去跳过它。
+                previous = self.store.meta_json('sync_watermark', {}) or {}
+                roots_map = dict(previous.get('roots') or {})
+                for cid in (config.get('source_cids') or []):
+                    roots_map[str(cid)] = started
                 self.store.set_meta('sync_watermark', {
                     'at': started, 'job': jid,
-                    'mode': 'incremental' if config.get('incremental_since') else 'full'})
+                    'mode': 'incremental' if config.get('incremental_since') else 'full',
+                    'roots': roots_map})
         finally:
             if hasattr(self.cloud, 'use_scope'):
                 self.cloud.use_scope(self.engine.current_account(), jid)

@@ -1,4 +1,4 @@
-"""按用户给的规则逐条验证双库治理（对齐参考实现 1.2.12 的判定分支）。"""
+"""按用户给的规则逐条验证双库治理（对齐1.2.12 口径 的判定分支）。"""
 import pytest
 
 from strimkeep.inventory_preview import governance_preview

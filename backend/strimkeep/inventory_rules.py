@@ -168,7 +168,7 @@ def cmp_versions(left, right, policy):
 def best_index(filenames, policy):
     """1.2.12 ``_best``：同侧多份取画质最优；平局保留先出现的那一份。
 
-    参考实现用严格 ``>`` 比较，所以完全打平时保留第一份。这里先把名字排序再取，
+    1.2.12 口径用严格 ``>`` 比较，所以完全打平时保留第一份。这里先把名字排序再取，
     让结果与磁盘遍历顺序无关（同样的输入永远得到同样的保留项）。
     """
     order = sorted(range(len(filenames)), key=lambda index: (str(filenames[index]), index))
@@ -182,14 +182,14 @@ def best_index(filenames, policy):
 def season_decision(share, cloud, policy, tie='cloud', threshold=0.9):
     """逐行对齐 1.2.12 ``domain.governance.season_verdict``。
 
-    输入是已经清洗过的同一季：``{集号: 文件名}``。裁决顺序与参考实现一致：
+    输入是已经清洗过的同一季：``{集号: 文件名}``。裁决顺序与1.2.12 口径一致：
     1. 任一侧不完整（E01 起断档）→ ``incomplete``（只清残次品，不比画质）；
     2. 没有共同集 → ``no_common``；
     3. 分享达标率 ≥ 阈值 **且** 分享集数不少于本地 → ``share_wins``；
     4. 分享集数少于本地 → ``local_wins_fewer``（集数优先）；
     5. 其余 → ``local_wins_quality``（画质优先）。
 
-    参考实现不设"两侧各有对方没有的集就交人工"这一层：那种情况必然至少一侧
+    1.2.12 口径不设"两侧各有对方没有的集就交人工"这一层：那种情况必然至少一侧
     不完整，会在第 1 步就终止（只清残次品），所以这里也不需要额外兜底。
     """
     if tie not in ('share', 'cloud') or not 0.5 <= threshold <= 1:
@@ -221,7 +221,7 @@ def season_decision(share, cloud, policy, tie='cloud', threshold=0.9):
         scores[winner] += 1
         result['comparisons'].append({'episode': episode, 'winner': winner, 'rules': evidence})
         if sample is None and outcome != 0:
-            # 代表集：第一个真正分出胜负的共同集，和参考实现的 sample 同义。
+            # 代表集：第一个真正分出胜负的共同集，和1.2.12 口径的 sample 同义。
             sample = {'episode': episode, 'rules': evidence}
     share_ratio = scores['share'] / len(common)
     result.update(scores=scores, share_ratio=share_ratio, sample=sample)

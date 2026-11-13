@@ -1,6 +1,6 @@
 """Emby 媒体库归属：片库映射的「目录分类」直接读 Emby 的库。
 
-参考实现把分类写死成目录关键词；StrimKeep 的库由用户在 Emby 里自己划分，
+1.2.12 口径把分类写死成目录关键词；StrimKeep 的库由用户在 Emby 里自己划分，
 所以按 Emby 的库列表（CollectionFolder）建立「媒体库 → 作品」映射：
     tv:123   → 国产剧集
     movie:456 → 电影
