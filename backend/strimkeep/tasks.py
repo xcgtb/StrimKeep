@@ -100,6 +100,23 @@ class Tasks:
             ident = 'legacy' + hashlib.sha256(str(cid).encode()).hexdigest()[:16]
             if any(p['id'] == ident for p in profiles):
                 continue
+            def same_schedule(profile):
+                if (not profile.get('enabled') or profile.get('mode') != 'incremental'
+                        or profile.get('source_cid') != str(cid)
+                        or profile.get('timezone', 'Asia/Shanghai') != settings.get('timezone', 'Asia/Shanghai')):
+                    return False
+                if settings.get('sync_mode') != 'cron':
+                    return profile.get('frequency') == 'interval' and int(profile.get('interval_minutes', 60)) == int(settings.get('sync_interval_minutes', 60))
+                expression = ' '.join(settings.get('sync_cron', '0 3 * * *').split())
+                if profile.get('frequency') == 'cron':
+                    return ' '.join(profile.get('cron', '').split()) == expression
+                if profile.get('frequency') in ('daily', 'weekly'):
+                    hour, minute = (int(value) for value in profile.get('time', '03:00').split(':'))
+                    day = '*' if profile['frequency'] == 'daily' else str(profile.get('weekday', 1))
+                    return expression == f'{minute} {hour} * * {day}'
+                return False
+            if any(same_schedule(p) for p in profiles):
+                continue
             label = labels.get(str(cid)) or str(cid)
             item = {'id':ident, 'name':'原定时 · ' + label[-60:], 'source_cid':str(cid),
                     'source_label':label, 'mode':'incremental', 'enabled':True,

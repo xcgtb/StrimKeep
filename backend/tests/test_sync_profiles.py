@@ -103,3 +103,16 @@ def test_profile_custom_schedule_validation(tmp_path, monkeypatch):
     assert client.post('/api/v1/sync/profiles', json={**valid, 'timezone':'invalid'}).status_code == 422
     assert client.post('/api/v1/sync/profiles', json={**valid, 'frequency':'interval', 'interval_minutes':2}).status_code == 422
     client.__exit__(None, None, None)
+
+
+def test_migration_keeps_equivalent_existing_profile_without_duplicate(tmp_path, monkeypatch):
+    app, client = _client(tmp_path, monkeypatch)
+    store = app.state.store
+    created = client.post('/api/v1/sync/profiles', json=profile('影视增量','incremental')).json()
+    store.set_many({'schedule_config': {'sync_enabled':True, 'sync_source_cids':['100'],
+        'sync_mode':'cron', 'sync_cron':'0 3 * * *', 'timezone':'Asia/Shanghai'}})
+    app.state.organizer.tasks.migrate_legacy_sync()
+    profiles = store.get('sync_profiles')
+    assert len(profiles) == 1 and profiles[0]['id'] == created['id']
+    assert not store.get('schedule_config')['sync_enabled']
+    client.__exit__(None, None, None)
