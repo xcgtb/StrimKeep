@@ -68,13 +68,13 @@ function selectAvailableActions() {
 const kindFilter = ref('all'), scopeFilter = ref('all'), statusFilter = ref('all'), categoryFilter = ref('all'), page = ref(1), pageSize = ref(window.innerWidth < 640 ? 30 : 45)
 const statusById = ref<Record<string,any>>({}), statusBusy = ref(false), statusProgress = ref('')
 const embyItems = ref<any[]>([]), embyError = ref(''), embyBusy = ref(false)
-const orphanBusy = ref(false), orphanError = ref(''), orphanResult = ref<any>(null), orphanSelected = ref<any[]>([]), orphanDone = ref<any[]>([])
+const orphanBusy = ref(false), orphanError = ref(''), cloudOrphanError=ref(''), orphanResult = ref<any>(null), orphanSelected = ref<any[]>([]), orphanDone = ref<any[]>([])
 let statusGeneration = 0, embyGeneration = 0
 const statusInFlight = new Map<string, Promise<void>>()
 watch([tie, decision, matchStrategy, multiProtect, specialAction, exemptInput, singleQuality, singleGaps, seasonRatio, quietMinutes, scanScheduleEnabled, scanIntervalHours], () => { preview.value = null; scanTime.value = 0; configMessage.value = '' })
 const reasons:Record<string,string> = {recent_activity:'近期仍有入库变动，暂不治理', activity_unknown:'目录变动时间无法核实', missing_or_unsafe:'文件缺失或路径不安全', unsafe_path:'路径不安全', duplicate_path:'多个记录使用同一路径', identity_unresolved:'TMDB 身份未能核实', identity_conflict:'同一 TMDB 编号对应不同片名或年份', episode_ambiguous:'集号有歧义', episode_unresolved:'集号未能识别', episode_invalid:'集号范围无效', audit_mismatch:'目录和台账不一致，请先核对', source_unverified:'115 账号或文件来源身份无法核实，请检查登录和台账', inventory_incomplete:'库存有无法核实的记录', single_library_duplicates:'单库存在多版本', single_library_not_clean:'单库尚有多版本或缺口', episode_gap:'前序缺失或中间跳集', merged_episodes:'合并集需人工核实', unknown_quality:'质量信息不足', quality_rules_disabled:'未启用有效画质比较规则', mixed_quality_or_coverage:'画质结果或集数覆盖不足', tie_or_conflict:'平局或结果冲突', incomplete:'季集不连续', coverage_conflict:'双方集数无法互相覆盖',multi_overlap_protected:'双方各有对方没有的季，同季不动'}
 function label(row:any) { return `${row.title || '全部库存'}${row.season != null ? row.season === 0 ? ' · 特别篇（第 0 季）' : ` · 第 ${row.season} 季` : ''}${row.episode ? ` · 第 ${row.episode} 集` : ''}` }
-function side(value:string) { return value === 'cloud' ? '网盘库' : value === 'share' ? '分享库' : '待核实' }
+function side(value:string) { return value === 'cloud' ? '网盘库' : value === 'share' ? '分享库' : value === 'cloud115' ? '115 网盘' : '待核实' }
 function reason(value:string) { return reasons[value] || value }
 const skipReasons:Record<string,string> = {symlink:'软链接目录', has_media_or_unknown:'含视频/未知文件',
   changed:'扫描时变动', too_large:'过大过深', not_plain_directory:'不是普通目录', no_tmdb:'无 TMDB 标识',
@@ -86,19 +86,37 @@ function actionCount(row:any) {
   return (files || []).length
 }
 async function scanOrphans() {
-  orphanBusy.value = true; orphanError.value = ''; orphanResult.value = null; orphanSelected.value = []; orphanDone.value = []
-  try { orphanResult.value = await props.api('/inventory/orphans/scan', 'POST') }
-  catch (e) { orphanError.value = (e as Error).message }
+  orphanBusy.value = true; orphanError.value = ''; cloudOrphanError.value = ''; orphanResult.value = null; orphanSelected.value = []; orphanDone.value = []
+  try {
+    const local=await props.api('/inventory/orphans/scan', 'POST')
+    let remote:any={items:[],skipped:0}
+    try { remote=await props.api('/inventory/cloud-orphans/scan','POST') }
+    catch(e){cloudOrphanError.value='115 网盘扫描未完成，本次只能清理本地：'+(e as Error).message}
+    const byPath=new Map<string,any>(remote.items.map((row:any)=>[row.local_path,row]))
+    const linked=new Set<string>()
+    const rows=local.items.map((row:any)=>{const found=row.side==='cloud'&&row.kind!=='file'?byPath.get(row.path):null;if(found){linked.add(found.id);return {...row,linkedCloud:found}}return row})
+    for(const row of remote.items)if(!linked.has(row.id))rows.push({side:'cloud115',kind:'cloud_directory',path:row.path,files:row.files,dirs:row.dirs,linkedCloud:row})
+    orphanResult.value={...local,items:rows,cloudSkipped:remote.skipped||0}
+  } catch (e) { orphanError.value = (e as Error).message }
   finally { orphanBusy.value = false }
 }
 async function cleanOrphans() {
   if (!orphanSelected.value.length) return
-  try { await ElMessageBox.confirm(`将清理选中的 ${orphanSelected.value.length} 个残留项；仅清理经核实的目录或已删除 STRM 的同名附属文件。`, '确认清理残留', {type:'warning', confirmButtonText:'确认清理', cancelButtonText:'取消'}) } catch { return }
+  const cloudCount=orphanSelected.value.filter(row=>row.linkedCloud).length
+  try { await ElMessageBox.confirm(`将清理选中的 ${orphanSelected.value.length} 项；其中 ${cloudCount} 项会联动回收 115 网盘的字幕、元数据和空目录。分享侧只清理本地。执行前会再次核对。`, '确认清理残留', {type:'warning', confirmButtonText:'确认清理', cancelButtonText:'取消'}) } catch { return }
   orphanBusy.value = true; orphanError.value = ''; orphanDone.value = []
   try {
-    const result = await props.api('/inventory/orphans/clean', 'POST', {items:orphanSelected.value.map(row => ({path:row.path, fingerprint:row.fingerprint, kind:row.kind || 'directory', source:row.source || ''}))})
-    orphanDone.value = result.items || []; orphanResult.value = null; orphanSelected.value = []
-  } catch (e) { orphanError.value = (e as Error).message }
+    const local=orphanSelected.value.filter(row=>row.kind!=='cloud_directory')
+    const localResult=local.length?await props.api('/inventory/orphans/clean','POST',{items:local.map(row=>({path:row.path,fingerprint:row.fingerprint,kind:row.kind||'directory',source:row.source||''}))}):{items:[]}
+    const localRows=localResult.items||[]
+    orphanDone.value=localRows.map((row:any)=>({...row,location:'本地'}))
+    const success=new Set(localRows.filter((row:any)=>!row.errors?.length).map((row:any)=>row.path))
+    const cloud=orphanSelected.value.filter(row=>row.linkedCloud&&(row.kind==='cloud_directory'||success.has(row.path))).map(row=>({id:row.linkedCloud.id,fingerprint:row.linkedCloud.fingerprint}))
+    const cloudResult=cloud.length?await props.api('/inventory/cloud-orphans/clean','POST',{items:cloud}):{items:[],remaining:0}
+    orphanDone.value=[...orphanDone.value,...(cloudResult.items||[]).map((row:any)=>({...row,location:'115 网盘'}))]
+    if(cloudResult.remaining)orphanError.value=`115 清理遇到问题后停止，还有 ${cloudResult.remaining} 项未处理，请重新扫描。`
+    orphanResult.value = null; orphanSelected.value = []
+  } catch (e) { orphanResult.value=null; orphanSelected.value=[]; orphanError.value = '清理未全部完成，请查看结果并重新扫描：'+(e as Error).message }
   finally { orphanBusy.value = false }
 }
 function episodeList(values:any[]) { return values?.length ? values.map((ep:number) => `E${String(ep).padStart(2,'0')}`).join('、') : '无' }
@@ -698,11 +716,11 @@ onUnmounted(() => window.removeEventListener('resize', updatePageSize))
    <details class="gov-panel gov-history"><summary><span><strong>最近清理计划</strong><small>查看执行记录与进度</small></span><span class="gov-chevron">展开</span></summary><div class="gov-panel-body"><div class="inventory-tools"><el-button @click="loadHistory">刷新状态</el-button><span class="muted">执行中断的计划不会自动重试。</span></div><el-alert v-if="historyError" :title="historyError" type="error" :closable="false" /><el-table :data="history" empty-text="暂无清理计划"><el-table-column prop="mode_label" label="类型" width="110" /><el-table-column label="创建时间" min-width="160"><template #default="s">{{ new Date(s.row.created * 1000).toLocaleString() }}</template></el-table-column><el-table-column prop="state" label="状态" width="110" /><el-table-column label="进度" width="100"><template #default="s">{{ s.row.done }}/{{ s.row.count }}</template></el-table-column><el-table-column prop="error" label="说明" min-width="160" /></el-table></div></details>
   </template>
   <template v-else>
-   <el-alert title="扫描两库带 TMDB 标识且只含附属文件的作品目录，也核对近 7 天已删除 STRM 的同名残留。执行前逐项重新核对指纹；现存媒体、未知文件及软链接会保留。" type="info" :closable="false" show-icon />
-   <div class="inventory-tools"><el-button type="primary" :loading="orphanBusy" @click="scanOrphans">扫描目录残留</el-button><el-button type="danger" :loading="orphanBusy" :disabled="!orphanSelected.length || orphanSelected.length > 100" @click="cleanOrphans">清理选中项</el-button><span class="muted">每次最多清理 100 项</span></div>
-   <el-alert v-if="orphanError" :title="orphanError" type="error" :closable="false" />
-   <template v-if="orphanResult"><p>发现 {{ orphanResult.items.length }} 个可清理残留项<span v-if="orphanResult.skipped">；已跳过 {{ orphanResult.skipped }} 个</span></p><div v-if="orphanResult.reasons && Object.keys(orphanResult.reasons).length" class="inventory-tools"><el-tag v-for="(count, code) in orphanResult.reasons" :key="code" type="info" effect="plain">{{ skipReason(String(code)) }} {{ count }}</el-tag></div><details v-if="orphanResult.skipped_items && orphanResult.skipped_items.length"><summary>查看被跳过的目录与原因（{{ orphanResult.skipped_items.length }}{{ orphanResult.skipped_truncated ? " 条，另有 " + orphanResult.skipped_truncated + " 条未列出" : "" }}）</summary><p v-for="row in orphanResult.skipped_items.slice(0, 200)" :key="row.path + row.reason" class="file-path">{{ side(row.side) }} · {{ skipReason(row.reason) }}：{{ row.path }}<span v-if="row.detail" class="muted">（{{ row.detail }}）</span></p></details><el-table :data="orphanResult.items" @selection-change="orphanSelected = $event"><el-table-column type="selection" width="45" /><el-table-column label="库" width="90"><template #default="s">{{ side(s.row.side) }}</template></el-table-column><el-table-column label="类型" width="100"><template #default="s">{{ s.row.kind === 'file' ? '附属文件' : '作品目录' }}</template></el-table-column><el-table-column prop="path" label="路径" min-width="240" /><el-table-column prop="files" label="附属文件" width="100" /><el-table-column prop="dirs" label="目录" width="70" /></el-table></template>
-   <template v-if="orphanDone.length"><h3>清理结果</h3><div v-for="row in orphanDone" :key="row.path"><p>{{ row.path }} · 清理 {{ row.files_removed }} 个文件、{{ row.dirs_removed }} 个目录</p><p v-for="err in row.errors" :key="err" class="muted">未完成：{{ err }}</p></div></template>
+   <el-alert title="扫描本地两库和 115 归档目录。网盘侧同一作品可联动清理本地残留及 115 字幕、元数据和空目录；分享侧只清理本地。只处理带 TMDB 标识且没有视频或未知文件的目录，115 文件进入回收站。" type="info" :closable="false" show-icon />
+   <div class="inventory-tools"><el-button type="primary" :loading="orphanBusy" @click="scanOrphans">扫描本地及 115 残留</el-button><el-button type="danger" :loading="orphanBusy" :disabled="!orphanSelected.length || orphanSelected.length > 100" @click="cleanOrphans">清理选中项</el-button><span class="muted">每次最多清理 100 项</span></div>
+   <el-alert v-if="orphanError" :title="orphanError" type="error" :closable="false" /><el-alert v-if="cloudOrphanError" :title="cloudOrphanError" type="warning" :closable="false" />
+   <template v-if="orphanResult"><p>发现 {{ orphanResult.items.length }} 个可清理残留项<span v-if="orphanResult.skipped">；已跳过 {{ orphanResult.skipped }} 个</span><span v-if="orphanResult.cloudSkipped">；115 跳过 {{orphanResult.cloudSkipped}} 个含视频、未知内容或无法核实的目录</span></p><div v-if="orphanResult.reasons && Object.keys(orphanResult.reasons).length" class="inventory-tools"><el-tag v-for="(count, code) in orphanResult.reasons" :key="code" type="info" effect="plain">{{ skipReason(String(code)) }} {{ count }}</el-tag></div><details v-if="orphanResult.skipped_items && orphanResult.skipped_items.length"><summary>查看被跳过的目录与原因（{{ orphanResult.skipped_items.length }}{{ orphanResult.skipped_truncated ? " 条，另有 " + orphanResult.skipped_truncated + " 条未列出" : "" }}）</summary><p v-for="row in orphanResult.skipped_items.slice(0, 200)" :key="row.path + row.reason" class="file-path">{{ side(row.side) }} · {{ skipReason(row.reason) }}：{{ row.path }}<span v-if="row.detail" class="muted">（{{ row.detail }}）</span></p></details><el-table :data="orphanResult.items" @selection-change="orphanSelected = $event"><el-table-column type="expand"><template #default="s"><div v-if="s.row.linkedCloud"><strong>115 网盘待回收附属文件</strong><p v-for="(name,i) in s.row.linkedCloud.file_names" :key="i" class="file-path">{{name}}</p><p v-if="s.row.linkedCloud.files>s.row.linkedCloud.file_names.length" class="muted">仅显示前 {{s.row.linkedCloud.file_names.length}} 个文件；本项共 {{s.row.linkedCloud.files}} 个。</p><p v-if="!s.row.linkedCloud.files" class="muted">目录已空，无附属文件。</p></div><p v-else class="muted">只清理本地残留。</p></template></el-table-column><el-table-column type="selection" width="45" /><el-table-column label="库" width="90"><template #default="s">{{ side(s.row.side) }}<span v-if="s.row.linkedCloud&&s.row.side==='cloud'"> + 115</span></template></el-table-column><el-table-column label="类型" width="100"><template #default="s">{{ s.row.kind === 'file' ? '附属文件' : '作品目录' }}</template></el-table-column><el-table-column prop="path" label="路径" min-width="240" /><el-table-column prop="files" label="附属文件" width="100" /><el-table-column prop="dirs" label="目录" width="70" /></el-table></template>
+   <template v-if="orphanDone.length"><h3>清理结果</h3><div v-for="row in orphanDone" :key="row.path"><p>{{ row.location || '本地' }} · {{ row.path }} · 清理 {{ row.files_removed }} 个文件、{{ row.dirs_removed }} 个目录</p><p v-for="err in row.errors" :key="err" class="muted">未完成：{{ err }}</p></div></template>
   </template>
   <el-alert v-if="planError && !planOpen" :title="planError" type="error" :closable="false" />
   <el-dialog v-model="planOpen" :title="planTitle" width="min(90%, 760px)" :close-on-click-modal="false" :close-on-press-escape="!planBusy" :show-close="!planBusy">

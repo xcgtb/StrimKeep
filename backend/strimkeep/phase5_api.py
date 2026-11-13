@@ -132,10 +132,26 @@ def install_phase5(app,store,admin,job_public):
                     found.append(path.relative_to(Path(engine().root)).as_posix())
         return sorted(found)
 
+    def unidentified_empty_directories():
+        from .share_service import UNIDENT_NAME
+        root = Path(engine().root)
+        boundary = root / UNIDENT_NAME
+        if boundary.is_symlink() or not boundary.is_dir():
+            return []
+        empty = set()
+        def onerror(exc): raise exc
+        for parent, dirs, files in os.walk(boundary, topdown=False, followlinks=False, onerror=onerror):
+            path = Path(parent)
+            if not files and all(not (path / name).is_symlink() and (path / name) in empty for name in dirs):
+                empty.add(path)
+        empty.discard(boundary)
+        return sorted(path.relative_to(root).as_posix() for path in empty)
+
     @app.get('/api/v1/strm/unidentified',dependencies=[Depends(admin)])
     async def list_unidentified():
         files = await asyncio.to_thread(unidentified_files)
-        return {'total':len(files), 'items':files[:500]}
+        empty = await asyncio.to_thread(unidentified_empty_directories)
+        return {'total':len(files), 'items':files[:500], 'empty_total':len(empty), 'empty_dirs':empty[:500]}
 
     @app.post('/api/v1/strm/unidentified/cleanup',dependencies=[Depends(admin)])
     async def cleanup_unidentified(body: UnidentifiedCleanupInput):

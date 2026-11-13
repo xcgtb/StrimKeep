@@ -89,6 +89,17 @@ class OrphanSelection(BaseModel):
     items: list[OrphanItem] = Field(min_length=1, max_length=100)
 
 
+class CloudOrphanItem(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    id: str = Field(pattern=r'^[1-9]\d{0,23}$')
+    fingerprint: str = Field(pattern=r'^[a-f0-9]{64}$')
+
+
+class CloudOrphanSelection(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    items: list[CloudOrphanItem] = Field(min_length=1, max_length=100)
+
+
 def install_inventory(app, store, admin):
     mapping_cache = {'at': 0.0, 'snapshot': None, 'refreshing': False, 'generation': 0, 'error': ''}
     mapping_lock = asyncio.Lock()
@@ -199,6 +210,46 @@ def install_inventory(app, store, admin):
                     row = {'path': item.path, 'files_removed': 0, 'dirs_removed': 0, 'errors': [str(exc)]}
                 result.append(row)
         return {'items': result}
+    @app.post('/api/v1/inventory/cloud-orphans/scan', dependencies=[Depends(admin)])
+    async def scan_cloud_orphans():
+        from .cloud115 import CloudError
+        from .inventory_cloud_orphans import scan as scan_cloud
+        engine = app.state.organizer
+        try:
+            account = engine.index.account({})
+            archive = str((store.get('organize_config', {}) or {}).get('archive_cid') or '')
+            async with engine.scan_receive_gate:
+                return await scan_cloud(engine, archive, account, library_root(store.get('organize_config', {}) or {}))
+        except (CloudError, ValueError) as exc:
+            raise HTTPException(409, f'网盘残留扫描未完成：{exc}') from None
+
+    @app.post('/api/v1/inventory/cloud-orphans/clean', dependencies=[Depends(admin)])
+    async def clean_cloud_orphans(body: CloudOrphanSelection):
+        from .cloud115 import CloudError
+        from .inventory_cloud_orphans import clean_one as clean_cloud
+        engine = app.state.organizer
+        if len({item.id for item in body.items}) != len(body.items): raise HTTPException(422, '不能重复选择同一目录。')
+        archive = str((store.get('organize_config', {}) or {}).get('archive_cid') or '')
+        result = []
+        async with engine.scan_receive_gate:
+            async with engine.publication_gate:
+                async with engine.cleanup_gate:
+                    if store.db.execute("SELECT 1 FROM organize_jobs WHERE state='running' LIMIT 1").fetchone():
+                        raise HTTPException(409, '有任务正在运行，请稍后重试。')
+                    if store.db.execute('SELECT 1 FROM share_wash_intents LIMIT 1').fetchone():
+                        raise HTTPException(409, '分享整理有未完成的文件操作，请稍后重试。')
+                    for item in body.items:
+                        try:
+                            row = await clean_cloud(engine, archive, library_root(store.get('organize_config', {}) or {}), item.id, item.fingerprint)
+                        except (CloudError, ValueError, OSError) as exc:
+                            row = {'id':item.id, 'path':item.id, 'files_removed':0, 'dirs_removed':0, 'errors':[str(exc)[:200]]}
+                        result.append(row)
+                        if row['errors']:
+                            break
+        if result:
+            store.event('inventory', '网盘残留清理：提交 %d 个目录，完成核查 %d 个。' % (len(body.items), len(result)))
+        return {'items':result, 'remaining':len(body.items)-len(result)}
+
     def scan():
         settings = inventory_config_value(store.get('inventory_config', {}))
         config = store.get('organize_config', {}) or {}

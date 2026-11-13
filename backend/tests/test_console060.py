@@ -257,6 +257,8 @@ def test_unidentified_cleanup_removes_empty_directories_only(tmp_path,monkeypatc
         (root/'movie'/'season'/'one.strm').write_text('link')
         (root/'keep').mkdir()
         (root/'keep'/'poster.jpg').write_bytes(b'picture')
+        listing=c.get('/api/v1/strm/unidentified').json()
+        assert listing['empty_total']==2 and '分享STRM未识别/empty-old/nested' in listing['empty_dirs']
         result=c.post('/api/v1/strm/unidentified/cleanup',json={'paths':['分享STRM未识别/movie/season/one.strm']}).json()
         assert result['removed']==1 and result['empty_dirs']==4
         assert not (root/'movie').exists() and not (root/'empty-old').exists()
