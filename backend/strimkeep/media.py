@@ -116,20 +116,47 @@ def source_of(name):
     return ''
 
 
-def release_group(name):
-    """结尾的 -Group；前后必须是分隔符，并排除 WEB-DL 这类规格尾巴。
+# 真实媒体/字幕扩展名。只有命中它才剥后缀：分享来的文件名常常没有扩展名
+# （`...S01E46-1080p.WEB-DL-H264-AAC@ADWeb`），见 release_group 的说明。
+MEDIA_SUFFIXES = ('.mkv', '.mp4', '.m2ts', '.mts', '.ts', '.avi', '.rmvb', '.rm', '.wmv',
+                  '.flv', '.mov', '.mpg', '.mpeg', '.m4v', '.webm', '.vob', '.iso', '.tp',
+                  '.f4v', '.3gp', '.strm', '.nfo', '.srt', '.ass', '.ssa', '.sup', '.idx')
 
-    真实发布名常写成 `-SCDIY@HiveWeb`：`@` 前面是压制者、后面是站点/组名，组别取 `@`
-    之后那一段。以前正则不认 `@`，这类名字整段被判成「没有组别」，于是文件名里也
-    丢掉了 -HiveWeb（现场：通知显示 SCDIY@HiveWeb，STRM/NFO 却没有任何组别）。
+
+def media_stem(name):
+    """文件名主干：只剥真实媒体扩展名，不按「最后一个点」硬切。
+
+    `Path(name).stem` 会把没有扩展名的分享文件名最后一段当后缀剥掉：
+    `…S01E46-1080p.WEB-DL-H264-AAC@ADWeb` → `…S01E46-1080p`，画质、编码、组别
+    全消失（现场：转生成猫的大叔，通知里组别是 `DL-H264-AAC@ADWeb`，
+    落盘文件名却没有任何组别）。
     """
-    stem = Path(str(name or '')).stem
+    text = str(name or '').strip()
+    low = text.casefold()
+    for suffix in MEDIA_SUFFIXES:
+        if low.endswith(suffix):
+            return text[:-len(suffix)]
+    return text
+
+
+def release_group(name):
+    """结尾的 -Group / @Group；排除 WEB-DL 这类规格尾巴。
+
+    真实发布名有三种写法，都要能认出组别：
+    `…DDP 5.1-NTb`（`-` 直接跟组名）、
+    `…DDP 5.1-SCDIY@HiveWeb`（`@` 前面压制者、后面站点）、
+    `…WEB-DL-H264-AAC@ADWeb`（组名直接挂在编码后面，中间只有 `@`）。
+    """
+    stem = media_stem(name)
     # 发布组紧跟在规格后面（DDP5.1-ParkTV、H.265-NTb），所以不能用字母边界卡，
     # 改由 GROUP_STOP 排除 WEB-DL/DTS-HD 这类被 '-' 拆开的规格词。
     match = re.search(r'-([A-Za-z][A-Za-z0-9@_]{1,40})$', stem)
-    if not match:
-        return ''
-    value = match.group(1).rsplit('@', 1)[-1]
+    if match:
+        value = match.group(1).rsplit('@', 1)[-1]
+    else:
+        # `AAC@ADWeb`、`DDP5.1@ADWeb`：`-` 后面还夹着点号，退一步只取 `@` 之后那段。
+        match = re.search(r'@([A-Za-z][A-Za-z0-9_]{1,40})$', stem)
+        value = match.group(1) if match else ''
     if not value or value.upper() in GROUP_STOP:
         return ''
     return value
