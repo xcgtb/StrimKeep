@@ -41,6 +41,17 @@ class UnidentifiedCleanupInput(Input):
     paths: list[str] = Field(min_length=1, max_length=500)
 
 
+class SyncProfileInput(Input):
+    name: str = Field(min_length=1, max_length=80)
+    source_cid: str = Field(pattern=r'^[1-9]\d{0,23}$')
+    source_label: str = Field(min_length=1, max_length=300)
+    mode: str = Field(pattern='^(incremental|full)$')
+    enabled: bool = False
+    frequency: str = Field(default='daily', pattern='^(daily|weekly)$')
+    weekday: int = Field(default=1, ge=0, le=6)
+    time: str = Field(default='03:00', pattern=r'^([01]\d|2[0-3]):[0-5]\d$')
+
+
 class ScheduleConfig(Input):
     scan_enabled: bool = False
     scan_interval_minutes: int = Field(default=5,ge=5,le=43200)
@@ -171,6 +182,50 @@ def install_phase5(app,store,admin,job_public):
     @app.post('/api/v1/sync/jobs',dependencies=[Depends(admin)])
     async def start_sync():
         jid,_ = engine().tasks.enqueue(config_for('strm_sync'))
+        return job_public(engine().job(jid))
+
+    @app.get('/api/v1/sync/profiles', dependencies=[Depends(admin)])
+    async def sync_profiles():
+        profiles = store.get('sync_profiles', [])
+        states = {row['kind']:dict(row) for row in store.db.execute("SELECT * FROM task_schedules WHERE kind LIKE 'sync_profile:%'")}
+        return {'items':[{**profile, 'next_due':states.get('sync_profile:' + profile['id'], {}).get('next_due')} for profile in profiles]}
+
+    @app.post('/api/v1/sync/profiles', dependencies=[Depends(admin)])
+    async def create_sync_profile(body: SyncProfileInput):
+        await validate_roots([body.source_cid])
+        profiles = store.get('sync_profiles', [])
+        if len(profiles) >= 30: raise HTTPException(422, '最多创建 30 个同步任务。')
+        profile = {'id': secrets.token_hex(8), **body.model_dump()}
+        store.set_many({'sync_profiles': [*profiles, profile]})
+        engine().tasks.tick_sync_profiles(time.time())
+        return profile
+
+    @app.put('/api/v1/sync/profiles/{profile_id}', dependencies=[Depends(admin)])
+    async def update_sync_profile(profile_id: str, body: SyncProfileInput):
+        await validate_roots([body.source_cid])
+        profiles = store.get('sync_profiles', [])
+        if not any(p['id'] == profile_id for p in profiles): raise HTTPException(404, '同步任务不存在。')
+        profile = {'id': profile_id, **body.model_dump()}
+        store.set_many({'sync_profiles': [profile if p['id'] == profile_id else p for p in profiles]})
+        with store.db: store.db.execute('DELETE FROM task_schedules WHERE kind=?', ('sync_profile:' + profile_id,))
+        engine().tasks.tick_sync_profiles(time.time())
+        return profile
+
+    @app.delete('/api/v1/sync/profiles/{profile_id}', dependencies=[Depends(admin)])
+    async def delete_sync_profile(profile_id: str):
+        profiles = store.get('sync_profiles', [])
+        if not any(p['id'] == profile_id for p in profiles): raise HTTPException(404, '同步任务不存在。')
+        store.set_many({'sync_profiles': [p for p in profiles if p['id'] != profile_id]})
+        with store.db: store.db.execute('DELETE FROM task_schedules WHERE kind=?', ('sync_profile:' + profile_id,))
+        return {'deleted': True}
+
+    @app.post('/api/v1/sync/profiles/{profile_id}/run', dependencies=[Depends(admin)])
+    async def run_sync_profile(profile_id: str):
+        profile = next((p for p in store.get('sync_profiles', []) if p['id'] == profile_id), None)
+        if not profile: raise HTTPException(404, '同步任务不存在。')
+        try: config = engine().tasks.sync_profile_config(profile)
+        except ValueError as exc: raise HTTPException(409, str(exc)) from None
+        jid, _ = engine().tasks.enqueue(config)
         return job_public(engine().job(jid))
 
     @app.post('/api/v1/sync/full', dependencies=[Depends(admin)])

@@ -62,6 +62,47 @@ class Tasks:
         if not self.store.get('playback_base'): raise ValueError('请先配置 StrimKeep 播放基础地址。')
         return {**config, 'job_kind': kind, 'account_id': account, 'playback_base': self.store.get('playback_base')}
 
+    def sync_profile_config(self, profile):
+        roots = [profile['source_cid']]
+        incremental = profile['mode'] == 'incremental'
+        config = self.config('strm_sync', roots, incremental=incremental)
+        config['sync_profile_id'] = profile['id']
+        config['sync_profile_name'] = profile['name']
+        config['directory_labels'] = {**config.get('directory_labels', {}), roots[0]: profile['source_label']}
+        if not incremental:
+            config.update({'full_scan': True, '_force_full': True, 'trust_scan': False, 'mode': 'full'})
+        return config
+
+    @staticmethod
+    def sync_profile_next(profile, now):
+        hour, minute = (int(part) for part in profile['time'].split(':'))
+        day = '*' if profile['frequency'] == 'daily' else str(profile['weekday'])
+        expression = f'{minute} {hour} * * {day}'
+        return croniter(expression, datetime.fromtimestamp(now, ZoneInfo('Asia/Shanghai'))).get_next(datetime).timestamp()
+
+    def tick_sync_profiles(self, now):
+        for profile in self.store.get('sync_profiles', []):
+            if not profile.get('enabled'):
+                continue
+            kind = 'sync_profile:' + profile['id']
+            row = self.store.db.execute('SELECT * FROM task_schedules WHERE kind=?', (kind,)).fetchone()
+            due = self.sync_profile_next(profile, now)
+            if not row:
+                with self.store.db:
+                    self.store.db.execute('INSERT OR IGNORE INTO task_schedules(kind,next_due) VALUES(?,?)', (kind, due))
+                continue
+            if row['next_due'] > now:
+                continue
+            try:
+                config = self.sync_profile_config(profile)
+                jid, merged = self.enqueue(config, scheduled=True, now=now)
+            except ValueError:
+                jid, merged = None, False
+                self.store.event('schedule', '同步任务配置或登录不可用，本次未入队：' + profile['name'])
+            with self.store.db:
+                self.store.db.execute('UPDATE task_schedules SET next_due=?,last_run=?,last_job_id=?,merged=merged+? WHERE kind=?',
+                                      (due, now, jid, int(merged), kind))
+
     def enqueue(self, config, scheduled=False, now=None):
         now = time.time() if now is None else now
         if config.get('job_kind', 'organize') == 'organize' and not scheduled:
@@ -89,7 +130,7 @@ class Tasks:
             # 恢复后就会被重放成一批重复的空扫描。
             for row in self.store.db.execute("SELECT id,config FROM organize_jobs WHERE state IN ('queued','waiting_login') ORDER BY id"):
                 old = json.loads(row['config'])
-                if old.get('scheduled') and (old.get('job_kind','organize'),old.get('account_id'),sorted(old.get('source_cids',[]))) == (config['job_kind'],config['account_id'],sorted(config.get('source_cids',[]))):
+                if old.get('scheduled') and (old.get('job_kind','organize'),old.get('account_id'),sorted(old.get('source_cids',[])),old.get('sync_profile_id'),old.get('mode')) == (config['job_kind'],config['account_id'],sorted(config.get('source_cids',[])),config.get('sync_profile_id'),config.get('mode')):
                     return row['id'], True
         config = {**config, 'scheduled': scheduled}
         job_id = self.store.jobs.create(config)
@@ -110,6 +151,7 @@ class Tasks:
 
     def tick(self, now=None):
         now = time.time() if now is None else now
+        self.tick_sync_profiles(now)
         settings = self.store.get('schedule_config', {})
         for kind, prefix in (('organize','scan'),('strm_sync','sync')):
             if not settings.get(prefix + '_enabled'): continue
