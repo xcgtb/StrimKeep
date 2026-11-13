@@ -365,7 +365,7 @@ class Sync:
         self.engine.update_job(jid, config=dumps(config))
 
     def unchanged_since(self, account, source, since):
-        """增量同步的快速跳过判定：水位之后没变、且本地输出都还在。
+        """增量同步的快速跳过判定：上次同步之后没变、且本地输出都还在。
 
         这三个条件缺一不可：只看登记时间会漏掉「本地文件被删/被改」的残输出，
         所以本地输出缺失一律不跳过，让它走完整核对。
@@ -400,9 +400,9 @@ class Sync:
         source, plan = json.loads(row['original']), json.loads(row['plan'])
         account = self.engine.index.account(config)
         if self.unchanged_since(account, source, config.get('incremental_since')):
-            # 增量同步：水位后没变化、本地输出齐全 —— 不重读云端详情、不重写文件。
+            # 增量同步：上次同步之后没变化、本地输出齐全 —— 不重读云端详情、不重写文件。
             self.engine.update_item(row['id'], state='done', step='增量同步：文件未变化，跳过',
-                                    message='水位之后没有变化，已跳过。')
+                                    message='上次同步之后没有变化，已跳过。')
             return
         # 清单即事实：本轮扫描刚用 children_verified 读过 id/name/size/sha1/pickcode，
         # 未变化的文件再发 file()+path_info() 只是重复劳动（每条两跳网络 + 限流），
@@ -812,11 +812,11 @@ class Sync:
                 # 全量扫描后做差集（只标记不删除）。这条链路以前只有测试在调，
                 # 打开开关也不会执行——现在真的接进同步流程。
                 await self.stale_check(jid, config)
-            # 增量水位只在本次真正跑完之后推进，而且记的是**开始**时间：
+            # 这个时间点只在本次真正跑完之后才更新，而且记的是**开始**时刻：
             # 扫描期间发生的改动下一轮还会被看到，不会漏。
             if str(self.engine.job(jid)['state'] or '') in ('completed', 'partial'):
-                # 除了全局水位，还按同步目录各记一份：多根同步时，某个根没跑过就
-                # 不能拿另一个根的水位去跳过它。
+                # 除了全局时间，还按同步目录各记一份：多根同步时，某个根没跑过就
+                # 不能拿另一个根的时间去跳过它。
                 previous = self.store.meta_json('sync_watermark', {}) or {}
                 roots_map = dict(previous.get('roots') or {})
                 for cid in (config.get('source_cids') or []):

@@ -178,3 +178,41 @@ def test_changes_lists_outputs_registered_after_the_watermark(tmp_path, monkeypa
     assert [item['file_id'] for item in body['items']] == ['new']
     assert body['count'] == 1
     client.__exit__(None, None, None)
+
+def test_scheduled_sync_runs_incremental(tmp_path):
+    """定时同步 = 枚举目录（发现外部放进去的资源）+ 只核对变化的文件。"""
+    from strimkeep.store import Store
+    from strimkeep.tasks import Tasks
+
+    store = Store(tmp_path / 'data', 'admin', 'test-password-1234')
+    store.set_many({'cookie': 'UID=1_A1; CID=t; SEID=t', 'playback_base': 'http://nas:9000',
+                    'sync_config': {'source_cids': ['100']}})
+    store.set_meta('sync_watermark', {'at': 100.0, 'job': 1, 'roots': {'100': 400.0}})
+    tasks = Tasks(type('Engine', (), {'store': store})())
+
+    scheduled = tasks.config('strm_sync', ['100'], incremental=True)
+    assert scheduled['mode'] == 'incremental'
+    assert scheduled['incremental_since'] == 400.0      # 用该目录自己的水位
+    assert scheduled['trust_scan'] is True
+    assert scheduled['full_scan'] is True               # 仍要枚举目录，否则发现不了外部新增
+
+    manual = tasks.config('strm_sync', ['100'])
+    assert 'incremental_since' not in manual, '手动入口保持原语义'
+
+    # 目录没有水位时退回全局水位
+    store.set_meta('sync_watermark', {'at': 100.0, 'job': 1, 'roots': {'999': 400.0}})
+    assert tasks.config('strm_sync', ['100'], incremental=True)['incremental_since'] == 100.0
+    store.close()
+
+
+def test_watermark_since_prefers_the_oldest_requested_root(tmp_path):
+    from strimkeep.store import Store
+    from strimkeep.tasks import Tasks
+
+    store = Store(tmp_path / 'data', 'admin', 'test-password-1234')
+    store.set_meta('sync_watermark', {'at': 100.0, 'roots': {'100': 400.0, '200': 300.0}})
+    tasks = Tasks(type('Engine', (), {'store': store})())
+    assert tasks.watermark_since(['100', '200']) == 300.0
+    assert tasks.watermark_since(['100']) == 400.0
+    assert tasks.watermark_since(None) == 100.0
+    store.close()

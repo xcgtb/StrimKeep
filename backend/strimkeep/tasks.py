@@ -19,7 +19,21 @@ class Tasks:
         if not match: raise ValueError('请先登录并核实 115 账号。')
         return match[1]
 
-    def config(self, kind, roots=None):
+    def watermark_since(self, roots=None):
+        """增量起点：指定目录时取这些目录里最早的时间，没跑过就退回全局时间。
+
+        同步目录里除了本程序整理的资源，还会有手动放进去或别的工具落进来的文件：
+        它们只能靠扫目录发现，所以「增量」是枚举目录 + 只处理变化的文件。
+        """
+        watermark = self.store.meta_json('sync_watermark', {}) or {}
+        if roots:
+            per_root = watermark.get('roots') or {}
+            values = [float(per_root.get(str(cid)) or 0) for cid in roots]
+            if values and all(value > 0 for value in values):
+                return min(values)
+        return float(watermark.get('at') or 0)
+
+    def config(self, kind, roots=None, incremental=False):
         account = self.account()
         config = dict(self.store.get('organize_config', {}))
         if kind == 'organize':
@@ -36,9 +50,14 @@ class Tasks:
                       'library_dir_name': library_root(config),
                       'directory_labels': config.get('directory_labels', {}),
                       **sync, **effective(self.store),
-                      'full_scan': True,  # 兼容旧配置：普通手动和定时同步统一完整发现。
+                      'full_scan': True,  # 发现外部新增必须枚举目录：增量省的是逐文件核对。
                       'source_cids': roots if roots is not None else sync.get('source_cids', [])}
             if not config['source_cids']: raise ValueError('请先选择 STRM 同步目录。')
+            if incremental:
+                # 定时同步用增量：枚举目录照做（否则发现不了外部放进去的文件），
+                # 已登记且没变化的文件跳过逐项核对与重写。
+                config.update({'incremental_since': self.watermark_since(config['source_cids']),
+                               'trust_scan': True, 'mode': 'incremental'})
         else: raise ValueError('任务类型无效。')
         if not self.store.get('playback_base'): raise ValueError('请先配置 StrimKeep 播放基础地址。')
         return {**config, 'job_kind': kind, 'account_id': account, 'playback_base': self.store.get('playback_base')}
@@ -131,7 +150,8 @@ class Tasks:
                         continue
             if row['next_due'] > now: continue
             try:
-                config = self.config(kind, settings.get('sync_source_cids', []) if kind=='strm_sync' else None)
+                config = self.config(kind, settings.get('sync_source_cids', []) if kind=='strm_sync' else None,
+                                     incremental=(kind == 'strm_sync'))
                 jid, merged = self.enqueue(config, scheduled=True, now=now)
             except ValueError:
                 jid, merged = None, False

@@ -190,24 +190,15 @@ def install_phase5(app,store,admin,job_public):
 
     @app.post('/api/v1/sync/incremental', dependencies=[Depends(admin)])
     async def start_incremental_sync(body: SyncRunInput):
-        """增量 STRM 同步：只处理上次水位之后新增/变化的文件。
+        """增量 STRM 同步：只处理上次同步之后新增/变化的文件。
 
-        水位是上一次成功同步的**开始**时间；显式传 since 可覆盖。
+        这个时间点是上一次成功同步的**开始**时刻；显式传 since 可覆盖。
         本地输出缺失的文件不会被跳过，仍会完整核对并重建。
         """
         roots = body.source_cids or None
         if roots: await validate_roots(roots)
-        watermark = store.meta_json('sync_watermark', {}) or {}
-        if body.since is not None:
-            since = float(body.since)
-        elif roots:
-            # 指定了目录就按各自的目录水位取最早的一个：没跑过的目录不能借别人的水位跳过。
-            per_root = watermark.get('roots') or {}
-            values = [float(per_root.get(str(cid)) or 0) for cid in roots]
-            since = min(values) if values and all(value > 0 for value in values) \
-                else float(watermark.get('at') or 0)
-        else:
-            since = float(watermark.get('at') or 0)
+        # 与定时同步共用同一套时间口径（按目录取最早、没跑过退回全局）。
+        since = float(body.since) if body.since is not None else engine().tasks.watermark_since(roots)
         config = {**config_for('strm_sync', roots), 'full_scan': True, 'trust_scan': True,
                   'incremental_since': since, 'mode': 'incremental'}
         if body.dry_run:
@@ -227,7 +218,7 @@ def install_phase5(app,store,admin,job_public):
 
     @app.get('/api/v1/sync/changes', dependencies=[Depends(admin)])
     async def sync_changes(since: float = Query(0, ge=0), limit: int = Query(200, ge=1, le=1000)):
-        """水位之后的输出变更明细（只读台账，不访问云端）。
+        """上次同步之后的输出变更明细（只读台账，不访问云端）。
 
         外部要写报表/发通知时不必自己比对云盘：这里直接列出这段时间里
         新增、更新过的输出，以及已停用的旧登记。
@@ -241,7 +232,7 @@ def install_phase5(app,store,admin,job_public):
 
     @app.get('/api/v1/sync/state', dependencies=[Depends(admin)])
     async def sync_state():
-        """同步水位与最近一次任务：外部调用方据此决定跑全量还是增量。"""
+        """上次同步时间与最近一次任务：外部调用方据此决定跑全量还是增量。"""
         watermark = store.meta_json('sync_watermark', {}) or {}
         last = store.db.execute(
             "SELECT id,state,stage,created,updated FROM organize_jobs "
