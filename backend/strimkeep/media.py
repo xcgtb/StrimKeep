@@ -300,23 +300,17 @@ def infer_episode(stem, title=''):
 def parse_name(name, folder=None):
     stem = Path(name).stem
     context = folder_context(folder)
-    episode = re.search(r'(?i)(?<![a-z0-9])S(\d{1,2})[ ._-]*E(\d{1,3})(?:(?:[ ._-]*E|-)(\d{1,3})(?![a-z0-9]))?(?!\d)', stem)
-    # Support S01E01-E02; reject ambiguous tail or bare absolute episode numbers.
-    season = int(episode[1]) if episode else None
-    first = int(episode[2]) if episode else None
-    last = int(episode[3]) if episode and episode[3] else first
-    if episode and (first == 0 or last < first or last - first > 30):
+    # 季集解析与 episode_key 共用 episode_range：两个入口对同一个文件名必须得出同一结论。
+    marker = episode_range(stem)
+    episode = marker
+    season = marker['season'] if marker else None
+    first = marker['first'] if marker else None
+    last = marker['last'] if marker else None
+    if marker and marker['invalid']:
         raise NeedsReview('季集编号无效或合并集范围不可靠。')
-    # 中文/短集号：第12集、第12话、EP15、E08。没有季号时按父目录季号，
-    if not episode:
-        marked = (re.search(r'第\s*(\d{1,4})\s*[集话話]', stem)
-                  or re.search(r'(?i)(?<![a-z0-9])E(?:P)?[ ._-]?(\d{1,4})(?![a-z0-9])', stem))
-        if marked and 1 <= int(marked[1]) <= 2000:
-            episode = marked
-            first = last = int(marked[1])
-            mark = SEASON_MARK.search(stem)
-            season = ((season_number(mark) if mark else None)
-                      or (context.get('season') if context else None) or 1)
+    if marker and not marker['explicit_season']:
+        # 中文/短集号没有季号：文件名里的季标记优先，其次父目录，最后兜底第 1 季。
+        season = season or (context.get('season') if context else None) or 1
     technical = re.search(r'(?i)(?<![a-z0-9])(?:2160p|1080p|720p|4k|web[ ._-]?dl|bluray|hevc)(?![a-z0-9])', stem)
     # 年份可能排在 SxxExx 之后（如「剧名.S01E01.2026.2160p」），所以只以技术规格
     # 为边界；用季集号截断会把这类年份整段丢掉。
@@ -334,7 +328,8 @@ def parse_name(name, folder=None):
         raise NeedsReview('文件名与父目录的 TMDB 标识不一致，已停止自动命名。')
     if episode and season and context and context.get('season') and context['season'] != season:
         raise NeedsReview('文件季号与父目录季号不一致，已停止自动命名。')
-    cuts = [m.start() for m in (episode, year_match, identity) if m]
+    cuts = [m.start() if hasattr(m, 'start') else m['start']
+            for m in (episode, year_match, identity) if m]
     title = stem[:min(cuts)] if cuts else re.split(r'(?i)[ ._-](?:2160p|1080p|720p|4k|web[ .-]?dl|bluray|h[ .]?26[45]|hevc)\b', stem)[0]
     # 先清噪音再去边：直接 strip 会把 "[Group]" 削成 "Group]"，之后再也认不出方括号。
     title = title_noise(re.sub(r'[._]', ' ', title))
@@ -721,19 +716,45 @@ def naming(hint, details, episodes, media, original_name, policy=None, options=N
 EPISODE_TAG = re.compile(r'(?i)(?<![a-z0-9])s(\d{1,2})[\s._-]*e(\d{1,3})(?:(?:[ ._-]*e|-)(\d{1,3})(?![a-z0-9]))?(?!\d)')
 
 
+_CHINESE_EPISODE = re.compile(r'第\s*(\d{1,4})\s*[集话話]')
+_WORD_EPISODE = re.compile(r'(?i)(?<![a-z0-9])E(?:P)?[ ._-]?(\d{1,4})(?![a-z0-9])')
+
+
+def episode_range(stem):
+    """统一的季集解析：`SxxExx`（含 `E01E02` / `-E02` / `-02`）与 `第12集` / `EP12` / `E12`。
+
+    parse_name 和 episode_key 曾经各写一套：`某剧.第05集.mkv` 能正常识别入库，
+    但 episode_key 只认 SxxExx，跨发布组的字幕因此配不上（现场字幕不跟随），
+    organizer 的「同目录其它集」也判不出来。两边共用这一份，结论不会再分叉。
+    """
+    stem = str(stem or '')
+    match = EPISODE_TAG.search(stem)
+    if match:
+        first = int(match.group(2))
+        last = int(match.group(3)) if match.group(3) else first
+        return {'start': match.start(), 'season': int(match.group(1)), 'first': first, 'last': last,
+                'explicit_season': True, 'invalid': first == 0 or last < first or last - first > 30}
+    marked = _CHINESE_EPISODE.search(stem) or _WORD_EPISODE.search(stem)
+    if not marked:
+        return None
+    number = int(marked.group(1))
+    if not 1 <= number <= 2000:
+        return None
+    mark = SEASON_MARK.search(stem)
+    return {'start': marked.start(), 'season': season_number(mark) if mark else None,
+            'first': number, 'last': number, 'explicit_season': False, 'invalid': False}
+
+
 def episode_key(name):
     """从文件名取完整季集范围，用于跨发布组匹配字幕。"""
-    match = EPISODE_TAG.search(Path(name).stem)
-    if not match:
+    stem = Path(name).stem
+    marker = episode_range(stem)
+    if not marker or marker['invalid']:
         return None
-    first = int(match.group(2))
-    last = int(match.group(3)) if match.group(3) else first
-    if first == 0 or last < first or last - first > 30:
-        return None
-    title = normal(Path(name).stem[:match.start()])
+    title = normal(stem[:marker['start']])
     if not title:
         return None
-    return title, int(match.group(1)), first, last
+    return title, marker['season'] or 1, marker['first'], marker['last']
 
 
 _SUBTITLE_TAG = re.compile(r'(?i)^(?:zh|zho|chi|cn|chs|cht|zh-hans|zh-hant|zh-cn|zh-tw|zh-hk|eng|en|jpn|ja|jap|kor|ko|kr|fre|fra|fr|ger|deu|de|spa|es|rus|ru|ita|it|por|pt|ara|ar|简体|繁体|简中|繁中|中字|双语|中英|简英|繁英|中文|英文|日文|日语|韩文|韩语|简|繁|简体中文|繁体中文|forced|force|foreign|sdh|cc|hi|default|signs|songs|commentary|特效|强制|听障)$')

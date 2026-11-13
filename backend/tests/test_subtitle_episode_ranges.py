@@ -82,3 +82,26 @@ def test_combined_video_without_unrecognized_directory_stays_in_place(tmp_path):
         await http.aclose()
         store.close()
     asyncio.run(scenario())
+
+def test_chinese_and_ep_only_subtitles_match_scene_video():
+    """现场：视频写 SxxExx、字幕写「第05集」/「EP05」，episode_key 只认 SxxExx 时配不上。"""
+    videos = bind_subtitles([
+        entry('v', '剧名.S01E05.1080p-GROUP.mkv'),
+        entry('s1', '剧名.第05集.chs.srt'),
+        entry('s2', '剧名.EP05.简中.ass'),
+    ])
+    by_id = {v['id']: v for v in videos}
+    assert sorted(sub['id'] for sub in by_id['v']['subtitles']) == ['s1', 's2']
+
+
+def test_episode_key_agrees_between_naming_styles():
+    """parse_name 与 episode_key 必须给同一份季集范围，否则字幕/同目录判断会分叉。"""
+    from strimkeep.media import episode_key
+
+    scene = episode_key('剧名.S01E05.1080p-GROUP.mkv')
+    chinese = episode_key('剧名.第05集.chs.srt')
+    ep_only = episode_key('剧名.EP05.简中.ass')
+    assert scene is not None and chinese is not None and ep_only is not None
+    assert scene == chinese == ep_only
+    assert scene[1:] == (1, 5, 5)
+    assert episode_key('剧名.S01E05-E06.2160p.mkv')[1:] == (1, 5, 6)

@@ -292,6 +292,12 @@ class Organizer:
                 continue
             tries = int(config.get('auto_retry_count') or 0)
             if tries >= self.AUTO_RETRY_MAX:
+                # 重试用尽却还写着「稍后重试」：任务看起来会自己恢复，其实永远不会。
+                # 收敛成一个明确的终态，人工才知道该动手。
+                if '已用尽' not in stage:
+                    self.jobs.update(row['id'], stage='自动重试已用尽，请手动重试',
+                                     message='连续 %d 次因外部原因失败，自动重试已停止；'
+                                             '请检查 115 连接后手动重试。' % tries)
                 continue
             # 指数退避：5 分钟起，翻倍，封顶 1 小时。
             if now - float(row['updated'] or 0) < min(3600, self.AUTO_RETRY_BASE_SECONDS * 2 ** tries):

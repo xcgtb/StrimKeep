@@ -213,3 +213,14 @@ def test_partial_share_reasons_list_every_cause():
     assert partial_share_reasons({1: 'x.2160p.strm'}, cloud, p)[0].startswith('分享副本集数不足')
     # 从第 2 集开始就是"残次品"（E01 缺失），原因要说的是缺集而不是集数
     assert partial_share_reasons({2: 'x.2160p.strm'}, cloud, p)[0].startswith('分享缺集')
+
+def test_release_group_dimension_uses_the_shared_parser():
+    """治理比较用的「发布组」必须和命名/通知同一份解析，否则组优先级永远匹配不上。"""
+    from strimkeep.legacy_1212_quality import recognize_dims
+
+    assert recognize_dims('剧名.S01E01.2160p.WEB-DL.DDP 5.1-SCDIY@HiveWeb.mkv')['release_group'] == 'HiveWeb'
+    assert recognize_dims(
+        'duxingxia_转生成猫的大叔 (2024) [tmdbid=248707].S01E46-1080p.WEB-DL-H264-AAC@ADWeb'
+    )['release_group'] == 'ADWeb'
+    # 规格尾巴不是组别
+    assert recognize_dims('剧名.S01E01.2160p.WEB-DL.DTS-HD.mkv')['release_group'] == ''

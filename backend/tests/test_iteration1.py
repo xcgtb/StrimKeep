@@ -355,3 +355,25 @@ def test_first_transient_requeue_writes_no_log_line(tmp_path):
     assert store.db.execute("SELECT 1 FROM events WHERE message LIKE '%重新排队%'").fetchone()
     asyncio.run(http.aclose())
     store.close()
+
+def test_exhausted_auto_retry_becomes_explicit_terminal_state(tmp_path):
+    """重试用尽后不能再写「稍后重试」：那会让任务看起来会自己恢复。"""
+    store, engine, http = make_engine(tmp_path)
+    now = time.time()
+    jid = insert_job(store, 'needs_review', SYNC,
+                     stage='CLOUD_UNAVAILABLE，保留未完成文件并稍后重试', updated=now - 100000)
+    with store.db:
+        config = json.loads(engine.job(jid)['config'])
+        config['auto_retry_count'] = engine.AUTO_RETRY_MAX
+        store.db.execute('UPDATE organize_jobs SET config=? WHERE id=?', (json.dumps(config), jid))
+
+    assert engine.auto_retry_stalled(now) == []
+    job = engine.job(jid)
+    assert job['state'] == 'needs_review'
+    assert job['stage'] == '自动重试已用尽，请手动重试'
+    assert '手动重试' in job['message']
+
+    engine.auto_retry_stalled(now)   # 幂等：不会反复改写
+    assert engine.job(jid)['stage'] == '自动重试已用尽，请手动重试'
+    asyncio.run(http.aclose())
+    store.close()

@@ -186,9 +186,14 @@ def _dim_fps(s):
 
 
 def _dim_release_group(name):
-    stem = re.sub(r'(?i)\.(strm|mkv|mp4|ts|m2ts|avi|iso)$', '', name)
-    m = re.search(r'-([A-Za-z0-9@#&~^]{2,24})$', stem)
-    return m.group(1) if m else ''
+    """治理比较的「发布组」维度：与命名/通知共用 media.release_group。
+
+    这里原本是第二套正则（`-([A-Za-z0-9@#&~^]{2,24})$`），对真实发布名 `-SCDIY@HiveWeb`
+    返回整段 `SCDIY@HiveWeb`、对 `-AAC@ADWeb` 返回 `AAC@ADWeb`，永远匹配不上用户配置的
+    组优先级，治理里的「发布组优先级」等于失效。共用一份解析后，两个入口结论一致。
+    """
+    from .media import release_group
+    return release_group(name)
 
 
 def recognize_dims(name):

@@ -320,6 +320,13 @@ def install_console(app,store,admin):
         if cache is None: cache=app.state.dashboard_poster_cache={}
         cache_key=(kind,tmdb_id); now=time.time(); entry=cache.get(cache_key)
         if not entry or entry[0]<now:
+            # 进程内缓存只活到下次重启：再落一份 meta，重启后不用为同一批封面重新等 TMDB
+            # （现场：一次重启后整页海报各慢 1.7~2.7 秒，日志里全是慢请求）。
+            remembered=(store.meta_json('dashboard_posters',{}) or {}).get('%s:%s'%cache_key)
+            if (isinstance(remembered,list) and len(remembered)==2 and isinstance(remembered[1],str)
+                    and isinstance(remembered[0],(int,float)) and remembered[0]>now):
+                entry=(float(remembered[0]),remembered[1]); cache[cache_key]=entry
+        if not entry or entry[0]<now:
             try:
                 r=await app.state.http.get(f'https://api.themoviedb.org/3/{kind}/{tmdb_id}',params={'api_key':key,'language':'zh-CN'},timeout=8)
                 r.raise_for_status(); path=r.json().get('poster_path') or ''
@@ -327,6 +334,13 @@ def install_console(app,store,admin):
             except (httpx.HTTPError,ValueError,AttributeError): path=''
             if len(cache)>500: cache.clear()
             entry=(now+(21600 if path else 300),path);cache[cache_key]=entry
+            saved={key:value for key,value in (store.meta_json('dashboard_posters',{}) or {}).items()
+                   if isinstance(value,list) and len(value)==2 and isinstance(value[0],(int,float))
+                   and value[0]>now}
+            saved['%s:%s'%cache_key]=[entry[0],entry[1]]
+            if len(saved)>2000:
+                saved=dict(sorted(saved.items(),key=lambda item:item[1][0],reverse=True)[:2000])
+            store.set_meta('dashboard_posters',saved)
         if not entry[1]: raise HTTPException(404)
         return RedirectResponse('https://image.tmdb.org/t/p/w500'+entry[1],headers={'Cache-Control':'private,max-age=3600'})
     @app.get('/api/v1/dashboard/image/{item_id}',dependencies=[Depends(admin)])
