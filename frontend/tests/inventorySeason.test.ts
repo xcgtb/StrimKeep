@@ -14,7 +14,8 @@ test('missing inventory or official dates cannot claim complete', () => {
   const season = {official_known:true, expected:[1], unknown_air_date:[], cloud:{present:[1],missing:[],extra:[]}}
   assert.equal(librarySeasonStatus(season, 'cloud', true).label, '完整')
   assert.equal(librarySeasonStatus(season, 'cloud', false).label, '待核实')
-  assert.equal(librarySeasonStatus({...season, unknown_air_date:[2]}, 'cloud', true).label, '待核实')
+  // 未定档的集（连载中还没公布播出日期）不算待核实：它不进缺集统计，页面上另有说明。
+  assert.equal(librarySeasonStatus({...season, unknown_air_date:[2]}, 'cloud', true).label, '完整')
   assert.equal(librarySeasonStatus({...season, official_known:false}, 'cloud', true).percent, null)
   assert.equal(librarySeasonStatus({...season, expected:[]}, 'cloud', true).label, '待核实')
 })

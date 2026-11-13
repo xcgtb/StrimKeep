@@ -2,6 +2,8 @@
 import re
 from pathlib import Path
 
+from .media import release_group
+
 
 def line(value,limit=90):
     text=' '.join(str(value or '').split())
@@ -114,9 +116,10 @@ def media_card(items,shared=False,transferred=False,emby_status='',other_items=(
     if identity:lines.append('🆔 编号：TMDB '+line(identity,30))
     groups=[]
     for s,_ in items:
-        match=re.search(r'-([A-Za-z][A-Za-z0-9@_-]{1,50})$',Path(s.get('name','')).stem)
-        if match and match[1].lower() not in ('dl','ray','rip','bit','h264','h265','hevc','avc','x264','x265','hdr','sdr'):
-            groups.append(match[1])
+        # 和命名共用同一套解析：`-SCDIY@HiveWeb` 取 HiveWeb，
+        # 避免通知里的组别跟真正写进文件名的组别对不上。
+        group=release_group(s.get('name',''))
+        if group:groups.append(group)
     lines.append('👥 组别：'+(line(' / '.join(dict.fromkeys(groups)),80) or '未知'))
     if emby_status=='pending':lines.append('⏳ 状态：Emby 入库待核实')
     elif emby_status=='verified':lines.append('✅ 状态：Emby 已入库')

@@ -6,8 +6,8 @@ const tv = {kind:'tv',manual_complete:false}
 const complete = {tmdb_complete:true,inventory_complete:true,combined_missing:0,seasons:[{expected:[1],unknown_air_date:[]}],series_status:'Ended'}
 
 test('poster status distinguishes missing, ongoing, complete and manual completion', () => {
-  assert.equal(inventoryCardStatus(tv, {data:complete}).text, '完整')
-  assert.equal(inventoryCardStatus(tv, {data:{...complete,series_status:'Returning Series'}}).text, '在更')
+  assert.equal(inventoryCardStatus(tv, {data:complete}).text, '✓ 完整')
+  assert.equal(inventoryCardStatus(tv, {data:{...complete,series_status:'Returning Series'}}).text, '✓ 完整')
   assert.equal(inventoryCardStatus(tv, {data:{...complete,combined_missing:3}}).text, '缺 3 集')
   assert.equal(inventoryCardStatus({...tv,manual_complete:true}, null).text, '手动完结')
   assert.equal(inventoryCardStatus(tv, {data:{...complete,combined_extra:2}}).category, 'extra')
@@ -15,11 +15,12 @@ test('poster status distinguishes missing, ongoing, complete and manual completi
 })
 
 test('incomplete evidence never claims complete', () => {
-  assert.equal(inventoryCardStatus(tv, {data:{...complete,tmdb_complete:false}}).text, '待核实')
-  assert.equal(inventoryCardStatus(tv, {data:{...complete,seasons:[]}}).text, '待核实')
-  assert.equal(inventoryCardStatus(tv, {data:{...complete,inventory_complete:false}}).text, '待核实')
-  assert.equal(inventoryCardStatus(tv, {data:{...complete,seasons:[{unknown_air_date:[1]}]}}).text, '待核实')
-  assert.equal(inventoryCardStatus(tv, {data:{...complete,inventory_complete:false,combined_missing:1}}).text, '缺 1 集 · 待核实')
+  assert.equal(inventoryCardStatus(tv, {data:{...complete,tmdb_complete:false}}).text, '待对照')
+  assert.equal(inventoryCardStatus(tv, {data:{...complete,seasons:[]}}).text, '待对照')
+  assert.equal(inventoryCardStatus(tv, {data:{...complete,inventory_complete:false}}).text, '✓ 完整 · 库存待核实')
+  // 未定档的集不算待核实（连载中），但一条已播都没有就只能是待对照。
+  assert.equal(inventoryCardStatus(tv, {data:{...complete,seasons:[{unknown_air_date:[1]}]}}).text, '待对照')
+  assert.equal(inventoryCardStatus(tv, {data:{...complete,inventory_complete:false,combined_missing:1}}).text, '缺 1 集 · 库存待核实')
   assert.equal(inventoryCardStatus(tv, {data:{...complete,inventory_complete:false,combined_missing:1}}).category, 'unknown')
 })
 

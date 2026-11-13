@@ -622,11 +622,15 @@ async def notify_batch(engine, batch):
     skipped = sum(1 for r in rows if r['state'] == 'skipped')
     failed = sum(1 for r in rows if r['state'] == 'failed')
     lines = ['成功 %d · 跳过 %d · 失败 %d' % (done, skipped, failed)]
-    sample = [r['relative_path'] or r['share_id'] or r['file_id'] for r in rows[:3]]
-    for path in sample:
-        lines.append('· ' + (path or '')[:80])
-    if len(rows) > 3:
-        lines.append('… 共 %d 条' % len(rows))
+    marks = {'done': '✅', 'skipped': '⏭️', 'failed': '❌'}
+    # 明细给完整路径：以前每条截到 80 字，通知里只剩半截文件名，看不出删的是哪个版本。
+    for row in rows[:10]:
+        path = row['relative_path'] or row['share_id'] or row['file_id'] or ''
+        note = str(row['message'] or '').strip()
+        lines.append('%s %s%s' % (marks.get(row['state'], '·'), path,
+                                  ('（%s）' % note) if note else ''))
+    if len(rows) > 10:
+        lines.append('… 共 %d 条，完整明细见「深度删除」历史' % len(rows))
     await notifications.publish('deep_delete:%s' % batch, '🧹 深度删除完成',
                                 '\n'.join(lines), 'success' if not failed else 'warning',
                                 category='general')

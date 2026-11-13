@@ -117,14 +117,22 @@ def source_of(name):
 
 
 def release_group(name):
-    """结尾的 -Group；前后必须是分隔符，并排除 WEB-DL 这类规格尾巴。"""
+    """结尾的 -Group；前后必须是分隔符，并排除 WEB-DL 这类规格尾巴。
+
+    真实发布名常写成 `-SCDIY@HiveWeb`：`@` 前面是压制者、后面是站点/组名，组别取 `@`
+    之后那一段。以前正则不认 `@`，这类名字整段被判成「没有组别」，于是文件名里也
+    丢掉了 -HiveWeb（现场：通知显示 SCDIY@HiveWeb，STRM/NFO 却没有任何组别）。
+    """
     stem = Path(str(name or '')).stem
     # 发布组紧跟在规格后面（DDP5.1-ParkTV、H.265-NTb），所以不能用字母边界卡，
     # 改由 GROUP_STOP 排除 WEB-DL/DTS-HD 这类被 '-' 拆开的规格词。
-    match = re.search(r'-([A-Za-z][A-Za-z0-9]{1,24})$', stem)
-    if not match or match[1].upper() in GROUP_STOP:
+    match = re.search(r'-([A-Za-z][A-Za-z0-9@_]{1,40})$', stem)
+    if not match:
         return ''
-    return match[1]
+    value = match.group(1).rsplit('@', 1)[-1]
+    if not value or value.upper() in GROUP_STOP:
+        return ''
+    return value
 
 
 def dynamic_label(media):

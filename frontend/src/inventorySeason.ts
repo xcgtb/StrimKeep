@@ -9,7 +9,10 @@ export function librarySeasonStatus(entry:any, side:string, inventoryComplete:bo
   const extra:number[] = Array.isArray(data.extra) ? data.extra : []
   const airedPresent = expected.filter(ep => present.has(ep)).length
   const officialKnown = entry?.official_known === true
-  const uncertain = !inventoryComplete || !officialKnown || !!entry?.unknown_air_date?.length || !expected.length
+  // unknown_air_date 是「连载中还没公布播出日期」的集，属正常情况：它们本来就不计入
+  // 缺集统计，页面上另有「播出日期未知：…」的说明。把它当「待核实」会让一部已播集
+  // 全齐的剧（如 走马上任 27/27）也显示待核实，用户无从判断。
+  const uncertain = !inventoryComplete || !officialKnown || !expected.length
   const parts = [missing.length ? `缺 ${missing.length} 集` : '', extra.length ? `超 ${extra.length} 集` : ''].filter(Boolean)
   if (uncertain) parts.push('待核实')
   return {label: parts.join(' · ') || '完整', tone:uncertain ? 'unknown' : missing.length ? 'missing' : extra.length ? 'extra' : 'complete',
