@@ -5,7 +5,14 @@
 
 用法（仓库根目录）：
     python scripts/version.py            # 校验所有落点，不一致退出码 1
-    python scripts/version.py 0.7.1      # 改版本：写 __init__，再刷其它落点
+    python scripts/version.py patch      # 默认：只升第三位（3.5.0 → 3.5.1）
+    python scripts/version.py minor      # 升第二位并归零第三位（3.5.1 → 3.6.0）
+    python scripts/version.py major      # 升第一位（3.6.0 → 4.0.0）
+    python scripts/version.py 0.7.1      # 显式指定版本
+    python scripts/version.py --next patch   # 只打印下一个版本号，不写文件
+
+版本约定：**默认只动第三位**。一天发多次版就是 3.5.1、3.5.2、3.5.3……；
+第二位留给成组的跨模块改动，第一位只在破坏性变更时动。
 
 落点：__init__.py（唯一来源）、frontend/package.json、frontend/package-lock.json、
       docker-compose.yml 的发布通道（ghcr 发布镜像 + dev 本地镜像）、README.md 首行标题。
@@ -106,7 +113,26 @@ def sync(version):
     return check(version)
 
 
+BUMPS = ('patch', 'minor', 'major')
+
+
+def bump(version, kind):
+    parts = [int(item) for item in version.split('.')]
+    if kind == 'major':
+        return '%d.0.0' % (parts[0] + 1)
+    if kind == 'minor':
+        return '%d.%d.0' % (parts[0], parts[1] + 1)
+    return '%d.%d.%d' % (parts[0], parts[1], parts[2] + 1)
+
+
 def main(argv):
+    if argv and argv[0] == '--next':
+        kind = argv[1] if len(argv) > 1 else 'patch'
+        if kind not in BUMPS:
+            print('--next 需要 patch / minor / major')
+            return 2
+        print(bump(read_version(), kind))
+        return 0
     if not argv or argv[0] in ('--check', 'check'):
         version, problems = check()
         if problems:
@@ -117,10 +143,18 @@ def main(argv):
             return 1
         print(f'版本一致：{version}')
         return 0
-    version = argv[0].lstrip('v')
-    if not re.fullmatch(r'\d+\.\d+\.\d+', version):
-        print('版本号需要 x.y.z 形式')
-        return 2
+    if argv[0] in BUMPS:
+        version = bump(read_version(), argv[0])
+    else:
+        version = argv[0].lstrip('v')
+        if not re.fullmatch(r'\d+\.\d+\.\d+', version):
+            print('版本号需要 x.y.z 形式，或 patch / minor / major')
+            return 2
+        current = read_version().split('.')
+        incoming = version.split('.')
+        if current[:2] != incoming[:2] and current[0] == incoming[0]:
+            print('提示：本次显式指定升了第二位（%s → %s）。项目约定默认只改第三位，'
+                  '确认是成组改动再继续。' % (read_version(), version))
     _, problems = sync(version)
     if problems:
         print('仍有不一致：')
