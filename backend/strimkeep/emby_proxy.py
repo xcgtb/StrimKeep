@@ -1,4 +1,4 @@
-﻿"""Emby 反代：把 115 直链交给播放器（对齐上游 TgtoDrive 的「Emby 与飞牛反代」）。
+﻿"""Emby 反代：把 115 直链交给播放器（与「Emby 与飞牛反代」页面的行为一致）。
 
 上游的快不来自 STRM 里写的地址，而来自反代：客户端连反代端口 → 反代带 API Key
 转发 Emby 接口 → 在 PlaybackInfo 的返回体里补上 ``MediaSources[*].DirectStreamUrl``，

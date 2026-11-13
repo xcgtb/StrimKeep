@@ -29,6 +29,12 @@ class SyncConfig(StrmOptions, Input):
     cleanup_missing: bool = True
 
 
+class SyncRunInput(Input):
+    """全量 / 增量同步的显式参数：目录可覆盖，增量可指定起点。"""
+    source_cids: list[str] = Field(default_factory=list, max_length=20)
+    since: float | None = Field(default=None, ge=0)
+
+
 class ScheduleConfig(Input):
     scan_enabled: bool = False
     scan_interval_minutes: int = Field(default=5,ge=5,le=43200)
@@ -167,6 +173,49 @@ def install_phase5(app,store,admin,job_public):
     async def start_sync():
         jid,_ = engine().tasks.enqueue(config_for('strm_sync'))
         return job_public(engine().job(jid))
+
+    @app.post('/api/v1/sync/full', dependencies=[Depends(admin)])
+    async def start_full_sync(body: SyncRunInput):
+        """全量 STRM 同步：重建云端清单并逐文件核对。
+
+        与增量相对：文件没变也会完整核对一遍。改过库根、命名口径或换账号之后用它。
+        """
+        roots = body.source_cids or None
+        if roots: await validate_roots(roots)
+        config = {**config_for('strm_sync', roots), 'full_scan': True, '_force_full': True,
+                  'trust_scan': False, 'mode': 'full'}
+        jid, _ = engine().tasks.enqueue(config)
+        return {**job_public(engine().job(jid)), 'mode': 'full'}
+
+    @app.post('/api/v1/sync/incremental', dependencies=[Depends(admin)])
+    async def start_incremental_sync(body: SyncRunInput):
+        """增量 STRM 同步：只处理上次水位之后新增/变化的文件。
+
+        水位是上一次成功同步的**开始**时间；显式传 since 可覆盖。
+        本地输出缺失的文件不会被跳过，仍会完整核对并重建。
+        """
+        roots = body.source_cids or None
+        if roots: await validate_roots(roots)
+        watermark = store.meta_json('sync_watermark', {}) or {}
+        since = float(body.since if body.since is not None else (watermark.get('at') or 0))
+        config = {**config_for('strm_sync', roots), 'full_scan': True, 'trust_scan': True,
+                  'incremental_since': since, 'mode': 'incremental'}
+        jid, _ = engine().tasks.enqueue(config)
+        return {**job_public(engine().job(jid)), 'mode': 'incremental', 'since': since}
+
+    @app.get('/api/v1/sync/state', dependencies=[Depends(admin)])
+    async def sync_state():
+        """同步水位与最近一次任务：外部调用方据此决定跑全量还是增量。"""
+        watermark = store.meta_json('sync_watermark', {}) or {}
+        last = store.db.execute(
+            "SELECT id,state,stage,created,updated FROM organize_jobs "
+            "WHERE json_extract(config,'$.job_kind')='strm_sync' ORDER BY id DESC LIMIT 1").fetchone()
+        running = store.db.execute(
+            "SELECT count(*) FROM organize_jobs WHERE state IN ('queued','running') "
+            "AND json_extract(config,'$.job_kind')='strm_sync'").fetchone()[0]
+        stale = store.meta_json('stale_strms', []) or []
+        return {'watermark': watermark, 'last_job': dict(last) if last else None,
+                'running': int(running or 0), 'stale_count': len(stale)}
 
     @app.post('/api/v1/sync/webhook-token',dependencies=[Depends(admin)])
     async def rotate_webhook_token():

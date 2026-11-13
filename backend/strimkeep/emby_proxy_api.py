@@ -1,6 +1,6 @@
 ﻿"""Emby 反代的设置接口。
 
-对齐上游 TgtoDrive「Emby 与飞牛反代」页的服务器卡片：列表 / 新增 / 保存并应用 /
+「Emby 与飞牛反代」页的服务器卡片：列表 / 新增 / 保存并应用 /
 开启·关闭 / 测试 / 播放记录 / 删除。上游地址与 API Key 留空即沿用「Emby 服务连接」。
 """
 from urllib.parse import urlsplit
