@@ -22,6 +22,8 @@ def test_full_sync_reports_each_selected_root_even_when_empty(tmp_path):
         assert '2 个目录' in start and 'ID 100' in start and 'ID '+empty in start
         reports={x['event_key']:x['message'] for x in messages}
         assert '目录 ID：100' in reports[f'strm:{jid}:dir:100']
+        assert '云盘目录：电影来源' in reports[f'strm:{jid}:dir:100']
+        assert '云盘目录：电影来源' in reports[f'strm:{jid}:scan-start:100']
         assert '扫描文件：0 个' in reports[f'strm:{jid}:dir:{empty}']
         assert '任务总耗时' in reports[f'strm:{jid}:sync-summary']
         if engine.notice_tasks:await asyncio.gather(*engine.notice_tasks)

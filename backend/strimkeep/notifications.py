@@ -460,7 +460,7 @@ class Notifications:
                 items=groups.get(cid,[]); detail=stats.get(cid) or {}
                 updated=sum(bool(p.get('output_changed')) for p,_ in items)
                 unfinished=sum(state!='done' for _,state in items)
-                lines=[sync_task_context(c).rstrip(), f'目录 ID：{cid}', f'云盘目录：{detail.get("name") or labels.get(cid,cid)}']
+                lines=[sync_task_context(c).rstrip(), f'目录 ID：{cid}', f'云盘目录：{labels.get(cid) or detail.get("name") or cid}']
                 lines=[line for line in lines if line]
                 if detail.get('local_path'):lines.append('本地目录：'+detail['local_path'])
                 if c.get('sync_mode')=='cached':lines.append('扫描方式：复用近期清单（未重扫云端）')

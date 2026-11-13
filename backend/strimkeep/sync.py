@@ -175,7 +175,7 @@ class Sync:
                     'local_path':str(self.engine.root / Path(self.relative(synthetic,config)).parent),
                     'directories':0,'files':0,'scan_seconds':0.0}
             await self.engine.notifications.publish(f'strm:{jid}:scan-start:{root}','▶️ [%d/%d] 开始同步目录ID: %s' % (order, len(effective), root),
-                sync_task_context(config)+f'进度：{order}/{len(effective)}\n目录 ID：{root}\n云盘目录：{detail["name"]}',
+                sync_task_context(config)+f'进度：{order}/{len(effective)}\n目录 ID：{root}\n云盘目录：{(config.get("directory_labels") or {}).get(root) or detail["name"]}',
                 job_id=jid,category='strm_summary')
             started=time.monotonic()
             dirs, entries=await self.cloud.download_tree(root)
@@ -216,7 +216,7 @@ class Sync:
                       'local_path': str(self.engine.root / Path(self.relative(synthetic, config)).parent),
                       'directories': 0, 'directories_exact': False, 'files': 0, 'scan_seconds': 0.0}
             await self.engine.notifications.publish(f'strm:{jid}:scan-start:{root}', '▶️ [%d/%d] 开始同步目录ID: %s' % (order, len(effective), root),
-                sync_task_context(config)+f'进度：{order}/{len(effective)}\n目录 ID：{root}\n云盘目录：{detail["name"]}',
+                sync_task_context(config)+f'进度：{order}/{len(effective)}\n目录 ID：{root}\n云盘目录：{(config.get("directory_labels") or {}).get(root) or detail["name"]}',
                 job_id=jid, category='strm_summary')
             started = time.monotonic()
             entries = await self.cloud.recursive_files_verified(root)
@@ -300,7 +300,7 @@ class Sync:
                                  'directories':0, 'files':0, 'scan_seconds':0.0}
                     order=effective.index(root)+1
                     await self.engine.notifications.publish(f'strm:{jid}:scan-start:{root}','▶️ [%d/%d] 开始同步目录ID: %s' % (order, len(effective), root),
-                        sync_task_context(config)+f'进度：{order}/{len(effective)}\n目录 ID：{root}\n云盘目录：{stats[root]["name"]}',
+                        sync_task_context(config)+f'进度：{order}/{len(effective)}\n目录 ID：{root}\n云盘目录：{(config.get("directory_labels") or {}).get(root) or stats[root]["name"]}',
                         job_id=jid,category='strm_summary')
                 started=time.monotonic()
                 entries=await read(cid)
