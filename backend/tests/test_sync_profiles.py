@@ -71,3 +71,35 @@ def test_scheduled_jobs_do_not_merge_when_mode_changes(tmp_path, monkeypatch):
     second, merged = tasks.enqueue(full, scheduled=True)
     assert not merged and first != second
     client.__exit__(None, None, None)
+
+
+def test_legacy_timer_migrates_without_changing_time_or_organizer(tmp_path, monkeypatch):
+    app, client = _client(tmp_path, monkeypatch)
+    store = app.state.store
+    store.set_many({'schedule_config': {'sync_enabled':True, 'sync_source_cids':['100'],
+        'sync_mode':'cron', 'sync_cron':'0 3 * * *', 'timezone':'Asia/Shanghai',
+        'directory_labels':{'100':'影视'}, 'scan_enabled':True}})
+    with store.db:
+        store.db.execute("INSERT OR REPLACE INTO task_schedules(kind,next_due) VALUES('strm_sync',?)", (1700000000,))
+    tasks = app.state.organizer.tasks
+    tasks.migrate_legacy_sync()
+    profiles = store.get('sync_profiles')
+    assert len(profiles) == 1 and profiles[0]['source_cid'] == '100'
+    assert profiles[0]['frequency'] == 'cron' and profiles[0]['cron'] == '0 3 * * *'
+    assert profiles[0]['mode'] == 'incremental' and profiles[0]['enabled']
+    assert store.get('schedule_config')['scan_enabled'] and not store.get('schedule_config')['sync_enabled']
+    assert store.db.execute('SELECT next_due FROM task_schedules WHERE kind=?', ('sync_profile:'+profiles[0]['id'],)).fetchone()[0] == 1700000000
+    assert store.db.execute("SELECT 1 FROM task_schedules WHERE kind='strm_sync'").fetchone() is None
+    tasks.migrate_legacy_sync()
+    assert len(store.get('sync_profiles')) == 1
+    client.__exit__(None, None, None)
+
+
+def test_profile_custom_schedule_validation(tmp_path, monkeypatch):
+    app, client = _client(tmp_path, monkeypatch)
+    valid = {**profile('旧定时','incremental'), 'frequency':'cron', 'cron':'0 3 * * *', 'timezone':'Asia/Shanghai'}
+    assert client.post('/api/v1/sync/profiles', json=valid).status_code == 200
+    assert client.post('/api/v1/sync/profiles', json={**valid, 'cron':'bad'}).status_code == 422
+    assert client.post('/api/v1/sync/profiles', json={**valid, 'timezone':'invalid'}).status_code == 422
+    assert client.post('/api/v1/sync/profiles', json={**valid, 'frequency':'interval', 'interval_minutes':2}).status_code == 422
+    client.__exit__(None, None, None)

@@ -38,7 +38,7 @@ class SyncRunInput(Input):
 
 
 class UnidentifiedCleanupInput(Input):
-    paths: list[str] = Field(min_length=1, max_length=500)
+    paths: list[str] = Field(default_factory=list, max_length=500)
 
 
 class SyncProfileInput(Input):
@@ -47,7 +47,10 @@ class SyncProfileInput(Input):
     source_label: str = Field(min_length=1, max_length=300)
     mode: str = Field(pattern='^(incremental|full)$')
     enabled: bool = False
-    frequency: str = Field(default='daily', pattern='^(daily|weekly)$')
+    frequency: str = Field(default='daily', pattern='^(daily|weekly|interval|cron)$')
+    interval_minutes: int = Field(default=60, ge=5, le=43200)
+    cron: str = Field(default='0 3 * * *', max_length=100)
+    timezone: str = Field(default='Asia/Shanghai', max_length=100)
     weekday: int = Field(default=1, ge=0, le=6)
     time: str = Field(default='03:00', pattern=r'^([01]\d|2[0-3]):[0-5]\d$')
 
@@ -144,7 +147,7 @@ def install_phase5(app,store,admin,job_public):
             if (not rel.startswith(prefix) or len(parts) < 2 or any(p in ('', '.', '..') or '\\' in p or '\0' in p for p in parts)
                     or Path(parts[-1]).suffix.lower() != '.strm'):
                 raise HTTPException(422, '只能选择分享STRM未识别目录中的 STRM 文件。')
-        removed, failed = [], []
+        removed, failed, empty_dirs = [], [], 0
         async with engine().publication_gate:
             for rel in requested:
                 path = root.joinpath(*rel.split('/'))
@@ -158,11 +161,32 @@ def install_phase5(app,store,admin,job_public):
                     remember(store, [rel])
                     path.unlink()
                     removed.append(rel)
+                    parent = path.parent
+                    boundary = root / UNIDENT_NAME
+                    while parent != boundary and boundary in parent.parents:
+                        try:
+                            parent.rmdir()
+                            empty_dirs += 1
+                        except OSError:
+                            break
+                        parent = parent.parent
                 except (OSError, ValueError, RuntimeError):
                     failed.append(rel)
-        if removed:
-            store.event('strm_sync', f'清理分享未识别 STRM：删除 {len(removed)} 个本地文件。')
-        return {'removed':len(removed), 'failed':failed}
+            boundary = root / UNIDENT_NAME
+            if boundary.is_dir() and not boundary.is_symlink():
+                for parent, dirs, _ in os.walk(boundary, topdown=False, followlinks=False):
+                    for name in dirs:
+                        directory = Path(parent) / name
+                        if directory.is_symlink():
+                            continue
+                        try:
+                            directory.rmdir()
+                            empty_dirs += 1
+                        except OSError:
+                            pass
+        if removed or empty_dirs:
+            store.event('strm_sync', f'清理分享未识别 STRM：删除 {len(removed)} 个本地文件、{empty_dirs} 个空目录。')
+        return {'removed':len(removed), 'empty_dirs':empty_dirs, 'failed':failed}
 
     @app.post('/api/v1/strm/stale/cleanup',dependencies=[Depends(admin)])
     async def stale_cleanup():
@@ -190,8 +214,18 @@ def install_phase5(app,store,admin,job_public):
         states = {row['kind']:dict(row) for row in store.db.execute("SELECT * FROM task_schedules WHERE kind LIKE 'sync_profile:%'")}
         return {'items':[{**profile, 'next_due':states.get('sync_profile:' + profile['id'], {}).get('next_due')} for profile in profiles]}
 
+    def validate_profile_schedule(body: SyncProfileInput):
+        try:
+            zone = ZoneInfo(body.timezone)
+            if body.frequency == 'cron':
+                if len(body.cron.split()) != 5 or not croniter.is_valid(body.cron): raise ValueError('invalid cron')
+                croniter(body.cron, datetime.now(zone), max_years_between_matches=8).get_next(datetime)
+        except (ValueError, KeyError):
+            raise HTTPException(422, '请填写有效的五段 Cron 表达式和时区。') from None
+
     @app.post('/api/v1/sync/profiles', dependencies=[Depends(admin)])
     async def create_sync_profile(body: SyncProfileInput):
+        validate_profile_schedule(body)
         await validate_roots([body.source_cid])
         profiles = store.get('sync_profiles', [])
         if len(profiles) >= 30: raise HTTPException(422, '最多创建 30 个同步任务。')
@@ -202,6 +236,7 @@ def install_phase5(app,store,admin,job_public):
 
     @app.put('/api/v1/sync/profiles/{profile_id}', dependencies=[Depends(admin)])
     async def update_sync_profile(profile_id: str, body: SyncProfileInput):
+        validate_profile_schedule(body)
         await validate_roots([body.source_cid])
         profiles = store.get('sync_profiles', [])
         if not any(p['id'] == profile_id for p in profiles): raise HTTPException(404, '同步任务不存在。')

@@ -59,8 +59,13 @@ const cleanupMsg=ref('')
 async function loadUnidentified(){await run(async()=>{unidentified.value=await props.api('/strm/unidentified');selectedUnidentified.value=[]})}
 async function cleanupUnidentified(){
   if(!selectedUnidentified.value.length)return
-  try{await ElMessageBox.confirm(`将删除勾选的 ${selectedUnidentified.value.length} 个飞牛本地分享未识别 STRM。不会删除网盘源文件、NFO 或图片。`,'清理分享未识别 STRM',{confirmButtonText:'删除所选 STRM',cancelButtonText:'取消',type:'warning'})}catch{return}
-  await run(async()=>{const r:any=await props.api('/strm/unidentified/cleanup','POST',{paths:[...selectedUnidentified.value]});unidentified.value=await props.api('/strm/unidentified');selectedUnidentified.value=[];if(r.failed.length)ElMessage.warning(`已删除 ${r.removed} 个，${r.failed.length} 个未删除，请刷新列表检查`);else ElMessage.success(`已删除 ${r.removed} 个本地 STRM`)})
+  try{await ElMessageBox.confirm(`将删除勾选的 ${selectedUnidentified.value.length} 个飞牛本地分享未识别 STRM。会清理空目录，保留网盘源文件、NFO 和图片。`,'清理分享未识别 STRM',{confirmButtonText:'删除所选 STRM',cancelButtonText:'取消',type:'warning'})}catch{return}
+  await run(async()=>{const r:any=await props.api('/strm/unidentified/cleanup','POST',{paths:[...selectedUnidentified.value]});unidentified.value=await props.api('/strm/unidentified');selectedUnidentified.value=[];if(r.failed.length)ElMessage.warning(`已删除 ${r.removed} 个，${r.failed.length} 个未删除，请刷新列表检查`);else ElMessage.success(`已删除 ${r.removed} 个本地 STRM，清理 ${r.empty_dirs} 个空目录`)})
+}
+
+async function cleanupUnidentifiedEmpty(){
+  try{await ElMessageBox.confirm('删除“分享STRM未识别”下的空目录？有文件的目录会保留。','清理空目录',{type:'warning'})}catch{return}
+  await run(async()=>{const r:any=await props.api('/strm/unidentified/cleanup','POST',{paths:[]});ElMessage.success(`已清理 ${r.empty_dirs} 个空目录`);unidentified.value=await props.api('/strm/unidentified')})
 }
 
 async function cleanupPlaybacks(){await run(async()=>{const r:any=await props.api('/playbacks/cleanup','POST',{});cleanupMsg.value=r.message||`已清理 ${r.removed} 条`;ElMessage.success(cleanupMsg.value)})}
@@ -97,14 +102,10 @@ useVisiblePolling(async()=>{if(!busy.value){await refreshJob();if(!dirty.value){
 <p class="hint">生成位置：{{outputRoot||'读取中'}}（容器内路径）；已整理归档沿用媒体库结构，其他目录位于“StrimKeep同步”。</p>
 <div class="workflow-switch-row"><span>同步后自动清理失效的本地 STRM</span><el-switch v-model="config.cleanup_missing"/></div><p class="hint">开启后，增量或全量同步完整扫描并确认源文件已删除或移出范围时，清理本项目登记且未被修改的本地输出，不删除网盘文件。关闭后保留失效条目。修改开关后点击页面顶部“保存修改”。</p>
 </SettingCard>
-<SettingCard v-if="legacyEnabled||schedule.enabled" title="旧版定时同步" description="升级前的定时任务仍在运行；可在此关闭，避免与新任务重复。" :icon="VideoPlay" :query="query" keywords="旧版 定时 同步" :default-open="false">
-<AutomationSettings v-model="schedule" kind="sync" :busy="busy" :next-due="nextDue"/>
-<div class="directory-group"><h3>旧版定时同步目录</h3><div v-for="id in schedule.source_cids" :key="id" class="directory-item"><span>{{label(id,true)}}</span><el-button text :disabled="busy" @click="schedule.source_cids=schedule.source_cids.filter(x=>x!==id)">移除</el-button></div><el-button :disabled="busy" @click="picker='scheduled'">添加目录</el-button><p class="hint">关闭或修改后，请点击页面顶部“保存修改”。</p></div>
-</SettingCard>
 <SettingCard title="播放地址" description="播放器访问 StrimKeep 的基础地址，写入 STRM。" :summary="base||'尚未配置播放地址'" :icon="Connection" :query="query" keywords="URL 域名 端口 IP 公网 局域网 302" default-open><el-form label-position="top"><el-form-item label="StrimKeep 播放基础地址"><el-input v-model="base" :disabled="busy" placeholder="http://strimkeep.example.com:9000"/></el-form-item></el-form><div class="button-row" style="margin:10px 0"><el-button :disabled="busy||!base" @click="rewrite">按当前地址重写全部本地 STRM</el-button><span v-if="rewriteMsg" class="hint" style="margin:0">{{rewriteMsg}}</span><el-button :disabled="busy" @click="rollbackRewrite">回滚上次重写</el-button><el-button :disabled="busy" @click="cleanupPlaybacks">清理未被引用的播放身份</el-button><span v-if="cleanupMsg" class="hint" style="margin:0">{{cleanupMsg}}</span></div><p class="hint">改完地址保存后，点上面的按钮可以把所有 STRM 的入口批量换成新地址：只改本地文件与台账，不读云端、不动网盘。换 IP、加域名、内网切公网时用它，不必整库重扫。</p></SettingCard>
 <SettingCard title="分享未识别 STRM" description="查看本机未识别的分享 STRM，选择不再需要的文件清理。" :summary="unidentified?`共 ${unidentified.total} 个`:'点击查看文件'" :icon="DocumentChecked" :query="query" keywords="STRM 分享 未识别 清理 删除" :default-open="false">
-  <div class="button-row"><el-button :disabled="busy" @click="loadUnidentified">查看未识别文件</el-button><el-button :disabled="busy||!unidentified?.items.length" @click="selectedUnidentified=[...unidentified.items]">全选当前列表</el-button><el-button :disabled="busy||!selectedUnidentified.length" @click="selectedUnidentified=[]">取消选择</el-button><el-button type="danger" plain :disabled="busy||!selectedUnidentified.length" @click="cleanupUnidentified">清理所选（{{selectedUnidentified.length}}）</el-button></div>
-  <p class="hint">只删除勾选的本地 STRM，保留网盘源文件、NFO 和图片。未识别文件可能是本程序生成的，不代表外部文件。</p>
+  <div class="button-row"><el-button :disabled="busy" @click="loadUnidentified">查看未识别文件</el-button><el-button :disabled="busy||!unidentified?.items.length" @click="selectedUnidentified=[...unidentified.items]">全选当前列表</el-button><el-button :disabled="busy||!selectedUnidentified.length" @click="selectedUnidentified=[]">取消选择</el-button><el-button :disabled="busy" @click="cleanupUnidentifiedEmpty">清理空目录</el-button><el-button type="danger" plain :disabled="busy||!selectedUnidentified.length" @click="cleanupUnidentified">清理所选（{{selectedUnidentified.length}}）</el-button></div>
+  <p class="hint">删除勾选的本地 STRM，并清理空目录；保留网盘源文件、NFO 和图片。未识别文件可能是本程序生成的，不代表外部文件。</p>
   <template v-if="unidentified"><p class="hint">{{unidentified.total?`共 ${unidentified.total} 个，当前显示 ${unidentified.items.length} 个`:'没有未识别 STRM'}}</p><p v-if="unidentified.total>unidentified.items.length" class="hint">每次最多显示 500 个，清理后可再次查看。</p><div v-for="path in unidentified.items" :key="path" class="directory-item"><el-checkbox v-model="selectedUnidentified" :value="path" :disabled="busy">{{path}}</el-checkbox></div></template>
 </SettingCard>
 <SettingCard title="STRM 生成过滤与附属文件" description="与整理格式分开控制；分享 STRM 自动继承这里的生成规则。" :icon="DocumentChecked" :query="query" keywords="扩展名 过滤 视频 元数据 字幕 大小 阈值" default-open>

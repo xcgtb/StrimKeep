@@ -210,7 +210,9 @@ def test_timers_fifo_coalescing_restart_and_separate_sync_scope(tmp_path):
     engine.tasks.tick(now=1300);jobs=store.db.execute('SELECT * FROM organize_jobs ORDER BY id').fetchall()
     assert len(jobs)==2 and json.loads(jobs[0]['config'])['job_kind']=='organize' and json.loads(jobs[1]['config'])['source_cids']==['200']
     engine.tasks.tick(now=10000);assert store.db.execute('SELECT count(*) FROM organize_jobs').fetchone()[0]==2
-    assert dict(store.db.execute('SELECT kind,merged FROM task_schedules')) == {'organize': 0, 'strm_sync': 1}
+    states = dict(store.db.execute('SELECT kind,merged FROM task_schedules'))
+    assert states['organize'] == 0 and len(states) == 2
+    assert next(value for key, value in states.items() if key.startswith('sync_profile:')) == 1
     engine.update_job(jobs[0]['id'],state='running');engine.tasks.tick(now=10300)
     assert store.db.execute('SELECT count(*) FROM organize_jobs').fetchone()[0]==2
     assert engine.tasks.enqueue(engine.tasks.config('strm_sync'))[0]>jobs[1]['id']

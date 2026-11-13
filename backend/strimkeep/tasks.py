@@ -1,5 +1,6 @@
 """Persistent FIFO enqueue and interval timers; no replay of missed intervals."""
 import json
+import hashlib
 import re
 import time
 from .quality import public_policy
@@ -75,10 +76,50 @@ class Tasks:
 
     @staticmethod
     def sync_profile_next(profile, now):
-        hour, minute = (int(part) for part in profile['time'].split(':'))
-        day = '*' if profile['frequency'] == 'daily' else str(profile['weekday'])
-        expression = f'{minute} {hour} * * {day}'
-        return croniter(expression, datetime.fromtimestamp(now, ZoneInfo('Asia/Shanghai'))).get_next(datetime).timestamp()
+        if profile['frequency'] == 'interval':
+            return now + int(profile.get('interval_minutes', 60)) * 60
+        if profile['frequency'] == 'cron':
+            expression = profile.get('cron', '0 3 * * *')
+        else:
+            hour, minute = (int(part) for part in profile['time'].split(':'))
+            day = '*' if profile['frequency'] == 'daily' else str(profile['weekday'])
+            expression = f'{minute} {hour} * * {day}'
+        return croniter(expression, datetime.fromtimestamp(now, ZoneInfo(profile.get('timezone', 'Asia/Shanghai')))).get_next(datetime).timestamp()
+
+    def migrate_legacy_sync(self):
+        """Convert the old sync timer into visible per-directory tasks, preserving its schedule."""
+        settings = self.store.get('schedule_config', {})
+        if not settings.get('sync_enabled'):
+            return
+        roots = settings.get('sync_source_cids') or []
+        old = self.store.db.execute("SELECT next_due FROM task_schedules WHERE kind='strm_sync'").fetchone()
+        profiles = list(self.store.get('sync_profiles', []))
+        labels = settings.get('directory_labels') or {}
+        added = []
+        for cid in roots:
+            ident = 'legacy' + hashlib.sha256(str(cid).encode()).hexdigest()[:16]
+            if any(p['id'] == ident for p in profiles):
+                continue
+            label = labels.get(str(cid)) or str(cid)
+            item = {'id':ident, 'name':'原定时 · ' + label[-60:], 'source_cid':str(cid),
+                    'source_label':label, 'mode':'incremental', 'enabled':True,
+                    'frequency':'cron' if settings.get('sync_mode') == 'cron' else 'interval',
+                    'cron':settings.get('sync_cron', '0 3 * * *'),
+                    'interval_minutes':settings.get('sync_interval_minutes', 60),
+                    'timezone':settings.get('timezone', 'Asia/Shanghai'),
+                    'weekday':1, 'time':'03:00'}
+            profiles.append(item); added.append(item)
+        self.store.set_many({'sync_profiles':profiles, 'schedule_config':{**settings, 'sync_enabled':False}})
+        with self.store.db:
+            if old:
+                for item in added:
+                    self.store.db.execute('INSERT OR IGNORE INTO task_schedules(kind,next_due) VALUES(?,?)',
+                                          ('sync_profile:' + item['id'], old['next_due']))
+            self.store.db.execute("DELETE FROM task_schedules WHERE kind='strm_sync'")
+        if added:
+            self.store.event('schedule', f'已将原定时同步迁移为 {len(added)} 个独立任务，原时间和目录保持不变。')
+        elif not roots:
+            self.store.event('schedule', '原定时同步没有选择目录，已关闭。')
 
     def tick_sync_profiles(self, now):
         for profile in self.store.get('sync_profiles', []):
@@ -151,7 +192,7 @@ class Tasks:
 
     def tick(self, now=None):
         now = time.time() if now is None else now
-        self.tick_sync_profiles(now)
+        self.migrate_legacy_sync()
         settings = self.store.get('schedule_config', {})
         for kind, prefix in (('organize','scan'),('strm_sync','sync')):
             if not settings.get(prefix + '_enabled'): continue
@@ -200,3 +241,4 @@ class Tasks:
                 self.store.event('schedule', '定时任务配置或登录不可用，本周期未入队；请检查系统设置。')
             with self.store.db:
                 self.store.db.execute('UPDATE task_schedules SET next_due=?,last_run=?,last_job_id=?,merged=merged+? WHERE kind=?', (next_due(),now,jid,int(merged),kind))
+        self.tick_sync_profiles(now)

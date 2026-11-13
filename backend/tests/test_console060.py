@@ -247,6 +247,26 @@ def test_unidentified_listing_and_selected_cleanup_preserve_other_files(tmp_path
         assert c.post('/api/v1/strm/audit/cleanup').status_code==410
 
 
+def test_unidentified_cleanup_removes_empty_directories_only(tmp_path,monkeypatch):
+    app=console_app(tmp_path,monkeypatch)
+    with TestClient(app) as c:
+        login(c)
+        root=app.state.strms/'分享STRM未识别'
+        (root/'empty-old'/'nested').mkdir(parents=True)
+        (root/'movie'/'season').mkdir(parents=True)
+        (root/'movie'/'season'/'one.strm').write_text('link')
+        (root/'keep').mkdir()
+        (root/'keep'/'poster.jpg').write_bytes(b'picture')
+        result=c.post('/api/v1/strm/unidentified/cleanup',json={'paths':['分享STRM未识别/movie/season/one.strm']}).json()
+        assert result['removed']==1 and result['empty_dirs']==4
+        assert not (root/'movie').exists() and not (root/'empty-old').exists()
+        assert (root/'keep'/'poster.jpg').is_file() and root.is_dir()
+        (root/'empty-again').mkdir()
+        result=c.post('/api/v1/strm/unidentified/cleanup',json={'paths':[]}).json()
+        assert result['removed']==0 and result['empty_dirs']==1
+        assert not (root/'empty-again').exists() and root.is_dir()
+
+
 def test_unidentified_cleanup_rejects_symlinks_and_active_records(tmp_path,monkeypatch):
     app=console_app(tmp_path,monkeypatch)
     with TestClient(app) as c:
