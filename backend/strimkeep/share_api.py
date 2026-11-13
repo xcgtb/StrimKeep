@@ -44,6 +44,10 @@ def install_share(app, store, admin):
         receive_code: str = Field(default='', max_length=64)
         files: list[dict] = Field(min_length=1, max_length=10000)
 
+    class ShareIngestInput(BaseModel):
+        model_config = ConfigDict(extra='forbid')
+        text: str = Field(min_length=1, max_length=2000)
+
     class ShareSettingsInput(BaseModel):
         model_config = ConfigDict(extra='forbid')
         auto_organize: bool = True
@@ -190,6 +194,35 @@ def install_share(app, store, admin):
             raise HTTPException(422, str(exc))
         return {'created': result['created'], 'skipped': result['skipped'],
                 'count': len(result['created']), 'skip_count': len(result['skipped']),
+                'target': str(strm_root / PENDING_NAME)}
+
+    @app.post('/api/v1/share/ingest', dependencies=[Depends(admin)])
+    async def ingest_share(body: ShareIngestInput):
+        """影视探索「分享入库」：解锁后的分享直接进分享库，不转存到自己网盘。
+
+        与「转存到 115」并列的第二条入库路径：解析 → 列出视频 → 生成 STRM 到待整理，
+        播放时走分享下载通道，不占自己 115 的空间。整理跟随分享设置里的自动整理开关。
+        """
+        try:
+            parsed = parse_shares(body.text)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        unique = {(entry['share_code'], entry['receive_code']): entry for entry in parsed}
+        if len(unique) != 1:
+            raise HTTPException(422, '一次只能入库一个分享链接。')
+        secret = next(iter(unique.values()))
+        videos = await share_service.list_videos(
+            app.state.cloud, secret, share_effective_settings(store)['strm']['video_extensions'])
+        if not videos:
+            raise HTTPException(422, '这个分享里没有可识别的视频文件。')
+        videos.sort(key=lambda entry: entry['name'])
+        result = share_service.generate(store, strm_root, secret, videos, origin='web', allow_restore=True)
+        job_id = None
+        if result['created'] and (store.get('share_settings', {}) or {}).get('auto_organize', True):
+            job_id = share_service.enqueue_organize(app.state.organizer, origin='web')
+        return {'share_code': secret['share_code'], 'video_count': len(videos),
+                'count': len(result['created']), 'skip_count': len(result['skipped']),
+                'skipped': result['skipped'][:20], 'job_id': job_id,
                 'target': str(strm_root / PENDING_NAME)}
 
     @app.post('/api/v1/share/organize', dependencies=[Depends(admin)])

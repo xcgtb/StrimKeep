@@ -77,7 +77,7 @@ const resourceDialog=ref(false), selected=ref<any>(null)
 const resourceItems=ref<any[]>([]), resourceError=ref(''), resourceBusy=ref(false), resourcePartial=ref(false), resourceTruncated=ref(false)
 const resourceStates=new Map<string,any>()
 function resourceKey(item:any){return item.slug?`${item.source}|${item.provider}|${item.slug}`:''}
-function rememberResource(item:any){const key=resourceKey(item);if(key)resourceStates.set(key,{share_url:item.share_url,resolveUncertain:item.resolveUncertain,transferUncertain:item.transferUncertain,transferSubmitted:item.transferSubmitted})}
+function rememberResource(item:any){const key=resourceKey(item);if(key)resourceStates.set(key,{share_url:item.share_url,resolveUncertain:item.resolveUncertain,transferUncertain:item.transferUncertain,transferSubmitted:item.transferSubmitted,shareSubmitted:item.shareSubmitted})}
 function restoreResource(item:any){const state=resourceStates.get(resourceKey(item));if(!state)return item;return {...item,...state,share_url:state.share_url||item.share_url}}
 const resourceSource=ref('re0'), resourceMessage=ref('')
 let resourceRequestVersion=0
@@ -150,6 +150,25 @@ async function transferResource(item:any){
   }catch(e){
     if(stage==='resolve'){item.resolveUncertain=true;rememberResource(item);resourceError.value=(e as Error).message}
     else {item.transferUncertain=true;rememberResource(item);resourceError.value='提交结果未确认，请先在任务中心核查，避免重复转存。 '+(e as Error).message}
+  }finally{resourceBusy.value=false}
+}
+async function shareStrmResource(item:any){
+  if(resourceBusy.value||item.resolveUncertain||item.shareSubmitted)return
+  // 第二条入库路径：分享直接生成 STRM，播放走分享下载通道，不占自己 115 的空间。
+  try{await ElMessageBox.confirm(`${pointNotice(item)}\n会把该分享直接接入本项目的分享库并生成 STRM（不转存到你的网盘，不占空间），整理后进入媒体库。\n确认入库？`, '分享入库（免转存）', {confirmButtonText:'确认入库',cancelButtonText:'取消',type:'warning'})}catch{return}
+  resourceBusy.value=true;resourceError.value='';resourceMessage.value=''
+  let stage='resolve'
+  try{
+    const link=item.share_url||await readResourceLink(item)
+    stage='ingest'
+    const r=await props.api('/share/ingest','POST',{text:link})
+    item.shareSubmitted=true;rememberResource(item)
+    resourceMessage.value=`已接入分享库 ${r.video_count} 个文件：新建 ${r.count} 个 STRM`+
+      (r.skip_count?`，跳过 ${r.skip_count} 个已存在`:'')+
+      (r.job_id?`；整理任务 #${r.job_id} 已入队，可在任务中心查看进度`:'；请到「分享 STRM」点击整理')+'。'
+  }catch(e){
+    if(stage==='resolve'){item.resolveUncertain=true;rememberResource(item);resourceError.value=(e as Error).message}
+    else resourceError.value='分享入库未完成：'+(e as Error).message
   }finally{resourceBusy.value=false}
 }
 async function copyResource(item:any){
@@ -256,7 +275,7 @@ onMounted(async()=>{await loadGenres();await load()})
 <div class="resource-summary"><div><strong>{{resourceItems.length}}</strong><span> 个候选资源</span></div><div class="resource-filters"><button :class="{active:resourceFilter==='all'}" @click="resourceFilter='all'">全部</button><button :class="{active:resourceFilter==='115'}" @click="resourceFilter='115'">115 网盘</button><button :class="{active:resourceFilter==='ready'}" @click="resourceFilter='ready'">链接就绪</button></div></div>
 <el-skeleton v-if="resourceBusy&&!resourceItems.length" :rows="4" animated/>
 <el-empty v-else-if="!visibleResources.length&&!resourceError" :description="resourceItems.length?'当前筛选下没有资源':'暂未找到资源，试试其他来源'"/>
-<div v-else class="resource-list"><article v-for="(item,index) in visibleResources" :key="item.slug||index" class="resource-card"><div class="resource-card-top"><div class="resource-labels"><span class="source-badge">{{sourceLabel(item.source)}}</span><span class="provider-badge">{{item.provider_label||item.provider||'网盘未知'}}</span><span v-if="item.validate_status==='valid'" class="valid-badge">有效</span></div><span class="resource-cost" :class="{'is-ready':item.share_url}">{{item.share_url?'链接就绪':item.is_unlocked?'已解锁':item.unlock_points!==null?'预计 '+item.unlock_points+' 积分':'费用未知'}}</span></div><h3>{{item.title||selected?.title||'未命名资源'}}</h3><p v-if="resourceRemark(item)" class="resource-remark" :title="resourceRemark(item)">{{resourceRemark(item)}}</p><div class="resource-meta"><span class="publisher-badge">发布者：{{item.sharer||'未知'}}</span><span v-if="item.size">{{item.size}}</span><span v-if="item.release_group">发布组：{{item.release_group}}</span></div><div class="resource-tags"><span v-for="tag in resourceTags(item)" :key="String(tag)">{{tag}}</span></div><details v-if="resourceDetails(item).length" class="resource-detail"><summary>资源详情</summary><dl><template v-for="row in resourceDetails(item)" :key="row[0]"><dt>{{row[0]}}</dt><dd>{{row[1]}}</dd></template></dl></details><div class="resource-card-actions"><span v-if="item.resolveUncertain" class="resource-note">解锁结果待核查</span><span v-else-if="item.transferUncertain" class="resource-note">转存结果待核查</span><span v-else-if="item.transferSubmitted" class="resource-note">已入队，查看任务中心</span><span v-else-if="item.provider!=='115'" class="resource-note">当前仅支持 115 转存</span><span v-else-if="!canTransfer(item)" class="resource-note">请到来源获取链接</span><span v-else class="resource-note">{{item.share_url?'链接就绪':'转存前确认积分'}}</span><div class="resource-buttons" v-if="canTransfer(item)"><el-button size="small" :disabled="resourceBusy||item.resolveUncertain" @click="copyResource(item)">复制链接</el-button><el-button type="primary" size="small" :disabled="resourceBusy||!transferTarget?.target_cid||item.resolveUncertain||item.transferUncertain||item.transferSubmitted" @click="transferResource(item)">转存到 115</el-button></div></div></article></div>
+<div v-else class="resource-list"><article v-for="(item,index) in visibleResources" :key="item.slug||index" class="resource-card"><div class="resource-card-top"><div class="resource-labels"><span class="source-badge">{{sourceLabel(item.source)}}</span><span class="provider-badge">{{item.provider_label||item.provider||'网盘未知'}}</span><span v-if="item.validate_status==='valid'" class="valid-badge">有效</span></div><span class="resource-cost" :class="{'is-ready':item.share_url}">{{item.share_url?'链接就绪':item.is_unlocked?'已解锁':item.unlock_points!==null?'预计 '+item.unlock_points+' 积分':'费用未知'}}</span></div><h3>{{item.title||selected?.title||'未命名资源'}}</h3><p v-if="resourceRemark(item)" class="resource-remark" :title="resourceRemark(item)">{{resourceRemark(item)}}</p><div class="resource-meta"><span class="publisher-badge">发布者：{{item.sharer||'未知'}}</span><span v-if="item.size">{{item.size}}</span><span v-if="item.release_group">发布组：{{item.release_group}}</span></div><div class="resource-tags"><span v-for="tag in resourceTags(item)" :key="String(tag)">{{tag}}</span></div><details v-if="resourceDetails(item).length" class="resource-detail"><summary>资源详情</summary><dl><template v-for="row in resourceDetails(item)" :key="row[0]"><dt>{{row[0]}}</dt><dd>{{row[1]}}</dd></template></dl></details><div class="resource-card-actions"><span v-if="item.resolveUncertain" class="resource-note">解锁结果待核查</span><span v-else-if="item.transferUncertain" class="resource-note">转存结果待核查</span><span v-else-if="item.transferSubmitted" class="resource-note">已入队，查看任务中心</span><span v-else-if="item.shareSubmitted" class="resource-note">已入分享库，查看任务中心</span><span v-else-if="item.provider!=='115'" class="resource-note">当前仅支持 115 转存</span><span v-else-if="!canTransfer(item)" class="resource-note">请到来源获取链接</span><span v-else class="resource-note">{{item.share_url?'链接就绪':'转存前确认积分'}}</span><div class="resource-buttons" v-if="canTransfer(item)"><el-button size="small" :disabled="resourceBusy||item.resolveUncertain" @click="copyResource(item)">复制链接</el-button><el-button size="small" :disabled="resourceBusy||item.resolveUncertain||item.shareSubmitted||item.transferSubmitted" @click="shareStrmResource(item)">分享入库</el-button><el-button type="primary" size="small" :disabled="resourceBusy||!transferTarget?.target_cid||item.resolveUncertain||item.transferUncertain||item.transferSubmitted" @click="transferResource(item)">转存到 115</el-button></div></div></article></div>
 <p class="resource-footnote">获取链接可能消耗积分；转存和整理状态可在任务中心查看。</p>
 </el-dialog>
 </template>
