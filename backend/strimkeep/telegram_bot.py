@@ -70,7 +70,7 @@ class TelegramBot:
             ident=str(profile.get('id') or '')
             if not re.fullmatch(r'[a-z0-9]{1,32}', ident): continue
             mode='全量' if profile.get('mode') == 'full' else '增量'
-            label=str(profile.get('name') or '同步任务')[:42]
+            label=str(profile.get('name') or '同步任务')
             buttons.append([{'text':f'{label} · {mode}',
                              'callback_data':f'sync:{ident}:{sync_profile_revision(profile)}'}])
         if not buttons: raise ValueError('没有可执行的同步任务，请检查网页任务设置。')

@@ -10,7 +10,7 @@ def compact(value, limit=100):
 def sync_task_context(config):
     """Keep sync notifications attributable without guessing legacy task modes."""
     lines=[]
-    name=compact(config.get('sync_profile_name'), 80)
+    name=str(config.get('sync_profile_name') or '').strip()
     if name: lines.append('任务：'+name)
     mode={'incremental':'增量同步','full':'全量同步'}.get(config.get('mode'))
     if mode: lines.append('方式：'+mode)

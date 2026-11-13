@@ -96,6 +96,22 @@ def test_sync_menu_empty_does_not_fall_back_to_old_settings(tmp_path):
     asyncio.run(run())
 
 
+def test_menu_and_receipt_follow_saved_names_and_directories(tmp_path):
+    async def run():
+        store,profiles,notes,http,bot=setup(tmp_path)
+        name='自定义电影资料库同步任务' * 5
+        profiles[0].update(name=name, source_cids=['200'], source_labels={'200':'115 网盘 / 自选目录'})
+        store.set_many({'sync_profiles':profiles})
+        await bot.handle(message(),{'allowed_user_id':'42'},'bot1')
+        assert notes.sent[0][1]['reply_markup']['inline_keyboard'][0][0]['text']==name+' · 增量'
+        await bot.handle(callback(2,profiles[0]),{'allowed_user_id':'42'},'bot1')
+        assert name in notes.notices[-1][0][2] and '115 网盘 / 自选目录' in notes.notices[-1][0][2]
+        details=json.loads(store.db.execute('SELECT config FROM organize_jobs').fetchone()[0])
+        assert details['source_cids']==['200']
+        store.close()
+    asyncio.run(run())
+
+
 def test_poll_requests_and_processes_callback_updates(tmp_path):
     async def run():
         store,profiles,notes,http,bot=setup(tmp_path)
