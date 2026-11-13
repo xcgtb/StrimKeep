@@ -165,6 +165,10 @@ class Cloud115:
         # 同步）并发跑，账号也可能切换，混在一份进程级缓存里会互相踩。
         self._scope_context = ContextVar('cloud115_scope_' + str(id(self)), default=('', ''))
         self._children_memo = {}
+        # 文件详情缓存：(账号, 文件 ID) → (读取时间, 详情)。
+        # 洗版准备会对「库内已存在的每个版本」逐个复核，同一任务里反复读同一文件只会
+        # 拿到同一份事实；我们自己的改名/移动/回收会主动失效，另有 TTL 兜底外部改动。
+        self._file_memo = {}
         self._ledgers = {}
         # 回收站快照：一份「刚核对过的清单」可当下一个文件的回收前状态。
         self._recycle_snapshot = None
@@ -387,9 +391,11 @@ class Cloud115:
             await self.sleep(wait)
 
     async def call(self, method, *args, _scope: str = 'generic', _kind: str = 'read', _batch: int = 0,
-                   _channel: str = '', _parents: tuple | None = None, **kwargs):
+                   _channel: str = '', _parents: tuple | None = None, _files: tuple = (), **kwargs):
         playing = playback_request.get()
         if _kind == 'write':
+            if _files:
+                self.forget_files(_files)
             # 写之前就清：万一响应丢失（结果未知），后续读也不能用旧清单。
             # 给了 _parents 就只清这几个目录：以前每次写都清整棵树，同一批整理里
             # 分类/地区/作品目录被反复重读（现场：36 个文件却 656 次目录读取）。
@@ -627,6 +633,22 @@ class Cloud115:
                 'offset': offset, 'limit': limit, 'next_offset': offset + len(items),
                 'has_more': has_more, 'path': result.get('path', []), 'raw_count': raw_count}
 
+    FILE_MEMO_SECONDS = 300
+
+    async def cached_file(self, file_id):
+        """带缓存的文件详情：只给「洗版候选复核」这类重复只读场景用。
+
+        写入后的核对（organizer.change_file）必须走 file()：改名/移动刚发生，
+        读缓存会看到旧名字。缓存按文件 ID 记账，我们自己的写会主动失效。
+        """
+        key = str(file_id)
+        hit = self._file_memo.get(key)
+        if hit and self.clock() - hit[0] < self.FILE_MEMO_SECONDS:
+            return dict(hit[1])
+        detail = await self.file(file_id)
+        self._file_memo[key] = (self.clock(), dict(detail))
+        return detail
+
     async def file(self, file_id: str):
         self.count_op('详情')
         client = self.client()
@@ -692,6 +714,15 @@ class Cloud115:
         """只丢掉这些目录的缓存（写操作后按实际影响面失效）。"""
         for cid in cids or ():
             self._children_memo.pop(self.scope_key(cid), None)
+
+    def forget_files(self, file_ids):
+        """丢掉这些文件的详情缓存：我们自己改名/移动/回收之后它们就不再有效。
+
+        只按文件 ID 记账：115 的文件 ID 全局唯一，掺进「账号 + 任务」作用域会让
+        缓存写入与失效落在不同的键上（现场：改名后校验读回旧名字）。
+        """
+        for file_id in file_ids or ():
+            self._file_memo.pop(str(file_id), None)
 
     def affected_parents(self, file_ids):
         """从目录缓存里找出「装着这些文件」的目录 ID。
@@ -948,7 +979,7 @@ class Cloud115:
         self.count_op('改名')
         # fs_rename(dict) expects already encoded field names; use tuple contract.
         return await self.call(self.client().fs_rename, (file_id, name), _kind='write',
-                               _parents=self.write_parents([file_id]))
+                               _parents=self.write_parents([file_id]), _files=(file_id,))
 
     async def rename_many(self, items):
         """按文件 ID 批量改名；分批串行提交，结果由调用方逐项核查。"""
@@ -962,7 +993,8 @@ class Cloud115:
         for start in range(0, len(pairs), 50):
             # 不标记 _batch：每次请求仍按用户设置的普通写入间隔执行。
             last = await self.call(client.fs_rename, pairs[start:start + 50],
-                                   _scope='file', _kind='write', _parents=parents)
+                                   _scope='file', _kind='write', _parents=parents,
+                                   _files=tuple(fid for fid, _ in pairs[start:start + 50]))
         return last
 
     async def move(self, file_id, parent_id):
@@ -971,7 +1003,7 @@ class Cloud115:
         # Always request keep_both; organizer also checks names and file identity.
         return await self.call(self.client().fs_move, {'fid': file_id, 'pid': parent_id,
             'conflict_policy': json.dumps({str(file_id): {'action': 'keep_both'}})}, _kind='write',
-            _parents=self.write_parents([file_id], parent_id))
+            _parents=self.write_parents([file_id], parent_id), _files=(file_id,))
 
     async def move_many(self, file_ids, parent_id):
         """对齐：一次 /open/ufile/move，file_ids 逗号分隔 + to。"""
@@ -982,7 +1014,7 @@ class Cloud115:
         return await self.call(self.client().fs_move_open,
                                {'file_ids': ','.join(ids), 'to_cid': str(parent_id)},
                                _scope='file', _kind='write', _batch=len(ids),
-                               _parents=self.write_parents(ids, parent_id))
+                               _parents=self.write_parents(ids, parent_id), _files=tuple(ids))
 
     async def sign(self):
         """115 每日签到。
@@ -1168,7 +1200,7 @@ class Cloud115:
         # Never purge or clean the recycle bin.
         return await self.call(self.client().fs_delete, {'fid': str(file_id), 'pid': str(parent_id), 'ignore_warn': 0},
                                _scope='file', _kind='write',
-                               _parents=self.write_parents([file_id], parent_id))
+                               _parents=self.write_parents([file_id], parent_id), _files=(file_id,))
 
     async def recycle_many(self, file_ids, parent_id):
         self.count_op('删除', len(file_ids))
@@ -1191,7 +1223,7 @@ class Cloud115:
             return await self.call(self.client().fs_delete_open,
                                    {'file_ids': ','.join(targets)},
                                    _scope='file', _kind='write', _batch=len(targets),
-                                   _parents=parents)
+                                   _parents=parents, _files=tuple(targets))
 
         try:
             return await send(ids)

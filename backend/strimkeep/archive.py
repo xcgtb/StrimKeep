@@ -387,6 +387,9 @@ class ArchiveIndex:
         hint = plan['hint']
         entries = self.store.db.execute("SELECT * FROM archive_entries WHERE snapshot_id=? AND state='resolved' AND media_type=? AND tmdb_id=? AND file_id<>?", (snapshot['id'], hint['media_type'], plan['details']['id'], original['id'])).fetchall()
         result = []
+        # 洗版准备对同一批「库内已有版本」会逐个复核：同一任务里重复读同一文件
+        # 只会得到同一份事实（我们自己的改名/移动/回收会主动失效），用带缓存的读法。
+        reader = getattr(self.cloud, 'cached_file', self.cloud.file)
         for entry in entries:
             if entry['file_id'] not in plan.get('current_archive_ids', []):
                 continue
@@ -394,7 +397,7 @@ class ArchiveIndex:
                     max(entry['episode'], hint['episode']) > min(entry['end_episode'], hint['end_episode'])):
                 continue
             self.engine.boundary(job_id)
-            current = await self.cloud.file(entry['file_id'])
+            current = await reader(entry['file_id'])
             saved = json.loads(entry['metadata'])['original']
             self.engine.check_source(saved, current, entry['name'], entry['parent_id'])
             result.append((dict(entry), current))
