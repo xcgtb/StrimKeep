@@ -243,6 +243,8 @@ def install(store):
         file_id TEXT NOT NULL, pickcode TEXT NOT NULL DEFAULT '', name TEXT NOT NULL,
         strm_path TEXT NOT NULL, token_hash TEXT NOT NULL,
         revoked INTEGER NOT NULL DEFAULT 0, created REAL NOT NULL)''')
+    store.db.execute('''CREATE TABLE IF NOT EXISTS share_check_candidates(
+        id TEXT PRIMARY KEY, identity TEXT NOT NULL, first_at REAL NOT NULL, last_at REAL NOT NULL)''')
     store.db.execute('''CREATE TABLE IF NOT EXISTS share_watchlist(
         share_code TEXT NOT NULL, receive_code TEXT NOT NULL DEFAULT '',
         last_checked REAL, created REAL NOT NULL,
@@ -1273,6 +1275,7 @@ async def check_alive(engine):
     rows = store.db.execute(
         'SELECT id, name, share_code, receive_code, file_id, strm_path FROM share_strms WHERE revoked=0').fetchall()
     dead, alive, skipped, details = [], 0, 0, []
+    status_cache = {}
     started = time.time()
     engine._share_check_progress = {'started_at': started, 'total': len(rows), 'processed': 0, 'alive': 0, 'dead': 0, 'skipped': 0}
 
@@ -1286,11 +1289,45 @@ async def check_alive(engine):
             await engine.cloud.share_url_download(
                 row['file_id'], row['share_code'], row['receive_code'], 'StrimKeep/0.6')
             alive += 1
+            with store.db:
+                store.db.execute('DELETE FROM share_check_candidates WHERE id=?', (row['id'],))
         except CloudError as exc:
             if not share_is_dead(exc):
                 skipped += 1
                 reasons = {'LOGIN_INVALID': '115 登录失效', 'LOGIN_REQUIRED': '115 未登录', 'RATE_LIMITED': '115 请求受限', 'CLOUD_REJECTED': '115 拒绝请求，无法确认分享状态', 'OBJECT_NOT_FOUND': '接口或对象未找到，无法确认分享状态'}
                 detail(row, 'unknown', reasons.get(exc.code, '115 请求失败，无法确认分享状态'))
+                continue
+            # 文件级“不存在”可能是目录、接口或权限错误；分享根状态必须独立核验。
+            share_key = (row['share_code'], row['receive_code'])
+            if share_key not in status_cache:
+                try:
+                    state = await engine.cloud.share_availability(*share_key)
+                except Exception:
+                    state = 'unknown'
+                status_cache[share_key] = (state, time.time())
+            share_state, observed_at = status_cache[share_key]
+            if share_state != 'cancelled':
+                with store.db:
+                    store.db.execute('DELETE FROM share_check_candidates WHERE id=?', (row['id'],))
+                skipped += 1
+                reason = ('分享仍可访问，但此文件取链失败，需人工核实' if share_state == 'accessible'
+                          else '分享状态未能确认，已保留')
+                detail(row, 'unknown', reason)
+                continue
+            # 两次独立检测至少间隔 5 分钟；记录只保存身份摘要，不保存分享码。
+            identity = hashlib.sha256(json.dumps([row['share_code'], row['receive_code'], row['file_id']],
+                                                  ensure_ascii=False).encode()).hexdigest()
+            candidate = store.db.execute('SELECT identity, first_at FROM share_check_candidates WHERE id=?', (row['id'],)).fetchone()
+            if not candidate or candidate['identity'] != identity or observed_at - candidate['first_at'] < 0:
+                with store.db:
+                    store.db.execute('INSERT OR REPLACE INTO share_check_candidates VALUES (?,?,?,?)',
+                                     (row['id'], identity, observed_at, observed_at))
+                skipped += 1
+                detail(row, 'pending', '115 返回分享取消，至少 5 分钟后再次检测确认；本地文件已保留')
+                continue
+            if observed_at - candidate['first_at'] < 300:
+                skipped += 1
+                detail(row, 'pending', '距离首次核验不足 5 分钟，暂不清理')
                 continue
             # Check the live row under the publication lock after the network
             # wait: a concurrent organiser may have changed or moved it.
@@ -1335,8 +1372,10 @@ async def check_alive(engine):
                     skipped += 1
                     detail(row, 'unknown', '条目状态已变化，请重新检查')
                     continue
+                with store.db:
+                    store.db.execute('DELETE FROM share_check_candidates WHERE id=?', (row['id'],))
                 dead.append({'id': row['id'], 'name': row['name'] or '', 'strm_path': row['strm_path']})
-                detail(row, 'dead', '115 确认分享或文件不可用，本地文件已清理')
+                detail(row, 'dead', '两次检测均确认分享已取消，本地文件已清理')
         except Exception:
             skipped += 1
             detail(row, 'unknown', '请求异常，无法确认分享状态')

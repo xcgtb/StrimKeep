@@ -101,7 +101,7 @@ def test_check_alive_records_last_run_for_metrics(tmp_path):
         cloud.share_url_download = expired
         await share_service.check_alive(engine)
         meta = store.meta_json('share_check_last')
-        assert meta and meta['dead'] == 1 and meta['alive'] == 0 and meta['at'] > 0, meta
+        assert meta and meta['dead'] == 0 and meta['skipped'] == 1 and meta['alive'] == 0 and meta['at'] > 0, meta
         await http.aclose()
         store.close()
 

@@ -190,16 +190,16 @@ def test_share_check_alive_skips_unknown_errors_and_only_retires_proven_shares(t
         _seed_share_rows(c, [('s1', '2001', '限流'), ('s2', '2002', '登录'),
                              ('s3', '2003', '接口'), ('s4', '2004', '失效'), ('s5', '2005', '正常')])
         result = c.post('/api/v1/share/check').json()
-        # 只有明确分享失效证据的条目被撤销；限流/登录/接口变化/未知全部跳过。
-        assert result['dead_count'] == 1 and result['skipped'] == 3 and result['alive'] == 1
+        # 缺少独立分享状态证据时均保留。
+        assert result['dead_count'] == 0 and result['skipped'] == 4 and result['alive'] == 1
         report = c.get('/api/v1/share/check').json()['history'][0]
-        assert report['total'] == 5 and report['alive'] == 1 and report['dead'] == 1 and report['skipped'] == 3
+        assert report['total'] == 5 and report['alive'] == 1 and report['dead'] == 0 and report['skipped'] == 4
         assert {item['id'] for item in report['details']} == {'s1', 's2', 's3', 's4'}
         assert next(item for item in report['details'] if item['id'] == 's2')['reason'] == '115 登录失效'
         assert 'recv' not in str(report) and 'code123' not in str(report)
         store = c.app.state.store
         states = {r['id']: r['revoked'] for r in store.db.execute('SELECT id,revoked FROM share_strms')}
-        assert states == {'s1': 0, 's2': 0, 's3': 0, 's4': 1, 's5': 0}
-        # 失效条目的 STRM 已清掉，其余保留。
-        assert not (c.app.state.strms / '分享STRM待整理' / '失效.strm').exists()
+        assert states == {'s1': 0, 's2': 0, 's3': 0, 's4': 0, 's5': 0}
+        # 未通过独立复核，不应清理。
+        assert (c.app.state.strms / '分享STRM待整理' / '失效.strm').exists()
         assert (c.app.state.strms / '分享STRM待整理' / '限流.strm').exists()

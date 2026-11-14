@@ -40,9 +40,9 @@ def _probe_user_agent(value: str) -> bool:
 
 
 class CloudError(Exception):
-    def __init__(self, message: str, code: str = 'CLOUD_UNAVAILABLE', status: int = 502):
+    def __init__(self, message: str, code: str = 'CLOUD_UNAVAILABLE', status: int = 502, errno=None):
         super().__init__(message)
-        self.code, self.status = code, status
+        self.code, self.status, self.errno = code, status, errno
 
 
 # 任务级信号：登录失效与限流必须上抛。下面那些「先吞掉错误、再按目录核对结果」的地方
@@ -452,7 +452,7 @@ class Cloud115:
                         code = classify_rejection(errno, str(error_msg), _scope)
                         # 登录类错误必须保留 LOGIN_INVALID，下游「去重新登录」的引导
                         # 依赖这个码，不能折进通用 CLOUD_REJECTED。
-                        raise CloudError(str(error_msg) or '115 返回请求频率限制。', code, _NOT_FOUND_STATUS.get(code, 422))
+                        raise CloudError(str(error_msg) or '115 返回请求频率限制。', code, _NOT_FOUND_STATUS.get(code, 422), errno=errno)
                 value = check_response(result) if isinstance(result, dict) else result
                 if not playing:
                     self.reward()
@@ -1320,6 +1320,21 @@ class Cloud115:
 
     async def share_receive(self,secret,items,dest):
         return await self.call(self.client().share_receive,{**secret,'file_id':','.join(x['id'] for x in items),'cid':dest},_scope='share',_kind='write',_parents=(str(dest),))
+
+    async def share_availability(self, share_code, receive_code):
+        """查询分享根目录状态；只使用有明确响应的结果，不推断目录中文件状态。"""
+        try:
+            response = await self.call(self.client().share_snap_app,
+                {'share_code': share_code, 'receive_code': receive_code, 'cid': 0, 'limit': 1, 'offset': 0},
+                app='android', _scope='share')
+        except CloudError as exc:
+            # 4100010 是社区观察到的“分享已取消”代码；不要用笼统的“不存在”文案代替。
+            if str(exc.errno) == '4100010':
+                return 'cancelled'
+            return 'unknown'
+        if isinstance(response, dict) and response.get('state') in (True, 1, '1') and isinstance(response.get('data'), dict):
+            return 'accessible'
+        return 'unknown'
 
     async def share_url_download(self, file_id, share_code, receive_code, user_agent):
         """获取分享直链；播放请求按账号、分享、文件和 UA 短暂缓存并合并并发。"""
