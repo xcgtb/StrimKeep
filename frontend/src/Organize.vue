@@ -124,5 +124,6 @@ useVisiblePolling(async()=>{if(!busy.value)await refreshJob()},5000)
 <style scoped>
 
 .workflow-page :deep(.directory-group){padding:16px 0}.workflow-page :deep(.directory-group h3){font-size:13px}.workflow-page :deep(.directory-item){border-radius:8px;align-items:center}.workflow-page :deep(.compact-note){line-height:1.7}.workflow-page :deep(.ext-chips){gap:7px}.workflow-page :deep(.inline-notice){padding:10px 12px;border-radius:7px;line-height:1.6}.workflow-page :deep(.task-peek){padding-top:15px}.workflow-page :deep(.organize-option){gap:12px}
+.organize-schedule :deep(.workflow-switch-row){padding:4px 0 10px;border-top:0}.organize-schedule :deep(.workflow-field-row){margin:8px 0;gap:6px}.organize-schedule :deep(.el-form-item){margin-bottom:10px}.organize-schedule :deep(.hint){margin:8px 0;line-height:1.5}.organize-schedule :deep(.schedule-next){margin:8px 0 0}.organize-schedule{margin:12px 0;padding:12px 14px}
 @media(max-width:760px){.workflow-page :deep(.directory-item span){word-break:break-word}.workflow-page :deep(.organize-option){align-items:stretch}.workflow-page :deep(.ext-add){flex-wrap:wrap}.workflow-page :deep(.task-peek){grid-template-columns:1fr auto}}
 </style>
