@@ -56,7 +56,7 @@ def emby_strm_mount(store):
 
 
 
-def inject_sidecar(db_path, item_id, sidecar, strm_root='/strm', emby_root='/media'):
+def inject_sidecar(db_path, item_id, sidecar, strm_root='/strm', emby_root='/media', should_continue=None):
     """单条即时写入（追更用）：已经有视频流就跳过。
 
     返回 ``(状态, 流数, 原因)``：状态为 ``injected`` / ``skip`` / ``missing`` /
@@ -64,6 +64,8 @@ def inject_sidecar(db_path, item_id, sidecar, strm_root='/strm', emby_root='/med
     这样"哪一条没写进去、为什么"可以直接落到失败清单里，而不是只剩一个汇总数字。
     """
     import os
+    if should_continue and not should_continue():
+        return 'skip', 0, ''
     conn = sqlite3.connect(db_path, timeout=20)
     conn.execute('PRAGMA busy_timeout=15000')
     conn.row_factory = sqlite3.Row
@@ -83,6 +85,9 @@ def inject_sidecar(db_path, item_id, sidecar, strm_root='/strm', emby_root='/med
         if not result['ok']:
             conn.rollback()
             return 'failed', 0, result['reason']
+        if should_continue and not should_continue():
+            conn.rollback()
+            return 'skip', 0, ''
         conn.commit()
         return 'injected', result['streams'], ''
     except sqlite3.Error:
@@ -134,12 +139,13 @@ def sidecar_path(strm_path, emby_root='/media', strm_root='/strm'):
 class Injector:
     """一次批量写入：备份 → 逐条补齐 → 汇总。"""
 
-    def __init__(self, db_path, strm_root='/strm', emby_root='/media', keep_backups=3, recorder=None):
+    def __init__(self, db_path, strm_root='/strm', emby_root='/media', keep_backups=3, recorder=None, should_continue=None):
         self.db_path = db_path
         self.strm_root = strm_root
         self.emby_root = emby_root
         self.keep_backups = keep_backups
         self.recorder = recorder      # 逐条回报：成功传 ''，失败传原因码
+        self.should_continue = should_continue
 
     # ---------- 库 ----------
 
@@ -246,6 +252,8 @@ class Injector:
         ``recorder(item_id, path, reason)`` 存在时，逐条回报结果（成功传 ``''``）：
         批量补的时候"哪一条没补上、为什么"就落在失败清单里，而不是只剩 ``failed: 7``。
         """
+        if self.should_continue and not self.should_continue():
+            return {'ok': True, 'skipped': 'disabled'}
         conn = self.connect()
         try:
             if not self.schema_ok(conn):
@@ -261,6 +269,9 @@ class Injector:
             if pending and backup:
                 stats['backup'] = self.backup()
             for item_id, path in pending:
+                if self.should_continue and not self.should_continue():
+                    stats['stopped'] = True
+                    break
                 try:
                     result = self.inject_one(conn, item_id,
                                              sidecar_path(path, self.emby_root, self.strm_root))
@@ -277,6 +288,10 @@ class Injector:
                                                   'reason': result['reason']})
                     self._record(item_id, path, result['reason'])
                     continue
+                if self.should_continue and not self.should_continue():
+                    conn.rollback()
+                    stats['stopped'] = True
+                    break
                 conn.commit()
                 stats['injected'] += 1
                 stats['streams'] += result['streams']

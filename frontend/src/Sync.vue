@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import {useVisiblePolling} from './pageActivity'
 import {computed,onMounted,onUnmounted,ref,watch} from 'vue'
-import {useRoute} from 'vue-router'
+import {useRoute,useRouter} from 'vue-router'
 import {ElMessage,ElMessageBox} from 'element-plus'
 import {VideoPlay,FolderOpened,Connection,Bell,DocumentChecked} from '@element-plus/icons-vue'
 import SettingCard from './SettingCard.vue'
@@ -11,7 +11,7 @@ import WorkflowToolbar from './WorkflowToolbar.vue'
 import SyncProfiles from './SyncProfiles.vue'
 import {copyText} from './clipboard'
 import {syncBaselineWithWebhookToken} from './workflowSettings'
-const route=useRoute()
+const route=useRoute(),router=useRouter()
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>()
 const emit=defineEmits<{navigate:[page:string]}>()
 const outputRoot=ref(''),savedBase=ref('')
@@ -61,7 +61,7 @@ async function cleanupUnidentifiedEmpty(){
 async function cleanupPlaybacks(){await run(async()=>{const r:any=await props.api('/playbacks/cleanup','POST',{});cleanupMsg.value=r.message||`已清理 ${r.removed} 条`;ElMessage.success(cleanupMsg.value)})}
 async function rewrite(){await run(async()=>{const p:any=await props.api('/strm/rebuild?dry_run=1','POST',{});if(!p.rewritten&&!p.missing){rewriteMsg.value=`无需重写：${p.unchanged} 条已是最新`;ElMessage.success('本地 STRM 与当前播放地址一致');return}try{await ElMessageBox.confirm(`将重写 ${p.rewritten} 条，缺失 ${p.missing} 条（缺失只报告、不创建）。执行前会自动快照，可一键回滚。`,'按当前地址重写本地 STRM',{confirmButtonText:'开始重写',cancelButtonText:'取消'})}catch{return}const r:any=await props.api('/strm/rebuild','POST',{});rewriteMsg.value=`重写 ${r.rewritten} · 未变 ${r.unchanged} · 缺失 ${r.missing} · 失败 ${r.failed}`;ElMessage.success(r.snapshot?`已重写 ${r.rewritten} 条，快照 #${r.snapshot} 可回滚`:'本地 STRM 已按当前播放地址重写')})}
 async function rollbackRewrite(){await run(async()=>{const s:any=await props.api('/strm/rebuild/status');if(!s||!s.snapshot){ElMessage.warning('还没有可回滚的重写记录');return}try{await ElMessageBox.confirm(`把上次重写（快照 #${s.snapshot}）写回的本地 STRM 内容还原？不影响云端文件与播放身份。`,'回滚上次重写',{confirmButtonText:'回滚',cancelButtonText:'取消'})}catch{return}const r:any=await props.api('/strm/rebuild/rollback','POST',{});rewriteMsg.value=`已回滚 ${r.restored}/${r.total} 条（快照 #${r.snapshot}）`;ElMessage.success('已回滚上次重写')})}
-async function save(){await run(async()=>{await props.api('/sync/config','PUT',config.value);try{if(base.value!==savedBase.value){await props.api('/settings','PUT',{playback_base:base.value});savedBase.value=base.value}}catch(e){throw new Error('同步设置已保存；播放地址未保存：'+(e as Error).message)}baseline.value=snapshot();ElMessage.success('STRM 同步设置已保存')})}
+async function save(){await run(async()=>{const latest=await props.api('/sync/config');config.value.emby_media_info=!!latest.config.emby_media_info;await props.api('/sync/config','PUT',config.value);try{if(base.value!==savedBase.value){await props.api('/settings','PUT',{playback_base:base.value});savedBase.value=base.value}}catch(e){throw new Error('同步设置已保存；播放地址未保存：'+(e as Error).message)}baseline.value=snapshot();ElMessage.success('STRM 同步设置已保存')})}
 async function canLeave(){if(profileEditor.value&&!await profileEditor.value.canLeave())return false;if(!dirty.value)return true;try{await ElMessageBox.confirm('当前修改尚未保存，修改会暂存到当前页面，刷新网页前请记得保存。确定切换？','离开同步设置',{confirmButtonText:'暂存并切换',cancelButtonText:'继续编辑'});return true}catch{return false}}
 function beforeUnload(e:BeforeUnloadEvent){if(route.name==='sync'&&(dirty.value||profileEditor.value?.hasDraft())){e.preventDefault();e.returnValue=''}}
 defineExpose({canLeave})
@@ -89,7 +89,7 @@ useVisiblePolling(async()=>{if(!ready.value||busy.value||dirty.value)return;cons
 <p class="hint">开启沿用后，以影视整理保存的扩展名为准；此处显示的是独立设置，关闭沿用后可编辑。未选格式不生成新 STRM，保留原视频和已有输出。</p>
 <div class="workflow-switch-row"><div><strong>生成 NFO</strong><p>在 STRM 旁边写电影/单集的 NFO，剧集还会写 tvshow.nfo；Emby 直接读本地元数据，不用再联网刮削。同步老库时也会现场识别补齐，认不出的文件跳过并记录原因。</p></div><el-switch v-model="config.generate_nfo" :disabled="busy"/></div>
 <div class="workflow-switch-row"><div><strong>下载海报与背景图</strong><p>从 TMDB 取 poster.jpg / fanart.jpg 放进作品目录，失败只跳过，不影响 STRM。</p></div><el-switch v-model="config.generate_images" :disabled="busy"/></div>
-<div class="workflow-switch-row"><div><strong>Emby 媒体信息</strong><p>需要启用 Emby 入库通知。网盘和分享 STRM 入库后，后台提取缺失的媒体信息，并在 STRM 旁保存 -media-info.json。无需安装插件；Emby 可能再次读取视频。失败不影响整理和 STRM。</p></div><el-switch v-model="config.emby_media_info" :disabled="busy" aria-label="Emby 媒体信息"/></div>
+<div class="workflow-switch-row"><div><strong>Emby 媒体信息</strong><p>提取、补写及总开关在系统设置统一管理。</p></div><el-button @click="router.push({name:'settings',query:{section:'emby'}})">前往设置</el-button></div>
 <div class="strm-field"><label>不生成 STRM 的小视频阈值（MB，0 不限制）</label><el-input-number v-model="config.min_video_size_mb" :min="0" :max="1048576" :disabled="busy"/></div>
 <ExtensionEditor v-model="config.metadata_extensions" label="实体下载的字幕与元数据扩展名" :presets="METADATA_PRESETS" :max-items="60" :excluded="config.inherit_video_extensions?[]:config.video_extensions" :forbidden="['.strm']" :disabled="busy"/>
 <p class="hint">视频只生成链接；这些扩展名实体下载。普通字幕绑定对应视频；其余附属文件增量下载到对应目录，不覆盖已有文件。单个附属文件上限20MB，超限说明并跳过。</p>

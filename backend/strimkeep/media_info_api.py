@@ -16,10 +16,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .emby_media_inject import DEFAULT_DB, Injector, emby_strm_mount, library_db
 from .media_info_log import install as install_failures, recorder, summary as failures_summary
+from .media_info_policy import media_info_enabled
 
 
 class MediaInfoConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
+    enabled: bool | None = None
+    extract: bool | None = None
     cron_enabled: bool | None = None
     cron: str | None = Field(default=None, max_length=100)
 
@@ -32,11 +35,14 @@ def make_injector(app, store, path=''):
     都往操作记录里写一条「兜底写入媒体信息失败：NameError」，只是没人翻日志。
     """
     return Injector(path or library_db(store), str(app.state.strms),
-                    emby_strm_mount(store), recorder=recorder(store))
+                    emby_strm_mount(store), recorder=recorder(store),
+                    should_continue=lambda: media_info_enabled(store))
 
 
 async def inject_once(app, store):
     """兜底跑一轮并返回统计；抽出来才能测（不依赖 croniter 和 while True）。"""
+    if not media_info_enabled(store):
+        return {'ok': True, 'skipped': 'disabled'}
     path = library_db(store)
     if not path:
         raise ValueError('emby_library_db 未配置')
@@ -54,7 +60,7 @@ def install_media_info(app, store, admin):
     async def media_info_config():
         schedule = store.get('schedule_config', {}) or {}
         sync_config = store.get('sync_config', {}) or {}
-        return {'extract': bool(sync_config.get('emby_media_info', False)),
+        return {'enabled': media_info_enabled(store), 'extract': bool(sync_config.get('emby_media_info', False)),
                 'cron_enabled': bool(schedule.get('media_info_enabled', False)),
                 'cron': schedule.get('media_info_cron', '0 4 * * *'),
                 'timezone': schedule.get('timezone', 'Asia/Shanghai'),
@@ -64,6 +70,13 @@ def install_media_info(app, store, admin):
     async def save_media_info_config(body: MediaInfoConfig):
         patch = body.model_dump(exclude_none=True)
         schedule = dict(store.get('schedule_config', {}) or {})
+        changes = {}
+        if 'enabled' in patch:
+            changes['media_info_master_enabled'] = patch['enabled']
+        if 'extract' in patch:
+            sync_config = dict(store.get('sync_config', {}) or {})
+            sync_config['emby_media_info'] = patch['extract']
+            changes['sync_config'] = sync_config
         if 'cron_enabled' in patch:
             schedule['media_info_enabled'] = bool(patch['cron_enabled'])
         if 'cron' in patch:
@@ -71,8 +84,10 @@ def install_media_info(app, store, admin):
             if len(expression.split()) != 5 or not croniter.is_valid(expression):
                 raise HTTPException(422, 'Cron 表达式需要 5 段，例如 0 4 * * *。')
             schedule['media_info_cron'] = expression
-        if patch:
-            store.set_many({'schedule_config': schedule})
+        if 'cron' in patch or 'cron_enabled' in patch:
+            changes['schedule_config'] = schedule
+        if changes:
+            store.set_many(changes)
         return await media_info_config()
     @app.get('/api/v1/emby/media-info/status', dependencies=[Depends(admin)])
     async def media_info_status():
@@ -102,6 +117,8 @@ def install_media_info(app, store, admin):
     @app.post('/api/v1/emby/media-info/inject', dependencies=[Depends(admin)])
     async def media_info_inject(dry_run: int = Query(0, ge=0, le=1),
                                 limit: int = Query(0, ge=0, le=200000)):
+        if not media_info_enabled(store):
+            raise HTTPException(409, '媒体信息总开关已关闭，请先在系统设置中开启。')
         path = library_db(store)
         if not path:
             raise HTTPException(409, '还没有配置 Emby 的 library.db 路径：请挂载 Emby 的 data 目录，'
@@ -115,6 +132,8 @@ def install_media_info(app, store, admin):
             raise HTTPException(500, '写入失败：%s' % type(exc).__name__) from None
         if not stats.get('ok'):
             raise HTTPException(409, stats.get('message') or '写入失败')
+        if stats.get('skipped') or stats.get('stopped'):
+            return stats
         if not dry_run:
             store.event('emby', '媒体信息写入 Emby：补 %d 条（%d 条流、%d 条章节），'
                                 '%d 条没有 sidecar 跳过、%d 条失败。'
@@ -130,6 +149,8 @@ async def inject_cycle(app, store):
     以前未配置也会抛 ValueError，由 inject_loop 记成「兜底写入媒体信息失败」，
     现场把它当成媒体信息写入故障来查了。
     """
+    if not media_info_enabled(store):
+        return {'ok': True, 'skipped': 'disabled'}
     if not library_db(store):
         return {'ok': True, 'skipped': 'unconfigured'}
     return await inject_once(app, store)
@@ -154,7 +175,7 @@ async def inject_loop(app, store, tick=60.0):
         due = False
         try:
             schedule = store.get('schedule_config', {}) or {}
-            if schedule.get('media_info_enabled'):
+            if media_info_enabled(store) and schedule.get('media_info_enabled'):
                 zone = ZoneInfo(schedule.get('timezone', 'Asia/Shanghai'))
                 expression = schedule.get('media_info_cron', '0 4 * * *')
                 now = datetime.now(zone)

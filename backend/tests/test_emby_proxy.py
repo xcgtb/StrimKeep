@@ -609,13 +609,14 @@ def test_video_stream_is_redirected_to_cdn_instead_of_relayed():
                                      headers={'User-Agent': 'SenPlayer'}, follow_redirects=False)
             assert first.status_code == 302
             assert first.headers['location'].startswith('https://cdn')
-            # 播放器每几秒发一次 Range：每次都应是 302，且不再回源问 Path
+            # 每次流请求都用当前用户凭据向 Emby 验证，不能沿用其他用户缓存。
             again = await client.get('/emby/videos/123/stream.mkv',
+                                     params={'api_key': 'user-token'},
                                      headers={'User-Agent': 'SenPlayer',
                                               'Range': 'bytes=1048576-'},
                                      follow_redirects=False)
             assert again.status_code == 302
-        assert sum(1 for url in seen if '/emby/Items/123' in url) == 1
+        assert sum(1 for url in seen if '/emby/Items/123' in url) == 2
         await server.client.aclose()
     asyncio.run(run())
 
@@ -627,7 +628,7 @@ def test_video_stream_falls_back_when_path_is_not_115():
     class FakeRequest:
         method = 'GET'
         headers = {'user-agent': 'SenPlayer'}
-        query_params = {}
+        query_params = {'api_key': 'user-token'}
 
         def __init__(self, path):
             self.url = SimpleNamespace(path=path, query='')
@@ -653,7 +654,7 @@ def test_video_stream_refuses_to_relay_through_tunnel_when_link_fails():
     class FakeRequest:
         method = 'GET'
         headers = {'user-agent': 'SenPlayer'}
-        query_params = {}
+        query_params = {'api_key': 'user-token'}
 
         def __init__(self, path):
             self.url = SimpleNamespace(path=path, query='')
@@ -691,7 +692,7 @@ def test_video_stream_reads_strm_content_to_build_the_redirect(monkeypatch, tmp_
     class FakeRequest:
         method = 'GET'
         headers = {'user-agent': 'SenPlayer'}
-        query_params = {}
+        query_params = {'api_key': 'user-token'}
 
         def __init__(self, path):
             self.url = SimpleNamespace(path=path, query='')
@@ -709,5 +710,35 @@ def test_video_stream_reads_strm_content_to_build_the_redirect(monkeypatch, tmp_
                                                  server.config())
         assert response is not None and response.status_code == 302
         assert response.headers['location'].startswith('https://cdn')
+        await server.client.aclose()
+    asyncio.run(run())
+
+
+def test_stream_redirect_checks_identity_and_media_source():
+    async def run():
+        calls = []
+        def upstream(request):
+            calls.append(request)
+            if request.url.params.get('api_key') == 'invalid':
+                return httpx.Response(401)
+            return httpx.Response(200, json={'MediaSources': [
+                {'Id': 'a', 'Path': PLAYCODE_PATH},
+                {'Id': 'b', 'Path': PLAYCODE_PATH.replace('abcdefg', 'othercode')}]})
+        server = ProxyServer({'id':'r','upstream':'http://emby','api_key':'ADMIN-KEY'}, FakeStore(), FakeCloud())
+        server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        from types import SimpleNamespace
+        def req(query):
+            return SimpleNamespace(query_params=query, headers={'user-agent':'player'}, url=SimpleNamespace(path='/emby/videos/1/stream.mkv',query=''))
+        assert await server._stream_redirect(req({}), server.config()) is None
+        assert calls == []
+        download = req({'api_key':'valid'})
+        download.url.path = '/emby/Items/1/File'
+        assert await server._stream_redirect(download, server.config()) is None and calls == []
+        assert await server._stream_redirect(req({'api_key':'invalid'}), server.config()) is None
+        assert await server._stream_redirect(req({'api_key':'valid'}), server.config()) is None
+        response = await server._stream_redirect(req({'api_key':'valid','MediaSourceId':'b'}), server.config())
+        assert response.status_code == 302
+        assert server.cloud.calls[-1][1] == 'othercode'
+        assert all('ADMIN-KEY' not in str(call.url) for call in calls)
         await server.client.aclose()
     asyncio.run(run())

@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .media_info_policy import media_info_enabled
 from .network import emby_request
 from .store import digest
 
@@ -69,6 +70,8 @@ class NativeMediaInfo:
 
     def write_sidecar(self, target, item, source_name=None):
         """Write only our own sidecars, after checking the current STRM identity."""
+        if not media_info_enabled(self.store):
+            return
         relative = Path(target['relative'])
         root = Path(self.engine.root).resolve()
         if relative.is_absolute() or relative.suffix.lower() != '.strm' or '..' in relative.parts:
@@ -182,6 +185,8 @@ class NativeMediaInfo:
 
         结果（成功/失败原因）同时写进失败清单：失败时能直接看出是哪一部、为什么。
         """
+        if not media_info_enabled(self.store):
+            return
         try:
             from .emby_media_inject import emby_strm_mount, inject_sidecar, library_db
             from .media_info_log import record as record_failure
@@ -192,7 +197,8 @@ class NativeMediaInfo:
             if not db_path:
                 return          # 用户没挂 Emby 数据目录：只生成 sidecar，不猜路径
             state, _streams, reason = inject_sidecar(db_path, int(item_id), str(sidecar_path),
-                                                     str(self.engine.root), emby_strm_mount(self.store))
+                                                     str(self.engine.root), emby_strm_mount(self.store),
+                                                     should_continue=lambda: media_info_enabled(self.store))
             if state == 'injected':
                 self._event('媒体信息已即时写入 Emby（条目 %s）。' % item_id)
                 record_failure(self.store, item_id, str(sidecar_path), '')
@@ -203,6 +209,8 @@ class NativeMediaInfo:
 
     def save_sidecar_safely(self, target, item, source_name=None):
         """Do not let a user-owned sidecar block Emby's native extraction."""
+        if not media_info_enabled(self.store):
+            return False
         try:
             self.write_sidecar(target, item, source_name)
             return True
@@ -260,7 +268,7 @@ class NativeMediaInfo:
         self._event(f'任务 {row["job_id"]}：{message}')
 
     def enqueue(self, job_id, item, target, connection):
-        if not (self.store.get('sync_config', {}) or {}).get('emby_media_info', False):
+        if not media_info_enabled(self.store) or not (self.store.get('sync_config', {}) or {}).get('emby_media_info', False):
             return
         item_id = str(item.get('Id') or '')
         if not re.fullmatch(r'[a-zA-Z0-9-]{1,80}', item_id):
@@ -383,7 +391,7 @@ class NativeMediaInfo:
                 'Size': size, 'RunTimeTicks': duration_ticks, 'Bitrate': media.get('bit_rate')}
 
     async def tick(self):
-        if not (self.store.get('sync_config', {}) or {}).get('emby_media_info', False):
+        if not media_info_enabled(self.store) or not (self.store.get('sync_config', {}) or {}).get('emby_media_info', False):
             return
         row = self.store.db.execute("SELECT * FROM native_media_info_queue WHERE state='queued' AND next_due<=? ORDER BY job_id,item_id LIMIT 1", (time.time(),)).fetchone()
         if not row:
@@ -398,6 +406,8 @@ class NativeMediaInfo:
             response = await emby_request(self.delivery.http, 'GET', url + '/Items', headers=headers,
                 params={'Ids':row['item_id'], 'Fields':'Path,MediaSources,MediaStreams,Chapters'}, timeout=15)
             response.raise_for_status()
+            if not media_info_enabled(self.store):
+                return
             items = response.json().get('Items') or []
             target = json.loads(row['target'])
             if len(items) != 1 or not self.delivery.matches(items[0], target):
@@ -422,6 +432,8 @@ class NativeMediaInfo:
                 return
             response = await emby_request(self.delivery.http, 'GET', url + '/Items/' + row['item_id'] + '/PlaybackInfo', headers=headers, timeout=60)
             response.raise_for_status()
+            if not media_info_enabled(self.store):
+                return
             sources = response.json().get('MediaSources') or []
             streams = [s for source in sources for s in source.get('MediaStreams',[])]
             if not any(s.get('Type') == 'Video' for s in streams):
@@ -429,6 +441,8 @@ class NativeMediaInfo:
             check = await emby_request(self.delivery.http, 'GET', url + '/Items', headers=headers,
                 params={'Ids':row['item_id'], 'Fields':'Path,MediaSources,MediaStreams,Chapters'}, timeout=15)
             check.raise_for_status()
+            if not media_info_enabled(self.store):
+                return
             items = check.json().get('Items') or []
             if len(items) != 1 or not self.delivery.matches(items[0], target):
                 raise ValueError('媒体信息回读未确认')
@@ -495,7 +509,7 @@ class NativeMediaInfo:
         这里用独立的 emby_state / emby_attempts / emby_next_due 记账：每轮只推一条，
         拿不到就按 10 分钟起翻倍、封顶 1 小时退避，最多 EMBY_MAX_ATTEMPTS 次。
         """
-        if not (self.store.get('sync_config', {}) or {}).get('emby_media_info', False):
+        if not media_info_enabled(self.store) or not (self.store.get('sync_config', {}) or {}).get('emby_media_info', False):
             return 0
         rows = self.store.db.execute(
             "SELECT * FROM native_media_info_queue WHERE state='done' AND emby_state='pending' "
@@ -503,6 +517,8 @@ class NativeMediaInfo:
             (time.time(), limit)).fetchall()
         pushed = 0
         for row in rows:
+            if not media_info_enabled(self.store):
+                break
             connection = self.delivery.connection()
             if not connection or digest('|'.join(connection)) != row['connection']:
                 self._give_up_emby(row, 'Emby 连接已变化，不再追 Emby 端媒体信息。')
@@ -573,6 +589,9 @@ class NativeMediaInfo:
 
     async def loop(self):
         while not self.engine.closing:
+            if not media_info_enabled(self.store):
+                await asyncio.sleep(2)
+                continue
             try:
                 await self.tick()
                 await self.probe_emby()
@@ -599,6 +618,8 @@ class NativeMediaInfo:
         0.9.54 起只剩一条判定：**带本项目字段（version=1 + playback_id）且 STRM 已不在**
         就清掉——归属看内容，不再依赖 media_info_outputs 登记表。别人的 JSON 不碰。
         """
+        if not media_info_enabled(self.store):
+            return 0
         root = Path(self.engine.root)
         removed = 0
         # 看起来就是本项目写的（带 version / playback_id），而 STRM 没了：清掉。
@@ -629,7 +650,7 @@ class NativeMediaInfo:
         每 5 分钟最多跑一次、单次最多 20 条；只收「playbacks 里有身份、Emby 里
         找得到条目」的文件，其余（待整理/无身份）留给正常入库流程。
         """
-        if not (self.store.get('sync_config', {}) or {}).get('emby_media_info', False):
+        if not media_info_enabled(self.store) or not (self.store.get('sync_config', {}) or {}).get('emby_media_info', False):
             return 0
         connection = self.delivery.connection()
         if not connection:

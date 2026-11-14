@@ -112,3 +112,45 @@ def test_fallback_cycle_skips_quietly_when_library_db_missing(tmp_path, monkeypa
     stats = asyncio.run(inject_cycle(App(strm_root), store))
     assert stats == {'ok': True, 'skipped': 'unconfigured'}
     assert not store.events
+
+
+def test_master_switch_pauses_scheduled_and_inflight_writes(tmp_path):
+    from strimkeep.media_info_api import inject_once
+    from strimkeep.emby_media_inject import Injector
+    db, strm_root = _library(tmp_path)
+    store = Store(db)
+    store.values['media_info_master_enabled'] = False
+    assert asyncio.run(inject_once(App(strm_root), store))['skipped'] == 'disabled'
+    with sqlite3.connect(db) as conn:
+        assert conn.execute('SELECT count(*) FROM MediaStreams2').fetchone()[0] == 0
+    # 模拟单条写入过程中关闭：提交前必须回滚。
+    checks = iter([True, True, False])
+    injector = Injector(str(db), str(strm_root), '/media', should_continue=lambda: next(checks))
+    result = injector.run(backup=False)
+    assert result['stopped'] and result['injected'] == 0
+    with sqlite3.connect(db) as conn:
+        assert conn.execute('SELECT count(*) FROM MediaStreams2').fetchone()[0] == 0
+
+
+def test_master_config_preserves_existing_options_and_blocks_manual_inject(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from strimkeep.media_info_api import install_media_info
+    from test_organize import setup
+    store, cloud, http, engine, _ = setup(tmp_path)
+    store.set_many({'sync_config': {'emby_media_info': True, 'keep_value': 123},
+                    'schedule_config': {'media_info_enabled': True, 'media_info_cron': '0 4 * * *'}})
+    app = FastAPI()
+    app.state.strms = engine.root
+    install_media_info(app, store, lambda: None)
+    with TestClient(app) as client:
+        assert client.get('/api/v1/emby/media-info/config').json()['enabled'] is True
+        res = client.put('/api/v1/emby/media-info/config', json={'enabled': False})
+        assert res.status_code == 200 and res.json()['enabled'] is False
+        assert res.json()['extract'] and res.json()['cron_enabled']
+        assert client.post('/api/v1/emby/media-info/inject').status_code == 409
+        assert store.get('sync_config')['keep_value'] == 123
+        assert client.put('/api/v1/emby/media-info/config', json={'enabled': True, 'extract': False}).json()['cron_enabled']
+        assert store.get('sync_config')['keep_value'] == 123
+    asyncio.run(http.aclose())
+    store.close()

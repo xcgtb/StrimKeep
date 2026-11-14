@@ -588,7 +588,8 @@ class Sync:
         if not relative: return
         target = self.engine.outputs.path(relative)
         source = json.loads(current['original'])
-        missing_media = settings.get('emby_media_info') and not target.with_name(target.stem+'-media-info.json').exists()
+        from .media_info_policy import media_info_enabled
+        missing_media = media_info_enabled(self.store) and settings.get('emby_media_info') and not target.with_name(target.stem+'-media-info.json').exists()
         folder = _show_dir(target)
         want_nfo = settings.get('generate_nfo') and (not target.with_suffix('.nfo').exists() or (folder != target.parent and not (folder/'tvshow.nfo').exists()))
         want_images = settings.get('generate_images') and (not (folder/'poster.jpg').exists() or not (folder/'fanart.jpg').exists())

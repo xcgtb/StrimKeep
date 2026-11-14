@@ -692,3 +692,24 @@ def test_emby_media_info_retry_logs_only_first_and_give_up(tmp_path):
         await http.aclose()
         store.close()
     asyncio.run(run())
+
+
+def test_master_switch_pauses_native_queue_and_preserves_orphans(tmp_path):
+    async def run():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        worker = engine.emby.media_info
+        store.set_many({'sync_config': {'emby_media_info': True}, 'media_info_master_enabled': False})
+        worker.enqueue(1, {'Id':'abc'}, {'relative':'x.strm','pid':'p'}, 'connection')
+        assert store.db.execute('SELECT count(*) FROM native_media_info_queue').fetchone()[0] == 0
+        sidecar=engine.root/'orphan-media-info.json'
+        sidecar.parent.mkdir(parents=True, exist_ok=True)
+        sidecar.write_text(json.dumps({'version':1,'playback_id':'p'}))
+        assert worker.purge_orphan_sidecars() == 0 and sidecar.exists()
+        await worker.tick()
+        assert await worker.probe_emby() == 0
+        assert await worker.sweep_missing() == 0
+        store.set_many({'media_info_master_enabled': True})
+        worker.enqueue(1, {'Id':'abc'}, {'relative':'x.strm','pid':'p'}, 'connection')
+        assert store.db.execute('SELECT count(*) FROM native_media_info_queue').fetchone()[0] == 1
+        await http.aclose(); store.close()
+    asyncio.run(run())

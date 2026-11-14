@@ -1,6 +1,6 @@
 ﻿"""Emby 反代：把 115 直链交给播放器（与「Emby 与飞牛反代」页面的行为一致）。
 
-上游的快不来自 STRM 里写的地址，而来自反代：客户端连反代端口 → 反代带 API Key
+上游的快不来自 STRM 里写的地址，而来自反代：客户端连反代端口 → 反代保留客户端凭据
 转发 Emby 接口 → 在 PlaybackInfo 的返回体里补上 ``MediaSources[*].DirectStreamUrl``，
 值是预先解析好的 115 CDN 直链。（2026-11-09 实测对比：同一部片直连上游 Emby 8096 与
 经反代 8097，两份响应逐字段对照，结构差异只有这一个字段，Path / Protocol /
@@ -46,8 +46,6 @@ _SHARE = re.compile(r'^/play115/share/(?P<sid>[0-9A-Za-z]+)(?:/|$)')
 # 实测只有 2.4 MB/s（68 Mbps 的片必然卡），直连 CDN 是 12-19 MB/s。
 _STREAM = re.compile(r'^/emby/(?:videos|audio)/(?P<id>[0-9A-Za-z]{1,64})/'
                      r'(?:stream(?:\.[0-9A-Za-z]{1,8})?|original(?:\.[0-9A-Za-z]{1,8})?)$', re.I)
-_STREAM_FILE = re.compile(r'^/emby/Items/(?P<id>[0-9A-Za-z]{1,64})/File(?:/[^/]*)?$', re.I)
-STREAM_PATH_TTL = 600.0
 # 转码/HLS：需要 Emby 现场编码，字节绕不开隧道，单独记账提示。
 _TRANSCODE = re.compile(r'/(?:master\.m3u8|\.ts$|hls/|TranscodingUrl)', re.I)
 
@@ -235,8 +233,6 @@ class ProxyServer:
         self.task = None
         self.client = None
         self.logged = 0.0
-        # 剧集/影片 ID → 上游 Path：播放器每几秒就发一个 Range，不能每次都回源问
-        self.paths = {}
 
     @property
     def id(self):
@@ -304,34 +300,44 @@ class ProxyServer:
 
         用 PlaybackInfo 而不是 ``/emby/Items/{id}``：后者在这个 Emby 版本上直接 404
         （实测返回 "The file '/emby/Items/14176' could not be found."），而 PlaybackInfo
-        是播放器本来就会调的接口，返回的 ``MediaSources[0].Path`` 就是 STRM 里那条 play115 地址。
+        是播放器本来就会调的接口；按当前用户和指定媒体源读取对应路径。
         """
-        cached = self.paths.get(item)
-        now = time.monotonic()
-        if cached and now - cached[1] < STREAM_PATH_TTL:
-            return cached[0]
+        # 每次向 Emby 验证调用者，绝不能用服务端管理员密钥代替用户鉴权。
+        query = {k.lower(): v for k, v in request.query_params.items()}
         headers = self._headers(request, config)
+        auth_headers = {k.lower(): v for k, v in headers.items()}
+        token = (query.get('api_key') or query.get('apikey') or query.get('x-emby-token')
+                 or auth_headers.get('x-emby-token') or auth_headers.get('x-mediabrowser-token'))
+        auth = auth_headers.get('authorization', '') or auth_headers.get('x-emby-authorization', '')
+        if not token and not re.search(r'(?:Bearer\s+\S+|\bToken\s*=\s*["\']?[^,"\'\s]+)', auth, re.I):
+            return ''
         headers['content-type'] = 'application/json'
-        key = request.query_params.get('api_key') or config.api_key
-        params = {'api_key': key} if key else {}
+        params = {k: v for k, v in request.query_params.items() if k.lower() in ('api_key', 'apikey', 'x-emby-token', 'userid', 'mediasourceid')}
         body = json.dumps({'EnableDirectPlay': True, 'EnableDirectStream': True})
-        path = ''
         try:
             response = await self._ensure_client().post(
                 config.upstream + '/emby/Items/' + item + '/PlaybackInfo',
                 params=params, headers=headers, content=body, timeout=8.0)
+            response.raise_for_status()
             payload = response.json()
             sources = payload.get('MediaSources') if isinstance(payload, dict) else None
-            if isinstance(sources, list) and sources and isinstance(sources[0], dict):
-                path = str(sources[0].get('Path') or '')
+            if not isinstance(sources, list):
+                return ''
+            sources = [source for source in sources if isinstance(source, dict)]
+            source_id = query.get('mediasourceid')
+            if source_id:
+                sources = [source for source in sources if str(source.get('Id') or '') == source_id]
+            if len(sources) != 1:
+                return ''  # 版本不明确时交回 Emby 处理
+            return str(sources[0].get('Path') or '')
         except (httpx.HTTPError, ValueError):
-            path = ''
-        self.paths[item] = (path, now)
-        return path
+            return ''
 
     async def _stream_redirect(self, request, config):
         """视频/音频流 → 302 到 115 直链；解析不出直链就返回 None（照旧转发）。"""
-        match = _STREAM.match(request.url.path) or _STREAM_FILE.match(request.url.path)
+        # File 接口还受 Emby 的下载权限控制；PlaybackInfo 无法验证该权限。
+        # 保留原请求交给 Emby，不能只凭播放权限下发下载直链。
+        match = _STREAM.match(request.url.path)
         if not match:
             if _TRANSCODE.search(request.url.path):
                 # 转码/HLS 分片只能由 Emby 现场产出，字节必然经过隧道。

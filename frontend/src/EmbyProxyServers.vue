@@ -10,10 +10,10 @@ function reasonText(raw:string){
 }
 function stateOf(s:any){return s.running?'运行中':(s.enabled?'已启用，但没有监听（端口被占用？）':'已停用')}
 async function run(fn:()=>Promise<void>){if(busy.value)return;busy.value=true;error.value='';try{await fn()}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
-function sync(list:any[]){servers.value=(list||[]).map((s:any)=>({...s,upstream_draft:s.upstream||'',api_key_draft:'',port_draft:s.port}))}
+function sync(list:any[],savedId=''){const old=new Map(servers.value.map(s=>[s.id,s]));servers.value=(list||[]).map((s:any)=>{const previous=old.get(s.id);const keep=previous&&s.id!==savedId;return {...s,name:keep&&previous.name!==previous.saved_name?previous.name:s.name,port_draft:keep&&previous.port_draft!==previous.saved_port?previous.port_draft:s.port,saved_name:s.name,saved_port:s.port}})}
 async function load(){try{const r:any=await props.api('/emby-proxy');sync(r.servers)}catch(e){error.value=(e as Error).message}}
 async function add(){await run(async()=>{const r:any=await props.api('/emby-proxy/servers','POST');sync(r.servers);ElMessage.success('已添加一台，默认是停用状态')})}
-async function save(s:any){await run(async()=>{const r:any=await props.api('/emby-proxy/servers/'+s.id,'PUT',{name:s.name,port:Number(s.port_draft)||9001});sync(r.servers);ElMessage.success('已保存')})}
+async function save(s:any){await run(async()=>{const r:any=await props.api('/emby-proxy/servers/'+s.id,'PUT',{name:s.name,port:Number(s.port_draft)});sync(r.servers,s.id);ElMessage.success('已保存')})}
 async function toggle(s:any){await run(async()=>{const r:any=await props.api('/emby-proxy/servers/'+s.id+(s.enabled?'/disable':'/enable'),'POST');sync(r.servers);ElMessage.success(s.enabled?'已停用':'已启用')})}
 async function probe(s:any){await run(async()=>{const r:any=await props.api('/emby-proxy/servers/'+s.id+'/test','POST');ElMessage({type:r.ok?'success':'error',message:r.message+(r.latency_ms?('，'+r.latency_ms+' ms'):'')})})}
 async function remove(s:any){await run(async()=>{await ElMessageBox.confirm('移除后这个端口不再监听；已经生成的 STRM 不受影响。','移除「'+s.name+'」',{type:'warning'});const r:any=await props.api('/emby-proxy/servers/'+s.id,'DELETE');sync(r.servers);ElMessage.success('已移除')})}
@@ -24,8 +24,7 @@ onMounted(load)
 <div class="proxy-block">
   <div class="proxy-head">
     <div>
-      <h3>Emby 反代</h3>
-      <p class="hint">播放器指到这里的端口时，StrimKeep 会尝试在 PlaybackInfo 中补充 115 直链。成功时播放器可直接向 CDN 拉取；取链失败时可能回退到 Emby 播放并使用隧道带宽。后端使用上面的「Emby 服务连接」。</p>
+      <p class="hint">播放器指到这里的端口时，StrimKeep 会尝试在 PlaybackInfo 中补充 115 直链。成功时播放器可直接向 CDN 拉取；无法识别或确认媒体源时交由 Emby 处理；已识别的 115 视频取链失败时返回错误，避免视频占满隧道。后端使用上面的「Emby 服务连接」。</p>
     </div>
     <el-button :loading="busy" @click="add">添加一台</el-button>
   </div>
@@ -44,8 +43,8 @@ onMounted(load)
     </div>
     <div class="proxy-field"><label>端口</label><el-input-number v-model="s.port_draft" :min="1" :max="65535"/><span class="hint">播放器填 http://服务器地址:端口；容器是 bridge 网络时要另外映射这个端口。地址与 Key 用上面的「Emby 服务连接」。</span></div>
   </div>
-  <p v-if="!servers.length" class="hint">还没有反代服务器，点右上角「添加一台」。</p>
-  <el-dialog v-model="playsOpen" :title="'取链记录 · '+playsFor" width="720px">
+  <p v-if="!servers.length" class="hint">还没有反代服务器，可以添加一台。</p>
+  <el-dialog v-model="playsOpen" :title="'取链记录 · '+playsFor" width="min(720px, 94vw)">
     <el-table :data="plays" size="small" empty-text="还没有取链记录">
       <el-table-column label="时间" width="170"><template #default="c">{{new Date(c.row.at*1000).toLocaleString()}}</template></el-table-column>
       <el-table-column prop="user_agent" label="客户端" width="150"/>
@@ -59,7 +58,7 @@ onMounted(load)
 </template>
 <style scoped>
 .proxy-block{margin-top:8px;padding-top:16px;border-top:1px solid var(--line)}
-.proxy-head{display:flex;align-items:flex-start;gap:16px;margin-bottom:12px}
+.proxy-head{display:flex;flex-wrap:wrap;align-items:flex-start;gap:16px;margin-bottom:12px}
 .proxy-head h3{margin:0 0 6px;font-size:15px}
 .proxy-card{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:12px;background:var(--el-fill-color-blank)}
 .proxy-card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
@@ -72,4 +71,5 @@ onMounted(load)
 .proxy-field{margin-bottom:12px}
 .proxy-field>label{display:block;font-size:13px;font-weight:600;color:var(--el-text-color-regular);margin-bottom:6px}
 .proxy-field .hint{display:block;margin-top:6px}
+@media(max-width:600px){.proxy-head>div{flex-basis:100%}.proxy-actions{margin-left:0}.proxy-actions :deep(.el-button){margin-left:0}}
 </style>
