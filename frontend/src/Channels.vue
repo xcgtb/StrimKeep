@@ -7,6 +7,11 @@ const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise
 const emit=defineEmits<{navigate:[page:string]}>()
 const route=useRoute()
 const config=ref<any>({enabled:false,notify:true,schedule_mode:'interval',interval:300,cron:'*/10 * * * *',channels:[]})
+// 界面按分钟填写，接口仍按秒保存：300 秒显示为 5 分钟，谁也看不懂 300。
+const intervalMinutes=computed({
+  get:()=>Math.max(1,Math.round((Number(config.value.interval)||60)/60)),
+  set:(value:number)=>{config.value.interval=Math.max(1,Math.round(Number(value)||1))*60}
+})
 const sources=ref<any[]>([]),organizeSources=ref<string[]>([])
 const draft=ref(''),busy=ref(false),error=ref(''),picker=ref(''),routeIndex=ref(-1)
 const baseline=ref(''),dirty=computed(()=>!!baseline.value&&JSON.stringify(config.value)!==baseline.value)
@@ -148,7 +153,7 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
  <el-form label-position="top" :disabled="busy">
   <el-form-item label="启用频道监控"><el-switch v-model="config.enabled"/></el-form-item>
   <el-form-item label="轮询方式"><el-radio-group v-model="config.schedule_mode"><el-radio-button value="interval">固定间隔</el-radio-button><el-radio-button value="cron">cron 表达式</el-radio-button></el-radio-group></el-form-item>
-  <el-form-item v-if="config.schedule_mode==='interval'" label="间隔（秒，最小 60）"><el-input-number v-model="config.interval" :min="60" :max="86400" :step="60"/></el-form-item>
+  <el-form-item v-if="config.schedule_mode==='interval'" label="间隔（分钟）"><div style="display:flex;align-items:center;gap:8px"><el-input-number v-model="intervalMinutes" :min="1" :max="1440" :step="1"/><span class="hint" style="margin:0">最小 1 分钟</span></div></el-form-item>
   <el-form-item v-else label="cron（5 段，按服务器时区）"><el-input v-model="config.cron" placeholder="*/10 * * * *"/></el-form-item>
   <el-form-item label="抓到新分享时推送通知"><el-switch v-model="config.notify"/></el-form-item>
  </el-form>
@@ -193,16 +198,22 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
 
   <div class="channel-section" v-if="c.share_mode==='transfer'">
    <div class="directory-block">
-    <div class="directory-block-heading"><div><strong>转存目录</strong><p>分享链接默认保存到这里</p></div><el-button :disabled="busy" @click="pick(c.name,-1,'share')">{{c.share_cid?'更换目录':'选择目录'}}</el-button></div>
-    <div class="directory-path" :class="{empty:!c.share_cid}"><span>115</span><strong>{{c.share_label||c.share_cid||'尚未选择目录'}}</strong></div>
+    <div class="directory-block-heading"><div><strong>转存目录</strong><p>分享链接默认保存到这里</p></div></div>
+    <div class="directory-pick-row">
+     <div class="directory-path" :class="{empty:!c.share_cid}"><span>115</span><strong>{{c.share_label||c.share_cid||'尚未选择目录'}}</strong></div>
+     <div class="button-row"><el-button :disabled="busy" @click="pick(c.name,-1,'share')">{{c.share_cid?'更换目录':'选择目录'}}</el-button></div>
+    </div>
     <p v-if="notSource(c.share_cid)" class="directory-status warning">未直接列为待整理目录，请核对整理范围</p>
     <p v-else-if="c.share_cid" class="directory-status">已列为待整理目录</p>
    </div>
   </div>
   <div v-if="c.share_mode==='transfer'" class="channel-section">
    <div v-for="kind in ['magnet','ed2k']" :key="kind" class="directory-block">
-    <div class="directory-block-heading"><div><strong>{{kind==='magnet'?'磁力':'ED2K'}}离线目录</strong><p>留空则不提交该类型的离线链接</p></div><div class="button-row"><el-button :disabled="busy" @click="pick(c.name,-1,kind)">{{c[kind+'_cid']?'更换目录':'选择目录'}}</el-button><el-button v-if="c[kind+'_cid']" text :disabled="busy" @click="toggleOffline(c,kind,false)">清除</el-button></div></div>
-    <div class="directory-path" :class="{empty:!c[kind+'_cid']}"><span>115</span><strong>{{c[kind+'_label']||c[kind+'_cid']||'尚未选择目录'}}</strong></div>
+    <div class="directory-block-heading"><div><strong>{{kind==='magnet'?'磁力':'ED2K'}}离线目录</strong><p>留空则不提交该类型的离线链接</p></div></div>
+    <div class="directory-pick-row">
+     <div class="directory-path" :class="{empty:!c[kind+'_cid']}"><span>115</span><strong>{{c[kind+'_label']||c[kind+'_cid']||'尚未选择目录'}}</strong></div>
+     <div class="button-row"><el-button :disabled="busy" @click="pick(c.name,-1,kind)">{{c[kind+'_cid']?'更换目录':'选择目录'}}</el-button><el-button v-if="c[kind+'_cid']" text :disabled="busy" @click="toggleOffline(c,kind,false)">清除</el-button></div>
+    </div>
    </div>
   </div>
   <div v-if="c.share_mode==='transfer'" class="channel-section">
@@ -212,7 +223,7 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
      <div class="route-header"><strong>分流 {{Number(ri)+1}}</strong><el-button text type="danger" :disabled="busy" @click="dropRoute(c,ri)">删除</el-button></div>
      <label :for="`channel-route-${c.name}-${ri}`">匹配关键词</label>
      <el-input :id="`channel-route-${c.name}-${ri}`" v-model="r.keywords" placeholder="用逗号分隔，例如 国配,国语" :disabled="busy"/>
-     <div class="route-destination"><div><span>保存目录</span><strong>{{r.target_label||r.target_cid||'尚未选择目录'}}</strong></div><el-button :disabled="busy" @click="pick(c.name,ri)">{{r.target_cid?'更换目录':'选择目录'}}</el-button></div>
+     <div class="route-destination"><div class="route-path" :class="{empty:!r.target_cid}"><span>115</span><strong>{{r.target_label||r.target_cid||'尚未选择目录'}}</strong></div><el-button :disabled="busy" @click="pick(c.name,ri)">{{r.target_cid?'更换目录':'选择目录'}}</el-button></div>
     </div>
     <p v-if="!c.routes.length" class="route-empty">尚未设置分流，按各类型的默认目录处理。</p>
    <div class="organize-option"><label>转存或离线完成后立即整理</label>
@@ -268,4 +279,4 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
 .tg-item-main strong{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tg-meta{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
 @media(max-width:760px){.tg-list{grid-template-columns:1fr;max-height:none}}
-.tg-tools{display:flex;align-items:center;gap:12px;margin:12px 0 10px;flex-wrap:wrap}.tg-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px;max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--surface)}.tg-item{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border-radius:8px;background:var(--surface-soft)}.tg-item-main{display:grid;gap:3px;min-width:0}.tg-item-main strong{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tg-meta{font-size:11px;color:var(--muted)}@media(max-width:760px){.tg-list{grid-template-columns:1fr;max-height:none}}</style>
+.tg-tools{display:flex;align-items:center;gap:12px;margin:12px 0 10px;flex-wrap:wrap}.tg-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px;max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--surface)}.tg-item{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border-radius:8px;background:var(--surface-soft)}.tg-item-main{display:grid;gap:3px;min-width:0}.tg-item-main strong{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tg-meta{font-size:11px;color:var(--muted)}@media(max-width:760px){.tg-list{grid-template-columns:1fr;max-height:none}}.directory-pick-row{display:flex;align-items:center;gap:10px;margin-top:12px}.directory-pick-row .directory-path{margin-top:0;flex:1;min-width:0}.directory-pick-row .button-row{flex:none;display:flex;gap:6px;margin:0}.route-path{display:flex;align-items:flex-start;gap:10px;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);min-width:0;flex:1}.route-path span{flex:none;padding:3px 6px;border-radius:5px;background:var(--el-color-primary-light-9);color:var(--accent);font-size:10px;font-weight:700}.route-path strong{min-width:0;overflow-wrap:anywhere;color:var(--text);font-size:13px;line-height:1.55}.route-path.empty strong{color:var(--muted);font-weight:400}@media(max-width:760px){.directory-pick-row{flex-direction:column;align-items:stretch}.directory-pick-row .button-row{justify-content:flex-end}}</style>
