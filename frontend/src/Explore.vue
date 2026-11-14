@@ -35,17 +35,18 @@ async function loadGenres(){
 }
 function pick(k:'movie'|'tv'){if(kind.value===k)return;kind.value=k;genre.value=undefined;if(['now_playing','upcoming','on_the_air','airing_today'].includes(sort.value))sort.value='popular';page.value=1;loadGenres();load()}
 function leaveSearchForBrowse(){if(activeQuery.value){activeQuery.value='';searchInput.value='';if(route.query.q){const query={...route.query};delete query.q;void router.replace({query})}ElMessage.info('已退出名称搜索，按筛选条件浏览')}}
-function setSort(s:string){if(sort.value===s)return;leaveSearchForBrowse();sort.value=s;page.value=1;load()}
+function setSort(s:string){if(sort.value===s)return;leaveSearchForBrowse();if(s==='trending'&&(genre.value||region.value||year.value)){genre.value=undefined;region.value='';year.value=undefined;yearInput.value='';ElMessage.info('趋势榜不支持组合筛选，已清除类型、地区和年份')}sort.value=s;page.value=1;load()}
 const regionOptions=[['CN','中国大陆'],['HK','中国香港'],['TW','中国台湾'],['US','美国'],['GB','英国'],['JP','日本'],['KR','韩国'],['IN','印度'],['FR','法国'],['TH','泰国']]
-function setRegion(code:string){if(region.value===code)return;leaveSearchForBrowse();region.value=code;page.value=1;load()}
-function setGenre(g:number|undefined){if(genre.value===g)return;leaveSearchForBrowse();genre.value=g;page.value=1;load()}
-function setYear(y:number|undefined){if(year.value===y)return;year.value=y;yearInput.value=y?String(y):'';page.value=1;load()}
+function leaveTrending(){if(sort.value==='trending'){sort.value='popular';ElMessage.info('趋势榜不支持组合筛选，已切换为热门排序')}}
+function setRegion(code:string){if(region.value===code)return;leaveSearchForBrowse();if(code)leaveTrending();region.value=code;page.value=1;load()}
+function setGenre(g:number|undefined){if(genre.value===g)return;leaveSearchForBrowse();if(g)leaveTrending();genre.value=g;page.value=1;load()}
+function setYear(y:number|undefined){if(year.value===y)return;if(y)leaveTrending();year.value=y;yearInput.value=y?String(y):'';page.value=1;load()}
 function applyYear(){
   const text=yearInput.value.trim()
   if(!text){setYear(undefined);return}
   const v=Number(text)
   if(Number.isInteger(v)&&v>=1900&&v<=2100)setYear(v)
-  else yearInput.value=year.value?String(year.value):''
+  else {yearInput.value=year.value?String(year.value):'';ElMessage.warning('请输入 1900 至 2100 之间的年份')}
 }
 function go(p:number){if(p<1||p>totalPages.value||p===page.value)return;page.value=p;load()}
 function doSearch(){
@@ -65,13 +66,13 @@ function clearSearch(){if(!activeQuery.value)return;searchInput.value='';activeQ
 
 const yearOptions=computed(()=>{
   const now=new Date().getFullYear(),out:number[]=[]
-  for(let y=now;y>=now-14;y--)out.push(y)
+  for(let y=now;y>=1900;y--)out.push(y)
   return out
 })
 const sortOptions=computed(()=>{
-  const base=[{v:'popular',t:'🔥 热门'},{v:'trending',t:'📈 趋势'},{v:'top_rated',t:'⭐ 高分'},{v:'newest',t:'🆕 最新'}]
-  if(kind.value==='movie')base.push({v:'now_playing',t:'🎬 正在上映'},{v:'upcoming',t:'📅 即将上映'})
-  else base.push({v:'on_the_air',t:'📺 正在播出'},{v:'airing_today',t:'📅 今日播出'})
+  const base=[{v:'popular',t:'热门'},{v:'newest',t:'最新'},{v:'top_rated',t:'高分'},{v:'trending',t:'趋势'}]
+  if(kind.value==='movie')base.push({v:'now_playing',t:'正在上映'},{v:'upcoming',t:'即将上映'})
+  else base.push({v:'on_the_air',t:'正在播出'},{v:'airing_today',t:'今日播出'})
   return base
 })
 const resourceDialog=ref(false), selected=ref<any>(null)
@@ -220,14 +221,14 @@ onMounted(async()=>{await loadGenres();await load()})
     <div class="chips"><button v-for="s in sortOptions" :key="s.v" :class="['chip',{active:sort===s.v}]" @click="setSort(s.v)">{{s.t}}</button></div>
   </div>
   <div class="frow"><span class="flabel">类型</span>
-    <div class="chips">
+    <div class="chips chip-scroll" tabindex="0" aria-label="类型，横向滚动查看更多">
       <button :class="['chip',{active:!genre}]" @click="setGenre(undefined)">全部</button>
       <button v-for="g in genres" :key="g.id" :class="['chip',{active:genre===g.id}]" @click="setGenre(g.id)">{{g.name}}</button>
     </div>
   </div>
-  <div class="frow"><span class="flabel">地区</span><div class="chips"><button :class="['chip',{active:!region}]" @click="setRegion('')">全部</button><button v-for="r in regionOptions" :key="r[0]" :class="['chip',{active:region===r[0]}]" @click="setRegion(r[0])">{{r[1]}}</button></div></div>
-  <div class="frow"><span class="flabel">年份</span>
-    <div class="chips">
+  <div class="frow"><span class="flabel">地区</span><div class="chips chip-scroll" tabindex="0" aria-label="地区，横向滚动查看更多"><button :class="['chip',{active:!region}]" @click="setRegion('')">全部</button><button v-for="r in regionOptions" :key="r[0]" :class="['chip',{active:region===r[0]}]" @click="setRegion(r[0])">{{r[1]}}</button></div></div>
+  <div class="frow year-filter"><span class="flabel">年份</span>
+    <div class="chips chip-scroll year-scroll" tabindex="0" aria-label="年份，从新到旧横向滚动至 1900 年">
       <button :class="['chip',{active:!year}]" @click="setYear(undefined)">全部</button>
       <button v-for="y in yearOptions" :key="y" :class="['chip',{active:year===y}]" @click="setYear(y)">{{y}}</button>
     </div>
@@ -235,7 +236,7 @@ onMounted(async()=>{await loadGenres();await load()})
   </div>
 </div>
 
-<p class="region-hint">上映／播出排序可与地区、类型、年份组合，组合结果按 TMDB 日期范围近似筛选；趋势榜及名称搜索暂不支持组合筛选。</p>
+<p v-if="filtersOpen||filterCount" class="region-hint">类型、地区和年份可横向滑动；趋势榜不支持组合筛选。</p>
 <div class="meta-row">
 <span v-if="activeQuery" class="search-tag">🔍 {{activeQuery}} <button class="clear-x" aria-label="清除搜索" @click="clearSearch">×</button></span>
 <span class="muted count">{{items.length}} 部 · 第 {{page}}/{{totalPages}} 页</span>
@@ -353,4 +354,5 @@ onMounted(async()=>{await loadGenres();await load()})
 .search-input::placeholder,.year-input::placeholder{color:var(--muted);opacity:1}
 @media(max-width:640px){.mobile-filter-toggle{display:flex;align-items:center;gap:8px;width:100%;padding:10px 11px;margin:0 0 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface-soft);color:var(--text);font-size:13px;font-weight:600;text-align:left}.mobile-filter-toggle span:first-child{flex:1;color:var(--muted);font-size:11px;font-weight:400}.mobile-filter-toggle span:last-child{color:var(--accent);font-size:17px}.filter-block.mobile-collapsed{display:none}}
 @media(max-width:640px){.explore-info h3{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.8em;overflow-wrap:anywhere}}
+.chip-scroll{min-width:0;flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-inline:contain;scrollbar-width:thin;padding:2px 1px 6px}.chip-scroll .chip{flex:none;white-space:nowrap}.year-filter .year-input{flex:none}.filter-block{min-width:0}.frow{min-width:0}@media(max-width:640px){.year-filter{display:grid;grid-template-columns:minmax(0,1fr) 104px;gap:7px}.year-filter .flabel{grid-column:1/-1}.year-filter .year-scroll{min-width:0}.year-filter .year-input{width:104px;height:32px}.chip-scroll{width:100%}}
 </style>
