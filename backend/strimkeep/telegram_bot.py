@@ -161,11 +161,22 @@ class TelegramBot:
             lines.extend('/'+name+'  '+descriptions[name] for name in ordered_bot_commands(self.store) if enabled[name])
             await self.engine.notifications.publish(key,'🤖 使用帮助','\n'.join(lines),chat_override=str(chat['id']),force=True)
             return
-        command=text.strip().split(' ',1)[0].split('@')[0]
+        command=(text.strip().split(maxsplit=1) or [''])[0].split('@')[0]
         name=command.lstrip('/')
         if name in BOT_COMMANDS and not bot_commands(self.store).get(name, True):
             await self.engine.notifications.publish(key,'⚙️ 指令已关闭',
                 '/%s 已在「系统设置 → Telegram 通知」里关闭。' % name,chat_override=str(chat['id']),force=True)
+            return
+        if command == '/save':
+            await self.engine.notifications.publish(key,'⚠️ 旧指令已停用',
+                '不再支持临时指定目录。请在网页「资源入库 → 保存目录」设置机器人目录，然后直接发送分享链接。',
+                chat_override=str(chat['id']),force=True)
+            return
+        parts=text.strip().split(maxsplit=2)
+        if command == '/offline' and len(parts)>1 and parts[1].isascii() and parts[1].isdigit():
+            await self.engine.notifications.publish(key,'⚠️ 离线下载未提交',
+                '不再支持临时指定目录。请在网页「资源入库」设置机器人保存目录后，去掉目录 ID 再发送链接。',
+                chat_override=str(chat['id']),force=True)
             return
         if command=='/tasks':
             rows=self.store.db.execute('SELECT id,state,config FROM organize_jobs ORDER BY id DESC LIMIT 8').fetchall()
@@ -233,9 +244,9 @@ class TelegramBot:
             if mixed:await self._handle_offline(text,key+':offline',chat)
             return
         offline=None
-        target=''
         if command=='/offline':
-            offline=text.strip().partition(' ')[2]
+            parts=text.strip().split(maxsplit=1)
+            offline=parts[1] if len(parts)>1 else ''
         elif OFFLINE_AUTO.search(text):
             offline=text
         if offline is not None:
@@ -245,10 +256,6 @@ class TelegramBot:
         if not LINK.search(text):return
         dest=config.get('bot_target_cid')
         if dest is None:dest=config.get('target_cid','')
-        if text.startswith('/save '):
-            parts=text.split(maxsplit=2)
-            if len(parts)!=3:return
-            dest,text=parts[1:]
         try:
             ids=await self.engine.transfer.enqueue(text,dest,config.get('bot_auto_organize',False),'telegram',identity+':'+str(update['update_id']))
         except ValueError as exc:
@@ -271,9 +278,7 @@ class TelegramBot:
 
     async def _handle_offline(self,text,key,chat):
         """独立提交磁力、电驴和直链；返回是否还含有 115 分享。"""
-        tokens=text.replace('\n',' ').split()
-        target=tokens.pop(0) if tokens and tokens[0].isdigit() else ''
-        links=links_in(' '.join(tokens))
+        links=links_in(text)
         has_share=any(LINK.match(url) for url in links)
         urls=[url for url in links if not LINK.match(url)]
         if not urls:
@@ -292,8 +297,8 @@ class TelegramBot:
         results=[]
         for group,kind,title in ((magnets,'bot_magnet','磁力'),(ed2ks,'bot_ed2k','ED2K'),(others,'target','直链')):
             if not group:continue
-            target_cid=target or cfg.get(kind+'_cid') or ''
-            label=target or cfg.get(kind+'_label') or target_cid
+            target_cid=cfg.get(kind+'_cid') or ''
+            label=cfg.get(kind+'_label') or target_cid
             if not target_cid:
                 results.append(f'⚠️ {title}未提交：尚未选择目录。');continue
             try:

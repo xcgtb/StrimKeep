@@ -59,7 +59,7 @@ def test_bot_mixed_links_use_independent_destinations(tmp_path):
     asyncio.run(run())
 
 
-def test_bot_share_uses_its_own_directory_and_command_overrides(tmp_path):
+def test_bot_share_uses_its_own_directory_and_rejects_old_save_command(tmp_path):
     from strimkeep.store import Store
     async def run():
         store=Store(tmp_path/'data','admin','test-password-1234')
@@ -73,7 +73,28 @@ def test_bot_share_uses_its_own_directory_and_command_overrides(tmp_path):
         cfg={'allowed_user_id':'42','target_cid':'100','bot_target_cid':'200','auto_organize':False}
         await bot.handle(update(1,'https://115.com/s/abc'),cfg,'bot1')
         await bot.handle(update(2,'/save 300 https://115.com/s/abc'),cfg,'bot1')
-        assert calls==['200','300']
+        assert calls==['200']
+        assert '旧指令已停用' in notices.items[-1][0][1]
+        store.close()
+    asyncio.run(run())
+
+
+def test_bot_offline_rejects_old_directory_override_but_accepts_numeric_prose(tmp_path):
+    from strimkeep.store import Store
+    async def run():
+        store=Store(tmp_path/'data','admin','test-password-1234')
+        store.set_many({'offline_config':{'directories_v2':True,'bot_magnet_cid':'100','bot_ed2k_cid':'200'}})
+        calls=[]
+        class Offline:
+            async def submit(self,urls,cid,label,organize=False,origin='web'): calls.append((urls,cid))
+        notices=Notices()
+        bot=TelegramBot(SimpleNamespace(store=store,http=None,offline=Offline(),notifications=notices))
+        config={'allowed_user_id':'42'}
+        await bot.handle(update(1,'/offline 300 magnet:?xt=urn:btih:abc'),config,'bot1')
+        assert calls==[] and '未提交' in notices.items[-1][0][1]
+        await bot.handle(update(2,'2024 magnet:?xt=urn:btih:abc'),config,'bot1')
+        await bot.handle(update(3,'/offline\nmagnet:?xt=urn:btih:def'),config,'bot1')
+        assert calls==[(['magnet:?xt=urn:btih:abc'],'100'),(['magnet:?xt=urn:btih:def'],'100')]
         store.close()
     asyncio.run(run())
 
