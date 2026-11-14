@@ -626,10 +626,18 @@ class ChannelMonitor:
             result = share_service.generate(self.store, self.engine.root, secret, videos, origin='channel')
             created += len(result['created'])
         if created:
-            self.store.event('channel', '频道 %s：生成 %d 条待整理 STRM（免转存），等定时/手动整理接手。'
-                             % (title or name, created))
+            queued=[]
+            if (self.store.get('share_settings', {}) or {}).get('auto_organize', True):
+                try:
+                    jid=share_service.enqueue_pending_organize(self.engine, origin='channel')
+                    queued=[(jid,'分享整理')]
+                    self.store.event('channel', '频道 %s：生成 %d 条待整理 STRM，整理任务 %s 已入队。' % (title or name, created, jid))
+                except Exception:
+                    self.store.event('channel', '频道 %s：STRM 已生成，但整理入队失败；请到待整理手动执行。' % (title or name))
+            else:
+                self.store.event('channel', '频道 %s：生成 %d 条待整理 STRM，等待手动整理或兜底扫描。' % (title or name, created))
             if self.config()['notify']:
-                self._notify(name, title, message, [], 'strm', count=created)
+                self._notify(name, title, message, queued, 'strm', count=created)
         if pending_error is not None:
             raise pending_error
         return created

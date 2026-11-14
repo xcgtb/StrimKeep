@@ -111,7 +111,7 @@ def test_share_scan_only_enqueues_when_pending_files_exist(tmp_path, monkeypatch
             enqueued.append(origin)
             return 7
 
-        monkeypatch.setattr(organizer_module.share_service, 'enqueue_organize', fake_enqueue)
+        monkeypatch.setattr(organizer_module.share_service, 'enqueue_pending_organize', fake_enqueue)
         engine = SimpleNamespace(store=store, root=root, _share_scanned=0.0)
 
         await Organizer.share_scan_tick(engine)            # 空目录：不排任务
@@ -139,7 +139,7 @@ def test_share_scan_can_be_switched_off(tmp_path, monkeypatch):
         pending.mkdir(parents=True)
         (pending / 'a.strm').write_text('x', encoding='utf-8')
         enqueued = []
-        monkeypatch.setattr(organizer_module.share_service, 'enqueue_organize',
+        monkeypatch.setattr(organizer_module.share_service, 'enqueue_pending_organize',
                             lambda *a, **k: enqueued.append(a))
         engine = SimpleNamespace(store=store, root=root, _share_scanned=0.0)
         await Organizer.share_scan_tick(engine)
@@ -159,7 +159,7 @@ def test_share_scan_waits_for_running_share_job(tmp_path, monkeypatch):
             store.db.execute("INSERT INTO organize_jobs(state,config,created,updated) VALUES('running',?,?,?)",
                              ('{"job_kind":"share_organize"}', 0, 0))
         enqueued = []
-        monkeypatch.setattr(organizer_module.share_service, 'enqueue_organize',
+        monkeypatch.setattr(organizer_module.share_service, 'enqueue_pending_organize',
                             lambda *a, **k: enqueued.append(a))
         engine = SimpleNamespace(store=store, root=root, _share_scanned=0.0)
         await Organizer.share_scan_tick(engine)

@@ -441,7 +441,9 @@ class Notifications:
             title='⏭ 已按格式规则跳过'
         if kind=='transfer' and state=='completed':title='📥 转存完成'
         elif kind=='transfer':title={'partial':'⚠️ 网盘转存待核查','needs_review':'⚠️ 网盘转存待核查','waiting_login':'🔑 网盘转存等待登录'}.get(state,title)
-        elif kind=='share_organize':title={'completed':'✅ 分享 STRM 整理完成','partial':'⚠️ 分享 STRM 部分待处理','needs_review':'⚠️ 分享 STRM 待核查','waiting_login':'🔑 分享 STRM 等待登录'}.get(state,title)
+        elif kind=='share_organize':
+            title={'completed':'✅ 分享 STRM 整理完成','partial':'⚠️ 分享 STRM 部分待处理','needs_review':'⚠️ 分享 STRM 待核查','waiting_login':'🔑 分享 STRM 等待登录'}.get(state,title)
+            if state=='completed' and row['stage']=='分享 STRM 已生成':title='✅ 分享 STRM 已生成，等待整理'
         if kind=='strm_sync' and json.loads(row['config']).get('sync_mode')=='sweep':
             await self.publish(f'strm:{row["id"]}:summary','🧹 STRM 本地巡检',row['message'] or '',
                                'success' if state=='completed' else 'warning',row['id'],category='strm_summary')

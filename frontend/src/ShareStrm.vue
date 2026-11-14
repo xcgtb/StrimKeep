@@ -9,7 +9,7 @@ const profileEditor=ref<any>(null)
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>()
 const shareText=ref(''),parsed=ref<any>(null),selected=ref<Set<string>>(new Set())
 const busy=ref(false),error=ref('')
-const settings=ref({auto_organize:true,share_check_hours:0,share_check_mode:'interval',share_check_cron:'0 3 * * *',share_prune_cron:'0 5 * * *'})
+const settings=ref({auto_organize:true,share_scan_minutes:5,share_check_hours:0,share_check_mode:'interval',share_check_cron:'0 3 * * *',share_prune_cron:'0 5 * * *'})
 const settingsBaseline=ref('')
 const monitorDirty=computed(()=>!!settingsBaseline.value&&JSON.stringify(settings.value)!==settingsBaseline.value)
 // U07：状态由登记表驱动（分页完整返回），不再从路径文字推断；整理进入持久化任务。
@@ -23,8 +23,8 @@ let watchInFlight=false, watchGeneration=0
 
 async function run(fn:()=>Promise<void>){if(busy.value)return;busy.value=true;error.value='';try{await fn()}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
 
-async function loadSettings(updateOwn=true){try{const r=await props.api('/share/settings');if(updateOwn){settings.value={auto_organize:r.auto_organize,share_check_hours:r.share_check_hours??0,share_check_mode:r.share_check_mode??'interval',share_check_cron:r.share_check_cron??'0 3 * * *',share_prune_cron:r.share_prune_cron??'0 5 * * *'};settingsBaseline.value=JSON.stringify(settings.value)}}catch(e){if(updateOwn)error.value='分享监控设置读取失败：'+(e as Error).message}}
-async function saveSettings(){await run(async()=>{const r=await props.api('/share/settings','POST',settings.value);settings.value={auto_organize:r.auto_organize,share_check_hours:r.share_check_hours,share_check_mode:r.share_check_mode,share_check_cron:r.share_check_cron,share_prune_cron:r.share_prune_cron};settingsBaseline.value=JSON.stringify(settings.value);ElMessage.success('监控设置已保存')})}
+async function loadSettings(updateOwn=true){try{const r=await props.api('/share/settings');if(updateOwn){settings.value={auto_organize:r.auto_organize,share_scan_minutes:r.share_scan_minutes??5,share_check_hours:r.share_check_hours??0,share_check_mode:r.share_check_mode??'interval',share_check_cron:r.share_check_cron??'0 3 * * *',share_prune_cron:r.share_prune_cron??'0 5 * * *'};settingsBaseline.value=JSON.stringify(settings.value)}}catch(e){if(updateOwn)error.value='分享监控设置读取失败：'+(e as Error).message}}
+async function saveSettings(){await run(async()=>{const r=await props.api('/share/settings','POST',settings.value);settings.value={auto_organize:r.auto_organize,share_scan_minutes:r.share_scan_minutes,share_check_hours:r.share_check_hours,share_check_mode:r.share_check_mode,share_check_cron:r.share_check_cron,share_prune_cron:r.share_prune_cron};settingsBaseline.value=JSON.stringify(settings.value);ElMessage.success('监控设置已保存')})}
 const checkMessage=ref('')
 async function checkShares(){
   try{await ElMessageBox.confirm('将检查已登记的分享 STRM；确认失效且归属可核实的条目会撤销，并清理对应的本地 STRM 及附属文件。网络错误或状态不明确的条目会保留。','立即检查分享存活',{type:'warning',confirmButtonText:'开始检查',cancelButtonText:'取消'})}catch{return}
@@ -41,7 +41,8 @@ async function generate(){
     const files=parsed.value.videos.filter((v:any)=>selected.value.has(v.id))
     const r=await props.api('/share/generate','POST',{
       share_code:parsed.value.share_code,receive_code:parsed.value.receive_code,files})
-    ElMessage.success(`已生成 ${r.count} 个 STRM 到待整理${r.skip_count?`，跳过 ${r.skip_count} 个已存在`:''}`)
+    const message=`已生成 ${r.count} 个 STRM 到待整理${r.skip_count?`，跳过 ${r.skip_count} 个已存在`:''}${r.job_id?`，整理任务 #${r.job_id} 已入队`:''}`
+    if(r.organize_error)ElMessage.warning(message+'；'+r.organize_error);else ElMessage.success(message)
     parsed.value=null;shareText.value='';tab.value='pending';pageSection.value='library';await doRefresh(0)
   })
 }
@@ -166,7 +167,8 @@ defineExpose({canLeave})
 </section>
 <section class="panel share-monitor-panel">
 <div class="monitor-section"><div class="monitor-heading"><div><h2>分享监控</h2><p>设置新内容处理、台账核对和存活检测。</p></div><el-button :disabled="busy||!monitorDirty" @click="saveSettings">保存</el-button></div>
-<div class="monitor-row"><div><strong>新内容立即整理</strong><p>影响影视探索接入及分享监控发现的新内容；待整理目录另有后台周期扫描。</p></div><el-switch v-model="settings.auto_organize"/></div>
+<div class="monitor-row"><div><strong>新内容立即整理</strong><p>适用于频道免转存、手动生成、影视探索和机器人 /share。关闭后新内容留在待整理；下方兜底扫描若开启仍会整理，已入队任务继续执行。</p></div><el-switch v-model="settings.auto_organize"/></div>
+<div class="monitor-row"><div><strong>待整理兜底扫描</strong><p>定期检查待整理目录，补接中断或未立即整理的内容；设为 0 关闭。关闭立即整理且关闭兜底时，只能手动整理。</p></div><div class="monitor-input"><el-input-number v-model="settings.share_scan_minutes" :min="0" :max="1440" :step="1" size="small" aria-label="分享待整理兜底扫描间隔"/><span>分钟</span></div></div>
 <div class="monitor-row"><div><strong>台账核对</strong><p>按 cron 清理「文件已不存在」的分享 STRM 记录，默认每天凌晨 5 点。</p></div><div class="monitor-input"><el-input v-model="settings.share_prune_cron" size="small" style="width:132px" placeholder="0 5 * * *"/><span>分 时 日 月 周</span></div></div><div class="monitor-row"><div><strong>存活检测</strong><p>{{settings.share_check_mode==='cron'?'按 Cron 表达式检查分享，只在明确失效时撤销。':(settings.share_check_hours>0?`每 ${settings.share_check_hours} 小时检查一次分享。`:'填 0 则关闭存活检测。')}}</p></div><div class="monitor-input"><el-radio-group v-model="settings.share_check_mode" size="small"><el-radio-button value="interval">间隔</el-radio-button><el-radio-button value="cron">Cron</el-radio-button></el-radio-group><template v-if="settings.share_check_mode==='interval'"><el-input-number v-model="settings.share_check_hours" :min="0" :max="8760" :step="1" size="small"/><span>小时</span></template><template v-else><el-input v-model="settings.share_check_cron" size="small" style="width:132px" placeholder="0 3 * * *"/><span>分 时 日 月 周</span></template></div></div></div>
 <div class="button-row"><el-button :loading="busy" @click="checkShares">立即检查分享存活</el-button><span v-if="checkMessage" class="hint">{{checkMessage}}</span></div>
 </section>

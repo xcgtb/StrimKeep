@@ -329,9 +329,10 @@ class TelegramBot:
             await engine.notifications.publish(key,'🔗 分享 STRM',self._safe_error(exc),chat_override=str(chat['id']),force=True)
             return
         from .share_service import enqueue_organize
+        auto=(self.store.get('share_settings', {}) or {}).get('auto_organize', True)
         ids=[];failure=False
         for secret in secrets_list:
-            try:ids.append(enqueue_organize(engine,origin='telegram',secret=secret))
+            try:ids.append(enqueue_organize(engine,origin='telegram',secret=secret,generate_only=not auto))
             except Exception:
                 failure=True;break
         if not ids:
@@ -341,6 +342,7 @@ class TelegramBot:
         numbers='、'.join('#'+str(jid) for jid in ids)
         result=(f'🔗 模式  分享 STRM · 免转存\n📨 已入队  {len(ids)} 个分享\n📋 任务  {numbers}'
                 '\n📂 位置  分享 STRM 待整理')
+        if not auto:result+='\n⏸ 自动整理已关闭，生成后留在待整理。'
         if failure:result+=f'\n⚠️ 其余 {len(secrets_list)-len(ids)} 个分享未确认，请先检查任务中心再重试。'
         await engine.notifications.publish(key,'🔗 分享 STRM · 已接收',result,chat_override=str(chat['id']),force=True)
 

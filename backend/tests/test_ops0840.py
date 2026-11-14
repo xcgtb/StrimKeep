@@ -41,8 +41,8 @@ def test_offline_submit_records_realtime_event_with_origin(tmp_path):
         messages = [row['message'] for row in
                     store.db.execute("SELECT message FROM events WHERE kind='offline' ORDER BY id")]
         assert any(('离线提交 #%d（bot）' % sid) in text for text in messages), messages
-        # 刚提交的目录要留个记号，兜底扫描下一轮先看它
-        assert store.meta_json('offline_scan_next_cid') == '100'
+        # 旧的离线目录兜底扫描已停用，提交不再写无效的扫描游标。
+        assert store.meta_json('offline_scan_next_cid') is None
         await http.aclose()
         store.close()
     asyncio.run(run())

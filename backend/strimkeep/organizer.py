@@ -819,7 +819,7 @@ class Organizer:
             self._share_scanned = now
             return
         self._share_scanned = now
-        jid = share_service.enqueue_organize(self, origin='schedule')
+        jid = share_service.enqueue_pending_organize(self, origin='schedule')
         self.store.event('share', f'定时扫描发现待整理分享 STRM，任务 {jid} 已入队。')
 
     async def offline_scan_tick(self):

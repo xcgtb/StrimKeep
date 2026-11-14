@@ -49,6 +49,8 @@ def channel_notice(channel, text, queued, mode, target='', count=None, resource_
     if mode == 'strm':
         lines.extend(['🔗 模式  分享 STRM · 免转存', '📂 位置  分享 STRM 待整理',
                       f'📄 已生成  {count if count is not None else 0} 个 STRM'])
+        ids = task_numbers([item[0] for item in queued])
+        if ids: lines.append('📋 整理任务  ' + ids)
     elif mode == 'offline_unknown':
         if resource_kind: lines.append('🧲 类型  ' + resource_kind)
         if target: lines.append('📂 目标  ' + compact(target))

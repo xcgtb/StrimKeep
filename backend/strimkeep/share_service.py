@@ -484,13 +484,15 @@ def generate(store, root, secret, videos, origin='web', settings_snapshot=None, 
     return {'created': created, 'skipped': skipped}
 
 
-def enqueue_organize(engine, origin='web', secret=None, channel_claim=None):
+def enqueue_organize(engine, origin='web', secret=None, channel_claim=None, generate_only=False, pending_only=False):
     """把整理放入持久化 FIFO（U03）。secret 存在时任务会先补齐该分享的待整理。"""
     store = engine.store
     inherited = share_effective_settings(store)
     config = {'job_kind':'share_organize','origin':origin,'notify_emby':inherited['notify_emby'],
               'organize_options':inherited['organize'],'upgrade_policy':inherited['upgrade_policy'],
               'strm_options':inherited['strm'],'playback_base':inherited['playback_base'],'shared_version':inherited['version']}
+    if generate_only: config['generate_only'] = True
+    if pending_only: config['pending_only'] = True
     now = time.time()
     with store.transaction():
         jid = store.jobs.create(json.dumps(config, ensure_ascii=False))
@@ -507,6 +509,18 @@ def enqueue_organize(engine, origin='web', secret=None, channel_claim=None):
                 raise ValueError('频道分享认领状态已变化，请重新核对。')
     store.event('share', f'分享 STRM 整理任务 {jid} 已入队（来源 {origin}）。')
     return jid
+
+
+def enqueue_pending_organize(engine, origin='web'):
+    """合并尚未开始的待整理任务；运行中的任务需要后续任务接住新文件。"""
+    for row in engine.store.db.execute("SELECT id,config FROM organize_jobs WHERE state='queued' ORDER BY id"):
+        try:
+            config=json.loads(row['config'] or '{}')
+        except (TypeError, ValueError):
+            continue
+        if config.get('job_kind')=='share_organize' and config.get('pending_only'):
+            return row['id']
+    return enqueue_organize(engine, origin=origin, pending_only=True)
 
 
 async def run_organize(engine, job_id, config):
@@ -537,6 +551,10 @@ async def run_organize(engine, job_id, config):
             config['share_generation_started'] = True
             engine.update_job(job_id, config=json.dumps(config, ensure_ascii=False))
         result = generate(store, root, secret, videos, origin=config.get('origin', 'telegram'), settings_snapshot={'strm':strm_rules,'organize':settings,'playback_base':config.get('playback_base',store.get('playback_base') or '')}, allow_restore=allow_restore)
+        if config.get('generate_only'):
+            engine.update_job(job_id, state='completed', stage='分享 STRM 已生成', manifest=1,
+                              message='已生成 %d 个待整理 STRM；自动整理已关闭。' % len(result['created']))
+            return
         pending_for_share = store.db.execute("SELECT 1 FROM share_strms WHERE revoked=0 AND share_code=? AND strm_path LIKE ? LIMIT 1", (secret['share_code'], PENDING_NAME + '/%')).fetchone()
         if not result['created'] and not pending_for_share:
             engine.update_job(job_id, state='completed', stage='分享整理结束', manifest=1,

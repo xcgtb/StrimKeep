@@ -76,6 +76,8 @@ def classify_rejection(errno, error_msg: str, scope: str = 'generic') -> str:
     """把 115 state:false 响应映射为稳定错误码。文字只作辅助，范围决定语义。"""
     if errno == 99 or '重新登录' in error_msg:
         return 'LOGIN_INVALID'
+    if str(errno) in ('911', '770004'):
+        return 'RATE_LIMITED'
     if scope == 'share' and any(hint in error_msg for hint in ALREADY_SAVED_HINTS):
         return 'ALREADY_SAVED'
     lowered = error_msg.lower()
@@ -401,9 +403,10 @@ class Cloud115:
         等于把限流关掉。这里只把「抢时刻」放进临界区，请求本身在锁外并发跑。
         """
         async with self.play_timetable:
-            next_request = self.play_next_request
-            self.play_next_request = self.clock() + self.PLAY_SPACING
-            wait = next_request - self.clock()
+            now = self.clock()
+            next_request = max(now, self.play_next_request)
+            self.play_next_request = next_request + self.PLAY_SPACING
+            wait = next_request - now
         if wait > 0:
             await self.sleep(wait)
 
@@ -440,15 +443,16 @@ class Cloud115:
                 async with asyncio.timeout(15 if playing else 30):
                     result = await method(*args, async_=True, request=self.sdk_request,
                                           session=session, timeout=10 if playing else 15, **kwargs)
-                if isinstance(result, dict) and result.get('state') is False:
+                if isinstance(result, dict) and result.get('state') in (False, 0, '0'):
                     # 115 返回 state:false 时 error_msg 就是业务错误原文（如「错误的链接」），
                     # 提前取出来抛 CloudError，比让 check_response 抛一整坨 repr 干净。
                     error_msg = result.get('error_msg') or result.get('error') or ''
-                    if error_msg:
-                        code = classify_rejection(result.get('errno'), str(error_msg), _scope)
+                    errno = result.get('errno') or result.get('code')
+                    if error_msg or str(errno) in ('911','770004'):
+                        code = classify_rejection(errno, str(error_msg), _scope)
                         # 登录类错误必须保留 LOGIN_INVALID，下游「去重新登录」的引导
                         # 依赖这个码，不能折进通用 CLOUD_REJECTED。
-                        raise CloudError(str(error_msg), code, _NOT_FOUND_STATUS.get(code, 422))
+                        raise CloudError(str(error_msg) or '115 返回请求频率限制。', code, _NOT_FOUND_STATUS.get(code, 422))
                 value = check_response(result) if isinstance(result, dict) else result
                 if not playing:
                     self.reward()
@@ -492,7 +496,7 @@ class Cloud115:
                 if not playing:
                     if _batch:
                         # 一次调用已经覆盖 _batch 个文件，不必再按单文件 3 秒等。
-                        self.next_request = self.clock() + self.BATCH_GAP
+                        self.next_request = self.clock() + self.BATCH_GAP * self.throttle_scale
                     else:
                         self.next_request = self.clock() + self.interval(_kind)
 

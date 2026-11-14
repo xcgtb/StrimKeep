@@ -51,6 +51,7 @@ def install_share(app, store, admin):
     class ShareSettingsInput(BaseModel):
         model_config = ConfigDict(extra='forbid')
         auto_organize: bool = True
+        share_scan_minutes: int | None = Field(default=None, ge=0, le=1440)
         share_check_hours: int = Field(default=0, ge=0, le=8760)
         # 存活检测两种执行方式：固定间隔（按小时，锚在 03:00）或 Cron（5 段，按服务器时区）。
         share_check_mode: Literal['interval', 'cron'] = 'interval'
@@ -131,6 +132,7 @@ def install_share(app, store, admin):
     async def get_settings():
         saved = store.get('share_settings', {}) or {}
         return {'auto_organize':saved.get('auto_organize',True),
+                'share_scan_minutes': 5 if store.get('share_scan_minutes') in (None,'') else int(store.get('share_scan_minutes')),
                 'share_check_hours':saved.get('share_check_hours',0),
                 'share_check_mode':saved.get('share_check_mode','interval'),
                 'share_check_cron':saved.get('share_check_cron','0 3 * * *'),
@@ -139,7 +141,9 @@ def install_share(app, store, admin):
 
     @app.post('/api/v1/share/settings', dependencies=[Depends(admin)])
     async def set_settings(body: ShareSettingsInput):
-        store.set_many({'share_settings':body.model_dump(),'share_prune_cron':body.share_prune_cron,'share_prune_due':0})
+        changes={'share_settings':body.model_dump(exclude={'share_scan_minutes'}),'share_prune_cron':body.share_prune_cron,'share_prune_due':0}
+        if body.share_scan_minutes is not None: changes['share_scan_minutes']=body.share_scan_minutes
+        store.set_many(changes)
         return await get_settings()
 
     @app.post('/api/v1/share/strms/prune', dependencies=[Depends(admin)])
@@ -192,7 +196,14 @@ def install_share(app, store, admin):
                                             body.files, origin='web', allow_restore=True)
         except ValueError as exc:
             raise HTTPException(422, str(exc))
-        return {'created': result['created'], 'skipped': result['skipped'],
+        job_id = None
+        organize_error = ''
+        if result['created'] and (store.get('share_settings', {}) or {}).get('auto_organize', True):
+            try: job_id = share_service.enqueue_pending_organize(app.state.organizer, origin='web')
+            except Exception:
+                organize_error = 'STRM 已生成，但整理任务入队失败；请到待整理手动执行。'
+                store.event('share', organize_error)
+        return {'created': result['created'], 'skipped': result['skipped'], 'job_id':job_id, 'organize_error':organize_error,
                 'count': len(result['created']), 'skip_count': len(result['skipped']),
                 'target': str(strm_root / PENDING_NAME)}
 
@@ -218,11 +229,15 @@ def install_share(app, store, admin):
         videos.sort(key=lambda entry: entry['name'])
         result = share_service.generate(store, strm_root, secret, videos, origin='web', allow_restore=True)
         job_id = None
+        organize_error = ''
         if result['created'] and (store.get('share_settings', {}) or {}).get('auto_organize', True):
-            job_id = share_service.enqueue_organize(app.state.organizer, origin='web')
+            try: job_id = share_service.enqueue_pending_organize(app.state.organizer, origin='web')
+            except Exception:
+                organize_error = 'STRM 已生成，但整理任务入队失败；请到待整理手动执行。'
+                store.event('share', organize_error)
         return {'share_code': secret['share_code'], 'video_count': len(videos),
                 'count': len(result['created']), 'skip_count': len(result['skipped']),
-                'skipped': result['skipped'][:20], 'job_id': job_id,
+                'skipped': result['skipped'][:20], 'job_id': job_id, 'organize_error':organize_error,
                 'target': str(strm_root / PENDING_NAME)}
 
     @app.post('/api/v1/share/organize', dependencies=[Depends(admin)])
@@ -378,7 +393,7 @@ def install_share(app, store, admin):
         if new_total:
             store.event('share_scan', '定时扫描发现 %d 个新的分享文件，已放入待整理。' % new_total)
             if settings.get('auto_organize', True):
-                share_service.enqueue_organize(app.state.organizer, origin='monitor')
+                share_service.enqueue_pending_organize(app.state.organizer, origin='monitor')
         return {'scanned': scanned, 'new_files': new_total}
 
     @app.post('/api/v1/share/scan', dependencies=[Depends(admin)])

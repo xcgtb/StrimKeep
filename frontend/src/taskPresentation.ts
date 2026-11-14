@@ -81,7 +81,7 @@ export function taskPresentation(job: Task) {
     if(ended) title=job.state==='completed'?'转存完成':'转存有项目需处理'
     summary='展开任务查看转存结果及后续整理进度。'
   } else if (job.kind === 'share_organize') {
-    if (ended) title = job.state === 'completed' ? '分享整理完成' : '分享整理有项目需处理'
+    if (ended) title = job.state === 'completed' ? (job.stage==='分享 STRM 已生成'?'分享 STRM 已生成':'分享整理完成') : '分享整理有项目需处理'
     summary = [
       done ? `入库 ${done} 个` : '',
       counts.skipped ? `跳过 ${counts.skipped} 个` : '',

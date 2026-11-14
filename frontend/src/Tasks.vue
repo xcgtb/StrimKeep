@@ -9,6 +9,7 @@ import {taskBucket} from './taskBuckets'
 import DeepDeleteHistory from './DeepDeleteHistory.vue'
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>,embedded?:boolean}>()
 const active=shallowRef<any[]>([]),history=shallowRef<any[]>([]),detail=shallowRef<any>(null),busy=ref(false),error=ref(''),live=ref(false),more=ref(false)
+const offlinePending=ref<any[]>([]),offlineStatusError=ref('')
 const kinds:Record<string,string>={transfer:'115 转存',organize:'扫描整理',archive_index:'归档索引',strm_sync:'STRM 同步',classification_migration:'历史分类迁移（已停用）'}
 let stream:EventSource|undefined,timer:ReturnType<typeof setInterval>|undefined,polling=false,visible=false
 const inProgress=(job:any)=>['queued','running','paused','waiting_login'].includes(job.state)
@@ -28,7 +29,8 @@ const matchTab=(job:any)=>tab.value==='all'||bucketOf(job)===tab.value
 const shownActive=computed(()=>active.value.filter(matchTab))
 const shownHistory=computed(()=>history.value.filter(matchTab))
 const bucketCount=(bucket:string)=>allJobs.value.filter(job=>bucketOf(job)===bucket).length
-async function load(older=false){const before=older&&history.value.length?'?before='+history.value.at(-1).id:'';const data=await props.api('/tasks'+before);active.value=reconcileRows(active.value,data.active);history.value=reconcileRows(history.value,older?[...history.value,...data.history]:data.history);more.value=data.has_more}
+async function loadOffline(){try{const o=await props.api('/offline/submissions?limit=50');offlinePending.value=(o.items||[]).filter((x:any)=>['submitting','submitted'].includes(x.state));offlineStatusError.value=''}catch{offlineStatusError.value='离线下载状态暂时无法读取'}}
+async function load(older=false){const before=older&&history.value.length?'?before='+history.value.at(-1).id:'';const data=await props.api('/tasks'+before);active.value=reconcileRows(active.value,data.active);history.value=reconcileRows(history.value,older?[...history.value,...data.history]:data.history);more.value=data.has_more;await loadOffline()}
 async function run(fn:()=>Promise<void>){if(busy.value)return;busy.value=true;error.value='';try{await fn()}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
 function fmtAgo(ts:number){if(!ts)return '';const diff=Date.now()/1000-ts;if(diff<60)return '刚刚';if(diff<3600)return Math.floor(diff/60)+' 分钟前';if(diff<86400)return Math.floor(diff/3600)+' 小时前';const d=new Date(ts*1000);return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`}
 async function control(job:any,action:string){if(action==='cancel'){try{await ElMessageBox.confirm('取消后保留已完成步骤，在途操作会先核查结果。','取消任务')}catch{return}}await run(async()=>{await props.api(`/organize/jobs/${job.id}/${action}`,'POST');await load()})}
@@ -38,7 +40,7 @@ async function poll(){
   if(!visible||polling||busy.value)return
   polling=true
   try{
-    if(!live.value)await load()
+    if(!live.value)await load();else await loadOffline()
     const current=detail.value
     if(current){
       const data=await props.api(`/organize/jobs/${current.job.id}`)
@@ -70,11 +72,14 @@ usePageActivity(()=>{visible=true;connect();void run(()=>load());timer=setInterv
   <p v-if="more" class="hint">数量仅包含已载入的任务；可在下方载入更早记录。</p>
   <h2>进行中 <span class="task-count">{{shownActive.length}}</span></h2>
   <p class="hint">整理、转存和 STRM 同步分别处理；同类任务按顺序执行，访问同一目录时可能短暂等待。暂停、等待登录或失败的批次不阻塞后续任务。</p>
+  <p v-if="offlineStatusError" class="hint">{{offlineStatusError}}</p>
+  <div v-if="offlinePending.length" class="job-card"><strong>离线下载 · 等待 115 完成或核实产物</strong><p class="hint">显示最近 50 条提交中仍待处理的任务；后台约每分钟检查，任务较多或遇到限流时可能更久。</p><p v-for="item in offlinePending" :key="item.id" class="hint">#{{item.id}} · {{item.target_label||'离线目录'}} · {{item.message||'等待下载状态'}}</p></div>
   <el-empty v-if="!shownActive.length" :description="tab==='all'?'当前没有进行中的任务':'此分类没有进行中的任务'" :image-size="64"/>
   <div v-for="(job,i) in shownActive" :key="job.id" v-memo="[job,busy]" class="job-card">
     <p class="hint"><span :title="new Date(job.updated*1000).toLocaleString()">{{fmtAgo(job.updated)}}</span> · #{{job.id}} · {{kinds[job.kind]||job.kind}} · {{taskSource(job)}}任务
       <el-tag :type="taskStatus(job).type" size="small">{{taskStatus(job).label}}</el-tag></p>
     <h3>{{taskPresentation(job).title}}</h3>
+    <p v-if="job.state==='queued'" class="hint">等待同类任务或调度执行；入队不等于开始处理。</p>
     <el-progress v-if="['queued','running'].includes(job.state)&&job.progress!==undefined" :percentage="job.progress"/>
     <p v-if="job.state==='running'" class="wrap">{{job.stage}}</p>
     <p v-if="job.manifest&&job.total" class="hint">已处理 {{job.finished}} / {{job.total}}</p>

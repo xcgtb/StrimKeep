@@ -167,6 +167,7 @@ async function shareStrmResource(item:any){
     resourceMessage.value=`已接入分享库 ${r.video_count} 个文件：新建 ${r.count} 个 STRM`+
       (r.skip_count?`，跳过 ${r.skip_count} 个已存在`:'')+
       (r.job_id?`；整理任务 #${r.job_id} 已入队，可在任务中心查看进度`:'；请到「分享 STRM」点击整理')+'。'
+    if(r.organize_error)resourceError.value=r.organize_error
   }catch(e){
     if(stage==='resolve'){item.resolveUncertain=true;rememberResource(item);resourceError.value=(e as Error).message}
     else {item.shareUncertain=true;rememberResource(item);resourceError.value='分享入库结果未确认，请先到分享 STRM 和任务中心核查，避免重复提交。 '+(e as Error).message}

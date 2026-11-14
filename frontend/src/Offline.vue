@@ -70,17 +70,7 @@ useVisiblePolling(async()=>{if(!busy.value)await refresh()},5000)
 <p class="selected-directory">{{config.target_label||config.target_cid||'未设置，请选择目录'}}</p>
 <div class="button-row"><el-button :disabled="busy" @click="pickerKind='target'">选择保存目录</el-button><el-button v-if="config.target_cid" :disabled="busy" @click="config.target_cid='';config.target_label=''">清除</el-button><el-button type="primary" :disabled="busy||panelState('target')!=='dirty'" @click="savePanel('target')">保存直链目录</el-button></div>
 <p class="hint">HTTP/HTTPS/FTP 直链使用这里的目录；未设置时无法提交。不同类型请分开提交。保存任一目录时，会一并保存其他目录和分流的未保存修改。</p>
-<div class="organize-option"><label>整理节奏</label>
- <div style="width:100%">
-  <el-select v-model="config.scan_minutes" :disabled="busy" aria-label="离线目录整理节奏" style="max-width:220px">
-   <el-option :value="0" label="关闭自动整理"/>
-   <el-option :value="5" label="每 5 分钟扫一次"/>
-   <el-option :value="10" label="每 10 分钟扫一次"/>
-   <el-option :value="30" label="每 30 分钟扫一次"/>
-  </el-select>
-  <p class="hint">手动提交的磁力/电驴下载完成后，定时扫描离线目录里还没整理的新视频并自动整理；关掉后只能手动触发。</p>
- </div>
-</div></section>
+</section>
 
 <section class="panel offline-directory"><div class="section-title"><h2>磁力与种子离线</h2><el-tag v-if="panelState('magnet')" size="small" :type="panelState('magnet')==='dirty'?'warning':'success'">{{panelState('magnet')==='dirty'?'有未保存改动':'已保存'}}</el-tag></div>
 <p class="selected-directory">{{config.magnet_label||config.magnet_cid||'未设置，请选择目录'}}</p>

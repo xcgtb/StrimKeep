@@ -244,7 +244,7 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
    <p class="hint">控制分享转存和磁力 / ED2K 离线；关闭时由「影视整理」手动或定时扫描处理。分享 STRM 的自动整理在「分享 STRM → 分享监控」设置。</p>
    </div>
   </div>
-  <p v-else class="hint">免转存模式只处理 115 分享链接；磁力和 ED2K 不会生成分享 STRM，也不会提交离线下载。</p>
+  <p v-else class="hint">免转存只处理 115 分享；先按上方频道监控间隔发现新帖，再按「分享 STRM → 整理与监控」决定是否立即整理。磁力和 ED2K 会跳过。</p>
 
 
   <div class="channel-section">

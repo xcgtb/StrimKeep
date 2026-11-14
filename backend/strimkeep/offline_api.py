@@ -58,8 +58,7 @@ class OfflineConfig(BaseModel):
     ed2k_auto_organize: bool | None = None        # Web ED2K（None=跟随 auto_organize）
     bot_magnet_auto_organize: bool | None = None  # 机器人磁力/直链（None=跟随 bot_auto_organize）
     bot_ed2k_auto_organize: bool | None = None    # 机器人 ED2K（None=跟随 bot_auto_organize）
-    # 离线目录兜底扫描的节奏（分钟）：0 = 关闭。页面「整理节奏」写这里，
-    # 组织器读它；运维仍可用 meta.offline_scan_minutes 临时压过。
+    # 仅为兼容旧版配置/客户端而保留；离线目录兜底扫描已停用。
     scan_minutes: int = Field(default=5, ge=0, le=1440)
 
 
@@ -195,6 +194,8 @@ class OfflinePostProcess:
         cols = {row[1] for row in self.store.db.execute('PRAGMA table_info(offline_submissions)')}
         if 'organize' not in cols:
             self.store.db.execute('ALTER TABLE offline_submissions ADD COLUMN organize INTEGER NOT NULL DEFAULT 1')
+        if 'finished_seen_at' not in cols:
+            self.store.db.execute('ALTER TABLE offline_submissions ADD COLUMN finished_seen_at REAL NOT NULL DEFAULT 0')
         self.store.db.commit()
 
     async def submit(self, urls, target_cid, target_label, organize=True, origin='web'):
@@ -245,8 +246,6 @@ class OfflinePostProcess:
             raise
         self._set(sid, 'submitted',
                   '已提交，等待下载完成' + ('后定位本批产物并自动整理。' if organize else '；只落盘，不自动整理。'))
-        # 让兜底扫描下一轮优先看这个目录：轮询要转一圈才轮到，用户会以为「没自动整理」。
-        self.store.set_meta('offline_scan_next_cid', str(target_cid))
         # 实时日志与来源无关：Web 与 Telegram 机器人提交都要留痕（#%d 便于和离线列表对账）。
         self.store.event('offline', '离线提交 #%d（%s）：%d 个链接 → %s；等待下载完成%s。'
                          % (sid, origin, len(urls), target_label or target_cid,
@@ -491,9 +490,17 @@ class OfflinePostProcess:
             self._set(row['id'], 'submitted', '115 未返回明确状态，稍后重试。')
             return
         if any(state != 'done' for state in states):
+            if row['finished_seen_at']:
+                with self.store.db:
+                    self.store.db.execute('UPDATE offline_submissions SET finished_seen_at=0 WHERE id=?', (row['id'],))
             self._set(row['id'], 'submitted', '下载进行中（任务列表 %d/%d 已完成）。' % (
                 states.count('done'), len(states)))
             return
+        finished_seen_at = float(row['finished_seen_at'] or 0)
+        if not finished_seen_at:
+            finished_seen_at = time.time()
+            with self.store.db:
+                self.store.db.execute('UPDATE offline_submissions SET finished_seen_at=? WHERE id=? AND finished_seen_at=0', (finished_seen_at, row['id']))
         # 产物认领：按任务给的产物文件 ID 直接查文件本身。
         # 不能靠 target_cid 列目录——115 报的 wp_path_id 有时和真实落盘目录不一致
         # （现场 SSNI-953 实际落在 3503430221283985095，wp_path_id 却是 porn 目录）。
@@ -515,7 +522,7 @@ class OfflinePostProcess:
             age = time.time() - row['submitted_at']
             if age > self.EXPIRE_SECONDS:
                 self._set(row['id'], 'needs_review', '无法唯一确认离线任务产物，请人工核查；不会认领其他文件。')
-            elif age > self.PRODUCT_GRACE_SECONDS:
+            elif time.time() - finished_seen_at > self.PRODUCT_GRACE_SECONDS:
                 # 115 明确说下载完成：回执照发（产物不在就注明），不静默。
                 # 现场 115 的任务列表里有 20 个 done，目标目录却一个都没多——这种情况很常见。
                 self._set(row['id'], 'completed',
