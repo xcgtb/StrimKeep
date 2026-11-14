@@ -38,7 +38,7 @@ class Tests(unittest.TestCase):
     def test_successful_sign_survives_followup_read_failure(self):
         async def run():
             cloud = Cloud115.__new__(Cloud115)
-            client = SimpleNamespace(user_points_sign='read', user_points_sign_post='post')
+            client = SimpleNamespace(user_points_sign='read', user_points_sign_post='post', user_points_balance='balance')
             cloud.client = lambda: client
             calls = []
             async def call(method, **kwargs):
@@ -50,7 +50,30 @@ class Tests(unittest.TestCase):
             result = await cloud.sign()
             self.assertTrue(result['signed'])
             self.assertIsNone(result['reward'])
-            self.assertEqual(calls, ['read', 'post', 'read'])
+            self.assertIsNone(result['balance'])
+            self.assertEqual(calls, ['read', 'post', 'read', 'balance'])
+        asyncio.run(run())
+
+    def test_signed_today_reports_recorded_reward_and_balance_without_signing_again(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        async def run():
+            cloud = Cloud115.__new__(Cloud115)
+            client = SimpleNamespace(user_points_sign='read', user_points_sign_post='post', user_points_balance='balance')
+            cloud.client = lambda: client
+            calls = []
+            async def call(method, **kwargs):
+                calls.append(method)
+                if method == 'balance': return {'data': {'balance': 1109}}
+                return {'data': {'is_sign_today': 1, 'continuous_day': 12,
+                        'sign_list': [{'sign_day': datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d'), 'points_num': '12'}]}}
+            cloud.call = call
+            result = await cloud.sign()
+            self.assertEqual((result['signed'], result['days'], result['reward'], result['balance']), (False, 12, 12, 1109))
+            self.assertEqual(calls, ['read', 'balance'])
+            notice = cloud_sign_notice(False, 12, reward=12, balance=1109)[1]
+            self.assertIn('今日获得  12 枫叶', notice)
+            self.assertIn('当前余额  1109 枫叶', notice)
         asyncio.run(run())
 
     def test_menu_order_and_disabled_commands_are_synced_and_updated(self):

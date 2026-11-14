@@ -284,7 +284,7 @@ def install_console(app,store,admin):
         store.event('cloud','115 签到：'+str(result.get('message') or '完成'))
         days = result.get('days')
         date_text = datetime.datetime.now(ZoneInfo(store.get('timezone') or 'Asia/Shanghai')).strftime('%Y-%m-%d')
-        heading, body = cloud_sign_notice(result.get('signed'), days, date_text, result.get('reward'))
+        heading, body = cloud_sign_notice(result.get('signed'), days, date_text, result.get('reward'), result.get('balance'))
         await app.state.organizer.notifications.publish(
             'cloud:sign:%d' % int(time.time()), heading, body,
             'success' if result.get('signed') else 'info', category='cloud')

@@ -1044,7 +1044,7 @@ class Cloud115:
         if isinstance(data, dict) and str(data.get('is_sign_today', '0')).lower() in ('1', 'true'):
             days, reward = sign_details(data)
             return {'signed': False, 'message': '今天已经签到过了。',
-                    'days': days, 'reward': reward}
+                    'days': days, 'reward': reward, 'balance': await self.sign_balance()}
         result = await self.call(self.client().user_points_sign_post,
                                  _scope='maintenance', _kind='write')
         payload = result.get('data') if isinstance(result, dict) else None
@@ -1057,7 +1057,18 @@ class Cloud115:
                 if refreshed_reward is not None: reward = refreshed_reward
             except Exception:
                 pass  # 签到已成功，查询失败不能误报签到失败或触发重复签到。
-        return {'signed': True, 'message': '签到完成。', 'days': days, 'reward': reward}
+        return {'signed': True, 'message': '签到完成。', 'days': days, 'reward': reward,
+                'balance': await self.sign_balance()}
+
+    async def sign_balance(self):
+        """Balance is optional: failure to read it must not turn a successful sign into a retry."""
+        try:
+            result = await self.call(self.client().user_points_balance, _scope='maintenance')
+            data = result.get('data') if isinstance(result, dict) else None
+            value = data.get('balance') if isinstance(data, dict) else None
+            return int(value) if not isinstance(value, bool) and str(value).isdigit() else None
+        except Exception:
+            return None
 
     async def recycle_info(self):
         """回收站概览：只读第一页拿总条数，不拉全量清单。"""

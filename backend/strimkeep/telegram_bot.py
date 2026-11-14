@@ -196,7 +196,7 @@ class TelegramBot:
         if command=='/sign':
             try:
                 r=await self.engine.cloud.sign()
-                heading,result=cloud_sign_notice(r.get('signed'),r.get('days'),reward=r.get('reward'))
+                heading,result=cloud_sign_notice(r.get('signed'),r.get('days'),reward=r.get('reward'),balance=r.get('balance'))
             except CloudError as exc:
                 heading,result='⚠️ 115 签到未完成',self._safe_error(exc)
             await self.engine.notifications.publish(key,heading,result,chat_override=str(chat['id']),force=True)
