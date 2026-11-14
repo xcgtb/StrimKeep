@@ -487,6 +487,7 @@ html.dark .mode-choice small,html.dark .rule-toggle small,html.dark .order-descr
 html.dark{color-scheme:dark;--app-bg:#101824;--surface:#192434;--surface-soft:#202e42;--text:#eff4fc;--muted:#9cabbd;--line:#314056;--accent:#83aafd;--brand-gradient:#3976ea;--panel-shadow:0 7px 20px rgba(1, 8, 20, .12);--focus-ring:rgba(131, 170, 253, .23);--el-color-primary:#83aafd;--el-color-primary-light-3:#618bd8;--el-color-primary-light-5:#4667a4;--el-color-primary-light-7:#2a405e;--el-color-primary-light-8:#223750;--el-color-primary-light-9:#1c304b;--el-color-primary-dark-2:#9cbcff;--el-text-color-primary:#eff4fc;--el-text-color-regular:#c7d4e4;--el-text-color-secondary:#9cabbd;--el-border-color:#314056;--el-border-color-light:#2c394b;--el-fill-color-light:#202e42;--el-bg-color:#192434;--el-bg-color-overlay:#202d40;--el-fill-color-blank:#192434}
 html{-webkit-text-size-adjust:100%;scroll-behavior:auto}
 body{margin:0;background:var(--app-bg);color:var(--text);-webkit-font-smoothing:antialiased}
+.selftest-result .el-message-box__message{white-space:pre-line;overflow-wrap:anywhere}
 button, input, textarea, select{font-family:inherit}
 button:focus-visible, a:focus-visible{outline:3px solid var(--focus-ring);outline-offset:2px}
 button, .el-button{-webkit-tap-highlight-color:transparent}

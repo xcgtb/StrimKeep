@@ -11,7 +11,7 @@ const account=ref<any>(null),accountBusy=ref(false)
 async function loadAccount(refresh=false){accountBusy.value=true;try{account.value=await props.api('/cloud/account'+(refresh?'?refresh=1':''))}catch(e){account.value={error:(e as Error).message}}finally{accountBusy.value=false}}
 const tb=(n?:number)=>n==null?'—':(n/1024**4).toFixed(2)+' TB'
 const pct=(used?:number,total?:number)=>{const t=Number(total||0);return t>0?Math.min(100,Math.round(Number(used||0)/t*100)):0}
-async function saved(){qr.value=false;await check();await browse('0')}
+async function saved(){qr.value=false;const wasConfigured=configured.value;await check();if(wasConfigured&&configured.value)await browse('0')}
 async function saveCookie(){await run(async()=>{await props.api('/settings','PUT',{cookie:cookie.value});cookie.value='';configured.value=true;status.value='已保存';ElMessage.success('Cookie 已保存')})}
 const listLoading=ref(false);let browseSequence=0
 async function browse(id=cid.value,name?:string,index?:number,page=0,trail?:{id:string;name:string}[]){
@@ -42,7 +42,7 @@ function fmtTime(ts:number){if(!ts)return '—';const d=new Date(ts*1000);const 
 
 onMounted(async()=>{try{configured.value=(await props.api('/settings')).cookie_configured}catch(e){error.value=(e as Error).message};void loadAccount();void loadMaint();void loadRecycle()})
 </script>
-<template><div class="page-title"><div><h1>115 账号配置</h1><p class="muted">登录网盘、浏览目录与接收分享链接。</p></div></div><el-alert v-if="error" :title="error" type="error"/>
+<template><div class="page-title"><div><h1>115 网盘</h1><p class="muted">管理账号、浏览目录、签到与回收站。</p></div></div><el-alert v-if="error" :title="error" type="error"/>
 <section class="panel account-panel">
   <div class="section-title"><div><h2>115 账号</h2><p class="account-caption">管理登录状态与网盘容量</p></div><el-tag :type="status==='已登录'?'success':'info'">{{configured?status:'尚未登录'}}</el-tag></div>
   <div v-if="account&&!account.error" class="account-card"><div class="account-row"><div class="account-avatar"><img v-if="account.avatar" :src="account.avatar" alt=""/><span v-else>115</span></div><div class="account-id"><strong>{{account.nickname||'115 账号'}}</strong><small>UID {{account.uid||'—'}}</small></div><el-tag v-if="account.vip_level" type="warning" effect="light">VIP</el-tag><el-button text :loading="accountBusy" @click="loadAccount(true)">刷新容量</el-button></div><div class="usage"><div class="usage-head"><span>已用 {{tb(account.space_used)}}</span><span class="muted">共 {{tb(account.space_total)}}</span></div><div class="usage-bar"><i :style="{width:pct(account.space_used,account.space_total)+'%'}"/></div></div></div>

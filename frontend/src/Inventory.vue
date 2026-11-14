@@ -5,6 +5,7 @@ import {ElMessage, ElMessageBox} from 'element-plus'
 import {inventoryCardStatus, STATUS_LEGEND} from './inventoryStatus'
 import {actionKey, bulkConflictKeys, selectionConflict} from './governanceSelection'
 import {librarySeasonStatus, ordinaryEpisodes} from './inventorySeason'
+import {usePageActivity} from './pageActivity'
 
 const props = defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>()
 const router = useRouter()
@@ -70,7 +71,7 @@ const statusById = ref<Record<string,any>>({}), statusBusy = ref(false), statusP
 const embyItems = ref<any[]>([]), embyError = ref(''), embyBusy = ref(false)
 const orphanBusy = ref(false), orphanError = ref(''), cloudOrphanError=ref(''), orphanResult = ref<any>(null), orphanSelected = ref<any[]>([]), orphanDone = ref<any[]>([])
 const orphanJobs=ref<any[]>([]), orphanJob=ref<any>(null)
-let orphanTimer:ReturnType<typeof setTimeout>|undefined
+let orphanTimer:ReturnType<typeof setTimeout>|undefined, orphanVisible=false
 let statusGeneration = 0, embyGeneration = 0
 const statusInFlight = new Map<string, Promise<void>>()
 watch([tie, decision, matchStrategy, multiProtect, specialAction, exemptInput, singleQuality, singleGaps, seasonRatio, quietMinutes, scanScheduleEnabled, scanIntervalHours], () => { preview.value = null; scanTime.value = 0; configMessage.value = '' })
@@ -111,7 +112,7 @@ async function loadOrphanJobs() {
     else { if(orphanJob.value) orphanJob.value=orphanJobs.value.find((job:any)=>job.id===orphanJob.value.id) || null; orphanBusy.value=false }
   } catch(e) { orphanError.value='清理记录读取失败：'+(e as Error).message; if(orphanBusy.value) scheduleOrphanPoll() }
 }
-function scheduleOrphanPoll() { if(orphanTimer) clearTimeout(orphanTimer); orphanTimer=setTimeout(loadOrphanJobs,3000) }
+function scheduleOrphanPoll() { if(orphanTimer) clearTimeout(orphanTimer); if(orphanVisible) orphanTimer=setTimeout(loadOrphanJobs,3000) }
 function jobState(state:string) { return ({queued:'等待执行',running:'清理中',completed:'已完成',partial:'部分完成',interrupted:'已中断'} as Record<string,string>)[state] || state }
 async function cleanOrphans() {
   if (!orphanSelected.value.length) return
@@ -569,7 +570,7 @@ function searchResources() {
   if (selected.value) void router.push({name:'explore',query:{q:selected.value.title,resource_id:String(selected.value.tmdb_id),resource_kind:selected.value.kind}})
 }
 onMounted(async () => { window.addEventListener('resize', updatePageSize); await load(false); await loadHistory(); try { const config = await props.api('/inventory/config'); tie.value = config.tie; decision.value = config.decision || 'quality_first'; matchStrategy.value = config.match_strategy || 'title_year'; multiProtect.value = config.multi_season_protect || 'compare'; specialAction.value = config.special_action || 'compare'; exemptInput.value = (config.exempt_keywords || []).join('，'); singleQuality.value = config.single_quality; singleGaps.value = config.single_gaps; seasonRatio.value = Math.round((config.season_ratio ?? .9) * 100); quietMinutes.value = config.quiet_minutes ?? 15; scanScheduleEnabled.value = !!config.scan_schedule_enabled; scanIntervalHours.value = config.scan_interval_hours ?? 6; savedSettings.value = settingsKey(); const last = await props.api('/inventory/last-scan'); if (last.result) { preview.value = last.result; scanTime.value = Number(last.at || 0) } } catch (e) { configMessage.value = (e as Error).message } try { ruleInfo.value = await props.api('/upgrade/config') } catch (e) { ruleError.value = (e as Error).message } })
-onMounted(() => { void loadOrphanJobs() })
+usePageActivity(() => { orphanVisible=true; void loadOrphanJobs() }, () => { orphanVisible=false; if(orphanTimer) clearTimeout(orphanTimer) })
 onUnmounted(() => { window.removeEventListener('resize', updatePageSize); if(orphanTimer) clearTimeout(orphanTimer) })
 </script>
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import {ref,onMounted,computed,watch} from 'vue'
 import {Film, Search, Setting, Refresh} from '@element-plus/icons-vue'
-import {ElMessageBox} from 'element-plus'
+import {ElMessage,ElMessageBox} from 'element-plus'
 import {useRouter,useRoute} from 'vue-router'
 const router=useRouter(),route=useRoute()
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>()
@@ -10,7 +10,7 @@ const filtersOpen=ref(false)
 const filterCount=computed(()=>Number(sort.value!=='popular')+Number(!!genre.value)+Number(!!year.value)+Number(!!region.value) )
 const items=ref<any[]>([]),genres=ref<any[]>([]),totalPages=ref(1),busy=ref(false),error=ref('')
 const searchInput=ref(String(route.query.q||'')),activeQuery=ref(String(route.query.q||'')),yearInput=ref('')
-watch(()=>route.query.q,value=>{const q=String(value||'').trim();if(q!==activeQuery.value){searchInput.value=q;activeQuery.value=q;page.value=1;void load()}})
+watch(()=>route.query.q,value=>{const q=String(value||'').trim();if(q!==activeQuery.value){searchInput.value=q;activeQuery.value=q;genre.value=undefined;region.value='';sort.value='popular';page.value=1;void load()}})
 const badgeClass:Record<string,string>={'已入库':'badge-ok','已完整':'badge-ok','连载中':'badge-partial','未入库':'badge-none','状态未知':'badge-unknown'}
 
 let requestVersion=0
@@ -34,10 +34,11 @@ async function loadGenres(){
   try{const r=await props.api('/explore/genres?kind='+requested);if(kind.value===requested)genres.value=r.genres||[]}catch{}
 }
 function pick(k:'movie'|'tv'){if(kind.value===k)return;kind.value=k;genre.value=undefined;if(['now_playing','upcoming','on_the_air','airing_today'].includes(sort.value))sort.value='popular';page.value=1;loadGenres();load()}
-function setSort(s:string){if(sort.value===s)return;sort.value=s;page.value=1;load()}
+function leaveSearchForBrowse(){if(activeQuery.value){activeQuery.value='';searchInput.value='';if(route.query.q){const query={...route.query};delete query.q;void router.replace({query})}ElMessage.info('已退出名称搜索，按筛选条件浏览')}}
+function setSort(s:string){if(sort.value===s)return;leaveSearchForBrowse();sort.value=s;page.value=1;load()}
 const regionOptions=[['CN','中国大陆'],['HK','中国香港'],['TW','中国台湾'],['US','美国'],['GB','英国'],['JP','日本'],['KR','韩国'],['IN','印度'],['FR','法国'],['TH','泰国']]
-function setRegion(code:string){if(region.value===code)return;region.value=code;page.value=1;load()}
-function setGenre(g:number|undefined){if(genre.value===g)return;genre.value=g;page.value=1;load()}
+function setRegion(code:string){if(region.value===code)return;leaveSearchForBrowse();region.value=code;page.value=1;load()}
+function setGenre(g:number|undefined){if(genre.value===g)return;leaveSearchForBrowse();genre.value=g;page.value=1;load()}
 function setYear(y:number|undefined){if(year.value===y)return;year.value=y;yearInput.value=y?String(y):'';page.value=1;load()}
 function applyYear(){
   const text=yearInput.value.trim()
@@ -58,9 +59,9 @@ function doSearch(){
   if(region.value)region.value=''
   if(sort.value!=='popular')sort.value='popular'
   searchInput.value=text
-  activeQuery.value=text;page.value=1;load()
+  activeQuery.value=text;page.value=1;const query={...route.query};if(text)query.q=text;else delete query.q;void router.replace({query});load()
 }
-function clearSearch(){if(!activeQuery.value)return;searchInput.value='';activeQuery.value='';page.value=1;load()}
+function clearSearch(){if(!activeQuery.value)return;searchInput.value='';activeQuery.value='';const query={...route.query};delete query.q;void router.replace({query});page.value=1;load()}
 
 const yearOptions=computed(()=>{
   const now=new Date().getFullYear(),out:number[]=[]
@@ -123,7 +124,7 @@ async function searchResources(){
   catch(e){if(version===resourceRequestVersion)resourceError.value=(e as Error).message}finally{if(version===resourceRequestVersion)resourceBusy.value=false}
 }
 function pointNotice(item:any){
-  return item.share_url?'分享链接已就绪，不需要再次获取。':item.is_unlocked?'资源显示为已解锁，实际状态以为准。':item.unlock_points!==null?`预计消耗 ${item.unlock_points} 积分，实际费用以为准。`:'积分费用未知，实际费用以为准。'
+  return item.share_url?'分享链接已就绪，不需要再次获取。':item.is_unlocked?'资源显示为已解锁，实际状态以资源服务返回为准。':item.unlock_points!=null?`预计消耗 ${item.unlock_points} 积分，实际费用以资源服务返回为准。`:'积分费用未知，请先在资源服务中确认。'
 }
 async function readResourceLink(item:any){
   const r=await props.api('/explore/resources/resolve','POST',{source:'re0',provider:'115',slug:item.slug})

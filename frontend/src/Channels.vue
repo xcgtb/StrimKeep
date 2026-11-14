@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import {computed,ref,onMounted} from 'vue'
-import {ElMessage} from 'element-plus'
+import {computed,ref,onMounted,onUnmounted} from 'vue'
+import {ElMessage,ElMessageBox} from 'element-plus'
+import {useRoute} from 'vue-router'
 import CloudTreePicker from './CloudTreePicker.vue'
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>()
 const emit=defineEmits<{navigate:[page:string]}>()
+const route=useRoute()
 const config=ref<any>({enabled:false,notify:true,schedule_mode:'interval',interval:300,cron:'*/10 * * * *',channels:[]})
 const sources=ref<any[]>([]),organizeSources=ref<string[]>([])
 const draft=ref(''),busy=ref(false),error=ref(''),picker=ref(''),routeIndex=ref(-1)
@@ -39,7 +41,7 @@ async function confirmRename(){
   await run(async()=>{
     await props.api('/channels/rename','POST',{old:from,new:to})
     renameOpen.value=false
-    await load()
+    absorb(await props.api('/channels'))
     ElMessage.success('已改名：落点和规则保留，跟进位置也搬过去了')
   })
 }
@@ -98,7 +100,11 @@ function addFromTelegram(ch:any){
 }
 function added(ch:any){const name=ch.username||ch.id;return config.value.channels.some((c:any)=>c.name===name)}
 function kindLabel(ch:any){return ch.kind==='group'?'群组':ch.kind==='bot'?'机器人':(ch.private?'私密频道':'公开频道')}
-onMounted(()=>{loadTelegram();load()})
+async function canLeave(){if(!dirty.value&&!draft.value.trim())return true;try{await ElMessageBox.confirm('频道设置或输入内容尚未保存，刷新页面可能丢失。','离开频道监控？',{confirmButtonText:'离开',cancelButtonText:'继续编辑'});return true}catch{return false}}
+function beforeUnload(e:BeforeUnloadEvent){if(route.name==='channels'&&(dirty.value||draft.value.trim())){e.preventDefault();e.returnValue=''}}
+defineExpose({canLeave})
+onMounted(()=>{window.addEventListener('beforeunload',beforeUnload);loadTelegram();load()})
+onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
 </script>
 <template>
 <div class="page-title channel-page-head"><div><h1>频道监控</h1><p class="muted">管理公开频道、保存目录与分流规则。</p></div><div class="channel-head-actions"><span role="status">{{!baseline?'正在读取设置':dirty?'有未保存修改':'设置已保存'}}</span><el-button type="primary" :loading="busy" :disabled="!dirty" @click="save">保存修改</el-button></div></div>

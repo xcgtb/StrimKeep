@@ -59,7 +59,7 @@ defineExpose({canLeave})
     <div v-for="type in types" :key="type.key" class="table-value" :class="{empty:value(row,type.key)==='未设置'}"><span class="mobile-label">{{type.label}}</span><span :title="value(row,type.key)">{{value(row,type.key)}}</span></div>
     <el-button text type="primary" :disabled="busy||disabled" @click="open(row)">编辑</el-button>
    </div>
-   <div v-if="!channelRows.length" class="channel-empty"><span>还没有添加频道</span><el-button text type="primary" @click="emit('navigate','channels')">前往添加</el-button></div>
+   <div v-if="!hideChannel&&!channelRows.length" class="channel-empty"><span>还没有添加频道</span><el-button text type="primary" @click="emit('navigate','channels')">前往添加</el-button></div>
   </div>
   <div class="explore-row">
    <div class="explore-copy"><strong>影视探索</strong><span :class="{empty:!exploreCid}">{{ exploreLabel||exploreCid||'跟随 Web 的 115 分享目录' }}</span></div>
@@ -68,7 +68,7 @@ defineExpose({canLeave})
     <el-button v-if="exploreCid" size="small" text :disabled="busy||disabled||exploreBusy" @click="clearExplore">改为跟随 Web</el-button>
    </div>
   </div>
-  <p class="footnote">影视探索里点「转存」就落到这一行的目录。转存后自动整理需要目标在待整理目录中；直链和关键词分流可在离线下载页设置。</p>
+  <p class="footnote">影视探索的转存使用此处目录。转存后自动整理需要目标在待整理目录中；直链和关键词分流可在下方“离线下载目录与分流”设置。</p>
  </div>
 </section>
 

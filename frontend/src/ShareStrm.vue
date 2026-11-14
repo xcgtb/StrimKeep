@@ -19,7 +19,7 @@ const watchJob=ref<number|null>(null),watchTimer=ref<number|null>(null)
 
 async function run(fn:()=>Promise<void>){if(busy.value)return;busy.value=true;error.value='';try{await fn()}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
 
-async function loadSettings(updateOwn=true){try{const r=await props.api('/share/settings');if(updateOwn){settings.value={auto_organize:r.auto_organize,share_check_hours:r.share_check_hours??0,share_check_mode:r.share_check_mode??'interval',share_check_cron:r.share_check_cron??'0 3 * * *',share_prune_cron:r.share_prune_cron??'0 5 * * *'};settingsBaseline.value=JSON.stringify(settings.value)}}catch{}}
+async function loadSettings(updateOwn=true){try{const r=await props.api('/share/settings');if(updateOwn){settings.value={auto_organize:r.auto_organize,share_check_hours:r.share_check_hours??0,share_check_mode:r.share_check_mode??'interval',share_check_cron:r.share_check_cron??'0 3 * * *',share_prune_cron:r.share_prune_cron??'0 5 * * *'};settingsBaseline.value=JSON.stringify(settings.value)}}catch(e){if(updateOwn)error.value='分享监控设置读取失败：'+(e as Error).message}}
 async function saveSettings(){await run(async()=>{await props.api('/share/settings','POST',settings.value);settingsBaseline.value=JSON.stringify(settings.value);ElMessage.success('监控设置已保存')})}
 
 async function parse(){await run(async()=>{const r=await props.api('/share/parse','POST',{text:shareText.value});parsed.value=r;selected.value=new Set(r.videos.map((v:any)=>v.id));ElMessage.success(`解析到 ${r.video_count} 个视频`)})}
@@ -75,11 +75,11 @@ async function doRefresh(at?:number){
   rows.value=r.items||[];total.value=r.total||0
 }
 async function refresh(){await run(()=>doRefresh())}
-function switchTab(t:'pending'|'library'|'revoked'){tab.value=t;doRefresh(0)}
+function switchTab(t:'pending'|'library'|'revoked'){if(busy.value)return;tab.value=t;void run(()=>doRefresh(0))}
 function fmtTime(ts:number){if(!ts)return '';return new Date(ts*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
 
 const tabLabels={pending:'待整理',library:'分享影视库',revoked:'已撤销'} as const
-onMounted(async()=>{await loadSettings();await refresh()})
+onMounted(async()=>{await refresh();await loadSettings()})
 useVisiblePolling(async()=>{if(!busy.value)await loadSettings(false)},5000)
 onUnmounted(stopWatching)
 async function canLeave(){if(profileEditor.value&&!await profileEditor.value.canLeave())return false;if(!monitorDirty.value)return true;try{await ElMessageBox.confirm('监控设置还没有保存。','放弃修改？',{confirmButtonText:'放弃修改',cancelButtonText:'继续编辑'});settings.value=JSON.parse(settingsBaseline.value);return true}catch{return false}}

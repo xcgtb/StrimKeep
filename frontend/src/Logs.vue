@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import {ref,shallowRef,computed,watch,nextTick,onUnmounted} from 'vue'
-import Tasks from './Tasks.vue'
 import {usePageActivity} from './pageActivity'
 import {levelOf} from './logLevel'
 import {ElMessage} from 'element-plus'
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>()
+const emit=defineEmits<{navigate:[page:string]}>()
 
-const tab=ref('live'),rows=shallowRef<any[]>([]),live=ref(false),paused=ref(false)
+const rows=shallowRef<any[]>([]),live=ref(false),paused=ref(false)
 const level=ref('all'),kind=ref(''),search=ref(''),term=ref(''),selected=shallowRef<any>(null)
 const scrollTop=ref(0),viewport=ref<HTMLElement>(),loading=ref(false),older=ref(true),showProgress=ref(true)
 let stream:EventSource|undefined,visible=false,frame=0,pending:any[]=[],queryTimer:ReturnType<typeof setTimeout>|undefined
@@ -20,7 +20,7 @@ const height=computed(()=>narrow.value?92:58)
 
 const KINDS:Record<string,string>={progress:'进度',organize:'整理',queue:'队列',schedule:'调度',emby:'Emby','115':'115',cloud:'风控',system:'系统',error:'异常',channel:'频道',share:'分享',share_organize:'分享整理',play:'播放',output:'输出',bot:'机器人',transfer:'转存',settings:'设置',token:'令牌'}
 const kindLabel=(value:string)=>KINDS[value]||value
-const kindOptions=computed(()=>{const seen=new Set(rows.value.map(r=>r.kind));return Object.keys(KINDS).filter(k=>seen.has(k))})
+const kindOptions=computed(()=>{const seen=new Set<string>(rows.value.map(r=>String(r.kind)));return [...seen].sort((a,b)=>kindLabel(a).localeCompare(kindLabel(b),'zh-CN'))})
 
 function jobOf(message:string){const m=/^任务\s*(\d+)\s*[：:]\s*/.exec(String(message||''));return m?m[1]:''}
 function bodyOf(message:string){return String(message||'').replace(/^任务\s*\d+\s*[：:]\s*/,'')}
@@ -45,8 +45,8 @@ const counts=computed(()=>{let warn=0,error=0;for(const row of rows.value){const
 function merge(items:any[]){const ids=new Set(items.map(r=>r.id));rows.value=[...items,...rows.value.filter(r=>!ids.has(r.id))].sort((a,b)=>b.id-a.id).slice(0,5000)}
 function flush(){frame=0;if(!paused.value&&pending.length){merge(pending);pending=[]}}
 function disconnect(){stream?.close();stream=undefined;live.value=false;if(frame)cancelAnimationFrame(frame);frame=0;pending=[]}
-function connect(){disconnect();if(!visible||tab.value!=='live')return;stream=new EventSource('/api/v1/logs/events?after='+(rows.value[0]?.id||0));stream.onopen=()=>live.value=true;stream.addEventListener('logs',e=>{if(paused.value)return;try{pending.push(...JSON.parse((e as MessageEvent).data).items);if(!frame)frame=requestAnimationFrame(flush)}catch{live.value=false}});stream.onerror=()=>live.value=false}
-async function load(before=false){if(loading.value)return;loading.value=true;try{const suffix=before?'&before='+rows.value.at(-1)?.id:'';const items=(await props.api('/logs?limit=200'+suffix)).items;merge(items);if(before)older.value=items.length===200;if(!before)connect()}catch(e){console.warn(e)}finally{loading.value=false}}
+function connect(){disconnect();if(!visible)return;stream=new EventSource('/api/v1/logs/events?after='+(rows.value[0]?.id||0));stream.onopen=()=>live.value=true;stream.addEventListener('logs',e=>{if(paused.value)return;try{pending.push(...JSON.parse((e as MessageEvent).data).items);if(!frame)frame=requestAnimationFrame(flush)}catch{live.value=false}});stream.onerror=()=>live.value=false}
+async function load(before=false){if(loading.value)return;loading.value=true;try{const suffix=before?'&before='+rows.value.at(-1)?.id:'';const items=(await props.api('/logs?limit=200'+suffix)).items;merge(items);if(before)older.value=items.length===200;if(!before)connect()}catch(e){ElMessage.error('日志读取失败：'+(e as Error).message)}finally{loading.value=false}}
 async function download(){
   const params=new URLSearchParams({limit:'5000'})
   if(kind.value)params.set('kind',kind.value)
@@ -57,23 +57,17 @@ async function download(){
     const blob=await res.blob(),url=URL.createObjectURL(blob),link=document.createElement('a')
     link.href=url;link.download='strimkeep-logs-'+new Date().toISOString().slice(0,19).replace(/[:T]/g,'')+'.txt'
     link.click();URL.revokeObjectURL(url)
-    ElMessage.success('已导出当前筛选下的日志')
+    ElMessage.success('已按类别和关键词导出日志；级别筛选仅影响页面显示')
   }catch(err){ElMessage.error('导出失败：'+(err as Error).message)}
 }
 watch(search,value=>{if(queryTimer)clearTimeout(queryTimer);queryTimer=setTimeout(()=>term.value=value.toLowerCase(),180)})
 watch([term,kind,level,showProgress],async()=>{scrollTop.value=0;await nextTick();if(viewport.value)viewport.value.scrollTop=0})
 watch(paused,value=>{if(!value)void load()})
-watch(tab,value=>{if(value==='live'&&visible)void load();else disconnect()})
-usePageActivity(()=>{visible=true;if(tab.value==='live')void load()},()=>{visible=false;disconnect();if(queryTimer)clearTimeout(queryTimer)})
+usePageActivity(()=>{visible=true;void load()},()=>{visible=false;disconnect();if(queryTimer)clearTimeout(queryTimer)})
 </script>
 <template>
-<div class="page-title"><div><h1>实时日志</h1><p class="muted">谁在做什么、做到哪一步、有没有出问题。</p></div><el-tag :type="live?'success':'info'">{{live?'实时连接':'连接待恢复'}}</el-tag></div>
-<el-tabs v-model="tab">
- <el-tab-pane label="实时日志" name="live"/>
- <el-tab-pane label="任务队列与记录" name="tasks"/>
-</el-tabs>
-<Tasks v-if="tab==='tasks'" :api="api" embedded/>
-<section v-else class="panel">
+<div class="page-title"><div><h1>实时日志</h1><p class="muted">查看运行过程和异常信息。</p></div><div class="button-row"><el-tag :type="live?'success':'info'">{{live?'实时连接':'连接待恢复'}}</el-tag><el-button text @click="emit('navigate','tasks')">任务中心 →</el-button></div></div>
+<section class="panel">
  <div class="log-toolbar">
   <el-radio-group v-model="level" size="small">
    <el-radio-button value="all">全部</el-radio-button>

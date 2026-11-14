@@ -5,6 +5,7 @@ import {mergeTaskDetail} from './taskDetails'
 import {taskPresentation,taskStatus} from './taskPresentation'
 import {usePageActivity} from './pageActivity'
 import {reconcileRows} from './taskRows'
+import {taskBucket} from './taskBuckets'
 import DeepDeleteHistory from './DeepDeleteHistory.vue'
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>,embedded?:boolean}>()
 const active=shallowRef<any[]>([]),history=shallowRef<any[]>([]),detail=shallowRef<any>(null),busy=ref(false),error=ref(''),live=ref(false),more=ref(false)
@@ -21,20 +22,7 @@ function taskSource(job:any){
 }
 const tab=ref('all')
 // 分类按「结果」而不是按任务类型：用户关心的是这条到底成没成、卡在哪。
-type Bucket='progress'|'done'|'filtered'|'unidentified'|'failed'
-function bucketOf(job:any):Bucket{
-  if(['queued','running','paused','waiting_login'].includes(job.state))return 'progress'
-  if(job.state==='needs_review')return 'failed'
-  const counts=job.counts||{}
-  // 未识别按条目 step 判断（后端 unidentified）：pending 只是中间态，跑完就变
-  // done/skipped，用它统计永远得 0，这一栏以前从来没显示过东西。
-  if((job.unidentified||0)>0||(counts.pending||0)>0)return 'unidentified'
-  // 过滤 = 被挡在库外的条目：洗版/已有更好版本（保留已有）、扩展名不匹配、体积不足。
-  // 现场 91 条「已有同集或同名条目，保留已有」属于这一类，而 config.excluded 是 0，
-  // 只看 excluded 永远抓不到。这里用后端汇总好的 filtered。
-  if((job.filtered||0)>0)return 'filtered'
-  return 'done'
-}
+const bucketOf=taskBucket
 const allJobs=computed(()=>[...active.value,...history.value])
 const matchTab=(job:any)=>tab.value==='all'||bucketOf(job)===tab.value
 const shownActive=computed(()=>active.value.filter(matchTab))
@@ -73,7 +61,8 @@ usePageActivity(()=>{visible=true;connect();void run(()=>load());timer=setInterv
     <el-tab-pane :label="`完成 ${bucketCount('done')}`" name="done"/>
     <el-tab-pane :label="`过滤 ${bucketCount('filtered')}`" name="filtered"/>
     <el-tab-pane :label="`未识别 ${bucketCount('unidentified')}`" name="unidentified"/>
-    <el-tab-pane :label="`失败 ${bucketCount('failed')}`" name="failed"/>
+    <el-tab-pane :label="`需处理 ${bucketCount('failed')}`" name="failed"/>
+    <el-tab-pane :label="`已取消 ${bucketCount('cancelled')}`" name="cancelled"/>
     <el-tab-pane label="深度删除" name="deep-delete"/>
   </el-tabs>
   <DeepDeleteHistory v-if="tab==='deep-delete'" :api="api"/>

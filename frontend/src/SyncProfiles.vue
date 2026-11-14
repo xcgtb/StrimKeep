@@ -11,6 +11,9 @@ const blank=():Profile=>({name:'',source_cid:'',source_label:'',source_cids:[],s
 function normalized(p:Profile):Profile{const ids=p.source_cids?.length?[...p.source_cids]:p.source_cid?[p.source_cid]:[];return {...blank(),...p,source_cids:ids,source_labels:{...(p.source_labels||{}),...(p.source_cid&&p.source_label?{[p.source_cid]:p.source_label}:{})}}}
 async function load(){profiles.value=(await props.api('/sync/profiles')).items.map(normalized)}
 function edit(p:Profile){draft.value=normalized(p)}
+async function canLeave(){if(!draft.value)return true;try{await ElMessageBox.confirm('同步任务正在编辑，切换页面后内容可能丢失。','离开同步任务？',{confirmButtonText:'离开',cancelButtonText:'继续编辑'});return true}catch{return false}}
+function hasDraft(){return !!draft.value}
+defineExpose({canLeave,hasDraft})
 async function runAction(fn:()=>Promise<void>){if(busy.value)return;busy.value=true;error.value='';try{await fn()}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
 onMounted(()=>runAction(load))
 function select(folder:{id:string,name:string}){if(draft.value){if(!draft.value.source_cids.includes(folder.id)){if(draft.value.source_cids.length>=20){ElMessage.warning('每个任务最多添加 20 个目录');picker.value=false;return}draft.value.source_cids.push(folder.id)}draft.value.source_labels[folder.id]=folder.name}picker.value=false}

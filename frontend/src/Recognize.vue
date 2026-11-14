@@ -23,7 +23,8 @@ async function test(){
       catch(e){rows.value.push({name,ok:false,reason:(e as Error).message})}
     }
     const bad=rows.value.filter(r=>!r.ok).length
-    ElMessage.success(bad?`测试完成，${rows.value.length-bad} 个可识别，${bad} 个需核查`:`${rows.value.length} 个文件名全部识别成功`)
+    if(bad)ElMessage.warning(`测试完成，${rows.value.length-bad} 个可识别，${bad} 个需核查`)
+    else ElMessage.success(`${rows.value.length} 个文件名全部识别成功`)
   }catch(e){error.value=(e as Error).message}finally{busy.value=false}
 }
 
@@ -37,7 +38,7 @@ function work(row:any){
 }
 function episode(row:any){
   const h=row.hint
-  if(!h||h.media_type!=='tv')return '—'
+  if(!h||h.media_type!=='tv'||h.season==null||h.episode==null)return '—'
   const code=`S${String(h.season).padStart(2,'0')}E${String(h.episode).padStart(2,'0')}`
   const end=h.end_episode&&h.end_episode!==h.episode?`-E${String(h.end_episode).padStart(2,'0')}`:''
   return code+end+(row.episode_title?` · ${row.episode_title}`:'')

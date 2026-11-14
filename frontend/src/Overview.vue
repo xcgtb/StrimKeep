@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import {useVisiblePolling} from './pageActivity'
 import {onMounted,shallowRef,ref,computed} from 'vue'
-import {VideoPlay,Refresh,Film,Collection,Cloudy,List,Link,Grid,ArrowRight,Finished} from '@element-plus/icons-vue'
+import {VideoPlay,Refresh,Film,Collection,Cloudy,List,Link,Grid,Finished} from '@element-plus/icons-vue'
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>();defineEmits<{navigate:[page:string]}>()
 const data=shallowRef<any>(null),error=ref(''),busy=ref(false),broken=ref<Record<string,boolean>>({})
 const recentKind=ref<'all'|'Movie'|'Series'>('all'),showAllRecent=ref(false)
@@ -9,13 +9,15 @@ const posterUrl=(item:any)=>item.image_id&&!broken.value[item.image_id]?`/api/v1
 const posterFailed=ref<Record<string,boolean>>({})
 function posterError(item:any){if(item.image_id&&!broken.value[item.image_id])broken.value={...broken.value,[item.image_id]:true};else posterFailed.value={...posterFailed.value,[item.id]:true}}
 const recentList=computed(()=>{const items=(data.value?.emby?.recent||[]).filter((item:any)=>recentKind.value==='all'||item.kind===recentKind.value);return showAllRecent.value?items:items.slice(0,6)})
-const cloud=shallowRef<any>(null),tasks=shallowRef<any>(null),schedules=shallowRef<any>(null),events=shallowRef<any>(null),channels=shallowRef<any>(null)
-async function loadAux(){const paths=['/tasks','/system/schedules','/events?limit=5','/channels'];const values=[tasks,schedules,events,channels];const result=await Promise.allSettled(paths.map(p=>props.api(p)));result.forEach((v,i)=>{values[i].value=v.status==='fulfilled'?v.value:null})}
+const cloud=shallowRef<any>(null),tasks=shallowRef<any>(null),schedules=shallowRef<any>(null),syncProfiles=shallowRef<any>(null),events=shallowRef<any>(null),channels=shallowRef<any>(null)
+async function loadAux(){const paths=['/tasks','/system/schedules','/sync/profiles','/events?limit=5','/channels'];const values=[tasks,schedules,syncProfiles,events,channels];const result=await Promise.allSettled(paths.map(p=>props.api(p)));result.forEach((v,i)=>{values[i].value=v.status==='fulfilled'?v.value:null})}
+const syncScheduleStatus=computed(()=>syncProfiles.value?`${(syncProfiles.value.items||[]).filter((p:any)=>p.enabled).length} 个定时任务开启`:'状态不可用')
+async function refreshAll(){await Promise.all([load(),loadAux(),loadCloud()])}
 async function loadCloud(){try{cloud.value=await props.api('/cloud/account')}catch{cloud.value=null}}
 const bytes=(n:any)=>{if(typeof n!=='number'||!Number.isFinite(n))return '—';if(n>=1024**4)return (n/1024**4).toFixed(2)+' TB';return (n/1024**3).toFixed(1)+' GB'}
 const cloudPercent=computed(()=>cloud.value?.space_total>0?Math.min(100,Math.round(cloud.value.space_used/cloud.value.space_total*100)):null)
 const recentTasks=computed(()=>[...(tasks.value?.active||[]),...(tasks.value?.history||[])].slice(0,4))
-const jobName=(kind:string)=>({organize:'影视整理',transfer:'链接转存',share_organize:'分享整理',strm_sync:'STRM 同步',archive_index:'媒体索引'} as Record<string,string>)[kind]||'后台任务'
+const jobName=(kind:string)=>({organize:'影视整理',transfer:'链接转存',share_organize:'分享整理',strm_sync:'STRM 同步',archive_index:'媒体索引'} as Record<string,string>)[kind]||kind||'后台任务'
 const jobState=(state:string)=>({queued:'排队中',running:'进行中',paused:'已暂停',waiting_login:'等待登录',needs_review:'待处理',cancelled:'已取消',completed:'已完成',partial:'部分完成'} as Record<string,string>)[state]||state
 
 async function load(){if(busy.value)return;busy.value=true;try{data.value=await props.api('/dashboard');error.value=''}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
@@ -45,7 +47,7 @@ const strip=computed(()=>[
 ])
 onMounted(()=>{void load();void loadAux();void loadCloud()});useVisiblePolling(load,20000);useVisiblePolling(loadAux,60000);useVisiblePolling(loadCloud,600000)
 </script>
-<template><div class="page-title"><div><h1>媒体总览</h1><p class="muted">媒体库规模、整理进度与播放动态。</p></div><el-button :icon="Refresh" :loading="busy" @click="load">刷新</el-button></div>
+<template><div class="page-title"><div><h1>媒体总览</h1><p class="muted">媒体库规模、整理进度与播放动态。</p></div><el-button :icon="Refresh" :loading="busy" @click="refreshAll">刷新</el-button></div>
 <el-alert v-if="error" :title="error" type="warning"/>
 <el-skeleton v-if="!data&&busy" :rows="8" animated/>
 <template v-if="data">
@@ -59,7 +61,7 @@ onMounted(()=>{void load();void loadAux();void loadCloud()});useVisiblePolling(l
 
 <div class="hero-stats">
   <article v-for="h in hero" :key="h.label" class="hero-card">
-    <div class="hero-heading"><el-icon><component :is="h.icon"/></el-icon><span>{{h.label}}</span><el-icon class="hero-arrow"><ArrowRight/></el-icon></div>
+    <div class="hero-heading"><el-icon><component :is="h.icon"/></el-icon><span>{{h.label}}</span></div>
     <strong class="hero-value">{{h.value??'—'}}<small v-if="h.label==='电影'||h.label==='剧集'"> 部</small></strong><small class="hero-sub">{{h.sub}}</small>
     <div v-if="h.label==='115 网盘'&&cloudPercent!==null" class="usage-track metric-track"><span :style="{width:cloudPercent+'%'}"/></div>
   </article>
@@ -68,7 +70,7 @@ onMounted(()=>{void load();void loadAux();void loadCloud()});useVisiblePolling(l
 
 
 <section class="panel recent-panel">
-  <div class="section-title recent-heading"><div class="recent-heading-main"><el-icon class="section-icon"><Grid/></el-icon><h2>最近添加</h2><div class="recent-tabs" aria-label="筛选最近添加"><button :class="{selected:recentKind==='all'}" @click="recentKind='all';showAllRecent=false">全部</button><button :class="{selected:recentKind==='Movie'}" @click="recentKind='Movie';showAllRecent=false">电影</button><button :class="{selected:recentKind==='Series'}" @click="recentKind='Series';showAllRecent=false">剧集</button></div></div><button class="text-link" @click="showAllRecent=!showAllRecent">{{showAllRecent?'收起':'查看全部'}} ›</button></div>
+  <div class="section-title recent-heading"><div class="recent-heading-main"><el-icon class="section-icon"><Grid/></el-icon><h2>最近添加</h2><div class="recent-tabs" aria-label="筛选最近添加"><button :class="{selected:recentKind==='all'}" @click="recentKind='all';showAllRecent=false">全部</button><button :class="{selected:recentKind==='Movie'}" @click="recentKind='Movie';showAllRecent=false">电影</button><button :class="{selected:recentKind==='Series'}" @click="recentKind='Series';showAllRecent=false">剧集</button></div></div><button v-if="(data.emby.recent||[]).filter((item:any)=>recentKind==='all'||item.kind===recentKind).length>6" class="text-link" @click="showAllRecent=!showAllRecent">{{showAllRecent?'收起':'显示更多'}} ›</button></div>
   <div v-if="recentList.length" class="poster-grid" :class="{expanded:showAllRecent}"><article v-for="item in recentList" :key="item.id" class="poster-card"><div class="poster-image"><img v-if="posterUrl(item)&&!posterFailed[item.id]" :src="posterUrl(item)" loading="lazy" :alt="item.name" @error="posterError(item)"/><div v-else class="poster-placeholder"><el-icon><Film/></el-icon><span>暂无海报</span></div><span class="poster-type">{{item.kind==='Series'?'剧集':'电影'}}</span></div><h3>{{item.name}}</h3><p class="muted poster-description">{{item.episode||item.year||'Emby 媒体库'}}</p><span class="library-badge">已入库</span></article></div>
   <el-empty v-else :description="data.emby.connected?'暂无对应的最近入库内容':'连接 Emby 后显示最近入库'" :image-size="65"/>
 </section>
@@ -81,7 +83,7 @@ onMounted(()=>{void load();void loadAux();void loadCloud()});useVisiblePolling(l
   <span class="strip-item"><em>磁盘</em>{{gb(data.system.used_bytes)}}/{{gb(data.system.total_bytes)}} GB · {{diskUsed}}</span>
 </div>
 <div class="overview-duo">
-<section class="panel"><div class="section-title"><h2>自动化状态</h2><el-button text @click="$emit('navigate','settings')">系统设置 →</el-button></div><div class="automation-lines"><div><span>调度器</span><b>{{data.system.scheduler_ok?'运行正常':'状态异常'}}</b></div><div><span>自动整理</span><b>{{schedules?(schedules.config.scan_enabled?'已启用':'已停用'):'状态不可用'}}</b></div><div><span>STRM 同步</span><b>{{schedules?(schedules.config.sync_enabled?'已启用':'已停用'):'状态不可用'}}</b></div><div><span>频道监控</span><b>{{channels?(channels.config?.enabled?'已启用':'已停用'):'状态不可用'}}</b></div></div></section>
+<section class="panel"><div class="section-title"><h2>自动化状态</h2><el-button text @click="$emit('navigate','sync')">管理同步任务 →</el-button></div><div class="automation-lines"><div><span>调度器</span><b>{{data.system.scheduler_ok?'运行正常':'状态异常'}}</b></div><div><span>自动整理</span><b>{{schedules?(schedules.config.scan_enabled?'已启用':'已停用'):'状态不可用'}}</b></div><div><span>STRM 同步</span><b>{{syncScheduleStatus}}</b></div><div><span>频道监控</span><b>{{channels?(channels.config?.enabled?'已启用':'已停用'):'状态不可用'}}</b></div></div></section>
 <section class="panel"><div class="section-title"><h2>最近动态</h2><el-button text @click="$emit('navigate','logs')">实时日志 →</el-button></div><div v-if="events?.items?.length" class="activity-list"><div v-for="event in events.items" :key="event.id"><span>{{event.message}}</span><time>{{fmt(event.at)}}</time></div></div><p v-else class="muted">{{events?'暂无动态':'动态信息暂不可用'}}</p></section>
 </div>
 <div class="duo">

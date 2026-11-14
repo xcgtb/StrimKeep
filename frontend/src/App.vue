@@ -19,7 +19,6 @@ const menu=[
  {id:'sync',title:'STRM 管理',icon:Refresh,group:'media'},
  {id:'tasks',title:'任务中心',icon:List,group:'system'},
  {id:'logs',title:'实时日志',icon:Document,group:'system'},
- {id:'notifications',title:'通知分类',icon:Setting,group:'system'},
  {id:'settings',title:'系统设置',icon:Setting,group:'system'},
 ] as const
 const headerSearch=ref('')

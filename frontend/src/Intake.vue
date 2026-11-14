@@ -2,17 +2,19 @@
 import {useVisiblePolling} from './pageActivity'
 import {ref,onMounted,onUnmounted,computed} from 'vue'
 import {ElMessage,ElMessageBox} from 'element-plus'
+import {useRoute} from 'vue-router'
 import TransferDirectories from './TransferDirectories.vue'
 import DirectoryPicker from './DirectoryPicker.vue'
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>()
 const emit=defineEmits<{navigate:[page:string]}>()
+const route=useRoute()
 
 const tab=ref<'share'|'offline'>('share')
 const transfer=ref<any>({target_cid:'',target_label:'',auto_organize:false,bot_auto_organize:false,bot_enabled:false,allowed_user_id:''})
-const transferBase=ref(''),transferText=ref(''),jobs=ref<any[]>([]),directoryEditor=ref<any>(null)
+const transferBase=ref(''),jobs=ref<any[]>([]),directoryEditor=ref<any>(null)
 const settingsOpen=ref(false)
 const offline=ref<any>({target_cid:'',target_label:'',magnet_cid:'',magnet_label:'',ed2k_cid:'',ed2k_label:'',magnet_routes:[],ed2k_routes:[],auto_organize:false,bot_auto_organize:false,magnet_auto_organize:false,ed2k_auto_organize:false,bot_magnet_auto_organize:false,bot_ed2k_auto_organize:false})
-const offlineBase=ref(''),offlineText=ref(''),pickerKind=ref(''),routePick=ref<{kind:string;index:number}|null>(null)
+const offlineBase=ref(''),pickerKind=ref(''),routePick=ref<{kind:string;index:number}|null>(null)
 const tasks=ref<any[]>([]),running=ref<any>(null),total=ref(0),submissions=ref<any[]>([])
 const ready=ref(false),busy=ref(false),error=ref('')
 const dirty=computed(()=>ready.value&&(JSON.stringify(transfer.value)!==transferBase.value||JSON.stringify(offline.value)!==offlineBase.value))
@@ -63,7 +65,7 @@ async function refresh(){
   const r=await props.api('/offline/tasks');tasks.value=r.items||[];total.value=r.total||0;running.value=r.running
   try{const s=await props.api('/offline/submissions?limit=20');submissions.value=s.items||[]}catch{}
 }
-async function destinationsSaved(){if(dirty.value){ElMessage.warning('下方设置有未保存改动，请先保存或刷新后再修改目录');return}const r=await props.api('/transfer/config');transfer.value=r.config;transferBase.value=JSON.stringify(transfer.value)}
+async function destinationsSaved(){if(dirty.value){ElMessage.warning('下方设置有未保存改动，请先保存或刷新后再修改目录');return}ready.value=false;try{const [t,o]=await Promise.all([props.api('/transfer/config'),props.api('/offline/config')]);transfer.value=t.config;transferBase.value=JSON.stringify(transfer.value);absorbOffline(o.config);offlineBase.value=JSON.stringify(offline.value);ready.value=true}catch(e){error.value='目录已保存，但设置刷新失败；请刷新页面后再修改：'+(e as Error).message}}
 async function save(){
   await run(async()=>{
     const t=await props.api('/transfer/config','PUT',transfer.value);transfer.value=t.config;transferBase.value=JSON.stringify(transfer.value)
@@ -72,12 +74,18 @@ async function save(){
   })
 }
 const intakeText=ref('')
-async function submitAll(){await run(async()=>{const r=await props.api('/intake','POST',{text:intakeText.value});intakeText.value='';const parts=[];if(r.share&&r.share.length)parts.push('分享转存 '+r.share.length+' 个');if(r.offline&&r.offline.length)parts.push('离线 '+r.offline.length+' 批');if(r.errors&&r.errors.length)parts.push(r.errors.join('；'));ElMessage.success(parts.join(' · ')||'已提交');await refresh()})}
-async function startTransfer(){await run(async()=>{const r=await props.api('/transfer/jobs','POST',{text:transferText.value});transferText.value='';ElMessage.success(`${r.items.length} 个转存任务已排队`);await refresh()})}
-async function submitOffline(){await run(async()=>{const r=await props.api('/offline/jobs','POST',{text:offlineText.value});offlineText.value='';ElMessage.success(r.message||`已提交 ${r.count} 个离线任务`);await refresh()})}
+async function submitAll(){await run(async()=>{
+  let r:any
+  try{r=await props.api('/intake','POST',{text:intakeText.value})}catch(e){throw new Error('提交结果未确认，请先到任务中心核对，避免重复提交。'+(e as Error).message)}
+  const parts=[];if(r.share?.length)parts.push('分享转存 '+r.share.length+' 个');if(r.offline?.length)parts.push('离线 '+r.offline.length+' 批')
+  if(r.errors?.length){error.value=(parts.length?parts.join('、')+'已提交。请勿整批重复提交；':'')+r.errors.join('；')+'。输入已保留，请核对后只提交未成功的链接。';ElMessage.warning('部分链接未提交，请查看原因')}
+  else if(!parts.length){error.value='没有识别到可提交的链接，请检查内容。';ElMessage.warning(error.value)}
+  else {intakeText.value='';ElMessage.success(parts.join(' · ')+'已提交')}
+  try{await refresh()}catch(e){error.value+=(error.value?'；':'')+'提交结果已返回，但最近记录刷新失败，请到任务中心核对：'+(e as Error).message}
+})}
 async function canLeave(){
   if(directoryEditor.value&&!await directoryEditor.value.canLeave())return false
-  if(!dirty.value&&!transferText.value.trim()&&!offlineText.value.trim())return true
+  if(!dirty.value&&!intakeText.value.trim())return true
   try{await ElMessageBox.confirm('有设置或链接还没保存/提交，离开会丢失。','离开资源入库？',{confirmButtonText:'离开',cancelButtonText:'继续编辑'});return true}catch{return false}
 }
 function subState(s:string){const map:Record<string,string>={submitting:'提交中',submitted:'等待下载',completed:'已完成',needs_review:'需核查',expired:'已放弃'};return map[s]||s}
@@ -90,12 +98,13 @@ const runningLabel=computed(()=>{
   return n===null?'已连接云端':`云端运行中 ${n}`
 })
 defineExpose({canLeave})
+function beforeUnload(e:BeforeUnloadEvent){if(route.name==='transfer'&&(dirty.value||intakeText.value.trim())){e.preventDefault();e.returnValue=''}}
 onMounted(()=>{run(async()=>{
   const t=await props.api('/transfer/config');transfer.value=t.config;transferBase.value=JSON.stringify(transfer.value)
   const o=await props.api('/offline/config');absorbOffline(o.config);offlineBase.value=JSON.stringify(offline.value)
   ready.value=true;await refresh()
-})})
-onUnmounted(()=>{})
+});window.addEventListener('beforeunload',beforeUnload)})
+onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
 useVisiblePolling(async()=>{if(!busy.value)await refresh()},5000)
 </script>
 <template>
@@ -106,7 +115,7 @@ useVisiblePolling(async()=>{if(!busy.value)await refresh()},5000)
 可以混着贴，系统会按类型分别入库。" aria-label="入库链接"/><p class="hint">分享 → 转存目录；磁力 / ED2K / 直链 → 各自的离线目录。落盘后是否立即整理由下面的「落盘后处理」决定。</p><div class="button-row"><el-button type="primary" :disabled="busy||!ready||!intakeText.trim()" @click="submitAll">提交</el-button></div></section>
 
 
-<TransferDirectories ref="directoryEditor" :api="api" :disabled="dirty||busy" :hide-channel="true" @saved="destinationsSaved" @navigate="page=>emit('navigate',page)"/>
+<TransferDirectories ref="directoryEditor" :api="api" :disabled="dirty||busy||!ready" :hide-channel="true" @saved="destinationsSaved" @navigate="page=>emit('navigate',page)"/>
 <section class="panel intake-options"><div class="settings-heading"><div><h2>落盘后处理 <span v-if="dirty" class="unsaved">未保存</span></h2><p>Web 与 Telegram 机器人分开设置；默认都只落盘</p></div></div>
 <div class="settings-content">
 <p class="hint">开关关闭：落盘成功即结束，要不要整理由「影视整理」的手动/定时扫描决定。开关打开：落盘完成立即入队本批整理，但目标目录必须在待整理范围内。</p>
@@ -119,6 +128,22 @@ useVisiblePolling(async()=>{if(!busy.value)await refresh()},5000)
 
 <div class="button-row"><el-button type="primary" :disabled="busy||!ready||!dirty" @click="save">保存设置</el-button><el-button :disabled="busy" @click="emit('navigate','system')">配置 Telegram 通知</el-button></div>
 </div></section>
+
+<details class="panel offline-advanced"><summary><strong>离线下载目录与分流</strong><span>直链目录和关键词分流</span></summary>
+<p class="hint">HTTP、HTTPS 和 FTP 直链使用单独目录；磁力和 ED2K 的默认目录在上方“保存目录”设置。</p>
+<div class="offline-destination"><div><strong>直链保存目录</strong><p>{{offline.target_label||offline.target_cid||'未设置，直链无法提交'}}</p></div><div class="button-row"><el-button :disabled="busy" @click="pickerKind='target'">选择目录</el-button><el-button v-if="offline.target_cid" text :disabled="busy" @click="offline.target_cid='';offline.target_label=''">清除</el-button></div></div>
+<div v-for="kind in ['magnet','ed2k']" :key="kind" class="offline-routes">
+ <h3>{{kind==='magnet'?'磁力':'ED2K'}}关键词分流</h3>
+ <p class="hint">提交文本命中关键词时使用对应目录；未命中时使用默认目录。每次提交的同类链接共用一个匹配结果。</p>
+ <div v-for="(item,index) in ensureRoutes(kind)" :key="index" class="offline-route">
+  <div class="offline-route-head"><strong>规则 {{Number(index)+1}}</strong><el-button text type="danger" :disabled="busy" @click="dropRoute(kind,index)">删除</el-button></div>
+  <el-input v-model="item.keywords" :disabled="busy" placeholder="关键词，英文逗号分隔"/>
+  <div class="offline-route-head"><span>{{item.target_label||item.target_cid||'尚未选择目录'}}</span><el-button :disabled="busy" @click="pickRoute(kind,index)">选择目录</el-button></div>
+ </div>
+ <el-button :disabled="busy||ensureRoutes(kind).length>=20" @click="addRoute(kind)">添加分流规则</el-button>
+</div>
+<el-button type="primary" :disabled="busy||!ready||!dirty" @click="save">保存入库设置</el-button>
+</details>
 
 <section class="panel intake-history"><div class="history-heading"><div><h2>最近记录</h2><p>转存任务与离线提交</p></div><el-button text type="primary" @click="emit('navigate','tasks')">查看全部</el-button></div>
 <p v-if="!recentRows.length" class="history-empty">还没有记录</p>
@@ -155,5 +180,6 @@ useVisiblePolling(async()=>{if(!busy.value)await refresh()},5000)
 .post-row{display:grid;grid-template-columns:120px 1fr 1fr 1fr;align-items:center;gap:12px;padding:10px 12px;border-radius:8px;background:var(--surface-soft)}
 .post-row.post-head{background:transparent;padding:0 12px;font-size:12px;color:var(--muted)}
 .post-row strong{font-size:13px}
+.offline-advanced>summary{display:flex;justify-content:space-between;gap:12px;align-items:center;cursor:pointer}.offline-advanced>summary span{font-size:12px;color:var(--muted)}.offline-destination,.offline-route-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.offline-destination{padding:12px 0;border-top:1px solid var(--line)}.offline-destination p{color:var(--muted);font-size:12px;margin:6px 0}.offline-routes{padding:8px 0 16px;border-top:1px solid var(--line)}.offline-routes h3{font-size:14px}.offline-route{display:grid;gap:8px;padding:12px;margin:8px 0;border:1px solid var(--line);border-radius:8px}.offline-route-head span{min-width:0;overflow-wrap:anywhere;color:var(--muted);font-size:12px}
 @media(max-width:760px){.history-row{align-items:flex-start;flex-wrap:wrap}.history-main{flex-basis:65%}.history-main strong,.history-main span{white-space:normal;overflow-wrap:anywhere;line-height:1.5}}
 </style>
