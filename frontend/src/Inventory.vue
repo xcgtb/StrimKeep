@@ -577,7 +577,7 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize); if(orp
 <template>
  <section class="inventory-page">
   <header class="inventory-header"><div><h1>库存管理</h1><p class="muted">{{ tab === 'mapping' ? '查看片库与缺集情况' : tab === 'governance' ? '管理两库版本与重复内容' : '检查作品目录中的残留' }}</p></div><el-button :loading="busy" @click="load">刷新库存</el-button></header>
-  <el-alert title="当前展示已登记且可核实的 STRM；未登记文件不在统计范围。删除前需核对计划清单。" type="info" :closable="false" show-icon />
+  <el-alert title="库存按本地两库中的 STRM 统计，未登记文件也会显示；网盘来源无法核实的文件不会直接删除源文件。清理前请核对计划清单。" type="info" :closable="false" show-icon />
   <el-alert v-if="!inventoryComplete" :title="`有 ${inventoryIssueCount} 条记录无法核实，统计可能不完整。`" type="warning" :closable="false" show-icon />
   <details v-if="!inventoryComplete && inventoryIssues.length"><summary>查看待核实记录</summary><p v-for="(issue, index) in inventoryIssues" :key="index" class="file-path">{{ side(issue.side) }} · {{ reason(issue.reason) }}：{{ issue.path || issue.id }}</p><el-button @click="openAuditFromMapping">前往核对并修复</el-button></details>
   <el-alert v-if="error" :title="error" type="error" :closable="false" />

@@ -78,8 +78,8 @@ export function taskPresentation(job: Task) {
       notes.push('有步骤尚未完成，请打开处理结果查看原因。')
     }
   } else if (job.kind === 'transfer') {
-    if(ended) title='转存完成'
-    summary='转存与后续整理的进度请在转存页面查看。'
+    if(ended) title=job.state==='completed'?'转存完成':'转存有项目需处理'
+    summary='展开任务查看转存结果及后续整理进度。'
   } else if (job.kind === 'share_organize') {
     if (ended) title = job.state === 'completed' ? '分享整理完成' : '分享整理有项目需处理'
     summary = [

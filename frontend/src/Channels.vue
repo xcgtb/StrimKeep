@@ -153,7 +153,7 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
   <el-form-item label="抓到新分享时推送通知"><el-switch v-model="config.notify"/></el-form-item>
  </el-form>
  <div class="button-row"><el-button type="primary" :loading="busy" @click="save">保存设置</el-button><el-button :loading="busy" :disabled="dirty" @click="check">立即检查一轮</el-button><span v-if="dirty" class="hint">请先保存修改，再检查频道。</span></div>
- <p class="hint">只支持公开频道：预览页是 Telegram 给游客看的，私密频道和群组没有。首次检查会回溯当前页（约 20 条）并按规则处理，之后只跟进新帖。</p>
+ <p class="hint">公开预览页只支持公开频道；使用已登录的 Telegram 用户会话可读取已加入的私密频道或群组。首次检查按各频道设置的回溯页数读取，之后跟进新帖。</p>
 </section>
 
 
@@ -181,16 +181,11 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
     </el-select>
    </div>
    <div class="organize-option"><label>首次回溯</label>
-    <el-select v-model="c.history_pages" :disabled="busy" style="width:240px">
-     <el-option :value="1" label="1 页（约 20 条，默认）"/>
-     <el-option :value="3" label="3 页（约 60 条）"/>
-     <el-option :value="5" label="5 页（约 100 条）"/>
-     <el-option :value="10" label="10 页（约 200 条）"/>
-    </el-select>
+    <el-input-number v-model="c.history_pages" :disabled="busy" :min="1" :max="20" :step="1" :precision="0" aria-label="首次回溯页数"/><span class="hint">页，每页约 20 条</span>
    </div>
    <div class="organize-option"><label>分享链接</label>
     <el-select v-model="c.share_mode" :disabled="busy" style="width:240px">
-     <el-option label="115 网盘落盘（分享转存 / 磁力 / ED2K）" value="transfer"/>
+     <el-option label="115 分享转存到网盘" value="transfer"/>
      <el-option label="分享 STRM 落盘（免转存）" value="strm"/>
     </el-select>
    </div>
@@ -200,23 +195,31 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
    <div class="directory-block">
     <div class="directory-block-heading"><div><strong>转存目录</strong><p>分享链接默认保存到这里</p></div><el-button :disabled="busy" @click="pick(c.name,-1,'share')">{{c.share_cid?'更换目录':'选择目录'}}</el-button></div>
     <div class="directory-path" :class="{empty:!c.share_cid}"><span>115</span><strong>{{c.share_label||c.share_cid||'尚未选择目录'}}</strong></div>
-    <p v-if="notSource(c.share_cid)" class="directory-status warning">不在整理目录，转存后不会被整理</p>
-    <p v-else-if="c.share_cid" class="directory-status">在整理目录，会按定时扫描整理</p>
+    <p v-if="notSource(c.share_cid)" class="directory-status warning">未直接列为待整理目录，请核对整理范围</p>
+    <p v-else-if="c.share_cid" class="directory-status">已列为待整理目录</p>
    </div>
+  </div>
+  <div class="channel-section">
+   <div v-for="kind in ['magnet','ed2k']" :key="kind" class="directory-block">
+    <div class="directory-block-heading"><div><strong>{{kind==='magnet'?'磁力':'ED2K'}}离线目录</strong><p>留空则不提交该类型的离线链接</p></div><div class="button-row"><el-button :disabled="busy" @click="pick(c.name,-1,kind)">{{c[kind+'_cid']?'更换目录':'选择目录'}}</el-button><el-button v-if="c[kind+'_cid']" text :disabled="busy" @click="toggleOffline(c,kind,false)">清除</el-button></div></div>
+    <div class="directory-path" :class="{empty:!c[kind+'_cid']}"><span>115</span><strong>{{c[kind+'_label']||c[kind+'_cid']||'尚未选择目录'}}</strong></div>
+   </div>
+  </div>
+  <div class="channel-section">
    <div class="routing-block">
-    <div class="routing-heading"><div><strong>关键词分流</strong><p>匹配关键词时保存到对应目录，未匹配时使用上方目录。</p></div><el-button :disabled="busy" @click="addRoute(c)">添加分流</el-button></div>
+    <div class="routing-heading"><div><strong>关键词分流</strong><p>帖子命中规则时，分享转存及磁力 / ED2K 使用该目录；分享 STRM 不受影响。</p></div><el-button :disabled="busy||c.routes.length>=20" @click="addRoute(c)">添加分流</el-button></div>
     <div v-for="(r,ri) in c.routes" :key="ri" class="route-card">
      <div class="route-header"><strong>分流 {{Number(ri)+1}}</strong><el-button text type="danger" :disabled="busy" @click="dropRoute(c,ri)">删除</el-button></div>
      <label :for="`channel-route-${c.name}-${ri}`">匹配关键词</label>
      <el-input :id="`channel-route-${c.name}-${ri}`" v-model="r.keywords" placeholder="用逗号分隔，例如 国配,国语" :disabled="busy"/>
      <div class="route-destination"><div><span>保存目录</span><strong>{{r.target_label||r.target_cid||'尚未选择目录'}}</strong></div><el-button :disabled="busy" @click="pick(c.name,ri)">{{r.target_cid?'更换目录':'选择目录'}}</el-button></div>
     </div>
-    <p v-if="!c.routes.length" class="route-empty">尚未设置分流，所有分享使用默认转存目录。</p>
-   <div class="organize-option"><label>落盘后立即整理</label>
+    <p v-if="!c.routes.length" class="route-empty">尚未设置分流，按各类型的默认目录处理。</p>
+   <div class="organize-option"><label>转存或离线完成后立即整理</label>
     <el-switch :model-value="!!c.organize_after" :disabled="busy" aria-label="落盘后立即整理"
      @update:model-value="(v:boolean)=>c.organize_after=v"/>
    </div>
-   <p class="hint">关闭时只落盘：要不要整理由「影视整理」的手动/定时扫描决定；开启后目标目录必须在待整理范围内才生效。</p>
+   <p class="hint">控制分享转存和磁力 / ED2K 离线；关闭时由「影视整理」手动或定时扫描处理。分享 STRM 的自动整理在「分享 STRM → 分享监控」设置。</p>
    </div>
   </div>
 

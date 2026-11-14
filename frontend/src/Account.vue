@@ -6,7 +6,7 @@ import CloudEntryList from './CloudEntryList.vue'
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>();const emit=defineEmits<{navigate:[page:string]}>()
 const qr=ref(false),cookie=ref(''),configured=ref(false),status=ref('未检查'),error=ref(''),busy=ref(false),files=ref<any[]>([]),cid=ref('0'),path=ref([{id:'0',name:'115 网盘'}]),offset=ref(0),more=ref(false),next=ref(0)
 async function run(fn:()=>Promise<void>){busy.value=true;error.value='';try{await fn()}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
-async function check(){await run(async()=>{const r=await props.api('/connections/115/test','POST');if(r&&r.connected===false){status.value='未登录';ElMessage.warning(r.message||'115 账号未登录，请扫码或填写 Cookie');return}status.value='已登录';configured.value=true;ElMessage.success('115 登录正常')});await loadAccount(true)}
+async function check(){await run(async()=>{try{const r=await props.api('/connections/115/test','POST');if(r&&r.connected===false){status.value='未登录';ElMessage.warning(r.message||'115 账号未登录，请扫码或填写 Cookie');return}status.value='已登录';configured.value=true;ElMessage.success('115 登录正常')}catch(e){status.value='检查失败';throw e}});await loadAccount(true)}
 const account=ref<any>(null),accountBusy=ref(false)
 async function loadAccount(refresh=false){accountBusy.value=true;try{account.value=await props.api('/cloud/account'+(refresh?'?refresh=1':''))}catch(e){account.value={error:(e as Error).message}}finally{accountBusy.value=false}}
 const tb=(n?:number)=>n==null?'—':(n/1024**4).toFixed(2)+' TB'
@@ -31,9 +31,9 @@ watch(configured,async value=>{if(value){await nextTick();await browse('0',undef
 function resizeTree(){treeHeight.value=420;if(window.innerWidth>760&&configured.value){void expandFolder(treeData.value[0]).then(()=>revealTree())}}
 onMounted(()=>window.addEventListener('resize',resizeTree));onUnmounted(()=>{browseSequence++;window.removeEventListener('resize',resizeTree)})
 const maint=ref<any>({sign_enabled:false,sign_cron:'0 9 * * *',recycle_enabled:false,recycle_cron:'0 4 * * 0',recycle_password:'000000'})
-const maintMeta=ref<any>({last_sign_at:0,last_clear_at:0,sign_due:0,recycle_due:0}),signBusy=ref(false),clearBusy=ref(false),recycleInfo=ref<any>(null),signMsg=ref('')
-async function loadMaint(){try{const r=await props.api('/cloud/maintenance');maint.value={...maint.value,...r.config};maintMeta.value=r}catch(e){error.value=(e as Error).message}}
-async function saveMaint(){await run(async()=>{const r=await props.api('/cloud/maintenance','PUT',maint.value);maintMeta.value=r;ElMessage.success('定时设置已保存')})}
+const maintMeta=ref<any>({last_sign_at:0,last_clear_at:0,sign_due:0,recycle_due:0}),maintLoaded=ref(false),signBusy=ref(false),clearBusy=ref(false),recycleInfo=ref<any>(null),signMsg=ref('')
+async function loadMaint(){try{const r=await props.api('/cloud/maintenance');maint.value={...maint.value,...r.config};maintMeta.value=r;maintLoaded.value=true}catch(e){maintLoaded.value=false;error.value='签到与回收站设置读取失败：'+(e as Error).message}}
+async function saveMaint(){if(!maintLoaded.value)return;await run(async()=>{const r=await props.api('/cloud/maintenance','PUT',maint.value);maintMeta.value=r;ElMessage.success('定时设置已保存')})}
 async function doSign(){signBusy.value=true;signMsg.value='';try{const r=await props.api('/cloud/sign','POST');signMsg.value=(r.message||'签到完成')+(r.days?`（连续 ${r.days} 天）`:'');ElMessage.success(signMsg.value);await loadMaint()}catch(e){signMsg.value=(e as Error).message}finally{signBusy.value=false}}
 async function loadRecycle(){try{recycleInfo.value=await props.api('/cloud/recycle')}catch(e){recycleInfo.value={available:false,error:(e as Error).message}}}
 async function doClear(){try{await ElMessageBox.confirm('回收站清空后无法恢复，确定继续？','清空回收站',{confirmButtonText:'清空',cancelButtonText:'取消',type:'warning'})}catch{return}clearBusy.value=true;try{const r=await props.api('/cloud/recycle/clear','POST');ElMessage.success(r.message||'已清空');await Promise.all([loadRecycle(),loadMaint()])}catch(e){error.value=(e as Error).message}finally{clearBusy.value=false}}
@@ -69,7 +69,7 @@ onMounted(async()=>{try{configured.value=(await props.api('/settings')).cookie_c
       <div class="button-row"><el-button type="danger" plain size="small" :loading="clearBusy" :disabled="!configured" @click="doClear">立即清空回收站</el-button></div>
     </div>
   </div>
-  <div class="button-row"><el-button type="primary" :loading="busy" @click="saveMaint">保存定时设置</el-button></div>
+  <div class="button-row"><el-button type="primary" :loading="busy" :disabled="!maintLoaded" @click="saveMaint">保存定时设置</el-button><el-button v-if="!maintLoaded" @click="loadMaint">重新读取设置</el-button></div>
 </section>
 <section class="panel cloud-browser-panel"><div class="section-title"><h2>网盘目录与文件</h2><el-button :disabled="listLoading||!configured" @click="browse()">刷新当前目录</el-button></div>
 <div v-if="configured" class="cloud-browser">

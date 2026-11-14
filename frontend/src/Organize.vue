@@ -61,7 +61,8 @@ useVisiblePolling(async()=>{if(!busy.value)await refreshJob()},5000)
 <div class="workflow-switch-row"><div><strong>重命名视频与对应字幕</strong><p>关闭后保留原视频文件名，识别与归档仍执行。</p></div><el-switch v-model="config.rename_enabled" :disabled="busy"/></div>
 <div class="organize-option"><label>新作品文件夹名称</label><el-select v-model="config.folder_language" :disabled="busy"><el-option label="优先中文" value="zh"/><el-option label="优先英文" value="en"/></el-select></div>
 <div class="organize-option"><label>视频文件中的作品名称</label><el-select v-model="config.filename_language" :disabled="busy||!config.rename_enabled"><el-option label="优先中文" value="zh"/><el-option label="优先英文" value="en"/></el-select></div>
-<p class="hint">使用 TMDB 对应语言主名，中文不足时查询中文别名，最后回退作品原名。年份、TMDB ID、季集和技术规格独立生成；已有作品目录与作品名保持稳定。</p>
+<p class="hint">使用 TMDB 对应语言主名，中文不足时查询中文别名，最后回退作品原名。年份、TMDB ID、季集和技术规格独立生成。</p>
+<div class="workflow-switch-row"><div><strong>沿用已有作品名称</strong><p>开启后，能唯一匹配到已有作品时沿用已有目录和名称；关闭后按当前命名规则处理。</p></div><el-switch v-model="config.keep_existing_names" :disabled="busy"/></div>
 <div class="workflow-switch-row"><div><strong>提取媒体信息完善命名</strong><p>开启后探测实际规格；关闭后从文件名识别。探测失败时自动按文件名解析，不会中断整理。</p></div><el-switch v-model="config.ffprobe_enabled" :disabled="busy"/></div>
 <div class="workflow-switch-row"><div><strong>批量探测预取</strong><p>整理前按并发预取媒体信息，主流程逐条命中缓存不再等待远程探测；单个文件失败只跳过它，其余照常处理。</p></div><el-switch v-model="config.probe_prefetch" :disabled="busy||!config.ffprobe_enabled"/></div>
 <div class="workflow-switch-row"><div><strong>批量识别预取</strong><p>开工前并发做完 TMDB 搜索，逐条处理直接命中缓存；只并发读，改名和移动仍按顺序来。</p></div><el-switch v-model="config.identify_prefetch" :disabled="busy"/></div>
@@ -74,6 +75,8 @@ useVisiblePolling(async()=>{if(!busy.value)await refreshJob()},5000)
 <p class="hint">默认关闭：只跳过、不删除。打开后，小于上面阈值的视频会被回收（115 回收站可恢复），适合清理宣传片/广告。</p>
 <div class="organize-option"><label>忽略关键词（输入后按回车，可添加多个）</label><el-select v-model="config.ignore_keywords" multiple filterable allow-create default-first-option :disabled="busy" placeholder="例如 sample、预告片"/></div>
 <p class="hint">关键词按视频文件名匹配，不区分大小写；字幕不受大小阈值影响。这里的忽略不会删除文件。</p>
+<div class="workflow-switch-row"><div><strong>回收非整理类型的小文件</strong><p>开启后，扫描范围内不属于已选视频、字幕或受保护元数据类型，且小于下方阈值的文件会进入 115 回收站；未列入视频类型的文件也可能受影响。</p></div><el-switch v-model="config.recycle_small_files" :disabled="busy"/></div>
+<div v-if="config.recycle_small_files" class="organize-option"><label>非整理类型文件回收阈值（MB）</label><el-input-number v-model="config.recycle_small_threshold_mb" :min="0" :max="1048576" :disabled="busy"/></div>
 </SettingCard>
 <SettingCard title="分类策略" description="配置新归档的分类层级；修改不会批量搬动已有片库。" :icon="FolderOpened" :query="query" keywords="分类 儿童 演唱会 地区 年份" :default-open="false">
 <div class="workflow-switch-row"><strong>自动分类</strong><el-switch v-model="config.classify_enabled" :disabled="busy"/></div>
@@ -86,8 +89,8 @@ useVisiblePolling(async()=>{if(!busy.value)await refreshJob()},5000)
 <SettingCard title="清理开关" description="只影响本任务关联的处理范围；洗版在「洗版与多版本」里选。" :icon="Refresh" :query="query" keywords="清理 空目录 洗版 开关 删除" :default-open="false">
 <div class="workflow-switch-row"><div><strong>整理后清理关联空目录</strong><p>保留扫描根、含媒体或未知文件的目录；不删除忽略的视频。</p></div><el-switch v-model="config.cleanup_empty_enabled" :disabled="busy"/></div>
 </SettingCard>
-<SettingCard title="洗版与多版本" description="设置同片、同集的处理方式和九项比较顺序。" :summary="policySummary" :icon="Refresh" :query="query" keywords="发布组 资源类型 分辨率 动态范围 帧率 色深 音频 编码 大小 杜比" :default-open="false"><p class="hint">发布组、资源类型、分辨率、动态范围、帧率、色深、音频、编码、文件大小；可按分辨率、动态范围和帧率共存分组。</p><div class="inline-rules"><Upgrade ref="ruleEditor" :api="api"/></div></SettingCard>
-<SettingCard title="STRM 与 Emby 通知" description="整理成功后生成 STRM、同步绑定字幕。" :summary="config.notify_emby?'有成功输出后通知 Emby 并检查入库':'自动通知 Emby 已关闭'" :icon="Bell" :query="query" keywords="联动 入库 字幕 Emby STRM" :default-open="false"><div class="workflow-switch-row"><div><strong>整理后通知 Emby 入库</strong><p>按本批文件路径通知 Emby；核对超时只刷新命中的目标库。</p></div><el-switch v-model="config.notify_emby" :disabled="busy" aria-label="整理后通知 Emby"/></div><p class="hint">本地输出为 STRM 和绑定字幕；NFO 与图片由 Emby 管理。下方映射用于发送准确的 Emby 入库路径。</p><el-button :disabled="busy" @click="emit('navigate','connections')">配置 Emby 与播放地址</el-button></SettingCard>
+<SettingCard title="洗版与多版本" description="设置同片、同集的处理方式和九项比较顺序。" :summary="policySummary" :icon="Refresh" :query="query" keywords="发布组 资源类型 分辨率 动态范围 帧率 色深 音频 编码 大小 杜比" :default-open="false"><p class="hint">发布组、资源类型、分辨率、动态范围、帧率、色深、音频、编码、文件大小；可选择杜比视界与非杜比视界分别保留。</p><div class="workflow-switch-row"><div><strong>目标文件同名且优先级无差异时回收新文件</strong><p>开启后保留目标文件，将本次新文件移入 115 回收站；关闭后转入待处理。此开关需点击页面顶部“保存修改”。</p></div><el-switch v-model="config.discard_inferior" :disabled="busy"/></div><div class="inline-rules"><Upgrade ref="ruleEditor" :api="api"/></div></SettingCard>
+<SettingCard title="STRM 与 Emby 通知" description="整理成功后生成 STRM、同步绑定字幕。" :summary="config.notify_emby?'有成功输出后通知 Emby 并检查入库':'自动通知 Emby 已关闭'" :icon="Bell" :query="query" keywords="联动 入库 字幕 Emby STRM" :default-open="false"><div class="workflow-switch-row"><div><strong>整理后通知 Emby 入库</strong><p>按本批文件路径通知 Emby；核对超时只刷新命中的目标库。</p></div><el-switch v-model="config.notify_emby" :disabled="busy" aria-label="整理后通知 Emby"/></div><p class="hint">本地输出包含 STRM 和绑定字幕；NFO 与图片可在「STRM 管理」设置生成，也可由 Emby 管理。下方映射用于发送准确的 Emby 入库路径。</p><el-button :disabled="busy" @click="emit('navigate','connections')">配置 Emby 与播放地址</el-button></SettingCard>
 <SettingCard title="整理联动" description="整理完成后，按设置的延迟生成 STRM。" :icon="Setting" :query="query" keywords="联动 延迟 STRM FFprobe 缓存" :default-open="false"><div class="workflow-field-row"><label>生成 STRM 延迟（秒）</label><el-input-number v-model="config.strm_delay" :min="0" :max="60" :step="0.5" :precision="1" :disabled="busy" aria-label="生成 STRM 延迟（秒）"/></div><p class="hint">支持 1.5 秒等小数值。直接扫描待整理目录，读取当前作品目录比较版本，复用已有探测信息。</p></SettingCard>
 <p v-if="query" class="search-caption">仅显示匹配的设置卡片；清空搜索可查看全部。</p>
 <section class="panel"><h2>Emby 路径映射</h2><EmbyMapping :api="api"/></section>

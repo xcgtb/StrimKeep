@@ -7,3 +7,7 @@ test('skipped duplicates are described as kept instead of missing from the libra
   assert.match(notes,/按洗版规则保留已有/)
   assert.doesNotMatch(notes,/未入库/)
 })
+test('a partial transfer is not described as completed',()=>{
+  const job={kind:'transfer',state:'partial',counts:{done:1},total:2}
+  assert.equal(taskPresentation(job).title,'转存有项目需处理')
+})

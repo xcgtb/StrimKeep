@@ -39,7 +39,7 @@ const hero=computed(()=>[
 ])
 const strip=computed(()=>[
   {k:'后台任务',v:String(data.value?.system?.active_tasks??0)},
-  {k:'最近一次整理',v:fmt(data.value?.stats?.last_at)},
+  {k:'最近任务',v:fmt(data.value?.stats?.last_at)},
   {k:'调度器',v:data.value?.system?.scheduler_ok?'正常':'异常',warn:!data.value?.system?.scheduler_ok},
   {k:'115',v:data.value?.system?.['115_configured']?'已配置':'未配置'},
   {k:'TMDB',v:data.value?.system?.tmdb_configured?'已配置':'未配置'},
@@ -88,7 +88,7 @@ onMounted(()=>{void load();void loadAux();void loadCloud()});useVisiblePolling(l
 </div>
 <div class="duo">
 <section class="panel half">
-  <div class="section-title"><h2>整理概览</h2><el-button text @click="$emit('navigate','tasks')">任务中心 →</el-button></div>
+  <div class="section-title"><h2>任务概览</h2><el-button text @click="$emit('navigate','tasks')">任务中心 →</el-button></div>
   <div class="big-three">
     <div><strong>{{data.stats.today}}</strong><span>今日</span></div>
     <div><strong>{{data.stats.week}}</strong><span>近 7 天</span></div>
@@ -97,10 +97,10 @@ onMounted(()=>{void load();void loadAux();void loadCloud()});useVisiblePolling(l
   <div class="stat-lines">
     <div class="line"><span>成功</span><b>{{data.stats.completed}}</b></div>
     <div class="line"><span>待复核</span><b>{{data.stats.partial}}</b></div>
-    <div class="line"><span>排队中</span><b>{{data.stats.active}}</b></div>
-    <div class="line"><span>输出文件</span><b>{{data.stats.files}}</b></div>
+    <div class="line"><span>排队或执行中</span><b>{{data.stats.active}}</b></div>
+    <div class="line"><span>已登记网盘文件</span><b>{{data.stats.files}}</b></div>
     <div class="line"><span>本地整理库</span><b>{{data.local.movies+data.local.series}} <small>电影 {{data.local.movies}} · 剧集 {{data.local.series}} · 单集 {{data.local.episodes}}</small></b></div>
-    <div class="line"><span>最近一次整理</span><b>{{fmt(data.stats.last_at)}}</b></div>
+    <div class="line"><span>最近任务更新</span><b>{{fmt(data.stats.last_at)}}</b></div>
   </div>
 </section>
 <section class="panel half">

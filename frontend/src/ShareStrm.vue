@@ -15,12 +15,18 @@ const monitorDirty=computed(()=>!!settingsBaseline.value&&JSON.stringify(setting
 // U07：状态由登记表驱动（分页完整返回），不再从路径文字推断；整理进入持久化任务。
 const tab=ref<'pending'|'library'|'revoked'>('pending')
 const rows=ref<any[]>([]),total=ref(0),offset=ref(0),limit=ref(50),query=ref('')
+let refreshSequence=0
 const watchJob=ref<number|null>(null),watchTimer=ref<number|null>(null)
 
 async function run(fn:()=>Promise<void>){if(busy.value)return;busy.value=true;error.value='';try{await fn()}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
 
 async function loadSettings(updateOwn=true){try{const r=await props.api('/share/settings');if(updateOwn){settings.value={auto_organize:r.auto_organize,share_check_hours:r.share_check_hours??0,share_check_mode:r.share_check_mode??'interval',share_check_cron:r.share_check_cron??'0 3 * * *',share_prune_cron:r.share_prune_cron??'0 5 * * *'};settingsBaseline.value=JSON.stringify(settings.value)}}catch(e){if(updateOwn)error.value='分享监控设置读取失败：'+(e as Error).message}}
 async function saveSettings(){await run(async()=>{await props.api('/share/settings','POST',settings.value);settingsBaseline.value=JSON.stringify(settings.value);ElMessage.success('监控设置已保存')})}
+const checkMessage=ref('')
+async function checkShares(){
+  try{await ElMessageBox.confirm('将检查已登记的分享 STRM；确认失效且归属可核实的条目会撤销，并清理对应的本地 STRM 及附属文件。网络错误或状态不明确的条目会保留。','立即检查分享存活',{type:'warning',confirmButtonText:'开始检查',cancelButtonText:'取消'})}catch{return}
+  await run(async()=>{const result=await props.api('/share/check','POST');checkMessage.value=result?.pending?(result.message||'检查正在后台进行，请查看实时日志。'):result?`检查完成：正常 ${result.alive??0}，失效已清理 ${result.dead_count??0}，无法判定 ${result.skipped??0}。`:'检查结果未确认，请查看实时日志。';await doRefresh()})
+}
 
 async function parse(){await run(async()=>{const r=await props.api('/share/parse','POST',{text:shareText.value});parsed.value=r;selected.value=new Set(r.videos.map((v:any)=>v.id));ElMessage.success(`解析到 ${r.video_count} 个视频`)})}
 function toggle(id:string){const s=new Set(selected.value);s.has(id)?s.delete(id):s.add(id);selected.value=s}
@@ -70,12 +76,14 @@ async function revoke(id:string){
   await run(async()=>{await props.api('/share/strm/'+id,'DELETE');ElMessage.success('已撤销');await doRefresh()})
 }
 async function doRefresh(at?:number){
-  if(at!==undefined)offset.value=at
-  const r=await props.api(`/share/strms?state=${tab.value}&offset=${offset.value}&limit=${limit.value}&q=${encodeURIComponent(query.value)}`)
-  rows.value=r.items||[];total.value=r.total||0
+  const sequence=++refreshSequence,target=at??offset.value
+  const r=await props.api(`/share/strms?state=${tab.value}&offset=${target}&limit=${limit.value}&q=${encodeURIComponent(query.value)}`)
+  if(sequence!==refreshSequence)return
+  offset.value=target;rows.value=r.items||[];total.value=r.total||0
 }
 async function refresh(){await run(()=>doRefresh())}
 function switchTab(t:'pending'|'library'|'revoked'){if(busy.value)return;tab.value=t;void run(()=>doRefresh(0))}
+function refreshAt(at:number){void run(()=>doRefresh(at))}
 function fmtTime(ts:number){if(!ts)return '';return new Date(ts*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
 
 const tabLabels={pending:'待整理',library:'分享影视库',revoked:'已撤销'} as const
@@ -115,7 +123,7 @@ defineExpose({canLeave})
 <div class="library-heading"><div><h2>分享内容</h2><p>管理生成的 STRM</p></div><span class="library-count">{{total}} 项</span></div>
 <div class="section-title share-actions">
 <button v-for="(label,t) in tabLabels" :key="t" class="library-tab" :class="{active:tab===t}" type="button" @click="switchTab(t)">{{label}}</button>
-<el-input v-model="query" size="small" placeholder="搜索名称/分享码" style="max-width:200px" clearable @change="()=>doRefresh(0)"/>
+<el-input v-model="query" size="small" placeholder="搜索名称/分享码" style="max-width:200px" clearable @change="refreshAt(0)"/>
 <el-button v-if="tab==='pending'" type="primary" size="small" :disabled="busy||!rows.length" @click="organize">整理 → 后台任务</el-button><el-button size="small" :disabled="busy" @click="pruneOrphans" title="文件已不存在的记录标撤销">清理孤儿记录</el-button>
 </div>
 <el-empty v-if="!rows.length" description="没有条目" :image-size="65"/>
@@ -132,7 +140,7 @@ defineExpose({canLeave})
 </div>
 <div style="display:flex;justify-content:flex-end;margin-top:10px" v-if="total>limit">
 <el-pagination layout="prev, pager, next" :total="total" :page-size="limit" :current-page="offset/limit+1"
-  @current-change="(p:number)=>doRefresh((p-1)*limit)"/>
+  @current-change="(p:number)=>refreshAt((p-1)*limit)"/>
 </div>
 </section>
 <section class="panel">
@@ -140,6 +148,7 @@ defineExpose({canLeave})
 <div class="monitor-section"><div class="monitor-heading"><div><h2>分享监控</h2><p>控制自动整理和存活检测</p></div><el-button :disabled="busy||!monitorDirty" @click="saveSettings">保存</el-button></div>
 <div class="monitor-row"><div><strong>自动整理</strong><p>监控发现新文件后，加入整理任务。</p></div><el-switch v-model="settings.auto_organize"/></div>
 <div class="monitor-row"><div><strong>台账核对</strong><p>按 cron 清理「文件已不存在」的分享 STRM 记录，默认每天凌晨 5 点。</p></div><div class="monitor-input"><el-input v-model="settings.share_prune_cron" size="small" style="width:132px" placeholder="0 5 * * *"/><span>分 时 日 月 周</span></div></div><div class="monitor-row"><div><strong>存活检测</strong><p>{{settings.share_check_mode==='cron'?'按 Cron 表达式检查分享，只在明确失效时撤销。':(settings.share_check_hours>0?`每 ${settings.share_check_hours} 小时检查一次分享。`:'填 0 则关闭存活检测。')}}</p></div><div class="monitor-input"><el-radio-group v-model="settings.share_check_mode" size="small"><el-radio-button value="interval">间隔</el-radio-button><el-radio-button value="cron">Cron</el-radio-button></el-radio-group><template v-if="settings.share_check_mode==='interval'"><el-input-number v-model="settings.share_check_hours" :min="0" :max="8760" :step="1" size="small"/><span>小时</span></template><template v-else><el-input v-model="settings.share_check_cron" size="small" style="width:132px" placeholder="0 3 * * *"/><span>分 时 日 月 周</span></template></div></div></div>
+<div class="button-row"><el-button :loading="busy" @click="checkShares">立即检查分享存活</el-button><span v-if="checkMessage" class="hint">{{checkMessage}}</span></div>
 </section>
 
 </template>
