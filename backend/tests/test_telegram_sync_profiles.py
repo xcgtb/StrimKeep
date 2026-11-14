@@ -9,6 +9,7 @@ from strimkeep.telegram_bot import TelegramBot, sync_profile_revision
 
 
 class Response:
+    status_code=200
     def raise_for_status(self): pass
     def json(self): return {'ok':True}
 

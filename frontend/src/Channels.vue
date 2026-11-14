@@ -9,8 +9,8 @@ const route=useRoute()
 const config=ref<any>({enabled:false,notify:true,schedule_mode:'interval',interval:300,cron:'*/10 * * * *',channels:[]})
 // 界面按分钟填写，接口仍按秒保存：300 秒显示为 5 分钟，谁也看不懂 300。
 const intervalMinutes=computed({
-  get:()=>Math.max(1,Math.round((Number(config.value.interval)||60)/60)),
-  set:(value:number)=>{config.value.interval=Math.max(1,Math.round(Number(value)||1))*60}
+  get:()=>Math.max(1,Number(((Number(config.value.interval)||60)/60).toFixed(6))),
+  set:(value:number)=>{config.value.interval=Math.max(60,Math.min(86400,Math.round((Number(value)||1)*60)))}
 })
 const sources=ref<any[]>([]),organizeSources=ref<string[]>([])
 const draft=ref(''),busy=ref(false),error=ref(''),picker=ref(''),routeIndex=ref(-1)
@@ -163,7 +163,7 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
  <el-form label-position="top" :disabled="busy">
   <el-form-item label="启用频道监控"><el-switch v-model="config.enabled"/></el-form-item>
   <el-form-item label="轮询方式"><el-radio-group v-model="config.schedule_mode"><el-radio-button value="interval">固定间隔</el-radio-button><el-radio-button value="cron">cron 表达式</el-radio-button></el-radio-group></el-form-item>
-  <el-form-item v-if="config.schedule_mode==='interval'" label="间隔（分钟）"><div style="display:flex;align-items:center;gap:8px"><el-input-number v-model="intervalMinutes" :min="1" :max="1440" :step="1"/><span class="hint" style="margin:0">最小 1 分钟</span></div></el-form-item>
+  <el-form-item v-if="config.schedule_mode==='interval'" label="间隔（分钟）"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><el-input-number v-model="intervalMinutes" :min="1" :max="1440" :step="1"/><span class="hint" style="margin:0">{{config.interval%60 ? `当前实际间隔 ${config.interval} 秒` : '最小 1 分钟'}}</span></div></el-form-item>
   <el-form-item v-else label="cron（5 段，按服务器时区）"><el-input v-model="config.cron" placeholder="*/10 * * * *"/></el-form-item>
   <el-form-item label="抓到新分享时推送通知"><el-switch v-model="config.notify"/></el-form-item>
  </el-form>
@@ -211,7 +211,7 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
     <div class="directory-block-heading"><div><strong>转存目录</strong><p>分享链接默认保存到这里</p></div></div>
     <div class="directory-pick-row">
      <div class="directory-path" :class="{empty:!c.share_cid}"><span>115</span><strong>{{c.share_label||c.share_cid||'尚未选择目录'}}</strong></div>
-     <div class="button-row"><el-button :disabled="busy" @click="pick(c,-1,'share')">{{c.share_cid?'更换目录':'选择目录'}}</el-button></div>
+     <div class="button-row"><el-button :disabled="busy" @click="pick(c,-1,'share')">{{c.share_cid?'更换目录':'选择目录'}}</el-button><el-button v-if="c.share_cid" text :disabled="busy" @click="c.share_cid='';c.share_label=''">清除</el-button></div>
     </div>
     <p v-if="notSource(c.share_cid)" class="directory-status warning">未直接列为待整理目录，请核对整理范围</p>
     <p v-else-if="c.share_cid" class="directory-status">已列为待整理目录</p>

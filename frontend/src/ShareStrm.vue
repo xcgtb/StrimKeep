@@ -19,6 +19,7 @@ const rows=ref<any[]>([]),total=ref(0),offset=ref(0),limit=ref(50),query=ref('')
 let refreshSequence=0
 const watchJob=ref<number|null>(null),watchTimer=ref<number|null>(null)
 const watchError=ref('')
+let watchInFlight=false, watchGeneration=0
 
 async function run(fn:()=>Promise<void>){if(busy.value)return;busy.value=true;error.value='';try{await fn()}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
 
@@ -58,23 +59,27 @@ async function pruneOrphans(){
 }
 
 function startWatching(){
-  if(watchTimer.value)window.clearInterval(watchTimer.value)
+  stopWatching();watchError.value=''
   watchTimer.value=window.setInterval(watch,3000)
 }
 async function watch(){
-  if(!watchJob.value)return
+  const id=watchJob.value, generation=watchGeneration
+  if(!id||watchInFlight)return
+  watchInFlight=true
   try{
-    const r=await props.api('/organize/jobs/'+watchJob.value)
+    const r=await props.api('/organize/jobs/'+id)
+    if(generation!==watchGeneration||id!==watchJob.value)return
     const job=r.job||r
     watchError.value=''
     if(['completed','partial','needs_review','cancelled'].includes(job.state)){
       stopWatching();watchJob.value=null
       ElMessage({message:'分享整理任务已结束：'+(job.message||job.stage||job.state),type:job.state==='completed'?'success':'warning'})
-      await doRefresh(0)
+      try{await doRefresh(0)}catch(e){error.value='整理任务已结束，但分享列表刷新失败，请手动刷新：'+(e as Error).message}
     }
-  }catch{watchError.value='暂时无法读取任务状态，稍后会自动重试；也可到任务中心查看。'}
+  }catch{if(generation===watchGeneration&&id===watchJob.value)watchError.value='暂时无法读取任务状态，稍后会自动重试；也可到任务中心查看。'}
+  finally{watchInFlight=false}
 }
-function stopWatching(){if(watchTimer.value){window.clearInterval(watchTimer.value);watchTimer.value=null}}
+function stopWatching(){watchGeneration++;if(watchTimer.value){window.clearInterval(watchTimer.value);watchTimer.value=null}}
 async function revoke(id:string){
   try{await ElMessageBox.confirm('撤销后 STRM 文件会被删除，播放链接失效。','确认撤销',{confirmButtonText:'撤销',cancelButtonText:'取消'})}catch{return}
   await run(async()=>{await props.api('/share/strm/'+id,'DELETE');ElMessage.success('已撤销');await doRefresh()})

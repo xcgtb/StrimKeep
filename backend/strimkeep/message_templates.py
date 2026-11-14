@@ -107,7 +107,7 @@ def transfer_completed(job_id, config, message):
     return '📥 转存完成', '\n'.join(lines)
 
 
-def cloud_sign_notice(signed, days=None, date=''):
+def cloud_sign_notice(signed, days=None, date='', reward=None):
     # 115 签到回执：emoji + 两空格对齐；结论写在标题里，不再追一行「后续」。
     heading = '☑️ 115 签到 · 已完成' if signed else '☑️ 115 签到 · 今天已签'
     lines = []
@@ -115,6 +115,10 @@ def cloud_sign_notice(signed, days=None, date=''):
         lines.append('📅 日期  ' + date)
     if days:
         lines.append('🔥 连续  %s 天' % days)
+    if reward is not None:
+        lines.append('🍁 今日获得  %s 枫叶' % reward)
+    if days is None or reward is None:
+        lines.append('ℹ️ 部分签到详情暂未返回')
     return heading, '\n'.join(lines)
 
 

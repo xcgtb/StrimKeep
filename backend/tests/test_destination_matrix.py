@@ -30,14 +30,14 @@ def test_legacy_channel_modes_do_not_enable_downloads():
     assert (separate['magnet_cid'],separate['ed2k_cid'])==('200','')
 
 
-def test_channel_strm_and_two_explicit_download_destinations(tmp_path):
+def test_channel_strm_ignores_even_explicit_download_destinations(tmp_path):
     async def run():
         cfg={'enabled':True,'notify':False,'channels':[{'name':'testchan','share_mode':'strm',
              'magnet_cid':'100','magnet_label':'磁力','ed2k_cid':'200','ed2k_label':'电驴'}]}
         store,monitor,_,_=make(tmp_path,{},cfg)
         await monitor.consume('testchan','',{'id':1,'text':'magnet:?xt=urn:btih:abc ed2k://one','links':[]})
         calls=monitor.engine.offline.calls
-        assert [(x['cid'],x['urls'],x['organize']) for x in calls]==[('100',['magnet:?xt=urn:btih:abc'],False),('200',['ed2k://one'],False)]
+        assert calls == []
         store.close()
     asyncio.run(run())
 

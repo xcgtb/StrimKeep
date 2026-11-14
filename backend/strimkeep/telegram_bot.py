@@ -8,7 +8,7 @@ from .cloud115 import CloudError
 from .offline_api import links_in, directory_config, OFFLINE_MAX_LINKS
 from .transfer import LINK, shares as parse_shares
 from . import share_service
-from .message_templates import transfer_received
+from .message_templates import transfer_received, cloud_sign_notice
 from .telegram_security import safe_telegram_error
 
 # 磁力与电驴可以自动识别；http/ftp 直链与分享链接容易混，必须显式 /offline。
@@ -32,6 +32,15 @@ def bot_commands(store):
     """指令开关：默认全开，只存被关掉的那些。"""
     saved = store.get('bot_commands_config', {}) or {}
     return {name: bool(saved.get(name, True)) for name in BOT_COMMANDS}
+
+
+def ordered_bot_commands(store):
+    saved = store.get('bot_commands_order', []) or []
+    names = []
+    for name in (saved if isinstance(saved, list) else []) + list(BOT_COMMANDS):
+        if name in BOT_COMMANDS and name not in names:
+            names.append(name)
+    return names
 
 
 def sync_profile_revision(profile):
@@ -141,16 +150,16 @@ class TelegramBot:
                 str(sender.get('id'))!=config.get('allowed_user_id') or str(chat.get('id'))!=str(sender.get('id'))):return
         key=f'bot:{identity}:{update["update_id"]}'
         if text.strip().split(' ',1)[0].split('@')[0] in ('/start','/help'):
-            await self.engine.notifications.publish(key,'转存机器人',
-                '📥 直接发送 115 分享链接即可转存，支持附带提取码。\n整理联动开启时会自动整理并生成 STRM。\n'
-                '🔗 /share 分享链接 → 免转存直接生成 STRM（不占网盘空间，新链接自动整理入库）\n'
-                '🧲 发送磁力/电驴链接，或 /offline 加链接，即提交 115 离线下载。\n'
-                '/organize 立即整理影视（网盘转存的文件）\n'
-                '/shareorganize 立即整理待处理的分享 STRM\n'
-                '/sync 选择并立即执行 STRM 同步任务\n'
-                '/status 查看任务状态，/tasks 看最近任务\n'
-                '/sign 115 签到',
-                chat_override=str(chat['id']),force=True)
+            enabled=bot_commands(self.store)
+            descriptions={
+                'status':'查看当前任务状态', 'tasks':'查看最近任务',
+                'organize':'立即整理网盘影视', 'sync':'选择网页中保存的 STRM 同步任务并立即执行',
+                'shareorganize':'整理待处理的分享 STRM', 'share':'加 115 分享链接，免转存生成 STRM',
+                'offline':'加磁力、ED2K 或直链，提交 115 离线下载', 'sign':'115 签到'}
+            lines=['直接发送 115 分享链接可转存；磁力和 ED2K 可直接发送。',
+                   '目录及落盘后是否整理在网页「资源入库」设置；直链请用 /offline。', '', '可用指令：']
+            lines.extend('/'+name+'  '+descriptions[name] for name in ordered_bot_commands(self.store) if enabled[name])
+            await self.engine.notifications.publish(key,'🤖 使用帮助','\n'.join(lines),chat_override=str(chat['id']),force=True)
             return
         command=text.strip().split(' ',1)[0].split('@')[0]
         name=command.lstrip('/')
@@ -176,11 +185,10 @@ class TelegramBot:
         if command=='/sign':
             try:
                 r=await self.engine.cloud.sign()
-                result=r.get('message') or '完成'
-                if r.get('days'): result+='（连续 %s 天）' % r['days']
+                heading,result=cloud_sign_notice(r.get('signed'),r.get('days'),reward=r.get('reward'))
             except CloudError as exc:
-                result=self._safe_error(exc)
-            await self.engine.notifications.publish(key,'☑️ 115 签到',result,chat_override=str(chat['id']),force=True)
+                heading,result='⚠️ 115 签到未完成',self._safe_error(exc)
+            await self.engine.notifications.publish(key,heading,result,chat_override=str(chat['id']),force=True)
             return
         if command=='/status':
             counts=dict(self.store.db.execute('SELECT state,count(*) FROM organize_jobs GROUP BY state').fetchall())
@@ -365,9 +373,13 @@ class TelegramBot:
         if not token or (not config.get('bot_enabled') and not watching):return False
         identity=hashlib.sha256((token+str(self.store.get('bot_epoch',''))).encode()).hexdigest()[:24]
         # 菜单版本：加命令后需要重新 setMyCommands，用版本号让缓存失效
-        if self.store.get('bot-menu:'+identity+':v4')!='ready':
-            response=await self.http.post('https://api.telegram.org/bot'+token+'/setMyCommands',json={'commands':[{'command':'help','description':'使用帮助'},{'command':'status','description':'任务状态'},{'command':'tasks','description':'最近任务'},{'command':'organize','description':'立即整理影视'},{'command':'sync','description':'同步 STRM'},{'command':'shareorganize','description':'整理分享 STRM'},{'command':'share','description':'分享 STRM（免转存）'},{'command':'offline','description':'提交离线下载'},{'command':'sign','description':'115 签到'}]},timeout=15)
-            if response.status_code==200 and response.json().get('ok'):self.store.set_many({'bot-menu:'+identity+':v4':'ready'})
+        enabled=bot_commands(self.store)
+        commands=[{'command':'help','description':'使用帮助'}]+[{'command':name,'description':BOT_COMMANDS[name]} for name in ordered_bot_commands(self.store) if enabled[name]]
+        revision=hashlib.sha256(json.dumps(commands,ensure_ascii=False).encode()).hexdigest()
+        menu_key='bot-menu:'+identity+':revision'
+        if self.store.get(menu_key)!=revision:
+            response=await self.http.post('https://api.telegram.org/bot'+token+'/setMyCommands',json={'commands':commands},timeout=15)
+            if response.status_code==200 and response.json().get('ok'):self.store.set_many({menu_key:revision})
         key='bot-offset:'+identity;offset=self.store.get(key,None)
         # Ignore backlog on first activation. Never delete an existing webhook.
         response=await self.http.post('https://api.telegram.org/bot'+token+'/getUpdates',json={

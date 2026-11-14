@@ -23,6 +23,7 @@ class BotCommands(BaseModel):
     """机器人指令开关：只传指令名到布尔的映射。"""
     model_config=ConfigDict(extra='forbid')
     enabled:dict[str,bool]=Field(default_factory=dict)
+    order:list[str]|None=None
 
 class CloudMaintenance(BaseModel):
     """115 签到与回收站清空的定时设置。"""
@@ -241,10 +242,10 @@ def install_console(app,store,admin):
         return {k:v for k,v in cached.items() if k!='at'}
     @app.get('/api/v1/bot/commands',dependencies=[Depends(admin)])
     async def bot_commands_get():
-        from .telegram_bot import BOT_COMMANDS
+        from .telegram_bot import BOT_COMMANDS, ordered_bot_commands
         saved=store.get('bot_commands_config',{}) or {}
-        return {'commands':[{'name':name,'label':label,'enabled':bool(saved.get(name,True))}
-                           for name,label in BOT_COMMANDS.items()]}
+        return {'commands':[{'name':name,'label':BOT_COMMANDS[name],'enabled':bool(saved.get(name,True))}
+                           for name in ordered_bot_commands(store)]}
 
     @app.put('/api/v1/bot/commands',dependencies=[Depends(admin)])
     async def bot_commands_put(body:BotCommands):
@@ -252,8 +253,12 @@ def install_console(app,store,admin):
         unknown=[name for name in body.enabled if name not in BOT_COMMANDS]
         if unknown:
             raise HTTPException(422,'未知指令：'+'、'.join(unknown))
+        if body.order is not None and (len(body.order)!=len(set(body.order)) or any(name not in BOT_COMMANDS for name in body.order)):
+            raise HTTPException(422,'指令顺序包含重复或未知指令。')
         # 只存关掉的那些：未来新增指令默认可用，不用回头补配置。
-        store.set_many({'bot_commands_config':{name:value for name,value in body.enabled.items() if not value}})
+        changes={'bot_commands_config':{name:value for name,value in body.enabled.items() if not value}}
+        if body.order is not None:changes['bot_commands_order']=body.order
+        store.set_many(changes)
         return await bot_commands_get()
     @app.get('/api/v1/cloud/maintenance',dependencies=[Depends(admin)])
     async def cloud_maintenance():
@@ -279,7 +284,7 @@ def install_console(app,store,admin):
         store.event('cloud','115 签到：'+str(result.get('message') or '完成'))
         days = result.get('days')
         date_text = datetime.datetime.now(ZoneInfo(store.get('timezone') or 'Asia/Shanghai')).strftime('%Y-%m-%d')
-        heading, body = cloud_sign_notice(result.get('signed'), days, date_text)
+        heading, body = cloud_sign_notice(result.get('signed'), days, date_text, result.get('reward'))
         await app.state.organizer.notifications.publish(
             'cloud:sign:%d' % int(time.time()), heading, body,
             'success' if result.get('signed') else 'info', category='cloud')

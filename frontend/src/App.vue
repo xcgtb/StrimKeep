@@ -45,7 +45,7 @@ function toggleTheme(){const next=dark.value?'light':'dark';applyAppearance({...
 const pendingReads=new Map<string,Promise<any>>()
 async function api(path:string,method='GET',body?:unknown):Promise<any>{
  if(method==='GET'&&pendingReads.has(path))return pendingReads.get(path)
- const request=(async()=>{const response=await fetch('/api/v1'+path,{method,credentials:'same-origin',headers:{'Content-Type':'application/json',...(csrf.value?{'X-CSRF-Token':csrf.value}:{})},body:body===undefined?undefined:JSON.stringify(body)});let data:any;try{data=await response.json()}catch{throw new Error('服务响应暂不可用，请稍后再试。')}if(!response.ok){if(response.status===401)logged.value=false;throw Object.assign(new Error(data.error?.message||'操作未完成'),{status:response.status})}return data})()
+ const request=(async()=>{const controller=method==='GET'&&/^\/organize\/jobs\/\d+$/.test(path)?new AbortController():null;const timer=controller?window.setTimeout(()=>controller.abort(),15000):null;try{const response=await fetch('/api/v1'+path,{method,credentials:'same-origin',signal:controller?.signal,headers:{'Content-Type':'application/json',...(csrf.value?{'X-CSRF-Token':csrf.value}:{})},body:body===undefined?undefined:JSON.stringify(body)});let data:any;try{data=await response.json()}catch{throw new Error('服务响应暂不可用，请稍后再试。')}if(!response.ok){if(response.status===401)logged.value=false;throw Object.assign(new Error(data.error?.message||'操作未完成'),{status:response.status})}return data}finally{if(timer!==null)window.clearTimeout(timer)}})()
  if(method==='GET')pendingReads.set(path,request)
  try{return await request}finally{if(pendingReads.get(path)===request)pendingReads.delete(path)}
 }

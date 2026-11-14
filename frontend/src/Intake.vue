@@ -116,7 +116,7 @@ useVisiblePolling(async()=>{if(!busy.value)await refresh()},5000)
 
 
 <TransferDirectories ref="directoryEditor" :api="api" :disabled="dirty||busy||!ready" :hide-channel="true" @saved="destinationsSaved" @navigate="page=>emit('navigate',page)"/>
-<section class="panel intake-options"><div class="settings-heading"><div><h2>落盘后处理 <span v-if="dirty" class="unsaved">未保存</span></h2><p>Web 与 Telegram 机器人分开设置；默认都只落盘</p></div></div>
+<details class="panel intake-options offline-advanced"><summary><strong>落盘后处理 <span v-if="dirty" class="unsaved">未保存</span></strong><span>Web 与机器人分开设置</span></summary>
 <div class="settings-content">
 <p class="hint">开关关闭：落盘成功即结束，要不要整理由「影视整理」的手动/定时扫描决定。开关打开：落盘完成立即入队本批整理，但目标目录必须在待整理范围内。</p>
 <div class="post-table">
@@ -124,17 +124,17 @@ useVisiblePolling(async()=>{if(!busy.value)await refresh()},5000)
  <div class="post-row"><strong>Web</strong><el-switch v-model="transfer.auto_organize" :disabled="busy" aria-label="Web 分享转存后立即整理"/><el-switch v-model="offline.magnet_auto_organize" :disabled="busy" aria-label="Web 磁力整理"/><el-switch v-model="offline.ed2k_auto_organize" :disabled="busy" aria-label="Web ED2K 整理"/></div>
  <div class="post-row"><strong>机器人</strong><el-switch v-model="transfer.bot_auto_organize" :disabled="busy" aria-label="机器人分享转存后立即整理"/><el-switch v-model="offline.bot_magnet_auto_organize" :disabled="busy" aria-label="机器人磁力整理"/><el-switch v-model="offline.bot_ed2k_auto_organize" :disabled="busy" aria-label="机器人 ED2K 整理"/></div>
 </div>
-<p class="hint">影视探索里点「转存」时落到这个目录；留空就跟随「保存目录」里 Web 的 115 分享目录。机器人接收链接（启用与允许的用户 ID）在「系统设置 → Telegram 通知」里设置。</p>
+<p class="hint">机器人接收链接（启用与允许的用户 ID）在「系统设置 → Telegram 通知」里设置。</p>
 
 <div class="button-row"><el-button type="primary" :disabled="busy||!ready||!dirty" @click="save">保存设置</el-button><el-button :disabled="busy" @click="emit('navigate','system')">配置 Telegram 通知</el-button></div>
-</div></section>
+</div></details>
 
 <details class="panel offline-advanced"><summary><strong>离线下载目录与分流</strong><span>直链目录和关键词分流</span></summary>
 <p class="hint">HTTP、HTTPS 和 FTP 直链使用单独目录；磁力和 ED2K 的默认目录在上方“保存目录”设置。</p>
 <div class="offline-destination"><div><strong>直链保存目录</strong><p>{{offline.target_label||offline.target_cid||'未设置，直链无法提交'}}</p></div><div class="button-row"><el-button :disabled="busy" @click="pickerKind='target'">选择目录</el-button><el-button v-if="offline.target_cid" text :disabled="busy" @click="offline.target_cid='';offline.target_label=''">清除</el-button></div></div>
 <div v-for="kind in ['magnet','ed2k']" :key="kind" class="offline-routes">
  <h3>{{kind==='magnet'?'磁力':'ED2K'}}关键词分流</h3>
- <p class="hint">提交文本命中关键词时使用对应目录；未命中时使用默认目录。每次提交的同类链接共用一个匹配结果。</p>
+ <p class="hint">网页提交的文本命中关键词时使用对应目录；未命中使用默认目录。机器人使用自己的默认目录，不应用这里的分流。每次提交的同类链接共用一个匹配结果。</p>
  <div v-for="(item,index) in ensureRoutes(kind)" :key="index" class="offline-route">
   <div class="offline-route-head"><strong>规则 {{Number(index)+1}}</strong><el-button text type="danger" :disabled="busy" @click="dropRoute(kind,index)">删除</el-button></div>
   <el-input v-model="item.keywords" :disabled="busy" placeholder="关键词，英文逗号分隔"/>

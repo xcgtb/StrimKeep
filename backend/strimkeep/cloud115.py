@@ -7,6 +7,8 @@ import json
 import random
 import secrets
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from contextvars import ContextVar
 from urllib.parse import urlsplit
 
@@ -85,6 +87,21 @@ def classify_rejection(errno, error_msg: str, scope: str = 'generic') -> str:
 
 
 _NOT_FOUND_STATUS = {'FILE_NOT_FOUND': 404, 'SHARE_NOT_FOUND': 404, 'OBJECT_NOT_FOUND': 409}
+
+
+def sign_details(data, today=None):
+    """Read only today's recorded reward; never infer it from the reward schedule."""
+    if not isinstance(data, dict):
+        return None, None
+    days = data.get('continuous_day', data.get('sign_day_count'))
+    today = today or datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d')
+    reward = None
+    for row in data.get('sign_list') or []:
+        if isinstance(row, dict) and str(row.get('sign_day', '')) == today:
+            value = str(row.get('points_num', ''))
+            if value.isdigit(): reward = int(value)
+            break
+    return days, reward
 
 
 class Cloud115:
@@ -1024,14 +1041,23 @@ class Cloud115:
         """
         info = await self.call(self.client().user_points_sign, _scope='maintenance')
         data = info.get('data') if isinstance(info, dict) else None
-        if isinstance(data, dict) and data.get('is_sign_today'):
+        if isinstance(data, dict) and str(data.get('is_sign_today', '0')).lower() in ('1', 'true'):
+            days, reward = sign_details(data)
             return {'signed': False, 'message': '今天已经签到过了。',
-                    'days': data.get('sign_day_count')}
+                    'days': days, 'reward': reward}
         result = await self.call(self.client().user_points_sign_post,
                                  _scope='maintenance', _kind='write')
         payload = result.get('data') if isinstance(result, dict) else None
-        days = payload.get('sign_day_count') if isinstance(payload, dict) else None
-        return {'signed': True, 'message': '签到完成。', 'days': days}
+        days, reward = sign_details(payload)
+        if days is None or reward is None:
+            try:
+                refreshed = await self.call(self.client().user_points_sign, _scope='maintenance')
+                refreshed_days, refreshed_reward = sign_details(refreshed.get('data') if isinstance(refreshed, dict) else None)
+                if refreshed_days is not None: days = refreshed_days
+                if refreshed_reward is not None: reward = refreshed_reward
+            except Exception:
+                pass  # 签到已成功，查询失败不能误报签到失败或触发重复签到。
+        return {'signed': True, 'message': '签到完成。', 'days': days, 'reward': reward}
 
     async def recycle_info(self):
         """回收站概览：只读第一页拿总条数，不拉全量清单。"""

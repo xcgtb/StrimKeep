@@ -35,7 +35,7 @@ useVisiblePolling(async()=>{if(!busy.value)await refresh()},5000)
 <h3>Telegram 接收链接</h3><div class="workflow-switch-row"><div><strong>机器人转存后立即整理</strong><p>与 Web 分开设置：开启后机器人提交的转存落盘完成就入队整理；关闭时只落盘。</p></div><el-switch v-model="config.bot_auto_organize" :disabled="busy" aria-label="机器人转存后立即整理"/></div><div class="workflow-switch-row"><div><strong>启用转存机器人</strong><p>私聊机器人发送链接即可转存。复用通知页的 Bot Token。</p></div><el-switch v-model="config.bot_enabled" :disabled="busy" aria-label="启用转存机器人"/></div>
 <el-form label-position="top"><el-form-item label="允许操作的 TG 用户数字 ID"><el-input v-model="config.allowed_user_id" placeholder="仅此用户可以私聊机器人发起转存"/></el-form-item></el-form>
 <p v-if="config.bot_enabled" class="hint">{{bot.state==='ready'?'机器人已连接，可发送新链接':bot.state==='error'?bot.message:'机器人正在连接，请稍候再发链接'}}。启用前的旧消息不会自动执行。</p>
-<p class="hint">直接发分享链接使用机器人独立目录；发送 /save 目录ID 分享链接 可指定其他目录。自动整理开启时，目标仍须为待整理目录。</p>
+<p class="hint">直接发送分享链接使用机器人独立目录。自动整理开启时，目标仍须为待整理目录。</p>
 <div class="button-row"><el-button type="primary" :disabled="busy||!ready||!dirty" @click="save">保存设置</el-button><el-button :disabled="busy" @click="emit('navigate','system')">配置 Telegram 通知</el-button></div></div></section>
 <section class="panel transfer-history"><div class="history-heading"><div><h2>最近转存</h2><p>查看最近提交的任务</p></div><el-button text type="primary" @click="emit('navigate','tasks')">查看全部</el-button></div>
 <p v-if="!jobs.length" class="history-empty">还没有转存记录</p>

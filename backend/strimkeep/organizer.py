@@ -765,7 +765,7 @@ class Organizer:
                     from datetime import datetime
                     from zoneinfo import ZoneInfo
                     date_text = datetime.now(ZoneInfo(self.store.get('timezone') or 'Asia/Shanghai')).strftime('%Y-%m-%d')
-                    heading, body = cloud_sign_notice(result.get('signed'), days, date_text)
+                    heading, body = cloud_sign_notice(result.get('signed'), days, date_text, result.get('reward'))
                     await self.notifications.publish(
                         'cloud:sign:%d' % int(now), heading, body,
                         'success' if result.get('signed') else 'info', category='cloud')

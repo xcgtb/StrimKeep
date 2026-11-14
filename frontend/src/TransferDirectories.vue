@@ -20,23 +20,23 @@ function title(row:any){return row.source==='web'?'Web':row.source==='bot'?'Tele
 function value(row:any,key:string){if(key==='share'&&row.source==='channel'&&row.share_mode!=='transfer')return row.share_mode==='strm'?'免转存 STRM':'不处理';return row[key+'_label']||row[key+'_cid']||'未设置'}
 function open(row:any){draft.value=JSON.parse(JSON.stringify(row));initial.value=JSON.stringify(draft.value);error.value=''}
 function choose(folder:any){
- if(picker.value==='explore'){exploreCid.value=folder.id;exploreLabel.value=folder.name;picker.value='';void saveExplore();return}
+ if(picker.value==='explore'){picker.value='';void saveExplore(folder.id,folder.name);return}
  if(draft.value&&picker.value){draft.value[picker.value+'_cid']=folder.id;draft.value[picker.value+'_label']=folder.name}
  picker.value=''
 }
 async function loadExplore(){
  try{const r=await props.api('/transfer/config');exploreCid.value=r.config?.explore_cid||'';exploreLabel.value=r.config?.explore_label||''}catch(e){error.value=(e as Error).message}
 }
-async function saveExplore(){
+async function saveExplore(cid:string,label:string){
  if(exploreBusy.value)return;exploreBusy.value=true;error.value=''
  try{
   const r=await props.api('/transfer/config')
-  const saved=await props.api('/transfer/config','PUT',{...r.config,explore_cid:exploreCid.value,explore_label:exploreLabel.value})
+  const saved=await props.api('/transfer/config','PUT',{...r.config,explore_cid:cid,explore_label:label})
   exploreCid.value=saved.config?.explore_cid||'';exploreLabel.value=saved.config?.explore_label||''
   ElMessage.success(exploreCid.value?'影视探索转存目录已更新':'影视探索已改为跟随 Web 目录')
  }catch(e){error.value=(e as Error).message}finally{exploreBusy.value=false}
 }
-function clearExplore(){exploreCid.value='';exploreLabel.value='';void saveExplore()}
+function clearExplore(){void saveExplore('','')}
 function clear(key:string){draft.value[key+'_cid']='';draft.value[key+'_label']=''}
 async function canLeave(){if(!dirty.value)return true;try{await ElMessageBox.confirm('目录改动还没有保存。','放弃修改？',{confirmButtonText:'放弃修改',cancelButtonText:'继续编辑',type:'warning'});return true}catch{return false}}
 async function close(){if(await canLeave()){draft.value=null;error.value=''}}
@@ -46,8 +46,8 @@ defineExpose({canLeave})
 </script>
 
 <template>
-<section class="panel destinations">
- <div class="destination-heading"><div class="heading-copy"><span class="heading-icon"><el-icon><FolderOpened/></el-icon></span><div><h2>保存目录</h2><p>为不同来源选择 115 目录</p></div></div></div>
+<details class="panel destinations">
+ <summary class="destination-heading"><div class="heading-copy"><span class="heading-icon"><el-icon><FolderOpened/></el-icon></span><div><h2>保存目录</h2><p>为不同来源选择 115 目录</p></div></div><span class="destination-expand">展开 / 收起</span></summary>
  <el-alert v-if="error&&!draft" :title="error" type="error" show-icon class="destination-error"/>
  <div class="destination-content">
   <div class="intro"><p>各入口独立设置，也可以选择同一个目录。</p><el-button text @click="emit('navigate','channels')">管理频道</el-button></div>
@@ -60,7 +60,6 @@ defineExpose({canLeave})
     <el-button text type="primary" :disabled="busy||disabled" @click="open(row)">编辑</el-button>
    </div>
    <div v-if="!hideChannel&&!channelRows.length" class="channel-empty"><span>还没有添加频道</span><el-button text type="primary" @click="emit('navigate','channels')">前往添加</el-button></div>
-  </div>
   <div class="explore-row">
    <div class="explore-copy"><strong>影视探索</strong><span :class="{empty:!exploreCid}">{{ exploreLabel||exploreCid||'跟随 Web 的 115 分享目录' }}</span></div>
    <div class="explore-actions">
@@ -68,9 +67,10 @@ defineExpose({canLeave})
     <el-button v-if="exploreCid" size="small" text :disabled="busy||disabled||exploreBusy" @click="clearExplore">改为跟随 Web</el-button>
    </div>
   </div>
+  </div>
   <p class="footnote">影视探索的转存使用此处目录。转存后自动整理需要目标在待整理目录中；直链和关键词分流可在下方“离线下载目录与分流”设置。</p>
  </div>
-</section>
+</details>
 
 <el-dialog :model-value="!!draft" :title="draft?`编辑${title(draft)}`:'编辑目录'" width="min(560px, 92vw)" class="directory-dialog" :close-on-click-modal="false" :before-close="close" @update:model-value="(v:boolean)=>{if(!v)close()}">
  <template v-if="draft">
@@ -80,7 +80,7 @@ defineExpose({canLeave})
   <div v-for="type in types" :key="type.key" class="edit-row"><div class="edit-label">{{type.label}}<small v-if="type.key==='share'&&draft.source==='channel'&&draft.share_mode!=='transfer'">{{draft.share_mode==='strm'?'免转存无需网盘目录':'已关闭'}}</small></div>
    <div v-if="!(type.key==='share'&&draft.source==='channel'&&draft.share_mode!=='transfer')" class="edit-controls"><button class="folder-choice" type="button" @click="picker=type.key"><el-icon><FolderOpened/></el-icon><span :class="{placeholder:!draft[type.key+'_cid']}" :title="value(draft,type.key)">{{draft[type.key+'_label']||draft[type.key+'_cid']||'选择目录'}}</span><span class="change">更换</span></button><el-button v-if="draft[type.key+'_cid']" text @click="clear(type.key)">清除</el-button></div>
   </div>
-  <p class="dialog-note">不需要处理的类型可以留空。机器人发送 /save 目录ID 可临时指定分享目录。</p>
+  <p class="dialog-note">不需要处理的类型可以留空。不同入口分别保存，修改后点击保存生效。</p>
  </template>
  <template #footer><el-button @click="close">取消</el-button><el-button type="primary" :loading="busy" :disabled="!dirty" @click="save">保存</el-button></template>
 </el-dialog>
@@ -91,10 +91,10 @@ defineExpose({canLeave})
 .destination-heading,.heading-copy,.intro{display:flex;align-items:center;gap:12px}.destination-heading{justify-content:space-between}.heading-copy h2{margin:0;font-size:16px}.heading-copy p,.intro p{margin:5px 0 0;color:var(--muted);font-size:12px}.heading-icon{display:grid;place-items:center;width:38px;height:38px;flex:none;border-radius:11px;background:var(--surface-soft);color:var(--accent);font-size:19px}.destination-content{margin-top:18px}.intro{justify-content:space-between;margin-bottom:12px}.intro p{margin:0}.directory-table{border:1px solid var(--line);border-radius:10px;overflow:hidden}.table-header,.table-row{display:grid;grid-template-columns:minmax(145px,1.1fr) repeat(3,minmax(0,1fr)) 58px;gap:14px;align-items:center;padding:12px 14px}.table-header{background:var(--surface-soft);color:var(--muted);font-size:12px}.table-row+.table-row,.channel-empty{border-top:1px solid var(--line)}.source{display:grid;gap:6px;font-size:13px}.source :deep(.el-select){max-width:170px}.table-value{min-width:0;font-size:13px;color:var(--text)}.table-value>span:last-child{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.table-value.empty{color:var(--muted)}.mobile-label{display:none}.table-row>.el-button{margin:0}.channel-empty{display:flex;align-items:center;justify-content:space-between;padding:7px 14px;color:var(--muted);font-size:12px}.footnote,.dialog-intro,.dialog-note{font-size:12px;line-height:1.7;color:var(--muted)}.footnote{margin:11px 0 0}.destination-error{margin:12px 0}.dialog-intro{margin:0 0 16px}.mode-row,.edit-row{display:grid;grid-template-columns:90px minmax(0,1fr);align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}.mode-row :deep(.el-select){width:100%}.edit-label{font-weight:600;font-size:13px}.edit-label small{display:block;margin-top:4px;color:var(--muted);font-weight:400}.edit-controls{display:flex;gap:4px;align-items:center;min-width:0}.folder-choice{display:flex;align-items:center;gap:8px;min-width:0;flex:1;border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--surface);color:var(--text);text-align:left;cursor:pointer}.folder-choice:hover{border-color:var(--accent)}.folder-choice>span:not(.change){overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.folder-choice .placeholder{color:var(--muted)}.folder-choice .change{margin-left:auto;color:var(--accent);font-size:12px;flex:none}.dialog-note{margin:14px 0 0}
 .table-value>span:last-child,.folder-choice>span:not(.change){white-space:normal;overflow-wrap:anywhere;line-height:1.5}.source :deep(.el-select){width:100%;max-width:220px}
 @media(max-width:760px){.destination-heading{align-items:flex-start}.heading-copy p{line-height:1.5}.table-header{display:none}.table-row{grid-template-columns:1fr auto;gap:10px}.source{grid-column:1}.table-row>.el-button{grid-column:2;grid-row:1}.table-value{grid-column:1/-1;display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.table-value>span:last-child{text-align:right;white-space:normal;overflow-wrap:anywhere;min-width:0}.mobile-label{display:inline;color:var(--muted);font-size:12px;flex:none}.mode-row,.edit-row{grid-template-columns:1fr;gap:7px}.folder-choice>span:not(.change){white-space:normal;overflow-wrap:anywhere;line-height:1.5}}
-.explore-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface-soft)}
+.destination-heading{cursor:pointer;list-style:none}.destination-heading::-webkit-details-marker{display:none}.destination-expand{color:var(--muted);font-size:12px;flex:none}.explore-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border-top:1px solid var(--line)}
 .explore-copy{display:grid;gap:5px;font-size:13px;min-width:0}
 .explore-copy span{color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .explore-copy span.empty{color:var(--muted)}
 .explore-actions{display:flex;gap:4px;flex:none}
-@media(max-width:760px){.explore-row{align-items:flex-start;flex-direction:column}.explore-actions{width:100%}}
+@media(max-width:760px){.explore-row{align-items:flex-start}.explore-actions{justify-content:flex-end;flex-wrap:wrap}.explore-copy span{white-space:normal;overflow-wrap:anywhere}}
 </style>
