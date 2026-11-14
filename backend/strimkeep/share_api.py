@@ -55,6 +55,7 @@ def install_share(app, store, admin):
         share_check_hours: int = Field(default=0, ge=0, le=8760)
         # 存活检测两种执行方式：固定间隔（按小时，锚在 03:00）或 Cron（5 段，按服务器时区）。
         share_check_mode: Literal['interval', 'cron'] = 'interval'
+        share_check_scope: Literal['file', 'share'] = 'file'
         share_check_cron: str = Field(default='0 3 * * *', max_length=100)
         share_prune_cron: str = Field(default='0 5 * * *', max_length=100)
 
@@ -135,6 +136,7 @@ def install_share(app, store, admin):
                 'share_scan_minutes': 5 if store.get('share_scan_minutes') in (None,'') else int(store.get('share_scan_minutes')),
                 'share_check_hours':saved.get('share_check_hours',0),
                 'share_check_mode':saved.get('share_check_mode','interval'),
+                'share_check_scope':saved.get('share_check_scope','file'),
                 'share_check_cron':saved.get('share_check_cron','0 3 * * *'),
                 'share_prune_cron':saved.get('share_prune_cron','0 5 * * *'),
                 'effective':share_effective_settings(store)}
@@ -419,11 +421,11 @@ def install_share(app, store, admin):
                 'next_at': store.get('share_check_due') or 0, 'history': history}
 
     @app.post('/api/v1/share/check', dependencies=[Depends(admin)])
-    async def check_alive():
+    async def check_alive(scope: Literal['file', 'share'] | None = None):
         """分享存活检测：业务在 share_service（B08 契约：只有明确失效证据才撤销）。
 
         0.9.56：改走后台任务，最多等 8 秒。实测 82 个分享串行取链要 41 秒，以前整段
         压在 HTTP 请求上（页面假死）。小库仍然同步拿到结果；大库返回 pending，
         跑完照旧写 `share_check` 事件与 meta.share_check_last。
         """
-        return await app.state.organizer.start_share_check(wait=8.0)
+        return await app.state.organizer.start_share_check(wait=8.0, scope=scope) if scope else await app.state.organizer.start_share_check(wait=8.0)

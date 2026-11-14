@@ -325,3 +325,24 @@ def test_share_check_status_returns_legacy_summary_and_reschedules_edits(tmp_pat
         response = c.post('/api/v1/share/settings', json={'share_check_hours':12,'share_check_mode':'interval'})
         assert response.status_code == 200
         assert store.get('share_check_due') == 0
+
+
+def test_share_scope_settings_and_manual_route(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from strimkeep.main import create_app
+    monkeypatch.setenv('ADMIN_USERNAME', 'admin')
+    monkeypatch.setenv('ADMIN_PASSWORD', 'test-password-1234')
+    app=create_app(tmp_path/'data',tmp_path/'strm')
+    with TestClient(app) as c:
+        login=c.post('/api/v1/auth/login',json={'username':'admin','password':'test-password-1234'})
+        c.headers['X-CSRF-Token']=login.json()['csrf']
+        assert c.get('/api/v1/share/settings').json()['share_check_scope']=='file'
+        assert c.post('/api/v1/share/settings',json={'share_check_scope':'share'}).json()['share_check_scope']=='share'
+        seen=[]
+        async def run_check(wait=8.0, scope=None):
+            seen.append(scope);return {'alive':0,'dead_count':0,'skipped':0,'scope':scope}
+        app.state.organizer.start_share_check=run_check
+        assert c.post('/api/v1/share/check?scope=share').json()['scope']=='share'
+        assert c.post('/api/v1/share/check?scope=file').json()['scope']=='file'
+        assert c.post('/api/v1/share/check?scope=invalid').status_code==422
+        assert seen==['share','file']

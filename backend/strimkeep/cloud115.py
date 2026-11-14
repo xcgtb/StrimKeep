@@ -1332,7 +1332,9 @@ class Cloud115:
             if str(exc.errno) == '4100010':
                 return 'cancelled'
             return 'unknown'
-        if isinstance(response, dict) and response.get('state') in (True, 1, '1') and isinstance(response.get('data'), dict):
+        data = response.get('data') if isinstance(response, dict) else None
+        if (isinstance(response, dict) and response.get('state') in (True, 1, '1')
+                and isinstance(data, dict) and isinstance(data.get('list'), list)):
             return 'accessible'
         return 'unknown'
 

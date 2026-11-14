@@ -148,7 +148,8 @@ def test_share_availability_accepts_only_explicit_cancel_code():
         for response, expected in [(CloudError('分享已取消','CLOUD_REJECTED',422,errno=4100010),'cancelled'),
                                    (CloudError('接口不存在','SHARE_NOT_FOUND',404),'unknown'),
                                    (CloudError('限流','RATE_LIMITED',503),'unknown'),
-                                   ({'state':True,'data':{}},'accessible'),
+                                   ({'state':True,'data':{'list':[]}},'accessible'),
+                                   ({'state':True,'data':{}},'unknown'),
                                    ({'state':True},'unknown')]:
             fake.response = response
             assert await Cloud115.share_availability(fake,'code','pwd') == expected
@@ -174,6 +175,107 @@ def test_share_availability_uses_sdk_response_and_preserves_errno(tmp_path):
         client.response={'state':False,'errno':10004,'error':'接口不存在'}
         assert await cloud.share_availability('code','pwd') == 'unknown'
         client.response={'state':True,'data':{}}
+        assert await cloud.share_availability('code','pwd') == 'unknown'
+        client.response={'state':True,'data':{'list':[]}}
         assert await cloud.share_availability('code','pwd') == 'accessible'
         await cloud.close(); store.close()
+    asyncio.run(scenario())
+
+
+def test_cancelled_share_group_avoids_repeated_file_requests(tmp_path):
+    async def scenario():
+        store, cloud, http, engine, _ = share_setup(tmp_path)
+        entries = share_service.generate(store, engine.root, {'share_code':'group','receive_code':'pw'},
+            [{'id':str(i),'name':f'episode-{i}.mkv','size':5000,'path':'Work/'} for i in range(1,56)])['created']
+        calls, share_calls = [], []
+        async def expired(file_id, *args):
+            calls.append(file_id)
+            raise CloudError('失效','SHARE_NOT_FOUND',404)
+        async def cancelled(*args):
+            share_calls.append(args)
+            return 'cancelled'
+        cloud.share_url_download, cloud.share_availability = expired, cancelled
+        first = await share_service.check_alive(engine)
+        assert first['dead_count'] == 0 and first['skipped'] == 55
+        assert len(calls) == 1 and len(share_calls) == 1
+        report=store.meta_json('share_check_history')[0]
+        assert report['file_checks'] == 1 and report['avoided_checks'] == 54
+        assert all((engine.root / e['strm_path']).exists() for e in entries)
+        store.db.execute('UPDATE share_check_candidates SET first_at=?', (time.time()-301,)); store.db.commit()
+        second = await share_service.check_alive(engine)
+        assert second['dead_count'] == 55 and len(calls) == 2 and len(share_calls) == 2
+        assert all(not (engine.root / e['strm_path']).exists() for e in entries)
+        await http.aclose(); store.close()
+    asyncio.run(scenario())
+
+
+def test_accessible_share_never_skips_other_file_checks(tmp_path):
+    async def scenario():
+        store, cloud, http, engine, _ = share_setup(tmp_path)
+        entries=share_service.generate(store, engine.root, {'share_code':'group','receive_code':'pw'},
+            [{'id':'1','name':'one.mkv','size':5000,'path':'Work/'},
+             {'id':'2','name':'two.mkv','size':5000,'path':'Work/'}])['created']
+        calls=[]
+        async def download(file_id,*args):
+            calls.append(file_id)
+            if file_id=='1': raise CloudError('文件不存在','SHARE_NOT_FOUND',404)
+            return 'https://cdn.example/file',{}
+        async def accessible(*args): return 'accessible'
+        cloud.share_url_download,cloud.share_availability=download,accessible
+        report=await share_service.check_alive(engine)
+        assert len(calls)==2 and report['alive']==1 and report['skipped']==1
+        assert store.meta_json('share_check_history')[0]['avoided_checks']==0
+        assert all((engine.root / e['strm_path']).exists() for e in entries)
+        await http.aclose(); store.close()
+    asyncio.run(scenario())
+
+
+def test_fast_share_check_reuses_one_status_without_claiming_file_checks(tmp_path):
+    async def scenario():
+        store, cloud, http, engine, _ = share_setup(tmp_path)
+        share_service.generate(store, engine.root, {'share_code':'group','receive_code':'pw'},
+            [{'id':str(i),'name':f'episode-{i}.mkv','size':5000,'path':'Work/'} for i in range(1,56)])
+        status_calls, file_calls = [], []
+        async def accessible(*args): status_calls.append(args); return 'accessible'
+        async def download(*args): file_calls.append(args); raise AssertionError('fast mode must not fetch file links')
+        cloud.share_availability, cloud.share_url_download = accessible, download
+        result=await share_service.check_alive(engine, scope='share')
+        assert result['scope']=='share' and result['alive']==55 and result['share_checks']==1
+        assert not file_calls and len(status_calls)==1
+        report=store.meta_json('share_check_history')[0]
+        assert report['scope']=='share' and report['file_checks']==0 and report['share_checks']==1
+        await http.aclose();store.close()
+    asyncio.run(scenario())
+
+
+def test_fast_share_check_confirmation_is_two_independent_runs(tmp_path):
+    async def scenario():
+        store, cloud, http, engine, _ = share_setup(tmp_path)
+        entries=share_service.generate(store, engine.root, {'share_code':'group','receive_code':'pw'},
+            [{'id':str(i),'name':f'episode-{i}.mkv','size':5000,'path':'Work/'} for i in range(1,4)])['created']
+        calls=[]
+        async def cancelled(*args): calls.append(args); return 'cancelled'
+        async def no_file(*args): raise AssertionError('fast mode must not fetch file links')
+        cloud.share_availability,cloud.share_url_download=cancelled,no_file
+        first=await share_service.check_alive(engine, scope='share')
+        assert first['skipped']==3 and first['dead_count']==0 and len(calls)==1
+        store.db.execute('UPDATE share_check_candidates SET first_at=?', (time.time()-301,));store.db.commit()
+        second=await share_service.check_alive(engine, scope='share')
+        assert second['dead_count']==3 and len(calls)==2
+        assert all(not (engine.root/e['strm_path']).exists() for e in entries)
+        await http.aclose();store.close()
+    asyncio.run(scenario())
+
+
+def test_fast_share_unknown_never_triggers_cleanup(tmp_path):
+    async def scenario():
+        store, cloud, http, engine, _ = share_setup(tmp_path)
+        entry=share_service.generate(store, engine.root, {'share_code':'group','receive_code':'pw'},
+            [{'id':'1','name':'one.mkv','size':5000,'path':'Work/'}])['created'][0]
+        async def unavailable(*args): return 'unknown'
+        cloud.share_availability=unavailable
+        result=await share_service.check_alive(engine, scope='share')
+        assert result['skipped']==1 and result['dead_count']==0
+        assert (engine.root/entry['strm_path']).exists()
+        await http.aclose();store.close()
     asyncio.run(scenario())

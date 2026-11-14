@@ -600,7 +600,7 @@ class Organizer:
                 if not self.closing:
                     await asyncio.sleep(.5)
 
-    async def start_share_check(self, wait: float = 8.0):
+    async def start_share_check(self, wait: float = 8.0, scope=None):
         """把一次分享存活检测丢到后台跑，不重入。
 
         0.9.56：实测 82 个分享串行取链要 **41 秒**，以前这段时长直接压在 HTTP 请求上
@@ -616,7 +616,7 @@ class Organizer:
 
         async def run():
             try:
-                return await share_service.check_alive(self)
+                return await share_service.check_alive(self, scope=scope) if scope else await share_service.check_alive(self)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -626,7 +626,7 @@ class Organizer:
                 failure = {'at': time.time(), 'started_at': progress.get('started_at'),
                            'total': progress.get('total', 0), 'processed': progress.get('processed', 0),
                            'alive': progress.get('alive', 0), 'dead': progress.get('dead', 0),
-                           'skipped': progress.get('skipped', 0), 'failed': True, 'details': []}
+                           'skipped': progress.get('skipped', 0), 'scope': progress.get('scope', 'file'), 'failed': True, 'details': []}
                 self.store.set_meta('share_check_history', ([failure] + history)[:20])
                 return {'failed': True, 'message': '检测未完成，请查看实时日志。'}
 
