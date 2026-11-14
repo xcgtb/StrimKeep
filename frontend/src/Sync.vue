@@ -67,7 +67,7 @@ function beforeUnload(e:BeforeUnloadEvent){if(route.name==='sync'&&(dirty.value|
 defineExpose({canLeave})
 onMounted(()=>{window.addEventListener('beforeunload',beforeUnload);run(async()=>{const [data,settings]=await Promise.all([props.api('/sync/config'),props.api('/settings')]);config.value=data.config;outputRoot.value=data.output_root;base.value=settings.playback_base;savedBase.value=base.value;baseline.value=snapshot();ready.value=true})})
 onUnmounted(()=>{window.removeEventListener('beforeunload',beforeUnload)})
-useVisiblePolling(async()=>{if(!busy.value&&!dirty.value){const [data,settings]=await Promise.all([props.api('/sync/config'),props.api('/settings')]);config.value=data.config;base.value=settings.playback_base;savedBase.value=base.value;baseline.value=snapshot()}},5000)
+useVisiblePolling(async()=>{if(!ready.value||busy.value||dirty.value)return;const before=baseline.value,previousBase=savedBase.value;const [data,settings]=await Promise.all([props.api('/sync/config'),props.api('/settings')]);if(busy.value||dirty.value||baseline.value!==before||savedBase.value!==previousBase)return;config.value=data.config;base.value=settings.playback_base;savedBase.value=base.value;baseline.value=snapshot()},5000)
 </script>
 <template><div class="workflow-page">
 <WorkflowToolbar v-model:query="query" title="STRM 管理" :dirty="dirty" :busy="busy" :ready="ready" @save="save"/>

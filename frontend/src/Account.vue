@@ -32,11 +32,14 @@ function resizeTree(){treeHeight.value=420;if(window.innerWidth>760&&configured.
 onMounted(()=>window.addEventListener('resize',resizeTree));onUnmounted(()=>{browseSequence++;window.removeEventListener('resize',resizeTree)})
 const maint=ref<any>({sign_enabled:false,sign_cron:'0 9 * * *',recycle_enabled:false,recycle_cron:'0 4 * * 0',recycle_password:'000000'})
 const maintMeta=ref<any>({last_sign_at:0,last_clear_at:0,sign_due:0,recycle_due:0}),maintLoaded=ref(false),signBusy=ref(false),clearBusy=ref(false),recycleInfo=ref<any>(null),signMsg=ref('')
-async function loadMaint(){try{const r=await props.api('/cloud/maintenance');maint.value={...maint.value,...r.config};maintMeta.value=r;maintLoaded.value=true}catch(e){maintLoaded.value=false;error.value='签到与回收站设置读取失败：'+(e as Error).message}}
-async function saveMaint(){if(!maintLoaded.value)return;await run(async()=>{const r=await props.api('/cloud/maintenance','PUT',maint.value);maintMeta.value=r;ElMessage.success('定时设置已保存')})}
-async function doSign(){signBusy.value=true;signMsg.value='';try{const r=await props.api('/cloud/sign','POST');signMsg.value=(r.message||'签到完成')+(r.days!=null?` 连续 ${r.days} 天`:'')+(r.reward!=null?`，今日获得 ${r.reward} 枫叶`:'')+(r.balance!=null?`，当前余额 ${r.balance} 枫叶`:'');ElMessage.success(signMsg.value);await loadMaint()}catch(e){signMsg.value=(e as Error).message}finally{signBusy.value=false}}
+const maintBaseline=ref('')
+const maintDirty=computed(()=>!!maintBaseline.value&&JSON.stringify(maint.value)!==maintBaseline.value)
+const passwordDirty=computed(()=>!!maintBaseline.value&&maint.value.recycle_password!==JSON.parse(maintBaseline.value).recycle_password)
+async function loadMaint(preserveDraft=false){try{const r=await props.api('/cloud/maintenance');if(!preserveDraft||!maintDirty.value){maint.value={...maint.value,...r.config};maintBaseline.value=JSON.stringify(maint.value)}maintMeta.value=r;maintLoaded.value=true}catch(e){maintLoaded.value=false;error.value='签到与回收站设置读取失败：'+(e as Error).message}}
+async function saveMaint(){if(!maintLoaded.value)return;await run(async()=>{const sent=JSON.parse(JSON.stringify(maint.value));const r=await props.api('/cloud/maintenance','PUT',sent);const saved={...sent,...r.config};if(JSON.stringify(maint.value)===JSON.stringify(sent))maint.value=saved;maintBaseline.value=JSON.stringify(saved);maintMeta.value=r;ElMessage.success('定时设置已保存')})}
+async function doSign(){signBusy.value=true;signMsg.value='';try{const r=await props.api('/cloud/sign','POST');signMsg.value=(r.message||'签到完成')+(r.days!=null?` 连续 ${r.days} 天`:'')+(r.reward!=null?`，今日获得 ${r.reward} 枫叶`:'')+(r.balance!=null?`，当前余额 ${r.balance} 枫叶`:'');ElMessage.success(signMsg.value);await loadMaint(true)}catch(e){signMsg.value=(e as Error).message}finally{signBusy.value=false}}
 async function loadRecycle(){try{recycleInfo.value=await props.api('/cloud/recycle')}catch(e){recycleInfo.value={available:false,error:(e as Error).message}}}
-async function doClear(){try{await ElMessageBox.confirm('回收站清空后无法恢复，确定继续？','清空回收站',{confirmButtonText:'清空',cancelButtonText:'取消',type:'warning'})}catch{return}clearBusy.value=true;try{const r=await props.api('/cloud/recycle/clear','POST');ElMessage.success(r.message||'已清空');await Promise.all([loadRecycle(),loadMaint()])}catch(e){error.value=(e as Error).message}finally{clearBusy.value=false}}
+async function doClear(){if(!maintLoaded.value||passwordDirty.value)return;try{await ElMessageBox.confirm('回收站清空后无法恢复，确定继续？','清空回收站',{confirmButtonText:'清空',cancelButtonText:'取消',type:'warning'})}catch{return}clearBusy.value=true;try{const r=await props.api('/cloud/recycle/clear','POST');ElMessage.success(r.message||'已清空');await Promise.all([loadRecycle(),loadMaint(true)])}catch(e){error.value=(e as Error).message}finally{clearBusy.value=false}}
 const recycleCount=computed(()=>{const i=recycleInfo.value&&recycleInfo.value.info||{};const v=i.count??i.num??i.total??i.size;return v==null?'—':v})
 function fmtTime(ts:number){if(!ts)return '—';const d=new Date(ts*1000);const p=(n:number)=>String(n).padStart(2,'0');return `${d.getMonth()+1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`}
 
@@ -67,7 +70,7 @@ onMounted(async()=>{try{configured.value=(await props.api('/settings')).cookie_c
       <div class="maint-row"><label>定时清空</label><el-switch v-model="maint.recycle_enabled"/></div>
       <div class="maint-row" v-if="maint.recycle_enabled"><label>Cron</label><el-input v-model="maint.recycle_cron" size="small" placeholder="0 4 * * 0" style="max-width:160px"/></div>
       <div class="maint-row"><label>安全密钥</label><el-input v-model="maint.recycle_password" type="password" show-password size="small" maxlength="6" placeholder="6 位数字" style="max-width:160px"/></div>
-      <div class="button-row"><el-button type="danger" plain size="small" :loading="clearBusy" :disabled="!configured" @click="doClear">立即清空回收站</el-button></div>
+      <p v-if="passwordDirty" class="hint">安全密钥已修改，请先保存定时设置，再清空回收站。</p><div class="button-row"><el-button type="danger" plain size="small" :loading="clearBusy" :disabled="!configured||!maintLoaded||passwordDirty" @click="doClear">立即清空回收站</el-button></div>
     </div>
   </div>
 </section>

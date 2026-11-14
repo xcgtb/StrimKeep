@@ -35,7 +35,7 @@ const resource=ref({base_url:'',token:''}),resourceConfigured=ref(false)
 async function loadResource(){try{const r=await props.api('/explore/resource-config');resource.value.base_url=r.base_url||'';resource.value.token='';resourceConfigured.value=!!r.token_configured;loaded.value.resource=true}catch(e){loaded.value.resource=false;error.value=(e as Error).message}}
 async function saveResource(){await run(async()=>{requireLoaded('resource');const r=await props.api('/explore/resource-config','PUT',resource.value);resource.value.token='';resourceConfigured.value=!!r.token_configured;ElMessage.success('资源来源已保存')})}
 async function clearResource(){await run(async()=>{requireLoaded('resource');const r=await props.api('/explore/resource-config','PUT',{base_url:resource.value.base_url,clear_token:true});resource.value.token='';resourceConfigured.value=!!r.token_configured;ElMessage.success('已清除本地令牌')})}
-watch(tab,value=>{if(value==='resource')void loadResource();if(value==='telegram'){void loadTransferBot();void loadBotCommands()}})
+watch(tab,value=>{if(value==='resource'&&!loaded.value.resource)void loadResource();if(value==='telegram'){if(!transferBotAll.value)void loadTransferBot();if(!loaded.value.commands)void loadBotCommands()}})
 watch(()=>route.query.section,value=>{if(value==='resource'||value==='telegram')tab.value=value})
 watch(()=>props.tab,value=>{if(value)tab.value=value})
 onMounted(()=>{if(tab.value==='resource')void loadResource();run(async()=>{
