@@ -14,14 +14,16 @@ const settingsBaseline=ref('')
 const monitorDirty=computed(()=>!!settingsBaseline.value&&JSON.stringify(settings.value)!==settingsBaseline.value)
 // U07：状态由登记表驱动（分页完整返回），不再从路径文字推断；整理进入持久化任务。
 const tab=ref<'pending'|'library'|'revoked'>('pending')
+const pageSection=ref<'library'|'add'|'settings'>('library')
 const rows=ref<any[]>([]),total=ref(0),offset=ref(0),limit=ref(50),query=ref('')
 let refreshSequence=0
 const watchJob=ref<number|null>(null),watchTimer=ref<number|null>(null)
+const watchError=ref('')
 
 async function run(fn:()=>Promise<void>){if(busy.value)return;busy.value=true;error.value='';try{await fn()}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
 
 async function loadSettings(updateOwn=true){try{const r=await props.api('/share/settings');if(updateOwn){settings.value={auto_organize:r.auto_organize,share_check_hours:r.share_check_hours??0,share_check_mode:r.share_check_mode??'interval',share_check_cron:r.share_check_cron??'0 3 * * *',share_prune_cron:r.share_prune_cron??'0 5 * * *'};settingsBaseline.value=JSON.stringify(settings.value)}}catch(e){if(updateOwn)error.value='分享监控设置读取失败：'+(e as Error).message}}
-async function saveSettings(){await run(async()=>{await props.api('/share/settings','POST',settings.value);settingsBaseline.value=JSON.stringify(settings.value);ElMessage.success('监控设置已保存')})}
+async function saveSettings(){await run(async()=>{const r=await props.api('/share/settings','POST',settings.value);settings.value={auto_organize:r.auto_organize,share_check_hours:r.share_check_hours,share_check_mode:r.share_check_mode,share_check_cron:r.share_check_cron,share_prune_cron:r.share_prune_cron};settingsBaseline.value=JSON.stringify(settings.value);ElMessage.success('监控设置已保存')})}
 const checkMessage=ref('')
 async function checkShares(){
   try{await ElMessageBox.confirm('将检查已登记的分享 STRM；确认失效且归属可核实的条目会撤销，并清理对应的本地 STRM 及附属文件。网络错误或状态不明确的条目会保留。','立即检查分享存活',{type:'warning',confirmButtonText:'开始检查',cancelButtonText:'取消'})}catch{return}
@@ -39,7 +41,7 @@ async function generate(){
     const r=await props.api('/share/generate','POST',{
       share_code:parsed.value.share_code,receive_code:parsed.value.receive_code,files})
     ElMessage.success(`已生成 ${r.count} 个 STRM 到待整理${r.skip_count?`，跳过 ${r.skip_count} 个已存在`:''}`)
-    parsed.value=null;shareText.value='';tab.value='pending';await doRefresh(0)
+    parsed.value=null;shareText.value='';tab.value='pending';pageSection.value='library';await doRefresh(0)
   })
 }
 async function organize(){
@@ -49,7 +51,8 @@ async function organize(){
     watchJob.value=r.job_id
     startWatching()
   })
-}async function pruneOrphans(){
+}
+async function pruneOrphans(){
   try{await ElMessageBox.confirm('把文件已经不在的记录标成撤销，不影响影视库里还能播的条目。','清理孤儿记录',{confirmButtonText:'清理',cancelButtonText:'取消'})}catch{return}
   await run(async()=>{const r:any=await props.api('/share/strms/prune','POST');ElMessage.success(r.message||'已清理');await doRefresh(0)})
 }
@@ -63,12 +66,13 @@ async function watch(){
   try{
     const r=await props.api('/organize/jobs/'+watchJob.value)
     const job=r.job||r
-    if(['completed','partial','needs_review','cancelled','waiting_login'].includes(job.state)){
+    watchError.value=''
+    if(['completed','partial','needs_review','cancelled'].includes(job.state)){
       stopWatching();watchJob.value=null
       ElMessage({message:'分享整理任务已结束：'+(job.message||job.stage||job.state),type:job.state==='completed'?'success':'warning'})
       await doRefresh(0)
     }
-  }catch{stopWatching();watchJob.value=null}
+  }catch{watchError.value='暂时无法读取任务状态，稍后会自动重试；也可到任务中心查看。'}
 }
 function stopWatching(){if(watchTimer.value){window.clearInterval(watchTimer.value);watchTimer.value=null}}
 async function revoke(id:string){
@@ -94,19 +98,23 @@ async function canLeave(){if(profileEditor.value&&!await profileEditor.value.can
 defineExpose({canLeave})
 </script>
 <template>
-<div class="page-heading"><div><h1>分享 STRM</h1><p class="muted">从 115 分享链接直接生成 STRM；整理规则与分享监控在页面底部，默认收起。</p></div></div>
+<div class="page-heading"><div><h1>分享 STRM</h1><p class="muted">用 115 分享链接生成 STRM，整理后加入分享影视库。</p></div></div>
 <el-alert v-if="error" :title="error" type="error" show-icon class="global-error"/>
-<el-alert v-if="watchJob" :title="`整理任务 #${watchJob} 进行中，完成后自动刷新列表`" type="info" :closable="false" class="global-error"/>
+<el-alert v-if="watchJob" :title="`整理任务 #${watchJob} 已提交，结束后自动刷新列表；详细状态请查看任务中心。`" type="info" :closable="false" class="global-error"/>
+<el-alert v-if="watchError" :title="watchError" type="warning" :closable="false" class="global-error"/>
+<div class="share-intro"><strong>免转存分享入库</strong><p>解析 115 分享 → 选择视频并生成 STRM → 整理到分享影视库。原分享失效后对应链接将无法播放。</p></div>
+<nav class="share-page-tabs" aria-label="分享 STRM 页面分组"><button v-for="item in [{id:'library',label:'分享列表'},{id:'add',label:'添加分享'},{id:'settings',label:'整理与监控'}]" :key="item.id" type="button" :class="{active:pageSection===item.id}" :aria-pressed="pageSection===item.id" @click="pageSection=item.id as typeof pageSection">{{item.label}}</button></nav>
+<div v-show="pageSection==='add'" class="share-page-group">
 
 
-<section class="panel share-parse" v-if="!parsed"><h2>解析分享链接</h2>
+<section class="panel share-parse" v-if="!parsed"><div class="share-block-heading"><div><h2>添加 115 分享</h2><p>先解析分享，再选择要生成 STRM 的视频。</p></div><span class="share-step">1 / 2</span></div>
 <el-form label-position="top"><el-form-item label="分享链接（可含提取码）">
 <el-input v-model="shareText" :disabled="busy" placeholder="https://115.com/s/xxxxx?password=yyyy" @keydown.enter="parse"/></el-form-item></el-form>
 <el-button type="primary" :disabled="busy||!shareText.trim()" @click="parse" style="margin-top:8px">解析链接</el-button>
 </section>
 
 <section class="panel" v-if="parsed">
-<div class="section-title"><h2>分享内容（{{parsed.video_count}} 个视频）</h2><el-button text @click="parsed=null">← 重新输入</el-button></div>
+<div class="share-block-heading"><div><h2>选择视频</h2><p>共 {{parsed.video_count}} 个视频；生成后进入待整理列表。</p></div><span class="share-step">2 / 2</span></div><el-button text @click="parsed=null">← 修改分享链接</el-button>
 <div class="filter-row" style="margin-bottom:12px">
 <el-button size="small" @click="toggleAll">{{selected.size===parsed.videos.length?'全不选':'全选'}}</el-button>
 <el-button type="primary" size="small" :disabled="busy||!selected.size" @click="generate">生成 {{selected.size}} 个 STRM</el-button>
@@ -119,14 +127,16 @@ defineExpose({canLeave})
 </div>
 </section>
 
+</div>
+<div v-show="pageSection==='library'" class="share-page-group">
 <section class="panel" >
-<div class="library-heading"><div><h2>分享内容</h2><p>管理生成的 STRM</p></div><span class="library-count">{{total}} 项</span></div>
+<div class="library-heading"><div><h2>分享列表</h2><p>查看待整理、已入库和已撤销的分享 STRM。</p></div><el-button type="primary" @click="pageSection='add'">添加分享</el-button></div>
 <div class="section-title share-actions">
 <button v-for="(label,t) in tabLabels" :key="t" class="library-tab" :class="{active:tab===t}" type="button" @click="switchTab(t)">{{label}}</button>
 <el-input v-model="query" size="small" placeholder="搜索名称/分享码" style="max-width:200px" clearable @change="refreshAt(0)"/>
-<el-button v-if="tab==='pending'" type="primary" size="small" :disabled="busy||!rows.length" @click="organize">整理 → 后台任务</el-button><el-button size="small" :disabled="busy" @click="pruneOrphans" title="文件已不存在的记录标撤销">清理孤儿记录</el-button>
+<el-button v-if="tab==='pending'" type="primary" size="small" :disabled="busy||!rows.length" @click="organize">整理待整理内容</el-button>
 </div>
-<el-empty v-if="!rows.length" description="没有条目" :image-size="65"/>
+<el-empty v-if="!rows.length" :description="tab==='pending'?'没有待整理的分享 STRM':tab==='library'?'分享影视库暂无条目':'没有已撤销条目'" :image-size="65"/>
 <div class="share-list library-list">
 <div v-for="s in rows" :key="s.id" class="share-card" :class="{revoked:s.revoked}">
 <div class="share-card-main">
@@ -142,17 +152,25 @@ defineExpose({canLeave})
 <el-pagination layout="prev, pager, next" :total="total" :page-size="limit" :current-page="offset/limit+1"
   @current-change="(p:number)=>refreshAt((p-1)*limit)"/>
 </div>
+<details class="share-maintenance"><summary>列表维护</summary><p class="hint">将本地文件已不存在的登记标记为撤销；不会删除仍在播放的条目。</p><el-button size="small" :disabled="busy" @click="pruneOrphans">清理失效登记</el-button></details>
 </section>
-<section class="panel">
+</div>
+<div v-show="pageSection==='settings'" class="share-page-group">
+<section class="panel share-rules-panel">
 <ShareProfile ref="profileEditor" :api="api"/>
-<div class="monitor-section"><div class="monitor-heading"><div><h2>分享监控</h2><p>控制自动整理和存活检测</p></div><el-button :disabled="busy||!monitorDirty" @click="saveSettings">保存</el-button></div>
-<div class="monitor-row"><div><strong>自动整理</strong><p>监控发现新文件后，加入整理任务。</p></div><el-switch v-model="settings.auto_organize"/></div>
+</section>
+<section class="panel share-monitor-panel">
+<div class="monitor-section"><div class="monitor-heading"><div><h2>分享监控</h2><p>设置新内容处理、台账核对和存活检测。</p></div><el-button :disabled="busy||!monitorDirty" @click="saveSettings">保存</el-button></div>
+<div class="monitor-row"><div><strong>新内容立即整理</strong><p>影响影视探索接入及分享监控发现的新内容；待整理目录另有后台周期扫描。</p></div><el-switch v-model="settings.auto_organize"/></div>
 <div class="monitor-row"><div><strong>台账核对</strong><p>按 cron 清理「文件已不存在」的分享 STRM 记录，默认每天凌晨 5 点。</p></div><div class="monitor-input"><el-input v-model="settings.share_prune_cron" size="small" style="width:132px" placeholder="0 5 * * *"/><span>分 时 日 月 周</span></div></div><div class="monitor-row"><div><strong>存活检测</strong><p>{{settings.share_check_mode==='cron'?'按 Cron 表达式检查分享，只在明确失效时撤销。':(settings.share_check_hours>0?`每 ${settings.share_check_hours} 小时检查一次分享。`:'填 0 则关闭存活检测。')}}</p></div><div class="monitor-input"><el-radio-group v-model="settings.share_check_mode" size="small"><el-radio-button value="interval">间隔</el-radio-button><el-radio-button value="cron">Cron</el-radio-button></el-radio-group><template v-if="settings.share_check_mode==='interval'"><el-input-number v-model="settings.share_check_hours" :min="0" :max="8760" :step="1" size="small"/><span>小时</span></template><template v-else><el-input v-model="settings.share_check_cron" size="small" style="width:132px" placeholder="0 3 * * *"/><span>分 时 日 月 周</span></template></div></div></div>
 <div class="button-row"><el-button :loading="busy" @click="checkShares">立即检查分享存活</el-button><span v-if="checkMessage" class="hint">{{checkMessage}}</span></div>
 </section>
+</div>
 
 </template>
 <style scoped>
+.share-intro{padding:16px 18px;margin-bottom:14px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}.share-intro strong{font-size:15px}.share-intro p,.share-block-heading p{font-size:12px;color:var(--muted);line-height:1.6;margin:6px 0 0}.share-page-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}.share-page-tabs button{border:1px solid var(--line);border-radius:9px;background:var(--surface);padding:9px 15px;color:var(--muted);font-size:13px;cursor:pointer}.share-page-tabs button.active{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--surface));color:var(--accent);font-weight:650}.share-block-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:18px}.share-block-heading h2{margin:0;font-size:16px}.share-step{flex:none;font-size:12px;color:var(--muted)}.share-maintenance{margin-top:16px;padding-top:14px;border-top:1px solid var(--line);font-size:13px}.share-maintenance summary{cursor:pointer;color:var(--muted)}.share-monitor-panel .monitor-section{margin:0;padding:0;border:0}@media(max-width:640px){.share-page-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}.share-page-tabs button{padding:9px 4px;font-size:12px}.share-intro{padding:13px}.monitor-row{align-items:flex-start;flex-wrap:wrap}.monitor-input{flex-wrap:wrap}}
+
 .share-list{display:grid;gap:10px;min-width:0}
 .share-card{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--surface-soft);min-width:0}
 .share-card.pick{cursor:pointer;display:flex;align-items:center;gap:10px}

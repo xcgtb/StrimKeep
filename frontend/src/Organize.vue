@@ -20,6 +20,7 @@ const emit=defineEmits<{navigate:[page:string]}>()
 const config=ref<any>({video_extensions:['.avi','.m2ts','.m4v','.mkv','.mov','.mp4','.ts','.webm'],subtitle_extensions:['.ass','.idx','.srt','.ssa','.sub','.sup','.vtt'],min_video_size_mb:0,recycle_small_videos:false,ignore_keywords:[],rename_enabled:true,folder_language:'zh',filename_language:'zh',ffprobe_enabled:true,probe_prefetch:true,probe_concurrency:2,identify_prefetch:true,classify_enabled:true,wash_enabled:true,children_enabled:true,concert_enabled:true,region_enabled:true,year_enabled:false,cleanup_empty_enabled:true,source_cids:[] as string[],archive_cid:'',pending_cid:'',directory_labels:{} as Record<string,string>,retries:1,retry_interval:2,strm_delay:1.5,notify_emby:true})
 const schedule=ref<ScheduleDraft>(scheduleDraft({},'scan')),baseline=ref(''),scheduleBaseline=ref(''),ready=ref(false),configured=ref(false)
 const picker=ref(''),busy=ref(false),error=ref(''),query=ref(''),nextDue=ref<number>(),latest=ref<any>(null),policySummary=ref('正在读取洗版规则'),ruleEditor=ref<any>(null)
+const section=ref<'start'|'rules'|'advanced'>('start')
 
 const dirty=computed(()=>ready.value&&(JSON.stringify(config.value)!==baseline.value||scheduleIdentity(schedule.value,'scan')!==scheduleBaseline.value))
 const label=(id:string)=>config.value.directory_labels[id]||id
@@ -40,18 +41,25 @@ useVisiblePolling(async()=>{if(!busy.value)await refreshJob()},5000)
 <div class="workflow-page">
 <WorkflowToolbar v-model:query="query" title="影视整理" :dirty="dirty" :busy="busy" :ready="ready" @save="save"/>
 <el-alert v-if="error" :title="error" type="error" show-icon class="global-error"/>
-<SettingCard title="整理执行" description="手动执行与定时扫描都在这里。" :summary="schedule.enabled?`定时已开启 · ${schedule.mode==='cron'?schedule.cron:'每 '+schedule.minutes+' 分钟'}`:'定时已关闭 · 可手动执行'" :icon="VideoPlay" :query="query" keywords="立即扫描 自动 定时 任务 间隔" :default-open="false">
+<div class="organize-intro"><div><strong>从待整理目录入库</strong><p>扫描网盘目录，识别并归档视频，随后生成 STRM。先选目录，再设置规则和定时；洗版优先级在对应面板单独保存。</p></div></div>
+<nav class="organize-tabs" aria-label="影视整理设置分组"><button v-for="item in [{id:'start',label:'开始与目录'},{id:'rules',label:'文件与命名'},{id:'advanced',label:'洗版与联动'}]" :key="item.id" type="button" :class="{active:section===item.id}" :aria-pressed="section===item.id" @click="section=item.id as typeof section">{{item.label}}</button></nav>
+<p v-if="query" class="search-caption">正在搜索全部分组，清空后返回当前分组。</p>
+<div v-show="section==='start'||!!query.trim()" class="organize-group">
+<SettingCard title="整理执行" description="手动执行与定时扫描都在这里。" :summary="schedule.enabled?`定时已开启 · ${schedule.mode==='cron'?schedule.cron:'每 '+schedule.minutes+' 分钟'}`:'定时已关闭 · 可手动执行'" :icon="VideoPlay" :query="query" keywords="立即扫描 自动 定时 任务 间隔" :default-open="true">
 <div class="execution-row"><div><strong>扫描 → 识别 → 归档 → 生成 STRM</strong><p>按保存的目录和洗版规则执行，任务依次排队。</p></div><el-button type="primary" :icon="VideoPlay" :disabled="busy||!ready||!configured||dirty" @click="start">立即整理</el-button></div>
 <p v-if="dirty" class="inline-notice">请先保存修改，再开始整理。</p><p v-else-if="ready&&!configured" class="inline-notice">先在下方选择目录，再点击顶部保存修改。</p>
-<AutomationSettings v-model="schedule" kind="scan" :busy="busy" :next-due="nextDue" :waiting="schedule.mode==='interval'&&['queued','running','waiting_login'].includes(latest?.state)"/>
+<details class="organize-schedule"><summary><span><strong>定时整理</strong><small>{{schedule.enabled?'已开启':'已关闭，仍可手动整理'}}</small></span><span>设置</span></summary><AutomationSettings v-model="schedule" kind="scan" :busy="busy" :next-due="nextDue" :waiting="schedule.mode==='interval'&&['queued','running','waiting_login'].includes(latest?.state)"/></details>
 <div v-if="latest" class="task-peek"><span>最近任务 #{{latest.id}}</span><strong>{{taskPresentation(latest).title}}</strong><el-button text type="primary" @click="emit('navigate','tasks')">查看任务进度 →</el-button></div>
 </SettingCard>
-<SettingCard title="扫描来源与归档目录" description="选择从哪里整理，以及整理后存到哪里。" :summary="`${config.source_cids.length} 个待整理目录 · ${config.archive_cid?'已选归档目录':'待选择归档目录'}`" :icon="FolderOpened" :query="query" keywords="来源 源目录 目标 分类 115" :default-open="false">
+<SettingCard title="扫描来源与归档目录" description="选择从哪里整理，以及整理后存到哪里。" :summary="`${config.source_cids.length} 个待整理目录 · ${config.archive_cid?'已选归档目录':'待选择归档目录'}`" :icon="FolderOpened" :query="query" keywords="来源 源目录 目标 分类 115" :default-open="true">
 <div class="directory-group"><h3>待整理目录 <small>可选择多个</small></h3><div v-for="id in config.source_cids" :key="id" class="directory-item"><el-icon><FolderOpened/></el-icon><span>{{label(id)}}</span><el-button text :disabled="busy" @click="config.source_cids=config.source_cids.filter((x:string)=>x!==id)">移除</el-button></div><el-button :disabled="busy" @click="picker='source'">添加待整理目录</el-button></div>
 <div class="directory-group"><h3>归档根目录 <small>只选择一个</small></h3><p class="selected-directory">{{config.archive_cid?label(config.archive_cid):'尚未选择'}}</p><el-button :disabled="busy" @click="picker='archive'">选择归档目录</el-button></div>
 <p class="compact-note">待整理、归档和已配置的未识别目录须相互独立，不能相同或互相包含。</p>
 </SettingCard>
 <SettingCard title="未识别目录（可选）" description="识别失败时保留原目录与附属文件，整体分流。" :summary="config.pending_cid?label(config.pending_cid):'未配置，整理失败原位保留'" :icon="FolderOpened" :query="query" keywords="未识别 失败 歧义 待处理" :default-open="false"><p class="selected-directory">{{config.pending_cid?label(config.pending_cid):'尚未选择'}}</p><el-button :disabled="busy" @click="picker='pending'">选择未识别目录</el-button><el-button v-if="config.pending_cid" :disabled="busy" @click="config.pending_cid=''">清除选择</el-button><p class="hint">未配置时：失败文件原位保留，不改名、不移动。配置后：保留原目录层级、视频及附属文件，整体移入此目录；同名冲突原位保留。来源根目录中的散装视频保留原名转入。</p></SettingCard>
+</div>
+<div v-show="section==='rules'||!!query.trim()" class="organize-group">
+<div v-if="!query" class="organize-group-title"><strong>文件与命名</strong><p>控制处理哪些文件、如何命名和分类。</p></div>
 <SettingCard title="需要处理的文件类型" description="显示、添加或移除参与整理的视频和字幕扩展名。" :icon="Setting" :query="query" keywords="扩展名 视频 字幕 ISO 格式 过滤" :default-open="false">
 <ExtensionEditor v-model="config.video_extensions" label="视频扩展名" :presets="VIDEO_PRESETS" :max-items="40" :excluded="config.subtitle_extensions" :disabled="busy"/>
 <ExtensionEditor v-model="config.subtitle_extensions" label="字幕扩展名" :presets="SUBTITLE_PRESETS" :allowed="SUBTITLE_PRESETS" :max-items="20" :excluded="config.video_extensions" :disabled="busy"/>
@@ -89,15 +97,20 @@ useVisiblePolling(async()=>{if(!busy.value)await refreshJob()},5000)
 <SettingCard title="清理开关" description="只影响本任务关联的处理范围；洗版在「洗版与多版本」里选。" :icon="Refresh" :query="query" keywords="清理 空目录 洗版 开关 删除" :default-open="false">
 <div class="workflow-switch-row"><div><strong>整理后清理关联空目录</strong><p>保留扫描根、含媒体或未知文件的目录；不删除忽略的视频。</p></div><el-switch v-model="config.cleanup_empty_enabled" :disabled="busy"/></div>
 </SettingCard>
+</div>
+<div v-show="section==='advanced'||!!query.trim()" class="organize-group">
+<div v-if="!query" class="organize-group-title"><strong>洗版与联动</strong><p>控制版本选择、Emby 通知和输出路径。</p></div>
 <SettingCard title="洗版与多版本" description="设置同片、同集的处理方式和九项比较顺序。" :summary="policySummary" :icon="Refresh" :query="query" keywords="发布组 资源类型 分辨率 动态范围 帧率 色深 音频 编码 大小 杜比" :default-open="false"><p class="hint">发布组、资源类型、分辨率、动态范围、帧率、色深、音频、编码、文件大小；可选择杜比视界与非杜比视界分别保留。</p><div class="workflow-switch-row"><div><strong>目标文件同名且优先级无差异时回收新文件</strong><p>开启后保留目标文件，将本次新文件移入 115 回收站；关闭后转入待处理。此开关需点击页面顶部“保存修改”。</p></div><el-switch v-model="config.discard_inferior" :disabled="busy"/></div><div class="inline-rules"><Upgrade ref="ruleEditor" :api="api"/></div></SettingCard>
 <SettingCard title="STRM 与 Emby 通知" description="整理成功后生成 STRM、同步绑定字幕。" :summary="config.notify_emby?'有成功输出后通知 Emby 并检查入库':'自动通知 Emby 已关闭'" :icon="Bell" :query="query" keywords="联动 入库 字幕 Emby STRM" :default-open="false"><div class="workflow-switch-row"><div><strong>整理后通知 Emby 入库</strong><p>按本批文件路径通知 Emby；核对超时只刷新命中的目标库。</p></div><el-switch v-model="config.notify_emby" :disabled="busy" aria-label="整理后通知 Emby"/></div><p class="hint">本地输出包含 STRM 和绑定字幕；NFO 与图片可在「STRM 管理」设置生成，也可由 Emby 管理。下方映射用于发送准确的 Emby 入库路径。</p><el-button :disabled="busy" @click="emit('navigate','connections')">配置 Emby 与播放地址</el-button></SettingCard>
 <SettingCard title="整理联动" description="整理完成后，按设置的延迟生成 STRM。" :icon="Setting" :query="query" keywords="联动 延迟 STRM FFprobe 缓存" :default-open="false"><div class="workflow-field-row"><label>生成 STRM 延迟（秒）</label><el-input-number v-model="config.strm_delay" :min="0" :max="60" :step="0.5" :precision="1" :disabled="busy" aria-label="生成 STRM 延迟（秒）"/></div><p class="hint">支持 1.5 秒等小数值。直接扫描待整理目录，读取当前作品目录比较版本，复用已有探测信息。</p></SettingCard>
-<p v-if="query" class="search-caption">仅显示匹配的设置卡片；清空搜索可查看全部。</p>
-<section class="panel"><h2>Emby 路径映射</h2><EmbyMapping :api="api"/></section>
+<section v-show="!query || /emby|路径|映射/i.test(query)" class="panel"><h2>Emby 路径映射</h2><EmbyMapping :api="api"/></section>
+</div>
 <DirectoryPicker v-if="picker" :api="api" @select="picked" @close="picker=''"/>
 </div>
 </template>
 <style scoped>
+.organize-intro{margin:0 0 14px;padding:16px 18px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}.organize-intro strong{font-size:15px}.organize-intro p,.organize-group-title p{margin:6px 0 0;color:var(--muted);font-size:12px;line-height:1.6}.organize-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}.organize-tabs button{border:1px solid var(--line);border-radius:9px;background:var(--surface);padding:9px 15px;color:var(--muted);font-size:13px;cursor:pointer}.organize-tabs button.active{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--surface));color:var(--accent);font-weight:650}.organize-group-title{padding:4px 2px 14px}.organize-group-title strong{font-size:15px}.organize-schedule{margin:16px 0;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface-soft)}.organize-schedule>summary{cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:12px}.organize-schedule>summary strong,.organize-schedule>summary small{display:block}.organize-schedule>summary small{margin-top:4px;color:var(--muted)}.organize-schedule>summary>span:last-child{color:var(--accent);font-size:12px}@media(max-width:640px){.organize-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}.organize-tabs button{padding:9px 4px;font-size:12px}.organize-intro{padding:13px}}
+
 .ext-row{align-items:flex-start}
 .ext-chips{display:flex;flex-wrap:wrap;gap:6px;min-width:0}
 .ext-chips :deep(.el-check-tag){font-size:12px;padding:5px 10px;border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
