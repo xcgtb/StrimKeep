@@ -515,6 +515,10 @@ class ChannelMonitor:
             group = [url for url in urls if url.lower().startswith(prefix)]
             if not group:
                 continue
+            # 免转存模式只接入分享 STRM；旧目录或分流配置不能意外触发离线下载。
+            if rule['share_mode'] == 'strm':
+                skipped_offline.extend(group)
+                continue
             if route_cid:
                 cid, label = route_cid, route_label
             else:
@@ -526,8 +530,9 @@ class ChannelMonitor:
             else:
                 skipped_offline.extend(group)
         if skipped_offline:
-            self.store.event('channel', '频道 %s：磁力或 ED2K 未设置目录，已跳过 %d 个链接。'
-                             % (title or name, len(skipped_offline)))
+            reason = '免转存模式不处理磁力或 ED2K' if rule['share_mode'] == 'strm' else '磁力或 ED2K 未设置目录'
+            self.store.event('channel', '频道 %s：%s，已跳过 %d 个链接。'
+                             % (title or name, reason, len(skipped_offline)))
         try:
             found = parse_shares(text)
         except ValueError:

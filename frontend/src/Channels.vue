@@ -199,15 +199,15 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
     <p v-else-if="c.share_cid" class="directory-status">已列为待整理目录</p>
    </div>
   </div>
-  <div class="channel-section">
+  <div v-if="c.share_mode==='transfer'" class="channel-section">
    <div v-for="kind in ['magnet','ed2k']" :key="kind" class="directory-block">
     <div class="directory-block-heading"><div><strong>{{kind==='magnet'?'磁力':'ED2K'}}离线目录</strong><p>留空则不提交该类型的离线链接</p></div><div class="button-row"><el-button :disabled="busy" @click="pick(c.name,-1,kind)">{{c[kind+'_cid']?'更换目录':'选择目录'}}</el-button><el-button v-if="c[kind+'_cid']" text :disabled="busy" @click="toggleOffline(c,kind,false)">清除</el-button></div></div>
     <div class="directory-path" :class="{empty:!c[kind+'_cid']}"><span>115</span><strong>{{c[kind+'_label']||c[kind+'_cid']||'尚未选择目录'}}</strong></div>
    </div>
   </div>
-  <div class="channel-section">
+  <div v-if="c.share_mode==='transfer'" class="channel-section">
    <div class="routing-block">
-    <div class="routing-heading"><div><strong>关键词分流</strong><p>帖子命中规则时，分享转存及磁力 / ED2K 使用该目录；分享 STRM 不受影响。</p></div><el-button :disabled="busy||c.routes.length>=20" @click="addRoute(c)">添加分流</el-button></div>
+    <div class="routing-heading"><div><strong>关键词分流</strong><p>帖子命中规则时，分享转存及磁力 / ED2K 使用该目录。</p></div><el-button :disabled="busy||c.routes.length>=20" @click="addRoute(c)">添加分流</el-button></div>
     <div v-for="(r,ri) in c.routes" :key="ri" class="route-card">
      <div class="route-header"><strong>分流 {{Number(ri)+1}}</strong><el-button text type="danger" :disabled="busy" @click="dropRoute(c,ri)">删除</el-button></div>
      <label :for="`channel-route-${c.name}-${ri}`">匹配关键词</label>
@@ -222,6 +222,7 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
    <p class="hint">控制分享转存和磁力 / ED2K 离线；关闭时由「影视整理」手动或定时扫描处理。分享 STRM 的自动整理在「分享 STRM → 分享监控」设置。</p>
    </div>
   </div>
+  <p v-else class="hint">免转存模式只处理 115 分享链接；磁力和 ED2K 不会生成分享 STRM，也不会提交离线下载。</p>
 
 
   <div class="channel-section">
