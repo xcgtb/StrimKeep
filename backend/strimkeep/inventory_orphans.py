@@ -10,9 +10,16 @@ import secrets
 from pathlib import Path, PurePosixPath
 
 from .fsops import SIDECAR_EXT
+from .media import KNOWN_VIDEOS
 
 MEDIA_DIR = re.compile(r'(?i)\{tmdb-[1-9]\d*\}')
 MAX_ITEMS = 1000
+
+
+class ProtectedContent(ValueError):
+    def __init__(self, name, ordinary):
+        super().__init__('存在媒体、未知文件、软链接或特殊文件：' + name)
+        self.ordinary = ordinary
 
 
 def _sig(st):
@@ -59,7 +66,7 @@ def inventory(root, relative, allowed_roots):
             elif stat.S_ISREG(st.st_mode) and p.suffix.lower() in SIDECAR_EXT:
                 entries[p.relative_to(base).as_posix()] = {'kind': 'file', 'signature': _sig(st)}
             else:
-                raise ValueError('存在媒体、未知文件、软链接或特殊文件：' + p.name)
+                raise ProtectedContent(p.name, stat.S_ISREG(st.st_mode) and p.suffix.lower() in (KNOWN_VIDEOS | {'.strm'}))
         if _sig(path.lstat()) != _sig(before):
             raise ValueError('扫描时目录发生变化')
     visit(base, 0)
@@ -102,9 +109,9 @@ def scan(root, allowed_roots):
     if len(set(allowed_roots)) != len(allowed_roots): raise ValueError('库根重复')
     hits, skipped_items = [], []
 
-    def note(relative, side, reason, detail=''):
+    def note(relative, side, reason, detail='', attention=True):
         skipped_items.append({'path': relative, 'side': side, 'reason': reason,
-                              'detail': str(detail)[:200]})
+                              'detail': str(detail)[:200], 'attention':attention})
 
     for name in allowed_roots:
         if not name or name in ('.', '..') or '/' in name or '\\' in name:
@@ -128,7 +135,8 @@ def scan(root, allowed_roots):
                 note(relative, side, 'unreadable', exc)
                 continue
             except ValueError as exc:
-                note(relative, side, _skip_reason(str(exc)), exc)
+                note(relative, side, _skip_reason(str(exc)), exc,
+                     not (isinstance(exc, ProtectedContent) and exc.ordinary))
                 continue
             hits.append({'path': relative, 'side': 'share' if name == '分享影视库' else 'cloud',
                          'files': sum(x['kind'] == 'file' for x in entries.values()),
@@ -139,9 +147,11 @@ def scan(root, allowed_roots):
     reasons = {}
     for item in skipped_items:
         reasons[item['reason']] = reasons.get(item['reason'], 0) + 1
+    attention_items = [item for item in skipped_items if item['attention']]
     return {'items': hits, 'skipped': len(skipped_items),
             'skipped_items': skipped_items[:500], 'reasons': reasons,
-            'skipped_truncated': max(0, len(skipped_items) - 500)}
+            'skipped_truncated': max(0, len(skipped_items) - 500),
+            'attention_count': len(attention_items), 'attention_items': attention_items[:200]}
 
 
 def _open_dir(root, relative):

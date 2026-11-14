@@ -118,6 +118,21 @@ def test_duplicate_cloud_paths_are_not_offered(tmp_path):
         cloud.nodes['600']={'id':'600','parent_id':'200','name':'作品 (2024) {tmdb-1}','is_dir':True}
         result=await scan(engine,'100','1','媒体库')
         assert not result['items'] and not cloud.writes
+        assert result['attention_count'] == 2
+        store.close()
+    asyncio.run(run())
+
+
+def test_cloud_scan_hides_normal_videos_but_reports_unknown_files(tmp_path):
+    async def run():
+        store,cloud,engine=setup(tmp_path)
+        cloud.nodes['402']={'id':'402','parent_id':'300','name':'video.mkv','is_dir':False,'size':30,'sha1':'123'}
+        result=await scan(engine,'100','1','媒体库')
+        assert not result['items'] and result['attention_count']==0
+        cloud.nodes['402']['name']='unknown.bin'
+        result=await scan(engine,'100','1','媒体库')
+        assert not result['items'] and result['attention_count']==1
+        assert 'unknown.bin' in result['attention_items'][0]['reason'] and not cloud.writes
         store.close()
     asyncio.run(run())
 

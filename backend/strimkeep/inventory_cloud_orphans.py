@@ -6,8 +6,8 @@ import time
 from pathlib import Path
 
 from .cloud115 import CloudError, fatal, unescape_115_charref
-from .inventory_orphans import MEDIA_DIR, inventory
-from .media import METADATA, SUBTITLES
+from .inventory_orphans import MEDIA_DIR, ProtectedContent, inventory
+from .media import KNOWN_VIDEOS, METADATA, SUBTITLES
 from .recycle import match_record
 
 ALLOWED = METADATA | SUBTITLES | {'.json', '.bif'}
@@ -121,15 +121,23 @@ async def scan(engine, archive, account, library):
         if owner(cid) == cid:
             root_paths.setdefault(folder_key(cid), []).append(cid)
     ambiguous = {cid for values in root_paths.values() if len(values) > 1 for cid in values}
-    blocked=set()
+    blocked=set(); unknown={}
     for item in files:
         candidate=owner(str(item.get('parent_id') or ''))
-        if candidate and Path(str(item.get('name') or '')).suffix.lower() not in ALLOWED:
+        name = str(item.get('name') or '')
+        suffix = Path(name).suffix.lower()
+        if candidate and suffix not in ALLOWED:
             blocked.add(candidate)
+            if suffix not in KNOWN_VIDEOS:
+                unknown.setdefault(candidate, name)
     # Only outermost work directories; inner folders are included in their parent.
     candidates=[cid for cid in roots if owner(cid)==cid and cid not in blocked and cid not in ambiguous]
     if len(candidates) > MAX_CANDIDATES: raise ValueError('候选超过 1000 个，请缩小网盘归档范围')
     items=[]; skipped=[]
+    attention = [{'id':cid, 'path':' / '.join(folder_key(cid)), 'reason':'存在未知文件：'+name[:160]}
+                 for cid,name in unknown.items()]
+    attention += [{'id':cid, 'path':' / '.join(folder_key(cid)), 'reason':'存在同名作品目录，无法确定对应关系'}
+                  for cid in ambiguous]
     for cid in sorted(candidates):
         try:
             snapshot, _ = await inspect(cloud, archive, cid)
@@ -143,7 +151,11 @@ async def scan(engine, archive, account, library):
         except (ValueError, CloudError, OSError) as exc:
             if fatal(exc): raise
             skipped.append({'id':cid, 'reason':str(exc)[:180]})
-    return {'items':items, 'skipped':len(blocked | ambiguous)+len(skipped), 'skipped_items':skipped[:100]}
+            if not ((isinstance(exc, ProtectedContent) and exc.ordinary)
+                    or str(exc) == '本地对应目录仍有网盘源文件登记，已保留'):
+                attention.append({'id':cid, 'path':' / '.join(folder_key(cid)), 'reason':str(exc)[:180]})
+    return {'items':items, 'skipped':len(blocked | ambiguous)+len(skipped), 'skipped_items':skipped[:100],
+            'attention_count':len(attention), 'attention_items':attention[:200]}
 
 
 async def confirm(cloud, source, intent):

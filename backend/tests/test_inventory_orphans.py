@@ -43,6 +43,17 @@ def test_live_video_unknown_and_changed_directory_are_never_removed(tmp_path):
     assert (work / 'poster.jpg').exists() and (work / 'user.bin').exists()
 
 
+def test_scan_only_reports_unusual_protected_content_for_review(tmp_path):
+    root, work, season = setup_tree(tmp_path)
+    video = season / 'new.strm'; video.write_text('link')
+    result = scan(root, ['cloud', '分享影视库'])
+    assert result['skipped'] == 1 and result['attention_count'] == 0
+    video.unlink()
+    (season / 'unknown.bin').write_bytes(b'other')
+    result = scan(root, ['cloud', '分享影视库'])
+    assert result['attention_count'] == 1 and result['attention_items'][0]['path'].endswith('Example {tmdb-42}')
+
+
 def test_symlink_and_library_escape_are_rejected(tmp_path):
     root, work, season = setup_tree(tmp_path)
     (season / 'link.nfo').symlink_to(tmp_path / 'outside')
