@@ -2,7 +2,7 @@
 import {computed,ref,onMounted,onUnmounted} from 'vue'
 import {ElMessage,ElMessageBox} from 'element-plus'
 import {useRoute} from 'vue-router'
-import CloudTreePicker from './CloudTreePicker.vue'
+import DirectoryPicker from './DirectoryPicker.vue'
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>()
 const emit=defineEmits<{navigate:[page:string]}>()
 const route=useRoute()
@@ -58,7 +58,7 @@ function pick(channel:any,index:number|string=-1,kind='share'){
  routeIndex.value=Number(index)
  pickKind.value=kind
 }
-function toggleOffline(c:any,kind:string,on:boolean){if(on){if(!c[kind+'_cid'])pick(c.name,-1,kind)}else{c[kind+'_cid']='';c[kind+'_label']=''}}
+function toggleOffline(c:any,kind:string,on:boolean){if(on){if(!c[kind+'_cid'])pick(c,-1,kind)}else{c[kind+'_cid']='';c[kind+'_label']=''}}
 function picked(folder:any){
  const c=pickerChannel.value||config.value.channels.find((x:any)=>x.name===picker.value)
  if(c){
@@ -262,7 +262,7 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
  </el-form>
  <template #footer><div class="button-row"><el-button @click="renameOpen=false">取消</el-button><el-button type="primary" :loading="busy" @click="confirmRename">改</el-button></div></template>
 </el-dialog>
-<CloudTreePicker v-if="picker" :api="api" @select="picked" @close="picker=''"/>
+<DirectoryPicker v-if="picker" :api="api" @select="picked" @close="picker=''"/>
 </template>
 <style scoped>
 .channel-card{border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-top:12px;background:var(--surface)}

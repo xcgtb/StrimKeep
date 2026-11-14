@@ -23,7 +23,7 @@ onMounted(() => load())
 onUnmounted(()=>sequence++)
 </script>
 <template>
-  <el-dialog :model-value="true" title="选择 115 文件夹" width="700px" @close="emit('close')">
+  <el-dialog :model-value="true" title="选择 115 文件夹" width="min(700px, 94vw)" append-to-body @close="emit('close')">
     <el-alert v-if="error" :title="error" type="error" />
     <nav class="cloud-breadcrumbs" aria-label="当前目录"><template v-for="(folder,i) in path" :key="folder.id"><span v-if="i" class="cloud-path-divider" aria-hidden="true">/</span><button :aria-current="i===path.length-1?'location':undefined" @click="load(folder.id,undefined,i)">{{folder.name}}</button></template></nav>
     <div class="cloud-list-toolbar"><el-button :disabled="loading||path.length<2" @click="load(path[path.length-2].id,undefined,path.length-2)">返回上级</el-button><span class="muted">选择文件夹后确认</span></div>
