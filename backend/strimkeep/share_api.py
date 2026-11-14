@@ -141,7 +141,10 @@ def install_share(app, store, admin):
 
     @app.post('/api/v1/share/settings', dependencies=[Depends(admin)])
     async def set_settings(body: ShareSettingsInput):
+        previous = store.get('share_settings', {}) or {}
         changes={'share_settings':body.model_dump(exclude={'share_scan_minutes'}),'share_prune_cron':body.share_prune_cron,'share_prune_due':0}
+        if any(previous.get(k) != getattr(body, k) for k in ('share_check_mode', 'share_check_hours', 'share_check_cron')):
+            changes['share_check_due'] = 0
         if body.share_scan_minutes is not None: changes['share_scan_minutes']=body.share_scan_minutes
         store.set_many(changes)
         return await get_settings()
@@ -402,6 +405,18 @@ def install_share(app, store, admin):
         return await _scan_watchlist()
 
     # ===== STRM 存活检测 =====
+
+    @app.get('/api/v1/share/check', dependencies=[Depends(admin)])
+    async def share_check_status():
+        engine = app.state.organizer
+        task = getattr(engine, '_share_check_task', None)
+        running = bool(task and not task.done())
+        history = store.meta_json('share_check_history', []) or []
+        last = store.meta_json('share_check_last', {}) or None
+        if not history and last:
+            history = [{**last, 'total': last.get('alive', 0) + last.get('dead', 0) + last.get('skipped', 0), 'legacy': True, 'details': []}]
+        return {'running': running, 'progress': getattr(engine, '_share_check_progress', None) if running else None,
+                'next_at': store.get('share_check_due') or 0, 'history': history}
 
     @app.post('/api/v1/share/check', dependencies=[Depends(admin)])
     async def check_alive():

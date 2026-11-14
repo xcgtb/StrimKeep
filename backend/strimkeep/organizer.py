@@ -621,7 +621,14 @@ class Organizer:
                 raise
             except Exception as exc:
                 self.store.event('share_check', '存活检测未完成：%s' % str(exc)[:120])
-                return None
+                progress = getattr(self, '_share_check_progress', {}) or {}
+                history = self.store.meta_json('share_check_history', []) or []
+                failure = {'at': time.time(), 'started_at': progress.get('started_at'),
+                           'total': progress.get('total', 0), 'processed': progress.get('processed', 0),
+                           'alive': progress.get('alive', 0), 'dead': progress.get('dead', 0),
+                           'skipped': progress.get('skipped', 0), 'failed': True, 'details': []}
+                self.store.set_meta('share_check_history', ([failure] + history)[:20])
+                return {'failed': True, 'message': '检测未完成，请查看实时日志。'}
 
         task = asyncio.create_task(run())
         self._share_check_task = task

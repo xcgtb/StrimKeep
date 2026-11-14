@@ -306,3 +306,22 @@ def test_share_check_records_failure_without_repeating_due_job(tmp_path, monkeyp
         assert event and '检测服务不可用' in event[0]
         store.close()
     asyncio.run(run())
+
+
+def test_share_check_status_returns_legacy_summary_and_reschedules_edits(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from strimkeep.main import create_app
+    monkeypatch.setenv('ADMIN_USERNAME', 'admin')
+    monkeypatch.setenv('ADMIN_PASSWORD', 'test-password-1234')
+    app = create_app(tmp_path / 'data', tmp_path / 'strm')
+    with TestClient(app) as c:
+        login = c.post('/api/v1/auth/login', json={'username':'admin','password':'test-password-1234'})
+        c.headers['X-CSRF-Token'] = login.json()['csrf']
+        store = app.state.store
+        store.set_meta('share_check_last', {'at':1234,'alive':5,'dead':1,'skipped':2})
+        status = c.get('/api/v1/share/check').json()
+        assert status['history'][0]['legacy'] and status['history'][0]['total'] == 8
+        store.set_many({'share_settings':{'share_check_hours':24,'share_check_mode':'interval','share_check_cron':'0 3 * * *'}, 'share_check_due':9999999999})
+        response = c.post('/api/v1/share/settings', json={'share_check_hours':12,'share_check_mode':'interval'})
+        assert response.status_code == 200
+        assert store.get('share_check_due') == 0

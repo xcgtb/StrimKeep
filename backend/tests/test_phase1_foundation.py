@@ -192,6 +192,11 @@ def test_share_check_alive_skips_unknown_errors_and_only_retires_proven_shares(t
         result = c.post('/api/v1/share/check').json()
         # 只有明确分享失效证据的条目被撤销；限流/登录/接口变化/未知全部跳过。
         assert result['dead_count'] == 1 and result['skipped'] == 3 and result['alive'] == 1
+        report = c.get('/api/v1/share/check').json()['history'][0]
+        assert report['total'] == 5 and report['alive'] == 1 and report['dead'] == 1 and report['skipped'] == 3
+        assert {item['id'] for item in report['details']} == {'s1', 's2', 's3', 's4'}
+        assert next(item for item in report['details'] if item['id'] == 's2')['reason'] == '115 登录失效'
+        assert 'recv' not in str(report) and 'code123' not in str(report)
         store = c.app.state.store
         states = {r['id']: r['revoked'] for r in store.db.execute('SELECT id,revoked FROM share_strms')}
         assert states == {'s1': 0, 's2': 0, 's3': 0, 's4': 1, 's5': 0}

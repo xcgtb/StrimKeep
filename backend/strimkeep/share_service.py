@@ -1271,9 +1271,17 @@ async def check_alive(engine):
     from .internal_delete import remember, recent
     store, root = engine.store, engine.root
     rows = store.db.execute(
-        'SELECT id, share_code, receive_code, file_id, strm_path FROM share_strms WHERE revoked=0').fetchall()
-    dead, alive, skipped = [], 0, 0
+        'SELECT id, name, share_code, receive_code, file_id, strm_path FROM share_strms WHERE revoked=0').fetchall()
+    dead, alive, skipped, details = [], 0, 0, []
+    started = time.time()
+    engine._share_check_progress = {'started_at': started, 'total': len(rows), 'processed': 0, 'alive': 0, 'dead': 0, 'skipped': 0}
+
+    def detail(row, status, reason):
+        if len(details) < 200:
+            details.append({'id': row['id'], 'name': row['name'] or '', 'path': row['strm_path'] or '', 'status': status, 'reason': reason})
+
     for row in rows:
+        engine._share_check_progress.update(processed=alive + len(dead) + skipped, alive=alive, dead=len(dead), skipped=skipped)
         try:
             await engine.cloud.share_url_download(
                 row['file_id'], row['share_code'], row['receive_code'], 'StrimKeep/0.6')
@@ -1281,6 +1289,8 @@ async def check_alive(engine):
         except CloudError as exc:
             if not share_is_dead(exc):
                 skipped += 1
+                reasons = {'LOGIN_INVALID': '115 登录失效', 'LOGIN_REQUIRED': '115 未登录', 'RATE_LIMITED': '115 请求受限', 'CLOUD_REJECTED': '115 拒绝请求，无法确认分享状态', 'OBJECT_NOT_FOUND': '接口或对象未找到，无法确认分享状态'}
+                detail(row, 'unknown', reasons.get(exc.code, '115 请求失败，无法确认分享状态'))
                 continue
             # Check the live row under the publication lock after the network
             # wait: a concurrent organiser may have changed or moved it.
@@ -1291,10 +1301,12 @@ async def check_alive(engine):
                 fields = ('id', 'share_code', 'receive_code', 'file_id', 'strm_path')
                 if not current or current['revoked'] or any(current[k] != row[k] for k in fields):
                     skipped += 1
+                    detail(row, 'unknown', '检查期间条目发生变化，已保留')
                     continue
                 path = _verified_share_strm(root, current['strm_path'], current['id'])
                 if path is None:
                     skipped += 1
+                    detail(row, 'unknown', '本地 STRM 归属无法确认，已保留')
                     store.event('share_check', '失效分享的本地文件归属无法确认，已保留并跳过。')
                     continue
                 # Remove the STRM and its own sidecars; the directory-level
@@ -1303,10 +1315,12 @@ async def check_alive(engine):
                     remember(store, [current['strm_path']])
                     if current['strm_path'] not in recent(store):
                         skipped += 1
+                        detail(row, 'unknown', '未能记录清理操作，已保留')
                         continue
                     purge_strm(path, root, store=store)
                 except (OSError, RuntimeError):
                     skipped += 1
+                    detail(row, 'unknown', '清理本地文件失败，请检查日志及权限')
                     continue
                 with store.db:
                     changed = store.db.execute(
@@ -1319,17 +1333,26 @@ async def check_alive(engine):
                             (current['strm_path'],))
                 if changed != 1:
                     skipped += 1
+                    detail(row, 'unknown', '条目状态已变化，请重新检查')
                     continue
-                dead.append({'id': row['id'], 'name': '', 'strm_path': row['strm_path']})
+                dead.append({'id': row['id'], 'name': row['name'] or '', 'strm_path': row['strm_path']})
+                detail(row, 'dead', '115 确认分享或文件不可用，本地文件已清理')
         except Exception:
             skipped += 1
+            detail(row, 'unknown', '请求异常，无法确认分享状态')
             continue
-    if dead:
-        store.event('share_check', '存活检测：%d 个分享 STRM 失效已清理，%d 个正常，%d 个暂时无法判定已跳过。' % (len(dead), alive, skipped))
-    elif skipped:
-        store.event('share_check', '存活检测：全部 %d 个暂时无法判定（登录/限流/网络或文件状态变化），未做任何撤销。' % skipped)
-    store.set_meta('share_check_last', {'at': time.time(), 'alive': alive,
-                                        'dead': len(dead), 'skipped': skipped})
+    finished = time.time()
+    report = {'at': finished, 'started_at': started, 'total': len(rows), 'alive': alive,
+              'dead': len(dead), 'skipped': skipped, 'details': details,
+              'details_truncated': max(0, len(dead) + skipped - len(details))}
+    history = store.meta_json('share_check_history', []) or []
+    previous = store.meta_json('share_check_last', {}) or {}
+    if not history and previous.get('at'):
+        history = [{**previous, 'total': sum(previous.get(k, 0) for k in ('alive', 'dead', 'skipped')), 'legacy': True, 'details': []}]
+    store.set_meta('share_check_history', ([report] + history)[:20])
+    store.set_meta('share_check_last', {'at': finished, 'alive': alive, 'dead': len(dead), 'skipped': skipped})
+    engine._share_check_progress.update(processed=len(rows), alive=alive, dead=len(dead), skipped=skipped)
+    store.event('share_check', '存活检测完成：正常 %d 条，失效已清理 %d 条，无法判定 %d 条。' % (alive, len(dead), skipped))
     return {'alive': alive, 'dead': dead, 'dead_count': len(dead), 'skipped': skipped}
 
 
