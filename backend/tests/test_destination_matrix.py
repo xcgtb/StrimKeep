@@ -59,6 +59,48 @@ def test_bot_mixed_links_use_independent_destinations(tmp_path):
     asyncio.run(run())
 
 
+def test_bot_offline_uses_shared_keyword_routes_and_bot_fallback(tmp_path):
+    from strimkeep.store import Store
+    async def run():
+        store=Store(tmp_path/'data','admin','test-password-1234')
+        store.set_many({'offline_config':{
+            'directories_v2':True,'bot_magnet_cid':'100','bot_ed2k_cid':'200',
+            'target_cid':'300','magnet_routes':[{'keywords':'4k','target_cid':'400','target_label':'磁力分流'}],
+            'ed2k_routes':[{'keywords':'4k','target_cid':'500','target_label':'电驴分流'}]}})
+        calls=[]
+        class Offline:
+            async def submit(self,urls,cid,label,organize=False,origin='web'):
+                calls.append((urls,cid,label,origin))
+                return len(calls)
+        notices=Notices()
+        bot=TelegramBot(SimpleNamespace(store=store,http=None,offline=Offline(),notifications=notices))
+        config={'allowed_user_id':'42'}
+        await bot.handle(update(1,'4K magnet:?xt=urn:btih:abc ed2k://one'),config,'bot1')
+        await bot.handle(update(2,'ordinary magnet:?xt=urn:btih:def ed2k://two'),config,'bot1')
+        await bot.handle(update(3,'/offline 4K https://example.com/video.mp4'),config,'bot1')
+        assert [(c[1],c[2]) for c in calls]==[('400','磁力分流'),('500','电驴分流'),('100','100'),('200','200'),('300','300')]
+        assert all(c[3]=='bot' for c in calls)
+        assert '磁力分流' in notices.items[0][0][2] and '电驴分流' in notices.items[0][0][2]
+        store.close()
+    asyncio.run(run())
+
+
+def test_bot_keyword_route_works_without_default_directory(tmp_path):
+    from strimkeep.store import Store
+    async def run():
+        store=Store(tmp_path/'data','admin','test-password-1234')
+        store.set_many({'offline_config':{'directories_v2':True,'bot_magnet_cid':'',
+                       'magnet_routes':[{'keywords':'movie','target_cid':'400','target_label':'分流'}]}})
+        calls=[]
+        class Offline:
+            async def submit(self,urls,cid,label,organize=False,origin='web'): calls.append(cid); return 1
+        bot=TelegramBot(SimpleNamespace(store=store,http=None,offline=Offline(),notifications=Notices()))
+        await bot.handle(update(1,'movie magnet:?xt=urn:btih:abc'),{'allowed_user_id':'42'},'bot1')
+        assert calls==['400']
+        store.close()
+    asyncio.run(run())
+
+
 def test_bot_share_uses_its_own_directory_and_rejects_old_save_command(tmp_path):
     from strimkeep.store import Store
     async def run():

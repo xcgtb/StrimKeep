@@ -5,7 +5,7 @@ import json
 import re
 import time
 from .cloud115 import CloudError
-from .offline_api import links_in, directory_config, OFFLINE_MAX_LINKS
+from .offline_api import links_in, directory_config, route_target, OFFLINE_MAX_LINKS
 from .transfer import LINK, shares as parse_shares
 from . import share_service
 from .message_templates import transfer_received, cloud_sign_notice
@@ -299,6 +299,9 @@ class TelegramBot:
             if not group:continue
             target_cid=cfg.get(kind+'_cid') or ''
             label=cfg.get(kind+'_label') or target_cid
+            if kind in ('bot_magnet','bot_ed2k'):
+                routes=cfg.get(('magnet' if kind=='bot_magnet' else 'ed2k')+'_routes')
+                target_cid,label=route_target(routes,text,target_cid,label)
             if not target_cid:
                 results.append(f'⚠️ {title}未提交：尚未选择目录。');continue
             try:

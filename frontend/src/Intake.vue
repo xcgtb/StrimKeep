@@ -2,6 +2,7 @@
 import {useVisiblePolling} from './pageActivity'
 import {ref,onMounted,onUnmounted,computed} from 'vue'
 import {ElMessage,ElMessageBox} from 'element-plus'
+import {Operation,Connection} from '@element-plus/icons-vue'
 import {useRoute} from 'vue-router'
 import TransferDirectories from './TransferDirectories.vue'
 import DirectoryPicker from './DirectoryPicker.vue'
@@ -111,12 +112,12 @@ useVisiblePolling(async()=>{if(!busy.value)await refresh()},5000)
 <div class="page-heading"><div><h1>资源入库</h1><p class="muted">分享链接走转存，磁力 / ED2K / 直链走离线下载；各自选择目录，并决定落盘后是否立即整理。</p></div></div>
 <el-alert v-if="error" :title="error" type="error" show-icon class="global-error"/>
 
-<section class="panel intake-entry"><el-input v-model="intakeText" type="textarea" :rows="7" :disabled="busy" placeholder="粘贴任意链接：115 分享 / magnet:?xt=... / ed2k://|file|... / https://...
+<section class="panel intake-entry"><el-input v-model="intakeText" type="textarea" :rows="5" :disabled="busy" placeholder="粘贴任意链接：115 分享 / magnet:?xt=... / ed2k://|file|... / https://...
 可以混着贴，系统会按类型分别入库。" aria-label="入库链接"/><p class="hint">分享 → 转存目录；磁力 / ED2K / 直链 → 各自的离线目录。落盘后是否立即整理由下面的「落盘后处理」决定。</p><div class="button-row"><el-button type="primary" :disabled="busy||!ready||!intakeText.trim()" @click="submitAll">提交</el-button></div></section>
 
 
 <TransferDirectories ref="directoryEditor" :api="api" :disabled="dirty||busy||!ready" :hide-channel="true" @saved="destinationsSaved" @navigate="page=>emit('navigate',page)"/>
-<details class="panel intake-options offline-advanced"><summary><strong>落盘后处理 <span v-if="dirty" class="unsaved">未保存</span></strong><span>Web 与机器人分开设置</span></summary>
+<details class="panel intake-options offline-advanced"><summary><div class="intake-heading-copy"><span class="intake-heading-icon"><el-icon><Operation/></el-icon></span><div><strong>落盘后处理 <span v-if="dirty" class="unsaved">未保存</span></strong><p>Web 与机器人分开设置</p></div></div><span class="intake-expand" aria-hidden="true"></span></summary>
 <div class="settings-content">
 <p class="hint">开关关闭：落盘成功即结束，要不要整理由「影视整理」的手动/定时扫描决定。开关打开：落盘完成立即入队本批整理，但目标目录必须在待整理范围内。</p>
 <div class="post-table">
@@ -129,12 +130,12 @@ useVisiblePolling(async()=>{if(!busy.value)await refresh()},5000)
 <div class="button-row"><el-button type="primary" :disabled="busy||!ready||!dirty" @click="save">保存设置</el-button><el-button :disabled="busy" @click="emit('navigate','system')">配置 Telegram 通知</el-button></div>
 </div></details>
 
-<details class="panel offline-advanced"><summary><strong>离线下载目录与分流</strong><span>直链目录和关键词分流</span></summary>
+<details class="panel offline-advanced"><summary><div class="intake-heading-copy"><span class="intake-heading-icon"><el-icon><Connection/></el-icon></span><div><strong>离线下载目录与分流</strong><p>设置直链目录和关键词分流</p></div></div><span class="intake-expand" aria-hidden="true"></span></summary>
 <p class="hint">HTTP、HTTPS 和 FTP 直链使用单独目录；磁力和 ED2K 的默认目录在上方“保存目录”设置。</p>
 <div class="offline-destination"><div><strong>直链保存目录</strong><p>{{offline.target_label||offline.target_cid||'未设置，直链无法提交'}}</p></div><div class="button-row"><el-button :disabled="busy" @click="pickerKind='target'">选择目录</el-button><el-button v-if="offline.target_cid" text :disabled="busy" @click="offline.target_cid='';offline.target_label=''">清除</el-button></div></div>
 <div v-for="kind in ['magnet','ed2k']" :key="kind" class="offline-routes">
  <h3>{{kind==='magnet'?'磁力':'ED2K'}}关键词分流</h3>
- <p class="hint">网页提交的文本命中关键词时使用对应目录；未命中使用默认目录。机器人使用自己的默认目录，不应用这里的分流。每次提交的同类链接共用一个匹配结果。</p>
+ <p class="hint">网页和机器人提交的文本命中关键词时使用对应目录；未命中时使用各自的默认目录。每次提交的同类链接共用一个匹配结果。</p>
  <div v-for="(item,index) in ensureRoutes(kind)" :key="index" class="offline-route">
   <div class="offline-route-head"><strong>规则 {{Number(index)+1}}</strong><el-button text type="danger" :disabled="busy" @click="dropRoute(kind,index)">删除</el-button></div>
   <el-input v-model="item.keywords" :disabled="busy" placeholder="关键词，英文逗号分隔"/>
@@ -155,7 +156,7 @@ useVisiblePolling(async()=>{if(!busy.value)await refresh()},5000)
 </template>
 
 <style scoped>
-.intake-entry :deep(.el-textarea__inner){min-height:130px;padding:14px 16px;background:var(--surface-soft);box-shadow:0 0 0 1px var(--line) inset}
+.intake-entry :deep(.el-textarea__inner){min-height:110px;padding:14px 16px;background:var(--surface-soft);box-shadow:0 0 0 1px var(--line) inset}
 .intake-tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
 .intake-tabs button{border:1px solid var(--line);background:transparent;color:var(--muted);padding:8px 14px;border-radius:8px;font-size:13px;cursor:pointer}
 .intake-tabs button.active{color:var(--accent);border-color:var(--accent);font-weight:600}
@@ -181,5 +182,6 @@ useVisiblePolling(async()=>{if(!busy.value)await refresh()},5000)
 .post-row.post-head{background:transparent;padding:0 12px;font-size:12px;color:var(--muted)}
 .post-row strong{font-size:13px}
 .offline-advanced>summary{display:flex;justify-content:space-between;gap:12px;align-items:center;cursor:pointer}.offline-advanced>summary span{font-size:12px;color:var(--muted)}.offline-destination,.offline-route-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.offline-destination{padding:12px 0;border-top:1px solid var(--line)}.offline-destination p{color:var(--muted);font-size:12px;margin:6px 0}.offline-routes{padding:8px 0 16px;border-top:1px solid var(--line)}.offline-routes h3{font-size:14px}.offline-route{display:grid;gap:8px;padding:12px;margin:8px 0;border:1px solid var(--line);border-radius:8px}.offline-route-head span{min-width:0;overflow-wrap:anywhere;color:var(--muted);font-size:12px}
+.offline-advanced>summary{list-style:none}.offline-advanced>summary::-webkit-details-marker{display:none}.intake-heading-copy{display:flex;align-items:center;gap:12px;min-width:0}.offline-advanced>summary .intake-heading-icon{display:grid;place-items:center;width:38px;height:38px;flex:none;border-radius:11px;background:var(--surface-soft);color:var(--accent);font-size:19px}.intake-heading-copy strong{font-size:16px}.intake-heading-copy p{margin:5px 0 0;color:var(--muted);font-size:12px;line-height:1.5}.intake-expand:before{content:'展开'}.offline-advanced[open] .intake-expand:before{content:'收起'}
 @media(max-width:760px){.history-row{align-items:flex-start;flex-wrap:wrap}.history-main{flex-basis:65%}.history-main strong,.history-main span{white-space:normal;overflow-wrap:anywhere;line-height:1.5}}
 </style>
