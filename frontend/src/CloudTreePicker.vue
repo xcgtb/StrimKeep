@@ -26,7 +26,7 @@ function pick(data:any,node:any){
 }
 </script>
 <template>
-<el-dialog :model-value="true" title="选择 115 文件夹" width="620px" @close="emit('close')">
+<el-dialog :model-value="true" title="选择 115 文件夹" width="620px" append-to-body @close="emit('close')">
   <p class="hint" style="margin-top:0">展开目录树，点中一个文件夹再确认；可以选任意目录，包括不在待整理里的。</p>
   <el-tree lazy :load="loadNode" node-key="id" :props="{label:'name',isLeaf:'leaf'}" highlight-current
            @node-click="pick" class="tree-box"/>

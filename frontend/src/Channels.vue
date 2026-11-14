@@ -51,17 +51,23 @@ async function confirmRename(){
   })
 }
 const pickKind=ref('share')
-function pick(name:string,index:number|string=-1,kind='share'){picker.value=name;routeIndex.value=Number(index);pickKind.value=kind}
+const pickerChannel=ref<any>(null)
+function pick(channel:any,index:number|string=-1,kind='share'){
+ picker.value=channel?.name||'channel'
+ pickerChannel.value=channel||null
+ routeIndex.value=Number(index)
+ pickKind.value=kind
+}
 function toggleOffline(c:any,kind:string,on:boolean){if(on){if(!c[kind+'_cid'])pick(c.name,-1,kind)}else{c[kind+'_cid']='';c[kind+'_label']=''}}
 function picked(folder:any){
- const c=config.value.channels.find((x:any)=>x.name===picker.value)
+ const c=pickerChannel.value||config.value.channels.find((x:any)=>x.name===picker.value)
  if(c){
   const route=c.routes[routeIndex.value]
   if(routeIndex.value>=0&&route){route.target_cid=folder.id;route.target_label=folder.name}
   else if(pickKind.value==='magnet'||pickKind.value==='ed2k'){c[pickKind.value+'_cid']=folder.id;c[pickKind.value+'_label']=folder.name}
   else{c.share_cid=folder.id;c.share_label=folder.name}
  }
- picker.value='';routeIndex.value=-1
+ picker.value='';pickerChannel.value=null;routeIndex.value=-1
 }
 function addRoute(c:any){c.routes.push({keywords:'',target_cid:'',target_label:''})}
 function dropRoute(c:any,index:number|string){c.routes.splice(Number(index),1)}
@@ -75,12 +81,15 @@ async function save(){const missing=config.value.channels.filter((c:any)=>c.shar
 async function check(){await run(async()=>{const data=await props.api('/channels/check','POST');absorb(data);ElMessage.success('已检查 '+data.checked+' 个频道，新入队 '+data.queued+' 个')})}
 const tg=ref<any>({logged_in:false,phone:'',api_id:''}),tgOpen=ref(false),tgStep=ref('form'),tgBusy=ref(false)
 const tgForm=ref({api_id:'',api_hash:'',phone:'',code:'',password:''}),tgChannels=ref<any[]>([])
+// 会话列表很长：读出来后可以一键收起，不用一直占着整屏。
+const tgCollapsed=ref(false)
 async function loadTelegram(){try{const r=await props.api('/telegram/session');tg.value=r.session}catch{}}
 async function loadTelegramChannels(){
   tgBusy.value=true
   try{
     const r:any=await props.api('/telegram/session/dialogs')
     tgChannels.value=r.items||[]
+    tgCollapsed.value=false
     if(tgChannels.value.length)ElMessage.success('读到 '+tgChannels.value.length+' 个会话')
     else ElMessage.warning('会话里没有频道、群组或机器人，先在 Telegram 里加入一个再读')
   }catch(e){
@@ -123,8 +132,9 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
 <div v-if="tgChannels.length" class="tg-tools">
  <el-input v-model="tgQuery" size="small" clearable placeholder="搜索频道名或 id" style="max-width:260px"/>
  <span class="hint">{{tgFiltered.length}} / {{tgChannels.length}} 个</span>
+ <el-button size="small" text style="margin-left:auto" @click="tgCollapsed=!tgCollapsed">{{tgCollapsed?'展开列表':'收起列表'}}</el-button>
 </div>
-<div v-if="tgChannels.length" class="tg-list">
+<div v-if="tgChannels.length&&!tgCollapsed" class="tg-list">
  <div v-for="ch in tgFiltered" :key="ch.id" class="tg-item">
   <div class="tg-item-main"><strong :title="ch.title||ch.id">{{ch.title||ch.id}}</strong><span class="tg-meta">{{kindLabel(ch)}} · {{ch.id}}</span></div>
   <el-button size="small" :disabled="busy||added(ch)" @click="addFromTelegram(ch)">{{added(ch)?'已添加':'添加'}}</el-button>
@@ -201,7 +211,7 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
     <div class="directory-block-heading"><div><strong>转存目录</strong><p>分享链接默认保存到这里</p></div></div>
     <div class="directory-pick-row">
      <div class="directory-path" :class="{empty:!c.share_cid}"><span>115</span><strong>{{c.share_label||c.share_cid||'尚未选择目录'}}</strong></div>
-     <div class="button-row"><el-button :disabled="busy" @click="pick(c.name,-1,'share')">{{c.share_cid?'更换目录':'选择目录'}}</el-button></div>
+     <div class="button-row"><el-button :disabled="busy" @click="pick(c,-1,'share')">{{c.share_cid?'更换目录':'选择目录'}}</el-button></div>
     </div>
     <p v-if="notSource(c.share_cid)" class="directory-status warning">未直接列为待整理目录，请核对整理范围</p>
     <p v-else-if="c.share_cid" class="directory-status">已列为待整理目录</p>
@@ -212,7 +222,7 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
     <div class="directory-block-heading"><div><strong>{{kind==='magnet'?'磁力':'ED2K'}}离线目录</strong><p>留空则不提交该类型的离线链接</p></div></div>
     <div class="directory-pick-row">
      <div class="directory-path" :class="{empty:!c[kind+'_cid']}"><span>115</span><strong>{{c[kind+'_label']||c[kind+'_cid']||'尚未选择目录'}}</strong></div>
-     <div class="button-row"><el-button :disabled="busy" @click="pick(c.name,-1,kind)">{{c[kind+'_cid']?'更换目录':'选择目录'}}</el-button><el-button v-if="c[kind+'_cid']" text :disabled="busy" @click="toggleOffline(c,kind,false)">清除</el-button></div>
+     <div class="button-row"><el-button :disabled="busy" @click="pick(c,-1,kind)">{{c[kind+'_cid']?'更换目录':'选择目录'}}</el-button><el-button v-if="c[kind+'_cid']" text :disabled="busy" @click="toggleOffline(c,kind,false)">清除</el-button></div>
     </div>
    </div>
   </div>
@@ -223,7 +233,7 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
      <div class="route-header"><strong>分流 {{Number(ri)+1}}</strong><el-button text type="danger" :disabled="busy" @click="dropRoute(c,ri)">删除</el-button></div>
      <label :for="`channel-route-${c.name}-${ri}`">匹配关键词</label>
      <el-input :id="`channel-route-${c.name}-${ri}`" v-model="r.keywords" placeholder="用逗号分隔，例如 国配,国语" :disabled="busy"/>
-     <div class="route-destination"><div class="route-path" :class="{empty:!r.target_cid}"><span>115</span><strong>{{r.target_label||r.target_cid||'尚未选择目录'}}</strong></div><el-button :disabled="busy" @click="pick(c.name,ri)">{{r.target_cid?'更换目录':'选择目录'}}</el-button></div>
+     <div class="route-destination"><div class="route-path" :class="{empty:!r.target_cid}"><span>115</span><strong>{{r.target_label||r.target_cid||'尚未选择目录'}}</strong></div><el-button :disabled="busy" @click="pick(c,ri)">{{r.target_cid?'更换目录':'选择目录'}}</el-button></div>
     </div>
     <p v-if="!c.routes.length" class="route-empty">尚未设置分流，按各类型的默认目录处理。</p>
     <div class="routing-actions"><el-button :disabled="busy||c.routes.length>=20" @click="addRoute(c)">添加分流</el-button></div>
