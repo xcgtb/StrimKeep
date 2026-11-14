@@ -800,8 +800,11 @@ class Organizer:
     async def share_scan_tick(self):
         """分享 STRM 待整理目录的定时整理，对齐每 5 分钟一轮的分享整理循环。
 
-        share_scan_minutes：0 关闭，默认 5。空目录不产生任务，避免把任务历史刷满。
+        自动整理总开关关闭时不扫描；间隔为 0 时只关闭补漏扫描。
+        空目录不产生任务，避免把任务历史刷满。
         """
+        if not (self.store.get('share_settings', {}) or {}).get('auto_organize', True):
+            return
         raw = self.store.get('share_scan_minutes')
         minutes = 5.0 if raw in (None, '') else float(raw)
         if minutes <= 0:

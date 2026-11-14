@@ -591,7 +591,7 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize); if(orp
      <el-button :loading="statusBusy" @click="compareAll">对照全部剧集</el-button>
     </div>
     <div class="mapping-filter-row"><span class="mapping-filter-label">类型</span><el-radio-group v-model="kindFilter"><el-radio-button value="all">全部</el-radio-button><el-radio-button value="tv">剧集</el-radio-button><el-radio-button value="movie">电影</el-radio-button></el-radio-group></div><div class="mapping-filter-row"><span class="mapping-filter-label">片库</span><el-radio-group v-model="scopeFilter"><el-radio-button value="all">全部</el-radio-button><el-radio-button value="cloud">网盘库</el-radio-button><el-radio-button value="share">分享库</el-radio-button><el-radio-button value="both">双库</el-radio-button></el-radio-group></div>
-    <div class="mapping-filter-row"><span class="mapping-filter-label">目录分类</span><el-select v-model="categoryFilter" style="width:210px" placeholder="全部分类" clearable><el-option label="全部分类" value="all" /><el-option v-for="entry in allCategories" :key="entry.name" :label="`${entry.name}（${entry.count}）`" :value="entry.name" /></el-select><span class="mapping-filter-hint">{{ categorySource === 'emby' ? '分类来自 Emby 媒体库（按 TMDB 号匹配）' : 'Emby 未连接或未匹配，暂按目录关键词分类' }}</span></div>
+    <div class="mapping-category-row"><span class="mapping-filter-label">目录分类</span><div class="mapping-status-scroll" tabindex="0" aria-label="目录分类，横向滚动查看更多"><el-radio-group v-model="categoryFilter"><el-radio-button value="all">全部分类</el-radio-button><el-radio-button v-for="entry in allCategories" :key="entry.name" :value="entry.name">{{entry.name}}（{{entry.count}}）</el-radio-button></el-radio-group></div><span class="mapping-filter-hint">{{ categorySource === 'emby' ? '分类来自 Emby 媒体库（按 TMDB 号匹配）' : 'Emby 未连接或未匹配，暂按目录关键词分类' }}</span></div>
     <div class="mapping-status-scroll"><el-radio-group v-model="statusFilter"><el-radio-button value="all">全部状态</el-radio-button><el-radio-button value="missing">缺集</el-radio-button><el-radio-button value="complete">完整</el-radio-button><el-radio-button value="extra">超集</el-radio-button><el-radio-button value="ongoing">在更</el-radio-button><el-radio-button value="pending">待对照</el-radio-button><el-radio-button value="unmatched">未识别</el-radio-button></el-radio-group></div>
    </section>
    <details class="inventory-help mapping-explanation"><summary>状态说明</summary><div class="mapping-legend"><span v-for="entry in STATUS_LEGEND" :key="entry.text" class="mapping-legend-item"><b>{{ entry.text }}</b>{{ entry.hint }}</span></div><p>扫描有问题的作品另标“库存待核实”。</p></details>
@@ -781,7 +781,7 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize); if(orp
 .poster-card.batch-selected .poster-cover::after{content:'✓';position:absolute;right:8px;top:8px;width:22px;height:22px;border-radius:11px;background:var(--el-color-primary);color:#fff;font-size:13px;display:flex;align-items:center;justify-content:center}
 .poster-cover{position:relative}
 
-.mapping-filter-hint{font-size:12px;color:var(--el-text-color-secondary)}
+.mapping-filter-hint{font-size:12px;color:var(--el-text-color-secondary)}.mapping-category-row{display:grid;min-width:0;gap:7px}
 
 .mapping-legend{display:flex;flex-wrap:wrap;gap:6px 18px;margin:4px 0 2px;font-size:12px;color:var(--el-text-color-secondary)}
 .mapping-legend-item b{color:var(--el-text-color-primary);margin-right:6px;font-weight:600}

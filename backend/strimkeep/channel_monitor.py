@@ -635,7 +635,7 @@ class ChannelMonitor:
                 except Exception:
                     self.store.event('channel', '频道 %s：STRM 已生成，但整理入队失败；请到待整理手动执行。' % (title or name))
             else:
-                self.store.event('channel', '频道 %s：生成 %d 条待整理 STRM，等待手动整理或兜底扫描。' % (title or name, created))
+                self.store.event('channel', '频道 %s：生成 %d 条待整理 STRM，自动整理已关闭，等待手动整理。' % (title or name, created))
             if self.config()['notify']:
                 self._notify(name, title, message, queued, 'strm', count=created)
         if pending_error is not None:

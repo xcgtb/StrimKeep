@@ -130,6 +130,28 @@ def test_share_scan_only_enqueues_when_pending_files_exist(tmp_path, monkeypatch
     asyncio.run(run())
 
 
+def test_share_auto_switch_controls_scheduled_scan_and_preserves_interval(tmp_path, monkeypatch):
+    async def run():
+        store = Store(tmp_path / 'data', 'admin', 'test-password-1234')
+        store.set_many({'share_scan_minutes': 10, 'share_settings': {'auto_organize': False}})
+        root = tmp_path / 'strm'
+        pending = root / organizer_module.share_service.PENDING_NAME
+        pending.mkdir(parents=True)
+        (pending / 'a.strm').write_text('x', encoding='utf-8')
+        enqueued = []
+        monkeypatch.setattr(organizer_module.share_service, 'enqueue_pending_organize',
+                            lambda *a, **k: enqueued.append(k['origin']) or 7)
+        engine = SimpleNamespace(store=store, root=root, _share_scanned=0.0)
+        await Organizer.share_scan_tick(engine)
+        assert enqueued == []
+        assert store.get('share_scan_minutes') == 10
+        store.set_many({'share_settings': {'auto_organize': True}})
+        await Organizer.share_scan_tick(engine)
+        assert enqueued == ['schedule']
+        store.close()
+    asyncio.run(run())
+
+
 def test_share_scan_can_be_switched_off(tmp_path, monkeypatch):
     async def run():
         store = Store(tmp_path / 'data', 'admin', 'test-password-1234')

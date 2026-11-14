@@ -48,7 +48,7 @@ useVisiblePolling(async()=>{if(!busy.value)await refreshJob()},5000)
 <SettingCard title="整理执行" description="手动执行与定时扫描都在这里。" :summary="schedule.enabled?`定时已开启 · ${schedule.mode==='cron'?schedule.cron:'每 '+schedule.minutes+' 分钟'}`:'定时已关闭 · 可手动执行'" :icon="VideoPlay" :query="query" keywords="立即扫描 自动 定时 任务 间隔" :default-open="true">
 <div class="execution-row"><div><strong>扫描 → 识别 → 归档 → 生成 STRM</strong><p>按保存的目录和洗版规则执行，任务依次排队。</p></div><el-button type="primary" :icon="VideoPlay" :disabled="busy||!ready||!configured||dirty" @click="start">立即整理</el-button></div>
 <p v-if="dirty" class="inline-notice">请先保存修改，再开始整理。</p><p v-else-if="ready&&!configured" class="inline-notice">先在下方选择目录，再点击顶部保存修改。</p>
-<details class="organize-schedule"><summary><span><strong>定时整理</strong><small>{{schedule.enabled?'已开启':'已关闭，仍可手动整理'}}</small></span><span>设置</span></summary><AutomationSettings v-model="schedule" kind="scan" :busy="busy" :next-due="nextDue" :waiting="schedule.mode==='interval'&&['queued','running','waiting_login'].includes(latest?.state)"/></details>
+<section class="organize-schedule" aria-label="定时整理设置"><AutomationSettings v-model="schedule" kind="scan" :busy="busy" :next-due="nextDue" :waiting="schedule.mode==='interval'&&['queued','running','waiting_login'].includes(latest?.state)"/></section>
 <div v-if="latest" class="task-peek"><span>最近任务 #{{latest.id}}</span><strong>{{taskPresentation(latest).title}}</strong><el-button text type="primary" @click="emit('navigate','tasks')">查看任务进度 →</el-button></div>
 </SettingCard>
 <SettingCard title="扫描来源与归档目录" description="选择从哪里整理，以及整理后存到哪里。" :summary="`${config.source_cids.length} 个待整理目录 · ${config.archive_cid?'已选归档目录':'待选择归档目录'}`" :icon="FolderOpened" :query="query" keywords="来源 源目录 目标 分类 115" :default-open="true">
