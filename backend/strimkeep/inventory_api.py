@@ -100,7 +100,20 @@ class CloudOrphanSelection(BaseModel):
     items: list[CloudOrphanItem] = Field(min_length=1, max_length=100)
 
 
+class OrphanJobItem(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    local: OrphanItem | None = None
+    cloud: CloudOrphanItem | None = None
+
+
+class OrphanJobRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    id: str = Field(pattern=r'^[a-f0-9]{32}$')
+    items: list[OrphanJobItem] = Field(min_length=1, max_length=100)
+
+
 def install_inventory(app, store, admin):
+    orphan_tasks = {}
     mapping_cache = {'at': 0.0, 'snapshot': None, 'refreshing': False, 'generation': 0, 'error': ''}
     mapping_lock = asyncio.Lock()
     MAPPING_TTL = 60.0
@@ -223,8 +236,7 @@ def install_inventory(app, store, admin):
         except (CloudError, ValueError) as exc:
             raise HTTPException(409, f'网盘残留扫描未完成：{exc}') from None
 
-    @app.post('/api/v1/inventory/cloud-orphans/clean', dependencies=[Depends(admin)])
-    async def clean_cloud_orphans(body: CloudOrphanSelection):
+    async def run_cloud_orphans(body: CloudOrphanSelection, progress=None):
         from .cloud115 import CloudError
         from .inventory_cloud_orphans import clean_one as clean_cloud
         engine = app.state.organizer
@@ -240,7 +252,7 @@ def install_inventory(app, store, admin):
                         raise HTTPException(409, '分享整理有未完成的文件操作，请稍后重试。')
                     for item in body.items:
                         try:
-                            row = await clean_cloud(engine, archive, library_root(store.get('organize_config', {}) or {}), item.id, item.fingerprint)
+                            row = await clean_cloud(engine, archive, library_root(store.get('organize_config', {}) or {}), item.id, item.fingerprint, progress)
                         except (CloudError, ValueError, OSError) as exc:
                             row = {'id':item.id, 'path':item.id, 'files_removed':0, 'dirs_removed':0, 'errors':[str(exc)[:200]]}
                         result.append(row)
@@ -249,6 +261,88 @@ def install_inventory(app, store, admin):
         if result:
             store.event('inventory', '网盘残留清理：提交 %d 个目录，完成核查 %d 个。' % (len(body.items), len(result)))
         return {'items':result, 'remaining':len(body.items)-len(result)}
+
+    @app.post('/api/v1/inventory/cloud-orphans/clean', dependencies=[Depends(admin)])
+    async def clean_cloud_orphans(body: CloudOrphanSelection):
+        return await run_cloud_orphans(body)
+
+    def job_key(job_id):
+        return 'orphan-clean-job:' + job_id
+
+    def read_job(job_id):
+        job = store.meta_json(job_key(job_id), None)
+        if job and job['state'] in ('queued', 'running') and job_id not in orphan_tasks:
+            job.update(state='interrupted', error='服务已重启，清理没有自动重试。请核对记录并重新扫描。', finished=time.time())
+            store.set_meta(job_key(job_id), job)
+        return job
+
+    async def run_orphan_job(body, job):
+        def save(**changes):
+            job.update(changes)
+            store.set_meta(job_key(body.id), job)
+        try:
+            save(state='running')
+            for index, item in enumerate(body.items):
+                save(index=index + 1, current={'path': item.local.path if item.local else item.cloud.id,
+                                              'phase':'核对本地残留' if item.local else '核对网盘目录'})
+                if item.local:
+                    local = (await clean_orphans(OrphanSelection(items=[item.local])))['items'][0]
+                    job['results'].append({**local, 'location':'本地'})
+                    save(results=job['results'])
+                    if local.get('errors'):
+                        save(done=index + 1)
+                        continue
+                if item.cloud:
+                    def progress(update):
+                        job['current'].update(update)
+                        save(current=job['current'])
+                    progress({'phase':'逐项核对并回收 115 文件'})
+                    result = await run_cloud_orphans(CloudOrphanSelection(items=[item.cloud]), progress)
+                    row = result['items'][0]
+                    job['results'].append({**row, 'location':'115 网盘'})
+                    save(results=job['results'], done=index + 1)
+                    if row.get('errors'):
+                        save(state='partial', error='网盘清理遇到问题，已停止；请查看详情并重新扫描。', finished=time.time())
+                        return
+                save(done=index + 1)
+            failed = any(row.get('errors') for row in job['results'])
+            save(state='partial' if failed else 'completed', finished=time.time(), current={})
+        except Exception as exc:
+            logging.exception('orphan cleanup job failed')
+            save(state='partial', error=str(getattr(exc, 'detail', '') or str(exc))[:200], finished=time.time())
+        finally:
+            orphan_tasks.pop(body.id, None)
+
+    @app.post('/api/v1/inventory/orphans/jobs', dependencies=[Depends(admin)])
+    async def start_orphan_job(body: OrphanJobRequest):
+        existing = read_job(body.id)
+        if existing: return existing
+        if any(task for task in orphan_tasks.values() if not task.done()):
+            raise HTTPException(409, '已有残留清理正在进行，请等待结束。')
+        if any(not item.local and not item.cloud for item in body.items):
+            raise HTTPException(422, '清理项目不能为空。')
+        local_paths = [x.local.path for x in body.items if x.local]
+        cloud_ids = [x.cloud.id for x in body.items if x.cloud]
+        if len(local_paths) != len(set(local_paths)) or len(cloud_ids) != len(set(cloud_ids)):
+            raise HTTPException(422, '不能重复选择同一目录。')
+        job = {'id':body.id, 'state':'queued', 'created':time.time(), 'count':len(body.items),
+               'done':0, 'index':0, 'current':{}, 'results':[], 'error':''}
+        store.set_meta(job_key(body.id), job)
+        orphan_tasks[body.id] = asyncio.create_task(run_orphan_job(body, job))
+        return job
+
+    @app.get('/api/v1/inventory/orphans/jobs', dependencies=[Depends(admin)])
+    async def list_orphan_jobs():
+        rows = store.db.execute("SELECT key FROM meta WHERE key LIKE 'orphan-clean-job:%'").fetchall()
+        jobs = [read_job(row['key'].split(':')[-1]) for row in rows]
+        return {'items':sorted((x for x in jobs if x), key=lambda x:x['created'], reverse=True)[:50]}
+
+    @app.get('/api/v1/inventory/orphans/jobs/{job_id}', dependencies=[Depends(admin)])
+    async def get_orphan_job(job_id: str):
+        if not re.fullmatch(r'[a-f0-9]{32}', job_id): raise HTTPException(404, '记录不存在')
+        job = read_job(job_id)
+        if not job: raise HTTPException(404, '记录不存在')
+        return job
 
     def scan():
         settings = inventory_config_value(store.get('inventory_config', {}))

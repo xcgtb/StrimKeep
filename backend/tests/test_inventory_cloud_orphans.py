@@ -159,3 +159,31 @@ def test_cloud_api_checks_auth_and_local_before_any_recycle(tmp_path):
         completed=client.post('/api/v1/inventory/cloud-orphans/clean',json=payload).json()['items'][0]
         assert not completed['errors'] and completed['files_removed']==2
     store.close()
+
+
+def test_background_cleanup_records_progress_and_deduplicates(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from strimkeep.inventory_api import install_inventory
+    import time
+    store, cloud, engine = setup(tmp_path)
+    store.set_many({'organize_config':{'archive_cid':'100', 'library_dir_name':'媒体库'}})
+    engine.publication_gate=asyncio.Lock(); engine.scan_receive_gate=asyncio.Lock(); engine.cleanup_gate=asyncio.Lock()
+    app=FastAPI(); app.state.organizer=engine; app.state.strms=engine.root
+    install_inventory(app,store,lambda:None)
+    with TestClient(app) as client:
+        item=client.post('/api/v1/inventory/cloud-orphans/scan').json()['items'][0]
+        payload={'id':'a'*32, 'items':[{'cloud':{'id':item['id'],'fingerprint':item['fingerprint']}}]}
+        assert client.post('/api/v1/inventory/orphans/jobs',json=payload).status_code==200
+        for _ in range(100):
+            job=client.get('/api/v1/inventory/orphans/jobs/'+payload['id']).json()
+            if job['state'] not in ('queued','running'): break
+            time.sleep(.01)
+        assert job['state']=='completed' and job['done']==1
+        assert job['results'][0]['files_removed']==2 and job['results'][0]['dirs_removed']==2
+        assert client.post('/api/v1/inventory/orphans/jobs',json=payload).json()['state']=='completed'
+        assert len(cloud.writes)==4
+        assert client.get('/api/v1/inventory/orphans/jobs').json()['items'][0]['id']==payload['id']
+        store.set_meta('orphan-clean-job:'+'b'*32, {'id':'b'*32,'state':'running','created':0})
+        assert client.get('/api/v1/inventory/orphans/jobs/'+'b'*32).json()['state']=='interrupted'
+    store.close()

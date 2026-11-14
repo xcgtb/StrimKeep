@@ -155,7 +155,7 @@ async def confirm(cloud, source, intent):
     raise ValueError('回收站结果未能确认；已停止，不能重复提交')
 
 
-async def clean_one(engine, archive, library, cid, expected):
+async def clean_one(engine, archive, library, cid, expected, progress=None):
     cloud, store = engine.cloud, engine.store
     snapshot, paths = await inspect(cloud, archive, cid)
     account = engine.index.account({})
@@ -168,10 +168,14 @@ async def clean_one(engine, archive, library, cid, expected):
     files = [e for e in entries.values() if not e['is_dir']]
     directories = sorted((e for e in entries.values() if e['is_dir']), key=lambda e:len(paths[e['id']]), reverse=True)
     result={'id':cid, 'path':' / '.join(x['name'] for x in snapshot['trail'] if x['name']),
-            'files_removed':0, 'dirs_removed':0, 'errors':[]}
+            'files_removed':0, 'dirs_removed':0, 'errors':[], 'entries':[]}
+    if progress:
+        progress({'path':result['path'], 'files_total':len(files), 'dirs_total':len(directories),
+                  'files_done':0, 'dirs_done':0, 'current':''})
     for source in files + directories:
         fid, parent = source['id'], source['parent_id']
         try:
+            if progress: progress({'current':source['name']})
             engine.index.account({'account_id':account})
             verify_local(engine, relative, library)
             # Every operation rechecks the work's position and exact current parent contents.
@@ -203,6 +207,11 @@ async def clean_one(engine, archive, library, cid, expected):
             store.set_meta(key, {**intent, 'state':'confirmed', 'rid':record['rid']})
             if parent in remaining: remaining[parent].pop(fid, None)
             result['dirs_removed' if source['is_dir'] else 'files_removed'] += 1
+            parent_path = paths.get(parent, snapshot['trail'][:-1])
+            result['entries'].append({'path':' / '.join([x['name'] for x in parent_path if x['name']] + [source['name']]),
+                                      'kind':'目录' if source['is_dir'] else '文件'})
+            if progress: progress({'files_done':result['files_removed'], 'dirs_done':result['dirs_removed'],
+                                   'entries':result['entries']})
         except (CloudError, ValueError, OSError) as exc:
             result['errors'].append(str(exc)[:200]); break
     return result

@@ -69,6 +69,8 @@ const kindFilter = ref('all'), scopeFilter = ref('all'), statusFilter = ref('all
 const statusById = ref<Record<string,any>>({}), statusBusy = ref(false), statusProgress = ref('')
 const embyItems = ref<any[]>([]), embyError = ref(''), embyBusy = ref(false)
 const orphanBusy = ref(false), orphanError = ref(''), cloudOrphanError=ref(''), orphanResult = ref<any>(null), orphanSelected = ref<any[]>([]), orphanDone = ref<any[]>([])
+const orphanJobs=ref<any[]>([]), orphanJob=ref<any>(null)
+let orphanTimer:ReturnType<typeof setTimeout>|undefined
 let statusGeneration = 0, embyGeneration = 0
 const statusInFlight = new Map<string, Promise<void>>()
 watch([tie, decision, matchStrategy, multiProtect, specialAction, exemptInput, singleQuality, singleGaps, seasonRatio, quietMinutes, scanScheduleEnabled, scanIntervalHours], () => { preview.value = null; scanTime.value = 0; configMessage.value = '' })
@@ -100,24 +102,33 @@ async function scanOrphans() {
   } catch (e) { orphanError.value = (e as Error).message }
   finally { orphanBusy.value = false }
 }
+async function loadOrphanJobs() {
+  try {
+    const response=await props.api('/inventory/orphans/jobs')
+    orphanJobs.value=response.items || []
+    const active=orphanJobs.value.find((job:any)=>['queued','running'].includes(job.state))
+    if(active) { orphanJob.value=active; orphanBusy.value=true; scheduleOrphanPoll() }
+    else { if(orphanJob.value) orphanJob.value=orphanJobs.value.find((job:any)=>job.id===orphanJob.value.id) || null; orphanBusy.value=false }
+  } catch(e) { orphanError.value='清理记录读取失败：'+(e as Error).message; if(orphanBusy.value) scheduleOrphanPoll() }
+}
+function scheduleOrphanPoll() { if(orphanTimer) clearTimeout(orphanTimer); orphanTimer=setTimeout(loadOrphanJobs,3000) }
+function jobState(state:string) { return ({queued:'等待执行',running:'清理中',completed:'已完成',partial:'部分完成',interrupted:'已中断'} as Record<string,string>)[state] || state }
 async function cleanOrphans() {
   if (!orphanSelected.value.length) return
   const cloudCount=orphanSelected.value.filter(row=>row.linkedCloud).length
   try { await ElMessageBox.confirm(`将清理选中的 ${orphanSelected.value.length} 项；其中 ${cloudCount} 项会联动回收 115 网盘的字幕、元数据和空目录。分享侧只清理本地。执行前会再次核对。`, '确认清理残留', {type:'warning', confirmButtonText:'确认清理', cancelButtonText:'取消'}) } catch { return }
-  orphanBusy.value = true; orphanError.value = ''; orphanDone.value = []
-  try {
-    const local=orphanSelected.value.filter(row=>row.kind!=='cloud_directory')
-    const localResult=local.length?await props.api('/inventory/orphans/clean','POST',{items:local.map(row=>({path:row.path,fingerprint:row.fingerprint,kind:row.kind||'directory',source:row.source||''}))}):{items:[]}
-    const localRows=localResult.items||[]
-    orphanDone.value=localRows.map((row:any)=>({...row,location:'本地'}))
-    const success=new Set(localRows.filter((row:any)=>!row.errors?.length).map((row:any)=>row.path))
-    const cloud=orphanSelected.value.filter(row=>row.linkedCloud&&(row.kind==='cloud_directory'||success.has(row.path))).map(row=>({id:row.linkedCloud.id,fingerprint:row.linkedCloud.fingerprint}))
-    const cloudResult=cloud.length?await props.api('/inventory/cloud-orphans/clean','POST',{items:cloud}):{items:[],remaining:0}
-    orphanDone.value=[...orphanDone.value,...(cloudResult.items||[]).map((row:any)=>({...row,location:'115 网盘'}))]
-    if(cloudResult.remaining)orphanError.value=`115 清理遇到问题后停止，还有 ${cloudResult.remaining} 项未处理，请重新扫描。`
-    orphanResult.value = null; orphanSelected.value = []
-  } catch (e) { orphanResult.value=null; orphanSelected.value=[]; orphanError.value = '清理未全部完成，请查看结果并重新扫描：'+(e as Error).message }
-  finally { orphanBusy.value = false }
+  orphanBusy.value=true; orphanError.value=''; orphanDone.value=[]
+  const id=Array.from(crypto.getRandomValues(new Uint8Array(16))).map(x=>x.toString(16).padStart(2,'0')).join('')
+  const items=orphanSelected.value.map(row=>({
+    local:row.kind==='cloud_directory'?null:{path:row.path,fingerprint:row.fingerprint,kind:row.kind||'directory',source:row.source||''},
+    cloud:row.linkedCloud?{id:row.linkedCloud.id,fingerprint:row.linkedCloud.fingerprint}:null
+  }))
+  orphanResult.value=null; orphanSelected.value=[]
+  try { orphanJob.value=await props.api('/inventory/orphans/jobs','POST',{id,items}); await loadOrphanJobs() }
+  catch(e) {
+    try { orphanJob.value=await props.api('/inventory/orphans/jobs/'+id); await loadOrphanJobs() }
+    catch { orphanBusy.value=false; orphanError.value='提交状态无法确认，请刷新清理记录并重新扫描后再操作：'+(e as Error).message }
+  }
 }
 function episodeList(values:any[]) { return values?.length ? values.map((ep:number) => `E${String(ep).padStart(2,'0')}`).join('、') : '无' }
 function ruleValue(value:any) { if (value == null) return '未知'; return typeof value === 'object' ? Object.values(value).filter(v => v != null && v !== '').join(' / ') || '未知' : String(value) }
@@ -558,7 +569,8 @@ function searchResources() {
   if (selected.value) void router.push({name:'explore',query:{q:selected.value.title,resource_id:String(selected.value.tmdb_id),resource_kind:selected.value.kind}})
 }
 onMounted(async () => { window.addEventListener('resize', updatePageSize); await load(false); await loadHistory(); try { const config = await props.api('/inventory/config'); tie.value = config.tie; decision.value = config.decision || 'quality_first'; matchStrategy.value = config.match_strategy || 'title_year'; multiProtect.value = config.multi_season_protect || 'compare'; specialAction.value = config.special_action || 'compare'; exemptInput.value = (config.exempt_keywords || []).join('，'); singleQuality.value = config.single_quality; singleGaps.value = config.single_gaps; seasonRatio.value = Math.round((config.season_ratio ?? .9) * 100); quietMinutes.value = config.quiet_minutes ?? 15; scanScheduleEnabled.value = !!config.scan_schedule_enabled; scanIntervalHours.value = config.scan_interval_hours ?? 6; savedSettings.value = settingsKey(); const last = await props.api('/inventory/last-scan'); if (last.result) { preview.value = last.result; scanTime.value = Number(last.at || 0) } } catch (e) { configMessage.value = (e as Error).message } try { ruleInfo.value = await props.api('/upgrade/config') } catch (e) { ruleError.value = (e as Error).message } })
-onUnmounted(() => window.removeEventListener('resize', updatePageSize))
+onMounted(() => { void loadOrphanJobs() })
+onUnmounted(() => { window.removeEventListener('resize', updatePageSize); if(orphanTimer) clearTimeout(orphanTimer) })
 </script>
 
 <template>
@@ -720,7 +732,28 @@ onUnmounted(() => window.removeEventListener('resize', updatePageSize))
    <div class="inventory-tools"><el-button type="primary" :loading="orphanBusy" @click="scanOrphans">扫描本地及 115 残留</el-button><el-button type="danger" :loading="orphanBusy" :disabled="!orphanSelected.length || orphanSelected.length > 100" @click="cleanOrphans">清理选中项</el-button><span class="muted">每次最多清理 100 项</span></div>
    <el-alert v-if="orphanError" :title="orphanError" type="error" :closable="false" /><el-alert v-if="cloudOrphanError" :title="cloudOrphanError" type="warning" :closable="false" />
    <template v-if="orphanResult"><p>发现 {{ orphanResult.items.length }} 个可清理残留项<span v-if="orphanResult.skipped">；已跳过 {{ orphanResult.skipped }} 个</span><span v-if="orphanResult.cloudSkipped">；115 跳过 {{orphanResult.cloudSkipped}} 个含视频、未知内容或无法核实的目录</span></p><div v-if="orphanResult.reasons && Object.keys(orphanResult.reasons).length" class="inventory-tools"><el-tag v-for="(count, code) in orphanResult.reasons" :key="code" type="info" effect="plain">{{ skipReason(String(code)) }} {{ count }}</el-tag></div><details v-if="orphanResult.skipped_items && orphanResult.skipped_items.length"><summary>查看被跳过的目录与原因（{{ orphanResult.skipped_items.length }}{{ orphanResult.skipped_truncated ? " 条，另有 " + orphanResult.skipped_truncated + " 条未列出" : "" }}）</summary><p v-for="row in orphanResult.skipped_items.slice(0, 200)" :key="row.path + row.reason" class="file-path">{{ side(row.side) }} · {{ skipReason(row.reason) }}：{{ row.path }}<span v-if="row.detail" class="muted">（{{ row.detail }}）</span></p></details><el-table :data="orphanResult.items" @selection-change="orphanSelected = $event"><el-table-column type="expand"><template #default="s"><div v-if="s.row.linkedCloud"><strong>115 网盘待回收附属文件</strong><p v-for="(name,i) in s.row.linkedCloud.file_names" :key="i" class="file-path">{{name}}</p><p v-if="s.row.linkedCloud.files>s.row.linkedCloud.file_names.length" class="muted">仅显示前 {{s.row.linkedCloud.file_names.length}} 个文件；本项共 {{s.row.linkedCloud.files}} 个。</p><p v-if="!s.row.linkedCloud.files" class="muted">目录已空，无附属文件。</p></div><p v-else class="muted">只清理本地残留。</p></template></el-table-column><el-table-column type="selection" width="45" /><el-table-column label="库" width="90"><template #default="s">{{ side(s.row.side) }}<span v-if="s.row.linkedCloud&&s.row.side==='cloud'"> + 115</span></template></el-table-column><el-table-column label="类型" width="100"><template #default="s">{{ s.row.kind === 'file' ? '附属文件' : '作品目录' }}</template></el-table-column><el-table-column prop="path" label="路径" min-width="240" /><el-table-column prop="files" label="附属文件" width="100" /><el-table-column prop="dirs" label="目录" width="70" /></el-table></template>
-   <template v-if="orphanDone.length"><h3>清理结果</h3><div v-for="row in orphanDone" :key="row.path"><p>{{ row.location || '本地' }} · {{ row.path }} · 清理 {{ row.files_removed }} 个文件、{{ row.dirs_removed }} 个目录</p><p v-for="err in row.errors" :key="err" class="muted">未完成：{{ err }}</p></div></template>
+   <div v-if="orphanJob && ['queued','running'].includes(orphanJob.state)" class="orphan-progress">
+    <strong>正在清理：{{ orphanJob.done }} / {{ orphanJob.count }} 项</strong>
+    <el-progress :percentage="Math.round(orphanJob.done * 100 / orphanJob.count)" />
+    <p>{{ orphanJob.current?.phase || '等待执行' }}<span v-if="orphanJob.index"> · 第 {{ orphanJob.index }} 项</span></p>
+    <p class="file-path">{{ orphanJob.current?.path }}</p>
+    <p v-if="orphanJob.current?.files_total != null" class="muted">文件 {{orphanJob.current.files_done}} / {{orphanJob.current.files_total}} · 目录 {{orphanJob.current.dirs_done}} / {{orphanJob.current.dirs_total}}</p>
+    <p v-if="orphanJob.current?.current" class="file-path">正在核对：{{orphanJob.current.current}}</p>
+    <small class="muted">115 文件需要逐个核对，可能耗时较长；离开页面后仍会继续，请勿重复清理。</small>
+   </div>
+   <details class="orphan-history" :open="!!orphanJobs.length"><summary><strong>残留清理记录</strong><span>最近 {{orphanJobs.length}} 次 · 展开或收起</span></summary>
+    <p v-if="!orphanJobs.length" class="muted">暂无记录；升级前的清理结果不会自动补录。</p>
+    <details v-for="job in orphanJobs" :key="job.id" class="orphan-job">
+     <summary><span><strong>{{new Date(job.created*1000).toLocaleString()}}</strong><small>{{jobState(job.state)}} · 已处理 {{job.done}} / {{job.count}} 项</small></span><span>详情</span></summary>
+     <p v-if="job.error" class="orphan-error">{{job.error}}</p>
+     <details v-if="job.state === 'interrupted' && job.current?.entries?.length"><summary>中断前已确认回收（{{job.current.entries.length}}）</summary><p v-for="(entry,j) in job.current.entries" :key="j" class="file-path">{{entry.kind}} · {{entry.path}}</p></details>
+     <div v-for="(row,i) in job.results" :key="i" class="orphan-record">
+      <div><el-tag size="small" :type="row.errors?.length?'warning':'success'">{{row.errors?.length?'未完成':'已完成'}}</el-tag> <strong>{{row.location}}</strong> · 文件 {{row.files_removed}} · 目录 {{row.dirs_removed}}</div>
+      <p class="file-path">{{row.path}}</p><p v-for="err in row.errors" :key="err" class="orphan-error">{{err}}</p>
+      <details v-if="row.entries?.length"><summary>查看已回收的文件和目录（{{row.entries.length}}）</summary><p v-for="(entry,j) in row.entries" :key="j" class="file-path">{{entry.kind}} · {{entry.path}}</p></details>
+     </div>
+    </details>
+   </details>
   </template>
   <el-alert v-if="planError && !planOpen" :title="planError" type="error" :closable="false" />
   <el-dialog v-model="planOpen" :title="planTitle" width="min(90%, 760px)" :close-on-click-modal="false" :close-on-press-escape="!planBusy" :show-close="!planBusy">
@@ -732,6 +765,8 @@ onUnmounted(() => window.removeEventListener('resize', updatePageSize))
 </template>
 
 <style scoped>
+.orphan-progress,.orphan-history{margin-top:18px;padding:16px;border:1px solid var(--el-border-color-lighter);border-radius:12px;background:var(--el-fill-color-blank)}
+.orphan-progress p{margin:10px 0}.orphan-progress .el-progress{margin-top:12px}.orphan-history>summary,.orphan-job>summary{display:flex;justify-content:space-between;gap:12px;cursor:pointer;align-items:center}.orphan-history>summary span,.orphan-job summary span:last-child{color:var(--el-text-color-secondary);font-size:12px}.orphan-job{margin-top:12px;padding:12px;border:1px solid var(--el-border-color-lighter);border-radius:9px}.orphan-job summary strong,.orphan-job summary small{display:block}.orphan-job summary small{margin-top:5px;color:var(--el-text-color-secondary)}.orphan-record{padding:12px 0;border-top:1px solid var(--el-border-color-lighter);margin-top:12px;font-size:13px}.orphan-record p{margin:7px 0}.orphan-error{color:var(--el-color-danger);font-size:12px;word-break:break-word}
 .mapping-batch-limit{font-size:12px}
 
 .poster-wall.swipe-select{touch-action:pan-y}
