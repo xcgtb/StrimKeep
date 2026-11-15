@@ -11,7 +11,8 @@ class FakeStore:
         self.db = sqlite3.connect(':memory:')
         self.db.row_factory = sqlite3.Row
         self.db.executescript(
-            'CREATE TABLE output_registry (account_id TEXT, relative_path TEXT, updated REAL);'
+            'CREATE TABLE output_registry (account_id TEXT, relative_path TEXT, updated REAL, file_id TEXT DEFAULT NULL);'
+            'CREATE TABLE organized_files (file_id TEXT);'
             'CREATE TABLE share_strms (id TEXT PRIMARY KEY, strm_path TEXT, created REAL);')
         self.events = []
 
@@ -32,7 +33,7 @@ def test_prune_removes_only_missing_files(tmp_path):
     _add_file(tmp_path, '媒体库/电影/在的/a.strm')
     store = FakeStore(tmp_path)
     old = time.time() - 7200
-    store.db.executemany('INSERT INTO output_registry VALUES (?,?,?)',
+    store.db.executemany('INSERT INTO output_registry(account_id,relative_path,updated) VALUES (?,?,?)',
                          [('acc', '媒体库/电影/在的/a.strm', old),
                           ('acc', '媒体库/电影/没的/b.strm', old)])
     store.db.executemany('INSERT INTO share_strms VALUES (?,?,?)',
@@ -64,7 +65,7 @@ def test_prune_respects_grace_period(tmp_path):
     from strimkeep.orphan_registry import prune
 
     store = FakeStore(tmp_path)
-    store.db.execute('INSERT INTO output_registry VALUES (?,?,?)',
+    store.db.execute('INSERT INTO output_registry(account_id,relative_path,updated) VALUES (?,?,?)',
                      ('acc', '媒体库/电影/刚写的/e.strm', time.time()))
     store.db.commit()
 
@@ -80,7 +81,7 @@ def test_managed_repair_requires_missing_source_and_matching_account(tmp_path):
     root = tmp_path / 'strm'; (root / '媒体库').mkdir(parents=True)
     store = FakeStore(tmp_path)
     db = store.db
-    db.executescript('DROP TABLE output_registry; CREATE TABLE output_registry(file_id TEXT, relative_path TEXT);'
+    db.executescript('DROP TABLE output_registry; DROP TABLE organized_files; CREATE TABLE output_registry(file_id TEXT, relative_path TEXT);'
                      'CREATE TABLE owned_outputs(file_id TEXT, relative_path TEXT);'
                      'CREATE TABLE organized_files(file_id TEXT, playback_id TEXT, relative_path TEXT, job_id INTEGER);'
                      'CREATE TABLE organize_jobs(id INTEGER, config TEXT, updated REAL, state TEXT);'
@@ -103,3 +104,15 @@ def test_managed_repair_requires_missing_source_and_matching_account(tmp_path):
     engine.index.account = lambda _: 'other'
     assert asyncio.run(repair_missing_organized(app, store)) == 0
     db.close()
+
+
+def test_prune_preserves_missing_output_with_managed_source(tmp_path):
+    from strimkeep.orphan_registry import prune
+    store = FakeStore(tmp_path)
+    store.db.execute('INSERT INTO output_registry VALUES(?,?,?,?)',
+                     ('acc', 'missing.strm', time.time() - 7200, '1000'))
+    store.db.execute('INSERT INTO organized_files VALUES(?)', ('1000',))
+    store.db.commit()
+    result = prune(store, str(tmp_path))
+    assert result['registry'] == 0
+    assert store.db.execute('SELECT COUNT(*) FROM output_registry').fetchone()[0] == 1

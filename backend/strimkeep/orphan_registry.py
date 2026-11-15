@@ -25,9 +25,14 @@ def scan(store, root, grace=GRACE):
     """只统计不删除；返回 ``(台账孤儿, 分享孤儿, 台账总数, 分享总数)``。"""
     now = time.time()
     registry = store.db.execute(
-        'SELECT account_id, relative_path, updated FROM output_registry').fetchall()
+        'SELECT account_id, file_id, relative_path, updated FROM output_registry').fetchall()
+    # Missing local output does not mean its source, token or provenance is
+    # disposable while an organized file still refers to that identity.
+    managed = {str(row['file_id']) for row in store.db.execute(
+        'SELECT file_id FROM organized_files')}
     orphans = [dict(row) for row in registry
-               if not _exists(root, row['relative_path'])
+               if str(row['file_id']) not in managed
+               and not _exists(root, row['relative_path'])
                and now - float(row['updated'] or 0) > grace]
     shares = store.db.execute('SELECT id, strm_path, created FROM share_strms').fetchall()
     share_orphans = [dict(row) for row in shares
@@ -56,13 +61,20 @@ def prune(store, root, dry_run=False, grace=GRACE):
             'share_strms': [dict(row) for row in store.db.execute('SELECT * FROM share_strms')
                             if row['id'] in share_doomed]},
             handle, ensure_ascii=False, indent=1)
+    removed_registry = 0
     with store.db:
         for row in orphans:
-            store.db.execute('DELETE FROM output_registry WHERE relative_path=? AND account_id=?',
-                             (row['relative_path'], row['account_id']))
+            if _exists(root, row['relative_path']):
+                continue
+            removed_registry += store.db.execute(
+                'DELETE FROM output_registry WHERE relative_path=? AND account_id=? AND file_id IS ? '
+                'AND updated=? AND NOT EXISTS(SELECT 1 FROM organized_files o '
+                'WHERE o.file_id=output_registry.file_id)',
+                (row['relative_path'], row['account_id'], row['file_id'], row['updated'])).rowcount
         for row in share_orphans:
             store.db.execute('DELETE FROM share_strms WHERE id=?', (row['id'],))
     result['backup'] = path
+    result['registry'] = removed_registry
     return result
 
 

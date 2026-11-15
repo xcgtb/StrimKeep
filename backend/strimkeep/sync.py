@@ -323,15 +323,8 @@ class Sync:
     def relative(self, source, config):
         path = source['_path']; ids = [x['id'] for x in path]
         ids.index(source['_root'])  # selected root must actually be in the trail
-        # 按 115 层级镜像：去掉最上面的网盘根，下面的目录名原样保留；
-        # 显式设置了库根时用它替换第一层（归档库的既有语义）。
-        parts = [component(entry['name'], 100) for entry in path[1:]]
-        explicit = str(config.get('library_dir_name') or '')
-        archive = str(config.get('archive_cid') or '')
-        # 归档库就在第一层时，显式库根替换这一层（既有语义）；
-        # 嵌在别的目录下面的库按真实层级镜像，不额外改名。
-        if explicit and parts and (not archive or str(path[1]['id']) == archive):
-            parts[0] = component(explicit, 100)
+        # Keep the actual cloud path; never inject names or rewrite directory components.
+        parts = [entry['name'] for entry in path if str(entry['id']) != '0']
         # Never silently turn separators into new path components.
         for name in parts + [source['name']]:
             if name in ('.','..') or '/' in name or '\\' in name or '\0' in name: raise ValueError('同步文件名含不安全路径字符。')
@@ -346,8 +339,7 @@ class Sync:
     async def process(self, jid, row, config):
         """把一份云端文件落成本地 STRM（+ 字幕）。
 
-        不再写任何「台账」：判断只看本轮清单与本地文件，输出内容自带身份，
-        下一轮从文件本身就能重新认出来。
+        同步以本轮清单和本地文件为准，来源证据用于后续归属核验。
         """
         from .core import atomic_write, dumps, UncertainState
         source = json.loads(row['original'])
@@ -445,12 +437,34 @@ class Sync:
         for relative, data in content.items():
             self.engine.boundary(jid)
             target = self.engine.outputs.path(relative)
-            if relative.lower().endswith('.strm') and target.is_file() and fid_of(target) != str(source['id']):
-                # 同名路径已经被别的文件（或用户手写的内容）占着：保留它，不覆盖。
-                self.update_item(row['id'], plan=plan, state='review', step='同名文件已存在',
-                                 message='本地已有同名的其他文件，已保留，未覆盖。')
-                return
+            if relative.lower().endswith('.strm'):
+                try:
+                    checksum = hashlib.sha256(data).hexdigest()
+                    self.engine.outputs.guard(self.engine.index.account(config), source['id'], relative,
+                                              {relative: checksum})
+                except UncertainState as exc:
+                    self.update_item(row['id'], plan=plan, state='review', step='同名文件已存在',
+                                     message=str(exc))
+                    return
             checksum = hashlib.sha256(data).hexdigest()
+            if (not relative.lower().endswith('.strm') and target.exists()
+                    and (target.is_symlink() or not target.is_file()
+                         or hashlib.sha256(target.read_bytes()).hexdigest() != checksum)):
+                old = self.engine.outputs.get(self.engine.index.account(config), source['id'])
+                try:
+                    recorded = json.loads(old['files'] or '{}').get(relative) if old else None
+                except (ValueError, TypeError, AttributeError):
+                    recorded = None
+                owner = self.store.db.execute(
+                    'SELECT account_id,file_id,digest FROM owned_outputs WHERE relative_path=?',
+                    (relative,)).fetchone()
+                if (target.is_symlink() or not target.is_file() or not recorded or not owner
+                        or (owner['account_id'], str(owner['file_id']), owner['digest'])
+                        != (str(self.engine.index.account(config)), str(source['id']), recorded)
+                        or hashlib.sha256(target.read_bytes()).hexdigest() != recorded):
+                    warnings.append('本地字幕已修改或归属不明，已保留：' + relative)
+                    plan['local_files'].pop(relative, None)
+                    continue
             if not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest() != checksum:
                 plan['local_files'][relative] = checksum
                 self.mark_changed(jid)
@@ -460,6 +474,13 @@ class Sync:
                 self.engine.outputs.note(self.engine.index.account(config), relative, target,
                                          identity_of_file(target)[0])
             plan['local_files'][relative] = checksum
+        account = self.engine.index.account(config)
+        old = self.engine.outputs.get(account, source['id'])
+        self.engine.outputs.remember(
+            account, {**actual, 'subtitles': subtitle_cache},
+            [entry['id'] for entry in source['_path']],
+            {**plan, 'playback_id': old['playback_id'] if old else '',
+             'token_cipher': old['token_cipher'] if old else ''})
         plan['warnings'] = warnings
         with self.store.db:
             # 整理登记只更新路径（按文件身份，不再按播放身份）。
@@ -552,7 +573,7 @@ class Sync:
             if plan_row.get('relative_path'):
                 expected[str(row['file_id'])] = plan_row['relative_path']
         removed = 0
-        for relative, identity in (await asyncio.to_thread(scan, self.engine.root)).items():
+        for relative, identity in (await asyncio.to_thread(self.scan_scope, jid, config)).items():
             if identity.get('kind') != 'netdisk':
                 continue
             fid = str(identity['file_id'])
@@ -563,10 +584,19 @@ class Sync:
                 continue
             try:
                 old_path = self.engine.outputs.path(relative)
+                old_identity, _ = identity_of_file(old_path)
+                new_identity, _ = identity_of_file(self.engine.outputs.path(want))
+                if (old_path.is_symlink() or not old_identity or not new_identity
+                        or old_identity.get('kind') != 'netdisk' or new_identity.get('kind') != 'netdisk'
+                        or str(old_identity.get('file_id')) != fid or str(new_identity.get('file_id')) != fid):
+                    continue
                 from .internal_delete import remember
                 if remember(self.store, [relative]):
                     old_path.unlink()
                     with self.store.db:
+                        self.store.db.execute(
+                            'DELETE FROM owned_outputs WHERE relative_path=? AND account_id=? AND file_id=?',
+                            (relative, str(self.engine.index.account(config)), fid))
                         self.store.db.execute('INSERT OR IGNORE INTO strm_changes VALUES(?,?,?)',
                                               (jid, 'removed', relative))
                     removed += 1
@@ -578,32 +608,25 @@ class Sync:
         return removed
 
     def scan_prefixes(self, jid, config):
-        """本轮任务真正管理的顶层目录。
-
-        两个来源：
-        1. 本轮清单里每个输出的顶层目录（`待整理/…` → `待整理`）；
-        2. 清单扫描时记下的每个来源根的本地根目录（整目录被删空时也能覆盖）。
-
-        以前扫整个 STRM 根：分享 STRM、别的库都被当成「清单外」的候选，
-        于是对上千个无关文件逐个向云端确认存在性，一轮能挂十几分钟。
-        """
+        """Return only the complete local roots proven by this job's manifest."""
+        saved = json.loads(self.engine.job(jid)['config'])
+        stats = config.get('sync_directory_stats') or saved.get('sync_directory_stats') or {}
+        roots = config.get('sync_effective_roots') or saved.get('sync_effective_roots') or config.get('source_cids') or []
+        base = self.engine.root.resolve()
         prefixes = set()
-        for row in self.store.db.execute('SELECT plan FROM organize_items WHERE job_id=?', (jid,)):
-            plan_row = json.loads(row['plan'] or '{}')
-            relative = plan_row.get('relative_path')
-            if relative:
-                prefixes.add(relative.split('/')[0])
-        root = self.engine.root
-        for stat in (config.get('sync_directory_stats') or {}).values():
-            local = str((stat or {}).get('local_path') or '')
+        for cid in roots:
+            local = str((stats.get(str(cid)) or {}).get('local_path') or '')
             if not local:
                 continue
             try:
-                relative = Path(local).resolve().relative_to(root.resolve())
+                relative = Path(local).resolve().relative_to(base)
             except (ValueError, OSError):
                 continue
             if relative.parts:
-                prefixes.add(relative.parts[0])
+                prefixes.add(str(relative))
+            elif str(cid) == '0':
+                # The user explicitly selected the 115 root.
+                prefixes.add('.')
         return prefixes
 
     def scan_scope(self, jid, config):
@@ -631,11 +654,15 @@ class Sync:
         present = self.present_ids(jid, config)
         missing = []
         probes = 0
-        for relative, identity in (await asyncio.to_thread(scan, self.engine.root)).items():
+        for relative, identity in (await asyncio.to_thread(self.scan_scope, jid, config)).items():
             if identity.get('kind') != 'netdisk':
                 continue
             fid = str(identity['file_id'])
             if fid in present:
+                continue
+            local = self.engine.outputs.path(relative)
+            verified, _ = identity_of_file(local)
+            if local.is_symlink() or not verified or verified.get('kind') != 'netdisk' or str(verified.get('file_id')) != fid:
                 continue
             if probes >= self.MAX_CLOUD_PROBES:
                 self.store.event('strm_sync', '失效检测达到单轮上限（%d），其余候选下次再看。' % self.MAX_CLOUD_PROBES)
@@ -664,7 +691,8 @@ class Sync:
                 if not fid or (item.get('account_id') and item['account_id'] != account):
                     rest.append({**item, 'error': '账号或文件身份不匹配，已保留。'}); continue
                 local = self.engine.outputs.path(relative)
-                if fid_of(local) != fid:
+                verified, _ = identity_of_file(local)
+                if local.is_symlink() or not verified or verified.get('kind') != 'netdisk' or str(verified.get('file_id')) != fid:
                     rest.append({**item, 'error': '本地文件身份对不上，已保留。'}); continue
                 if await self.cloud.live_file_exists(fid):
                     rest.append({**item, 'error': '网盘源文件仍存在，已保留。'}); continue
@@ -672,6 +700,10 @@ class Sync:
                 if not remember(self.store, [relative]):
                     raise RuntimeError('内部删除登记失败，已保留本地文件。')
                 local.unlink()
+                with self.store.db:
+                    self.store.db.execute(
+                        'DELETE FROM owned_outputs WHERE relative_path=? AND account_id=? AND file_id=?',
+                        (relative, str(account), fid))
                 cleaned.append(relative)
             except Exception as exc:
                 rest.append({**item, 'error': str(exc)[:80]})
@@ -690,7 +722,7 @@ class Sync:
                 expected[str(row['file_id'])] = plan_row['relative_path']
         removed, warnings = 0, []
         probes = 0
-        for relative, identity in self.scan_scope(jid, config).items():
+        for relative, identity in (await asyncio.to_thread(self.scan_scope, jid, config)).items():
             if identity.get('kind') != 'netdisk':
                 continue
             fid = str(identity['file_id'])
@@ -706,13 +738,17 @@ class Sync:
                 if await self.cloud.live_file_exists(fid):
                     continue
                 local = self.engine.outputs.path(relative)
-                if fid_of(local) != fid:
+                verified, _ = identity_of_file(local)
+                if local.is_symlink() or not verified or verified.get('kind') != 'netdisk' or str(verified.get('file_id')) != fid:
                     warnings.append('已保留身份变化的本地文件：' + relative); continue
                 from .internal_delete import remember
                 if not remember(self.store, [relative]):
                     warnings.append('内部删除登记失败，已保留：' + relative); continue
                 local.unlink()
                 with self.store.db:
+                    self.store.db.execute(
+                        'DELETE FROM owned_outputs WHERE relative_path=? AND account_id=? AND file_id=?',
+                        (relative, str(self.engine.index.account(config)), fid))
                     self.store.db.execute('INSERT OR IGNORE INTO strm_changes VALUES(?,?,?)',
                                           (jid, 'removed', relative))
                 removed += 1
@@ -1006,7 +1042,7 @@ class Sync:
                 except UncertainState as exc:
                     self.update_item(row['id'],state='review',step='本文件同步未完成',message=str(exc))
                 await self.backfill_sidecars(jid, row, config)
-        # 把旧的两张索引按磁盘现状重写：删掉本地文件后，索引里也就没有了。
+        # 发布时已逐项记录必要证据；结束时只使磁盘扫描缓存失效。
         try:
             await asyncio.to_thread(self.engine.outputs.reindex, self.engine.index.account(config))
         except Exception as exc:                    # 索引只是缓存，失败不影响本次同步

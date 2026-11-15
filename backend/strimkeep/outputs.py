@@ -1,11 +1,7 @@
-"""本地输出的查询入口：事实在磁盘和云端清单，两张表只是索引缓存。
+"""输出索引与来源证据。
 
-旧版本这里是一张台账：写过什么、内容指纹、播放令牌都往里记，同步时再拿它当
-「已经同步过」的依据，于是本地删掉文件后同步仍然跳过。现在：
-
-- 同步判定只看「云端清单 + 本地文件」；
-- 两张表由每轮同步结束时的 `reindex()` 按磁盘现状重写，只用于查询加速；
-- `get()` 走索引表（一次主键查询），不再为了一个文件号扫整棵树。
+同步是否复用必须核对实时清单和本地文件；来源、令牌和附件指纹不能从
+STRM 完整推导，单独保存供洗版、治理及兼容旧播放链接时核验。
 """
 import hashlib
 import json
@@ -108,50 +104,94 @@ class Outputs:
         if not fid:
             return
         checksum = self.digest(path)
-        source = {**identity, 'id': fid}
+        old = self.store.db.execute(
+            'SELECT source,trail,playback_id,token_cipher,files FROM output_registry WHERE account_id=? AND file_id=?',
+            (str(account), fid)).fetchone()
+        source = {}
+        if old:
+            try:
+                previous = json.loads(old['source'] or '{}')
+                # Keep provenance only for the same content identity.
+                if (str(previous.get('sha1') or '').upper() == str(identity.get('sha1') or '').upper()
+                        and previous.get('size') == identity.get('size')):
+                    source = previous
+            except (TypeError, ValueError, AttributeError):
+                pass
+        source = {**source, **identity, 'id': fid}
+        files = {}
+        if old:
+            try:
+                for old_path, old_digest in json.loads(old['files'] or '{}').items():
+                    if old_path != relative and Path(old_path).suffix.lower() in SUBTITLES:
+                        target = self.path(old_path)
+                        if target.is_file() and not target.is_symlink() and self.digest(target) == old_digest:
+                            files[old_path] = old_digest
+            except (TypeError, ValueError, AttributeError):
+                pass
+        files[relative] = checksum
         stamp = time.time()
         with self.store.db:
             self.store.db.execute(
                 'INSERT OR REPLACE INTO output_registry(account_id,file_id,source,trail,playback_id,'
                 'token_cipher,relative_path,files,active,updated) VALUES(?,?,?,?,?,?,?,?,1,?)',
                 (str(account), fid, json.dumps(source, ensure_ascii=False, separators=(',', ':')),
-                 '[]', '', '', relative,
-                 json.dumps({relative: checksum}, ensure_ascii=False, separators=(',', ':')), stamp))
+                 old['trail'] if old else '[]', old['playback_id'] if old else '',
+                 old['token_cipher'] if old else '', relative,
+                 json.dumps(files, ensure_ascii=False, separators=(',', ':')), stamp))
             self.store.db.execute('INSERT OR REPLACE INTO owned_outputs VALUES(?,?,?,?)',
                                   (relative, str(account), fid, checksum))
 
-    # ---- 索引重建：两张旧表降级为磁盘缓存 ------------------------------
+    # ---- 缓存失效 -------------------------------------------------------
     def reindex(self, account):
-        """按磁盘现状重写 output_registry / owned_outputs（调用方应放进线程）。"""
-        account = str(account)
-        now = time.time()
-        rows = []
-        for fid, entry in self.scan().items():
-            relative = entry['relative_path']
-            checksum = self.digest(entry['path'])
-            source = {**entry['identity'], 'id': str(fid)}
-            rows.append((account, str(fid),
-                         json.dumps(source, ensure_ascii=False, separators=(',', ':')),
-                         json.dumps([], separators=(',', ':')), relative,
-                         json.dumps({relative: checksum}, ensure_ascii=False, separators=(',', ':')), now))
-        with self.store.db:
-            self.store.db.execute('DELETE FROM output_registry WHERE account_id=?', (account,))
-            self.store.db.execute('DELETE FROM owned_outputs WHERE account_id=?', (account,))
-            for row in rows:
-                self.store.db.execute(
-                    'INSERT OR REPLACE INTO output_registry(account_id,file_id,source,trail,playback_id,'
-                    'token_cipher,relative_path,files,active,updated) VALUES(?,?,?,?,?,?,?,?,1,?)',
-                    (row[0], row[1], row[2], row[3], '', '', row[4], row[5], row[6]))
-                self.store.db.execute('INSERT OR REPLACE INTO owned_outputs VALUES(?,?,?,?)',
-                                      (row[4], row[0], row[1], json.loads(row[5])[row[4]]))
+        """Invalidate the disk cache; publication updates evidence incrementally.
+
+        An STRM does not encode its account, source parent, subtitle ownership, or
+        legacy playback secret. Reconstructing those fields from a disk scan loses
+        evidence and can assign another account's files to the current account.
+        """
         self.invalidate()
 
-    # ---- 写操作：不再登记，保留接口 ------------------------------------
+    # ---- 发布和归属检查 -------------------------------------------------
     def remember(self, account, source, trail, plan):
+        """Persist provenance after publication, never as proof a file still exists."""
+        fid = str(source['id'])
+        files = plan.get('local_files') or {}
+        with self.store.db:
+            self.store.db.execute(
+                'INSERT OR REPLACE INTO output_registry VALUES(?,?,?,?,?,?,?,?,1,?)',
+                (str(account), fid, json.dumps(source, ensure_ascii=False, separators=(',', ':')),
+                 json.dumps(trail, ensure_ascii=False, separators=(',', ':')),
+                 plan.get('playback_id') or '', plan.get('token_cipher') or '',
+                 plan['relative_path'], json.dumps(files, ensure_ascii=False, separators=(',', ':')),
+                 time.time()))
+            for relative, checksum in files.items():
+                self.store.db.execute('INSERT OR REPLACE INTO owned_outputs VALUES(?,?,?,?)',
+                                      (relative, str(account), fid, checksum))
         self.invalidate()
 
     def guard(self, account, fid, relative, previous=None):
-        return None
+        from .core import UncertainState
+        target = self.path(relative)
+        if not target.exists() and not target.is_symlink():
+            return
+        if target.is_symlink() or not target.is_file():
+            raise UncertainState('本地同名路径不是普通文件，已保留。')
+        owner = self.store.db.execute(
+            'SELECT account_id,file_id FROM owned_outputs WHERE relative_path=?', (relative,)).fetchone()
+        if owner and (str(owner['account_id']), str(owner['file_id'])) != (str(account), str(fid)):
+            raise UncertainState('本地路径属于另一账号或文件，已保留。')
+        checksum = self.digest(target)
+        if checksum and checksum == (previous or {}).get(relative):
+            return
+        identity = parse_file(target)
+        if identity and identity.get('kind') == 'netdisk' and str(identity.get('file_id')) == str(fid):
+            return
+        if identity and identity.get('kind') == 'playback':
+            mapping = self.store.db.execute('SELECT file_id,revoked FROM playbacks WHERE id=?',
+                                            (identity.get('playback_id'),)).fetchone()
+            if mapping and str(mapping['file_id']) == str(fid) and not mapping['revoked']:
+                return
+        raise UncertainState('本地已有同名的其他文件或无法核实的文件，已保留。')
 
     def mark_removed(self, job_id, relative):
         self.invalidate()

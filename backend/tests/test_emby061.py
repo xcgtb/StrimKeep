@@ -33,7 +33,7 @@ def test_path_notification_error_never_falls_back_to_global_scan(tmp_path,status
 
 def test_deletion_only_sync_notifies_deleted_paths_without_global_scan(tmp_path):
     async def run():
-        store,cloud,http,engine,_=setup(tmp_path);cloud.add_video();calls=[]
+        store,cloud,http,engine,_=setup(tmp_path);cloud.add_video()['sha1']='A'*40;calls=[]
         def respond(req):
             if req.url.path.endswith('/System/Info/Public'):
                 return httpx.Response(200, json={'ServerName': 'test', 'Version': '4.8'})
@@ -58,7 +58,7 @@ def test_deletion_only_sync_notifies_deleted_paths_without_global_scan(tmp_path)
 
 def test_rename_notifies_old_and_new_paths_and_unchanged_sync_sends_nothing(tmp_path):
     async def run():
-        store,cloud,http,engine,_=setup(tmp_path);cloud.add_video(name='Old.mkv');calls=[]
+        store,cloud,http,engine,_=setup(tmp_path);cloud.add_video(name='Old.mkv')['sha1']='A'*40;calls=[]
         def respond(req):
             if req.url.path.endswith('/System/Info/Public'):
                 return httpx.Response(200, json={'ServerName': 'test', 'Version': '4.8'})

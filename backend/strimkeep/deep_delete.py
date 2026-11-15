@@ -223,9 +223,15 @@ def _prepare_cloud(engine, target):
         fid, pid, relative = target['file_id'], target['playback_id'], target['relative_path']
         old = store.db.execute('SELECT * FROM output_registry WHERE account_id=? AND file_id=? AND active=1', (account, fid)).fetchone()
         owner = store.db.execute('SELECT * FROM owned_outputs WHERE relative_path=?', (relative,)).fetchone()
-        if not old or not owner or old['playback_id'] != pid or old['relative_path'] != relative:
+        if not old or not owner or old['relative_path'] != relative:
             return None, 'skipped', '受管文件或播放身份无法核实，已保留。'
         files, source = json.loads(old['files']), json.loads(old['source'])
+        if (old['playback_id'] != pid or not source.get('name') or not source.get('parent_id')):
+            from .output_provenance import source_from_organized
+            evidence = source_from_organized(store.db, account, fid, relative, old)
+            if not evidence or evidence[1] != str(pid):
+                return None, 'skipped', '受管文件或播放身份无法核实，已保留。'
+            source = evidence[0]
         expected = files.get(relative) if isinstance(files, dict) else None
         if not expected or (owner['account_id'], owner['file_id'], owner['digest']) != (account, fid, expected):
             return None, 'skipped', '本地输出归属无法核实，已保留。'

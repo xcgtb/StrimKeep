@@ -41,9 +41,15 @@ def source_fingerprints(db, rows, account):
             if not row or not output or not owner or not output['active']:
                 raise ValueError('网盘文件来源或输出归属不可核实')
             if (row['relative_path'] != path or output['relative_path'] != path
-                    or row['playback_id'] != output['playback_id']
                     or owner['account_id'] != account or str(owner['file_id']) != str(record_id)):
                 raise ValueError('网盘文件的来源身份不一致')
+            source = output['source']
+            if row['playback_id'] != output['playback_id']:
+                from .output_provenance import source_from_organized
+                recovered = source_from_organized(db, account, record_id, path, output)
+                if not recovered or recovered[1] != row['playback_id']:
+                    raise ValueError('网盘文件的来源身份不一致')
+                source = json.dumps(recovered[0],ensure_ascii=False,sort_keys=True,separators=(',',':'))
             try:
                 files = json.loads(output['files'])
             except (TypeError, ValueError):
@@ -51,7 +57,7 @@ def source_fingerprints(db, rows, account):
             if not isinstance(files, dict) or not files.get(path) or files[path] != owner['digest']:
                 raise ValueError('网盘文件的输出归属不一致')
             evidence = {'account_id': account, 'file_id': str(record_id), 'path': path,
-                        'playback_id': row['playback_id'], 'source': output['source'],
+                        'playback_id': row['playback_id'], 'source': source,
                         'trail': output['trail'], 'files': output['files'], 'owner_digest': owner['digest']}
         elif side == 'share':
             row = db.execute('SELECT id,share_code,receive_code,file_id,pickcode,strm_path,token_hash,revoked '

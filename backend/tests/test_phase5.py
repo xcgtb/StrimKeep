@@ -57,7 +57,7 @@ pytest.mark.parametrize('case',['delete','outside','listing_failure','auth_failu
 @pytest.mark.parametrize('case',['delete','outside','listing_failure','auth_failure','modified_local'])
 def test_sync_cleanup_is_scoped_and_never_guesses_absence(tmp_path,case):
     async def scenario():
-        store,cloud,http,engine,_=setup(tmp_path);cloud.add_video()
+        store,cloud,http,engine,_=setup(tmp_path);cloud.add_video()['sha1']='A'*40
         jid=new_job(store,sync_config());await engine.run_job(jid)
         registered=engine.outputs.get('1','1000');path=engine.root/registered['relative_path']
         if case=='outside':cloud.nodes['1000']['parent_id']='300'

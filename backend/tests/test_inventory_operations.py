@@ -129,3 +129,40 @@ def test_prepare_cloud_success_returns_info_status_message(tmp_path):
     assert isinstance(info, dict), (status, message)
     assert status is None and message == ''
     assert info['fid'] == '11' and info['pid'] == '22'
+
+
+def test_recover_source_from_matching_organized_evidence_without_modifying_index(tmp_path):
+    import asyncio, hashlib, json
+    from strimkeep.deep_delete import _prepare_cloud
+    from strimkeep.inventory_sources import source_fingerprints
+    from strimkeep.playaddr import play115_url
+    from strimkeep.store import digest
+    from test_organize import setup, new_job
+    store,cloud,http,engine,_=setup(tmp_path)
+    relative='媒体库/影片.strm';target=engine.root/relative;target.parent.mkdir(parents=True)
+    target.write_text(play115_url('http://play','pc1001','1001','A'*40,1000,'影片.mkv'),encoding='utf-8')
+    checksum=hashlib.sha256(target.read_bytes()).hexdigest()
+    original={'id':'1001','name':'原名.mkv','parent_id':'100','size':1000,'sha1':'A'*40}
+    plan={'target_name':'影片.mkv','dest':'200','relative_path':relative,'playback_id':'old-token'}
+    jid=new_job(store,{'account_id':'1','job_kind':'organize'})
+    with store.db:
+        cur=store.db.execute("insert into organize_items(job_id,file_id,original,state,plan) values(?,?,?,?,?)",(jid,'1001',json.dumps(original),'done',json.dumps(plan)))
+        item=cur.lastrowid
+        store.db.execute("insert into playbacks(id,file_id,pickcode,name,relative_path,token_hash,revoked,created) values(?,?,?,?,?,?,0,0)",('old-token','1001','pc1001','影片',relative,digest('')))
+        store.db.execute('insert into organized_files values(?,?,?,?,?,?)',('1001',jid,item,'old-token',relative,'{}'))
+        index={'kind':'netdisk','file_id':'1001','id':'1001','sha1':'A'*40,'size':1000,'pickcode':'pc1001'}
+        store.db.execute('insert into output_registry values(?,?,?,?,?,?,?,?,?,?)',('1','1001',json.dumps(index),'[]','','',relative,json.dumps({relative:checksum}),1,1))
+        store.db.execute('insert into owned_outputs values(?,?,?,?)',(relative,'1','1001',checksum))
+    before=store.db.execute('select source,playback_id from output_registry where file_id=?',('1001',)).fetchone()
+    info,status,message=_prepare_cloud(engine,{'file_id':'1001','playback_id':'old-token','relative_path':relative})
+    assert status is None and info['source']['name']=='影片.mkv' and info['pid']=='200'
+    assert source_fingerprints(store.db,[('cloud','1001',relative)],'1')
+    after=store.db.execute('select source,playback_id from output_registry where file_id=?',('1001',)).fetchone()
+    assert tuple(before)==tuple(after)
+    original['sha1']='B'*40
+    with store.db:store.db.execute('update organize_items set original=? where id=?',(json.dumps(original),item))
+    info,status,message=_prepare_cloud(engine,{'file_id':'1001','playback_id':'old-token','relative_path':relative})
+    assert info is None and status=='skipped'
+    import pytest
+    with pytest.raises(ValueError):source_fingerprints(store.db,[('cloud','1001',relative)],'1')
+    asyncio.run(http.aclose());store.close()

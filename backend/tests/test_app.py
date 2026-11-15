@@ -59,6 +59,21 @@ def sample(client):
     return response.json()
 
 
+def test_playback_cleanup_preserves_moved_legacy_strm(app, client):
+    kept = sample(client)['id']
+    app.state.store.db.execute(
+        "INSERT INTO playbacks VALUES(?,?,?,?,?,?,0,0)",
+        ('orphan-id', '999', 'pick', 'x', 'missing.strm', 'hash'))
+    app.state.store.db.commit()
+    moved = app.state.organizer.root / 'moved' / 'episode.strm'
+    moved.parent.mkdir(parents=True)
+    moved.write_text('https://example.test/play/' + kept)
+    response = client.post('/api/v1/playbacks/cleanup?include_active=true')
+    assert response.status_code == 200 and response.json()['removed'] == 1
+    ids = {row['id'] for row in app.state.store.db.execute('SELECT id FROM playbacks')}
+    assert kept in ids and 'orphan-id' not in ids
+
+
 def test_auth_csrf_origin_and_no_secret_echo(app, client):
     other = TestClient(app)
     assert other.get('/api/v1/settings').status_code == 401

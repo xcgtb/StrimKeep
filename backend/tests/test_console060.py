@@ -74,7 +74,7 @@ def test_cron_next_run_uses_shanghai_time_and_does_not_replay_missed_runs(tmp_pa
 def test_manual_full_sync_finds_deleted_files_and_cleans_orphan_strm_and_sidecars(tmp_path):
     # 定时任务已改为本地巡检（不枚举云端），云端删除由完全核对发现：这里用手动同步覆盖。
     async def run():
-        store,cloud,http,engine,_=setup(tmp_path);cloud.add_video(name='Movie.mkv')
+        store,cloud,http,engine,_=setup(tmp_path);cloud.add_video(name='Movie.mkv')['sha1']='A'*40
         jid=new_job(store,sync_config());await engine.run_job(jid)
         output=engine.outputs.get('1','1000');old=engine.root/output['relative_path']
         orphan=old.parent/'no-source.strm';orphan.write_text('http://unused')
@@ -92,7 +92,7 @@ def test_manual_full_sync_finds_deleted_files_and_cleans_orphan_strm_and_sidecar
 
 def test_full_sync_updates_renamed_and_moved_file_and_preserves_playback_token(tmp_path):
     async def run():
-        store,cloud,http,engine,_=setup(tmp_path);cloud.add_video(name='Original.mkv')
+        store,cloud,http,engine,_=setup(tmp_path);cloud.add_video(name='Original.mkv')['sha1']='A'*40
         await engine.run_job(new_job(store,sync_config()))
         first=engine.outputs.get('1','1000');old=engine.root/first['relative_path'];pid=first['playback_id']
         folder=(await cloud.mkdir('100','new folder'))['cid'];cloud.nodes['1000'].update(name='New Name.mkv',parent_id=folder)

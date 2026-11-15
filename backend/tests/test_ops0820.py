@@ -26,7 +26,7 @@ SHA1 = 'a' * 40
 SIZE = 12345
 NAME = '影片 (2020).mkv'
 RELATIVE = '电影/影片 (2020)/影片.strm'
-STALE = 'http://old-host:9000/play/deadbeef\n'
+STALE = 'http://old-host:9000/play/pid9001\n'
 
 
 def managed_app(tmp_path, monkeypatch, stale=STALE):
@@ -117,6 +117,31 @@ def test_rebuild_rewrites_address_and_keeps_a_rollback_snapshot(tmp_path, monkey
         files = json.loads(store.db.execute(
             'SELECT files FROM output_registry WHERE file_id=?', (FID,)).fetchone()['files'])
         assert files[RELATIVE] != ''
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_rebuild_keeps_file_replaced_by_another_source(tmp_path, monkeypatch):
+    foreign = 'https://other.example/play115/other/8002/' + 'B' * 40 + '/100/file.mkv'
+    app, client, path = managed_app(tmp_path, monkeypatch, stale=foreign)
+    try:
+        login(client)
+        result = client.post('/api/v1/strm/rebuild').json()
+        assert result['rewritten'] == 0 and result['failed'] == 1
+        assert path.read_text(encoding='utf-8') == foreign
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_rebuild_rollback_preserves_later_user_edits(tmp_path, monkeypatch):
+    app, client, path = managed_app(tmp_path, monkeypatch)
+    try:
+        login(client)
+        assert client.post('/api/v1/strm/rebuild').json()['rewritten'] == 1
+        path.write_text('user edit', encoding='utf-8')
+        result = client.post('/api/v1/strm/rebuild/rollback').json()
+        assert result['restored'] == 0
+        assert path.read_text(encoding='utf-8') == 'user edit'
     finally:
         client.__exit__(None, None, None)
 

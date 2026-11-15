@@ -1178,14 +1178,47 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         的孤儿一起删。正在用的身份（output_registry.active=1 引用）一个都不动。
         """
         clause = '' if include_active else ' AND p.revoked=1'
-        rows = store.db.execute(
-            'SELECT p.id, p.file_id, p.name FROM playbacks p WHERE NOT EXISTS ('
-            'SELECT 1 FROM output_registry o WHERE o.playback_id=p.id AND o.active=1)' + clause).fetchall()
+        def local_playback_ids():
+            from .identity import parse_url
+            root = app.state.organizer.root
+            if not root.is_dir():
+                raise OSError('STRM 目录不可用')
+            found = set()
+            def failed(exc):
+                raise exc
+            for parent, dirs, files in os.walk(root, onerror=failed, followlinks=False):
+                if any((Path(parent) / name).is_symlink() for name in dirs):
+                    raise OSError('STRM 目录包含无法核验的符号链接目录')
+                for name in files:
+                    if not name.lower().endswith('.strm'):
+                        continue
+                    path = Path(parent) / name
+                    if path.is_symlink():
+                        raise OSError('STRM 目录包含无法核验的符号链接文件')
+                    with path.open('r', encoding='utf-8') as stream:
+                        value = stream.read(65537)
+                    if len(value) > 65536:
+                        raise OSError('STRM 文件内容过长')
+                    identity = parse_url(value)
+                    if identity and identity.get('kind') == 'playback':
+                        found.add(identity['playback_id'])
+            return found
+        async with app.state.organizer.publication_gate:
+            try:
+                local_ids = await asyncio.to_thread(local_playback_ids)
+            except (OSError, UnicodeError, ValueError):
+                raise HTTPException(409, '无法完整核验本地 STRM，播放身份清理未执行。') from None
+            rows = store.db.execute(
+                'SELECT p.id, p.file_id, p.name FROM playbacks p WHERE NOT EXISTS ('
+                'SELECT 1 FROM output_registry o WHERE o.playback_id=p.id AND o.active=1) '
+                'AND NOT EXISTS (SELECT 1 FROM organized_files f WHERE f.playback_id=p.id)' + clause).fetchall()
+            rows = [row for row in rows if row['id'] not in local_ids]
+            if rows:
+                with store.db:
+                    for row in rows:
+                        store.db.execute('DELETE FROM playbacks WHERE id=?', (row['id'],))
         if not rows:
             return {'removed': 0, 'kept': 0, 'message': '没有可清理的播放身份。'}
-        with store.db:
-            for row in rows:
-                store.db.execute('DELETE FROM playbacks WHERE id=?', (row['id'],))
         store.event('play', '清理未被引用的播放身份 %d 条%s。'
                     % (len(rows), '' if include_active else '（仅已撤销）'))
         return {'removed': len(rows), 'kept': 0,

@@ -62,7 +62,7 @@ class Rebuild:
         """
         result = []
         rows = self.store.db.execute(
-            'SELECT * FROM output_registry WHERE account_id=? ORDER BY relative_path',
+            'SELECT * FROM output_registry WHERE account_id=? AND active=1 ORDER BY relative_path',
             (account,)).fetchall()
         for row in rows:
             relative = row['relative_path']
@@ -85,7 +85,17 @@ class Rebuild:
             # 结尾换行有两种历史写法：publication/sync 写的是「无换行」，write_strm() 写的是
             # 「带换行」。0.8.20 现场实测：949 条台账里 879 条是无换行形态。重建必须保持
             # 既有风格，否则会为了一个字节把整棵树重写一遍（还会打乱 owned_outputs 指纹）。
-            result.append({'relative': relative, 'path': path,
+            try:
+                expected_digest = json.loads(row['files'] or '{}').get(relative)
+            except (TypeError, ValueError, AttributeError):
+                expected_digest = None
+            owner = self.store.db.execute(
+                'SELECT account_id,file_id FROM owned_outputs WHERE relative_path=?', (relative,)).fetchone()
+            owner_ok = not owner or (str(owner['account_id']), str(owner['file_id'])) == (
+                str(account), str(row['file_id']))
+            result.append({'relative': relative, 'path': path, 'file_id': str(row['file_id']),
+                           'playback_id': str(row['playback_id'] or ''),
+                           'expected_digest': expected_digest, 'owner_ok': owner_ok,
                            'content': url.encode(), 'content_nl': (url + '\n').encode()})
         return result
 
@@ -105,13 +115,31 @@ class Rebuild:
         outcome = {'relative': item['relative'], 'checksum': None,
                    'action': 'failed', 'before': ''}
         try:
+            if not item['owner_ok']:
+                return outcome
+            if path.is_symlink():
+                return outcome
             if not path.is_file():
                 outcome['action'] = 'missing'
                 return outcome
             before = path.read_bytes()
+            if item.get('expected_before') and hashlib.sha256(before).hexdigest() != item['expected_before']:
+                return outcome
             if before in (item['content'], item['content_nl']):
                 outcome['action'] = 'unchanged'
                 outcome['checksum'] = hashlib.sha256(before).hexdigest()
+                return outcome
+            from .identity import parse_url
+            try:
+                identity = parse_url(before.decode('utf-8'))
+            except (UnicodeError, ValueError):
+                identity = None
+            matches = bool(identity and (
+                (identity.get('kind') == 'netdisk'
+                 and str(identity.get('file_id')) == item['file_id'])
+                or (identity.get('kind') == 'playback' and item['playback_id']
+                    and identity.get('playback_id') == item['playback_id'])))
+            if not matches and hashlib.sha256(before).hexdigest() != item['expected_digest']:
                 return outcome
             outcome['before'] = before.decode('utf-8', 'replace')
             content = item['content_nl'] if before.endswith(b'\n') else item['content']
@@ -129,17 +157,20 @@ class Rebuild:
     def _inspect_all(self, items, write):
         return [self._inspect(item, write) for item in items]
 
-    def _restore_all(self, files):
-        """线程内执行：把快照里的字节写回磁盘，返回成功条数。"""
-        restored = 0
+    def _restore_all(self, files, expected):
+        """仅还原仍与重建后指纹一致的文件。"""
+        restored = {}
         for relative, text in files.items():
             try:
                 path = self.engine.outputs.path(relative)
-                path.parent.mkdir(parents=True, exist_ok=True)
+                if path.is_symlink() or not path.is_file() or not expected.get(relative):
+                    continue
+                if hashlib.sha256(path.read_bytes()).hexdigest() != expected[relative]:
+                    continue
                 temporary = path.with_name(path.name + '.tmp-restore')
                 temporary.write_text(text, encoding='utf-8')
                 temporary.replace(path)
-                restored += 1
+                restored[relative] = hashlib.sha256(text.encode()).hexdigest()
             except (UncertainState, OSError):
                 continue
         return restored
@@ -176,17 +207,26 @@ class Rebuild:
         started = time.time()
         self.set_status(state='running', dry_run=bool(dry_run), total=len(items), done=0,
                         rewritten=0, unchanged=0, missing=0, failed=0, started=started)
-        inspected = await asyncio.to_thread(self._inspect_all, items, not dry_run)
+        inspected = await asyncio.to_thread(self._inspect_all, items, False)
+        backup = None
+        if not dry_run:
+            candidates = {row['relative']: row['before']
+                          for row in inspected if row['action'] == 'rewrite'}
+            if candidates:
+                backup = self.snapshot(candidates)
+                to_write = [{**item, 'expected_before': hashlib.sha256(
+                    candidates[item['relative']].encode()).hexdigest()}
+                    for item in items if item['relative'] in candidates]
+                written = await asyncio.to_thread(self._inspect_all, to_write, True)
+                by_path = {row['relative']: row for row in written}
+                inspected = [by_path.get(row['relative'], row) for row in inspected]
         counts = {'rewritten': 0, 'unchanged': 0, 'missing': 0, 'failed': 0}
         label = {'rewrite': 'rewritten', 'unchanged': 'unchanged',
                  'missing': 'missing', 'failed': 'failed'}
         for row in inspected:
             counts[label[row['action']]] += 1
         changed = {row['relative']: row['checksum'] for row in inspected if row['action'] == 'rewrite'}
-        backup = None
         if changed and not dry_run:
-            backup = self.snapshot({row['relative']: row['before']
-                                    for row in inspected if row['action'] == 'rewrite'})
             self.apply(changed, account)
         summary = {'scanned': len(items), 'dry_run': bool(dry_run), 'snapshot': backup,
                    'elapsed_seconds': round(time.time() - started, 2), **counts}
@@ -217,8 +257,10 @@ class Rebuild:
                     (json.dumps(files, ensure_ascii=False), time.time(),
                      row['account_id'], row['file_id']))
                 self.store.db.execute(
-                    'UPDATE owned_outputs SET digest=? WHERE relative_path=? AND account_id=? AND file_id=?',
-                    (checksum, relative, row['account_id'], row['file_id']))
+                    'INSERT INTO owned_outputs VALUES(?,?,?,?) ON CONFLICT(relative_path) DO UPDATE SET '
+                    'digest=excluded.digest WHERE owned_outputs.account_id=excluded.account_id '
+                    'AND owned_outputs.file_id=excluded.file_id',
+                    (relative, row['account_id'], row['file_id'], checksum))
 
     async def rollback(self, backup_id=None):
         """把最近一次（或指定）快照的字节写回，并同步台账指纹。
@@ -234,9 +276,14 @@ class Rebuild:
         else:
             row = self.latest_backup()
         files = json.loads(row['files'] or '{}')
-        restored = await asyncio.to_thread(self._restore_all, files)
-        changed = {relative: hashlib.sha256(text.encode()).hexdigest()
-                   for relative, text in files.items()}
+        account = self.engine.tasks.account()
+        expected = {row['relative_path']: row['digest'] for row in self.store.db.execute(
+            'SELECT w.relative_path,w.digest FROM owned_outputs w JOIN output_registry r '
+            'ON r.account_id=w.account_id AND r.file_id=w.file_id '
+            'WHERE w.account_id=? AND r.active=1 AND r.relative_path=w.relative_path',
+            (account,))}
+        changed = await asyncio.to_thread(self._restore_all, files, expected)
+        restored = len(changed)
         self.apply(changed, self.engine.tasks.account())
         self.set_status(state='rolled_back', done=restored, snapshot=row['id'])
         return {'restored': restored, 'snapshot': row['id'], 'at': row['at'], 'total': len(files)}

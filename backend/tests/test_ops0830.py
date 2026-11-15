@@ -57,12 +57,12 @@ def test_organize_options_allows_empty_library_name():
 def test_sync_relative_mirrors_the_cloud_directory_name():
     from strimkeep.sync import Sync
     config = {'archive_cid': ARCHIVE, 'library_dir_name': ''}
-    source = {'name': 'A.mkv', '_root': 'r',
-              '_path': [{'id': 'r', 'name': '115 网盘'}, {'id': ARCHIVE, 'name': NEW},
+    source = {'name': 'A.mkv', '_root': ARCHIVE,
+              '_path': [{'id': '0', 'name': '115 网盘'}, {'id': ARCHIVE, 'name': NEW},
                         {'id': 'x', 'name': '剧集'}]}
     assert Sync.relative(object(), source, config) == NEW + '/剧集/A.strm'
-    # 显式配置仍旧生效
-    assert Sync.relative(object(), source, {**config, 'library_dir_name': '旧库'}) == '旧库/剧集/A.strm'
+    # 同步始终使用实际网盘路径，不替换为本地别名。
+    assert Sync.relative(object(), source, {**config, 'library_dir_name': '旧库'}) == NEW + '/剧集/A.strm'
 
 
 def test_rewrite_handles_prefixes_and_nested_json():

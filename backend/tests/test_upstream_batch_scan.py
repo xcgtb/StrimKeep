@@ -161,7 +161,7 @@ def test_sync_mirrors_full_cloud_path_and_migrates_owned_old_output(tmp_path):
         second=new_job(store,config);await engine.run_job(second)
         assert engine.job(second)['state']=='completed',dict(engine.job(second))
         new_path=engine.root/'自建库'/'合集'/'Sample.strm'
-        assert new_path.is_file() and not old_path.exists()
+        assert new_path.is_file() and old_path.is_file()  # 保留范围之外无法核实的旧文件
         assert engine.outputs.get('1',video['id'])['relative_path']==str(new_path.relative_to(engine.root))
         await http.aclose();store.close()
     asyncio.run(run())
