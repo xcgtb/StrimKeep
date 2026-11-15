@@ -492,20 +492,21 @@ class Notifications:
             unfinished=sum(item_state not in ('done','skipped') for items in groups.values() for _,item_state in items)
             duration=max(0,float(row['updated'])-float(row['created']))
             reused=sum(bool(plan.get('sync_unchanged')) for items in groups.values() for plan,_ in items)
-            lines=[sync_task_context(c).rstrip(), '结果：完成' if state=='completed' else '结果：部分未完成']
+            lines=[sync_task_context(c).rstrip(), '结果：完成' if state=='completed' else '结果：部分未完成', '']
             if len(roots)==1:
                 cid=roots[0]; detail=stats.get(cid) or {}
-                lines.append('云盘目录：'+str(labels.get(cid) or detail.get('name') or cid))
-                if detail.get('local_path'):lines.append('本地目录：'+str(detail['local_path']))
+                lines.append('☁️ 云盘目录：'+str(labels.get(cid) or detail.get('name') or cid))
+                if detail.get('local_path'):lines.append('📁 本地目录：'+str(detail['local_path']))
+                lines.append('')
             if c.get('sync_mode')=='cached':lines.append('扫描方式：复用近期清单')
             elif stats:
                 dirs=sum(int(item.get('directories',0) or 0) for item in stats.values())
                 files=sum(int(item.get('files',0) or 0) for item in stats.values())
                 label='扫描目录' if all(item.get('directories_exact',True) for item in stats.values()) else '文件路径涉及目录'
-                lines.append(f'{label}：{dirs} 个 · 扫描文件：{files} 个')
+                lines.append(f'📊 {label}：{dirs} 个 · 扫描文件：{files} 个')
                 seconds=sum(float(item.get('scan_seconds',0) or 0) for item in stats.values())
                 if seconds:lines.append(f'目录读取耗时：{seconds:.2f} 秒')
-            lines.extend([f'核对视频：{len(entries)} 个 · 复用：{reused} 个',
+            lines.extend(['', f'🎬 核对视频：{len(entries)} 个 · 复用：{reused} 个',
                           f'输出有变化的视频：{changed} 个', f'清理本地：{c.get("sync_removed",0)} 个文件'])
             metadata=list((c.get('sync_metadata_stats') or {}).values())
             downloaded=sum(int(m.get('downloaded',0) or 0) for m in metadata)
@@ -532,9 +533,16 @@ class Notifications:
                     count=sum(bool(plan.get('output_changed')) for plan,_ in items)
                     lines.append(f'· {name}：核对 {len(items)}，变化 {count}')
                 if len(roots)>5:lines.append(f'其余 {len(roots)-5} 个目录请查看任务详情')
-            lines.append(f'任务总耗时（含排队）：{duration:.2f} 秒')
-            await self.publish(f'strm:{row["id"]}:sync-summary','📦 STRM 同步结果',
-                '\n'.join(line for line in lines if line),
+            started = c.get('sync_execution_started_at')
+            if isinstance(started, (int, float)) and not isinstance(started, bool) and float(row['created']) <= started <= float(row['updated']):
+                elapsed = float(row['updated']) - started
+                lines.append(f'\n⏱ 执行耗时：{elapsed:.2f} 秒')
+                if duration - elapsed >= 1:
+                    lines.append(f'任务总耗时：{duration:.2f} 秒')
+            else:
+                lines.append(f'\n⏱ 任务总耗时：{duration:.2f} 秒')
+            await self.publish(f'strm:{row["id"]}:sync-summary','✅ STRM 同步完成' if state=='completed' else '⚠️ STRM 同步未全部完成',
+                '\n'.join(lines).strip(),
                 'success' if state=='completed' else 'warning',row['id'],category='strm_summary',
                 depends_on=f'strm:{row["id"]}:start')
             if state=='completed':

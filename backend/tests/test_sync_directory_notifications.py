@@ -1,4 +1,4 @@
-import asyncio,json
+import asyncio,json,time
 import pytest
 from test_organize import setup,new_job
 from test_phase5 import sync_config
@@ -25,7 +25,8 @@ def test_full_sync_reports_each_selected_root_even_when_empty(tmp_path):
         summary=reports[f'strm:{jid}:sync-summary']
         assert '电影来源' in summary and '空目录' in summary
         assert '扫描目录：2 个' in summary and '扫描文件：1 个' in summary
-        assert '核对视频：1 个' in summary and '任务总耗时' in summary
+        assert '核对视频：1 个' in summary and '执行耗时' in summary
+        assert '含排队' not in summary
         assert '本次无变化' not in summary
         if engine.notice_tasks:await asyncio.gather(*engine.notice_tasks)
         await http.aclose();store.close()
@@ -64,6 +65,46 @@ def test_completed_sync_summary_is_scheduler_completion_marker(tmp_path):
         await engine.notifications.job(engine.job(jid))
         assert store.db.execute('select count(*) from notifications where event_key=?',(f'strm:{jid}:sync-summary',)).fetchone()[0]==1
         await http.aclose();store.close()
+    asyncio.run(run())
+
+
+def test_sync_summary_distinguishes_execution_from_total(tmp_path):
+    async def run():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        now = time.time()
+        config = {**sync_config(['100']), 'mode':'incremental',
+                  'sync_execution_started_at': now - 4}
+        jid = new_job(store, config)
+        store.db.execute('UPDATE organize_jobs SET created=?,updated=?,state=? WHERE id=?',
+                         (now - 12, now, 'completed', jid))
+        store.db.commit()
+        await engine.notifications.job(engine.job(jid))
+        row = store.db.execute('SELECT message FROM notifications WHERE event_key=?',
+                               (f'strm:{jid}:sync-summary',)).fetchone()
+        assert '执行耗时：4.00 秒' in row['message']
+        assert '任务总耗时：12.00 秒' in row['message']
+        assert '含排队' not in row['message']
+        await http.aclose(); store.close()
+    asyncio.run(run())
+
+
+def test_unexpected_start_delivery_error_is_left_for_retry(tmp_path):
+    async def run():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        store.set_many({'notification_config': {'telegram_enabled':True,
+                         'bot_token':'test', 'chat_id':'1'}})
+        async def broken(*args):
+            raise RuntimeError('simulated transport failure')
+        engine.notifications._deliver = broken
+        jid = new_job(store, {**sync_config(['100']), 'notify_emby':False})
+        await engine.run_job(jid)
+        if engine.notice_tasks:
+            await asyncio.gather(*engine.notice_tasks, return_exceptions=True)
+        row = store.db.execute('SELECT telegram_state FROM notifications WHERE event_key=?',
+                               (f'strm:{jid}:start',)).fetchone()
+        assert row['telegram_state'] == 'unknown'
+        assert engine.job(jid)['state'] == 'completed'
+        await http.aclose(); store.close()
     asyncio.run(run())
 
 

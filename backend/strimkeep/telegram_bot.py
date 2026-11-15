@@ -126,14 +126,9 @@ class TelegramBot:
             await self.engine.notifications.publish(f'bot:{identity}:{update["update_id"]}',
                 '⚠️ STRM 同步未提交',self._safe_error(exc),chat_override=str(chat['id']),force=True)
             return
-        await answer('任务已加入队列。')
-        labels=details.get('directory_labels') or {}; roots=details.get('source_cids') or []
-        mode='全量同步' if details.get('mode')=='full' else '增量同步'
-        result=f'任务：{profile.get("name", "STRM 同步")}\n方式：{mode}\n队列：#{jid}'
-        if merged: result+='（已合并到等待中的相同任务）'
-        result+='\n目录：\n'+'\n'.join('• '+str(labels.get(cid) or cid) for cid in roots)
-        await self.engine.notifications.publish(f'bot:{identity}:{update["update_id"]}',
-            '🔄 STRM 同步已提交',result,chat_override=str(chat['id']),force=True,job_id=jid)
+        # The callback toast acknowledges submission; the durable start/result
+        # notifications carry task and directory details without a racing duplicate.
+        await answer(('已合并到任务 #' if merged else '已提交任务 #') + str(jid))
 
     async def handle(self,update,config,identity):
         if isinstance(update.get('callback_query'), dict):

@@ -62,7 +62,8 @@ def test_menu_and_callback_use_the_same_profiles_as_web(tmp_path):
         row=store.db.execute('SELECT id,config FROM organize_jobs').fetchone(); details=json.loads(row['config'])
         assert details['source_cids']==['100','200'] and details['mode']=='incremental'
         assert details['sync_profile_id']==profiles[0]['id'] and not details['scheduled']
-        assert '增量同步' in notes.notices[-1][0][2] and '#'+str(row['id']) in notes.notices[-1][0][2]
+        assert not notes.notices
+        assert any('#'+str(row['id']) in call[1]['json']['text'] for call in http.calls if 'answerCallbackQuery' in call[0])
         await bot.handle(callback(2,profiles[0]),config,'bot1')
         assert store.db.execute('SELECT count(*) FROM organize_jobs').fetchone()[0]==1
         await bot.handle(callback(3,profiles[1],callback_id='click2'),config,'bot1')
@@ -106,9 +107,10 @@ def test_menu_and_receipt_follow_saved_names_and_directories(tmp_path):
         await bot.handle(message(),{'allowed_user_id':'42'},'bot1')
         assert notes.sent[0][1]['reply_markup']['inline_keyboard'][0][0]['text']==name+' · 增量'
         await bot.handle(callback(2,profiles[0]),{'allowed_user_id':'42'},'bot1')
-        assert name in notes.notices[-1][0][2] and '115 网盘 / 自选目录' in notes.notices[-1][0][2]
+        assert not notes.notices
         details=json.loads(store.db.execute('SELECT config FROM organize_jobs').fetchone()[0])
-        assert details['source_cids']==['200']
+        assert details['source_cids']==['200'] and details['sync_profile_name']==name
+        assert details['directory_labels']['200']=='115 网盘 / 自选目录'
         store.close()
     asyncio.run(run())
 

@@ -765,12 +765,11 @@ class Sync:
         if hasattr(self.cloud, 'reset_ledger'):
             self.cloud.reset_ledger()
         started = time.time()
+        saved = json.loads(self.engine.job(jid)['config'])
+        saved['sync_execution_started_at'] = started
+        self.engine.update_job(jid, config=json.dumps(saved, ensure_ascii=False))
         try:
             await self._run(jid, config)
-            if config.get('stale_detect'):
-                # 全量扫描后做差集（只标记不删除）。这条链路以前只有测试在调，
-                # 打开开关也不会执行——现在真的接进同步流程。
-                await self.stale_check(jid, config)
             # 这个时间点只在本次真正跑完之后才更新，而且记的是**开始**时刻：
             # 扫描期间发生的改动下一轮还会被看到，不会漏。
             if str(self.engine.job(jid)['state'] or '') in ('completed', 'partial'):
@@ -970,9 +969,30 @@ class Sync:
             roots=config.get('source_cids') or []
             names = [str(labels.get(cid) or cid)[:80] for cid in roots[:5]]
             suffix = f' 等 {len(roots)} 个目录' if len(roots) > 5 else ''
-            await self.engine.notifications.publish(f'strm:{jid}:start','📋 STRM 同步开始',
+            notice = asyncio.create_task(self.engine.notifications.publish(
+                f'strm:{jid}:start','📋 STRM 同步开始',
                 sync_task_context(config)+'目录：'+'、'.join(names)+suffix,
-                job_id=jid,category='strm_summary')
+                job_id=jid,category='strm_summary'))
+            self.engine.notice_tasks.add(notice)
+            def notice_done(task):
+                self.engine.notice_tasks.discard(task)
+                if task.cancelled():
+                    return
+                exc = task.exception()
+                if exc is not None:
+                    try:
+                        with self.store.db:
+                            self.store.db.execute(
+                                "UPDATE notifications SET telegram_state='unknown',next_try=0 "
+                                "WHERE event_key=? AND telegram_state='inflight'",
+                                (f'strm:{jid}:start',))
+                        self.store.event('sync', '同步开始通知发送异常，已交由通知重试。')
+                    except Exception:
+                        pass
+            notice.add_done_callback(notice_done)
+            # Let publish persist its outbox record before a result can refer
+            # to it, without waiting for Telegram network delivery.
+            await asyncio.sleep(0)
             # 手动和定时同步都必须发现网盘新增、改名与移动；仅在整理后
             # 的目标目录增量任务缩小范围，普通同步不使用旧快照或本地巡检。
             if self.engine.scan_receive_gate.locked():
@@ -994,9 +1014,9 @@ class Sync:
         config.update({k:saved_config[k] for k in ('sync_filtered_ids','sync_metadata','sync_filter_count',
                                                 'sync_directory_stats','sync_effective_roots') if k in saved_config})
         cached = saved_config.get('sync_mode') == 'cached'
-        # Prefer existing cloud sidecars before generating missing metadata locally.
-        async with self.engine.publication_gate:
-            await self.download_metadata(jid, config)
+        # Network downloads run outside the publication gate; only the final
+        # verified local write needs to exclude concurrent publishers.
+        await self.download_metadata(jid, config)
         next_progress = 0.0
         for row in self.store.db.execute("SELECT * FROM organize_items WHERE job_id=? AND state NOT IN ('done','skipped') ORDER BY id",(jid,)).fetchall():
             self.engine.boundary(jid)
@@ -1085,6 +1105,9 @@ class Sync:
                         except Exception as exc:
                             cleanup_removed, cleanup_warnings = 0, ['失效清理未能完成：%s' % str(exc)[:60]]
                         removed += cleanup_removed; warnings.extend(cleanup_warnings)
+        if config.get('stale_detect'):
+            # The task is not complete until this configured check finishes.
+            await self.stale_check(jid, config)
         if json.loads(self.engine.job(jid)['config']).get('output_changed') and config.get('notify_emby',True):
             await self.engine.notify_emby(jid)
         self.engine.boundary(jid)
@@ -1096,6 +1119,7 @@ class Sync:
 
 
     async def download_metadata(self, jid, config):
+        from .core import UncertainState
         copied, skipped, failed, existing = 0, 0, 0, 0
         per_root = {}
         for source in config.get('sync_metadata', []):
@@ -1115,6 +1139,8 @@ class Sync:
                 stat['skipped'] += 1
                 continue
             started=time.monotonic()
+            account = self.engine.index.account(config)
+            revision = self.store.meta('sync_revision:' + account)
             # 与字幕同一条契约：清单新鲜且带 sha1/size/pickcode 时不再逐条回查云端，
             # 下载后用本地摘要比对清单 sha1（正常路径零回查，只有对不上才核实一次）。
             fresh = bool(source.get('_scan_at')) and time.time()-source['_scan_at'] < 900
@@ -1135,7 +1161,27 @@ class Sync:
                         self.store.event('sync','附属文件内容与清单摘要不一致，已按云端现状写入：'+source['name'])
                 else:
                     self.engine.check_source(source,await self.cloud.file(source['id']),source['name'],source['parent_id'])
-                written=bool(write_new(path,data,self.engine.root))
+                async with self.engine.publication_gate:
+                    self.engine.boundary(jid)
+                    current_revision = self.store.meta('sync_revision:' + account)
+                    if current_revision != revision:
+                        checked = await self.cloud.file(source['id'])
+                        self.engine.check_source(source, checked, source['name'], source['parent_id'])
+                        trail = await self.cloud.path_info(source['parent_id'])
+                        if trail != source.get('_path') or self.store.meta('sync_revision:' + account) != current_revision:
+                            raise UncertainState('附属文件目录已变化，下次同步重新核对。')
+                    write_task = asyncio.create_task(asyncio.to_thread(
+                        write_new, path, data, self.engine.root))
+                    try:
+                        written = bool(await asyncio.shield(write_task))
+                    except asyncio.CancelledError:
+                        # A thread cannot be cancelled: keep the gate until the
+                        # filesystem operation actually finishes.
+                        try:
+                            await write_task
+                        except Exception:
+                            pass
+                        raise
                 copied += written
                 stat['downloaded'] += written
                 if written:
@@ -1147,7 +1193,7 @@ class Sync:
                     else:_type='other'
                     stat['types'][_type]=stat['types'].get(_type,0)+1
                 if not written:stat['skipped']+=1
-            except (ValueError,httpx.HTTPError,CloudError) as exc:
+            except (ValueError,httpx.HTTPError,CloudError,UncertainState) as exc:
                 if isinstance(exc,CloudError) and exc.code in ('LOGIN_REQUIRED','LOGIN_INVALID'):raise
                 self.store.event('sync','附属文件下载未完成，保留已有文件：'+source['name'])
                 failed += 1

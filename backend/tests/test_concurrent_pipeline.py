@@ -1,8 +1,175 @@
 import asyncio
 import json
 import time
+import hashlib
+import threading
 import pytest
 from test_queue_priority import make
+
+
+def test_sync_scan_does_not_wait_for_telegram_delivery(tmp_path):
+    from test_organize import setup, new_job
+    from test_phase5 import sync_config
+    async def scenario():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        store.set_many({'notification_config': {'telegram_enabled': True,
+                         'bot_token': 'test', 'chat_id': '1'}})
+        config = {**sync_config(['100']), 'notify_emby': False, 'cleanup_missing': False}
+        jid = new_job(store, config)
+        sending, scanning, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        async def deliver(*args):
+            sending.set()
+            await release.wait()
+            return 'sent', 1
+        async def manifest(job_id, _config):
+            scanning.set()
+            saved = json.loads(engine.job(job_id)['config'])
+            saved.update(sync_metadata=[], sync_effective_roots=['100'],
+                         sync_directory_stats={'100': {'local_path': str(engine.root/'待整理')}})
+            engine.update_job(job_id, manifest=1, config=json.dumps(saved))
+        engine.notifications._deliver = deliver
+        engine.sync.manifest = manifest
+        job = asyncio.create_task(engine.run_job(jid))
+        try:
+            await asyncio.wait_for(sending.wait(), 2)
+            await asyncio.wait_for(scanning.wait(), 2)
+            assert store.db.execute('SELECT telegram_state FROM notifications WHERE event_key=?',
+                                    (f'strm:{jid}:start',)).fetchone()[0] == 'inflight'
+        finally:
+            release.set()
+            await asyncio.wait_for(job, 5)
+            if engine.notice_tasks:
+                await asyncio.gather(*engine.notice_tasks)
+            await http.aclose()
+            store.close()
+    asyncio.run(scenario())
+
+
+def test_sync_completion_waits_for_enabled_stale_check(tmp_path):
+    from test_organize import setup, new_job
+    from test_phase5 import sync_config
+    async def scenario():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        config = {**sync_config(['100']), 'notify_emby': False,
+                  'cleanup_missing': False, 'stale_detect': True}
+        jid = new_job(store, config)
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def check(*args):
+            entered.set()
+            await release.wait()
+        engine.sync.stale_check = check
+        task = asyncio.create_task(engine.run_job(jid))
+        try:
+            await asyncio.wait_for(entered.wait(), 3)
+            assert engine.job(jid)['state'] == 'running'
+            assert not store.db.execute('SELECT 1 FROM notifications WHERE event_key=?',
+                                        (f'strm:{jid}:sync-summary',)).fetchone()
+            release.set()
+            await asyncio.wait_for(task, 3)
+            assert engine.job(jid)['state'] == 'completed'
+        finally:
+            release.set()
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            if engine.notice_tasks:
+                await asyncio.gather(*engine.notice_tasks, return_exceptions=True)
+            await http.aclose()
+            store.close()
+    asyncio.run(scenario())
+
+
+def test_cancelled_sidecar_write_holds_gate_until_thread_finishes(tmp_path, monkeypatch):
+    from test_organize import setup, new_job
+    from test_phase5 import sync_config
+    import strimkeep.sync as sync_module
+    async def scenario():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        data = b'metadata'
+        source = cloud.add_video('1234', 'poster.jpg')
+        source.update(size=len(data), sha1=hashlib.sha1(data).hexdigest().upper())
+        source.update(_root='100', _path=await cloud.path_info('100'), _scan_at=time.time())
+        config = {**sync_config(['100']), 'sync_metadata':[source]}
+        jid = new_job(store, config)
+        engine.update_job(jid, state='running')
+        started, release = threading.Event(), threading.Event()
+        def blocked_write(*args):
+            started.set()
+            release.wait(5)
+            return True
+        async def download(*args):
+            return data
+        monkeypatch.setattr(sync_module, 'write_new', blocked_write)
+        engine.download = download
+        task = asyncio.create_task(engine.sync.download_metadata(jid, config))
+        try:
+            assert await asyncio.to_thread(started.wait, 2)
+            task.cancel()
+            await asyncio.sleep(0.05)
+            assert not task.done() and engine.publication_gate.locked()
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert not engine.publication_gate.locked()
+        finally:
+            release.set()
+            if not task.done():
+                await asyncio.gather(task, return_exceptions=True)
+            await http.aclose()
+            store.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('move_during_download', [False, True])
+def test_sync_sidecar_download_releases_publication_gate(tmp_path, move_during_download):
+    from test_organize import setup, new_job
+    from test_phase5 import sync_config
+    async def scenario():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        data = b'fixture metadata'
+        source = cloud.add_video('1234', 'poster.jpg')
+        source.update(size=len(data), sha1=hashlib.sha1(data).hexdigest().upper())
+        source.update(_root='100', _path=await cloud.path_info('100'), _scan_at=time.time())
+        config = {**sync_config(['100']), 'notify_emby': False, 'cleanup_missing': False}
+        jid = new_job(store, config)
+        async def manifest(job_id, _config):
+            saved = json.loads(engine.job(job_id)['config'])
+            saved.update(sync_metadata=[source], sync_effective_roots=['100'],
+                         sync_directory_stats={'100': {'local_path': str(engine.root/'待整理')}})
+            engine.update_job(job_id, manifest=1, config=json.dumps(saved))
+        engine.sync.manifest = manifest
+        started, release = asyncio.Event(), asyncio.Event()
+        async def download(*args):
+            started.set()
+            await release.wait()
+            return data
+        engine.download = download
+        job = asyncio.create_task(engine.run_job(jid))
+        try:
+            await asyncio.wait_for(started.wait(), 2)
+            # A different publisher must be able to make progress while I/O waits.
+            await asyncio.wait_for(engine.publication_gate.acquire(), 1)
+            engine.publication_gate.release()
+            if move_during_download:
+                cloud.nodes['1234']['parent_id'] = '200'
+                engine.sync.invalidate('1')
+            release.set()
+            await asyncio.wait_for(job, 5)
+            path = engine.root/'待整理'/'poster.jpg'
+            if move_during_download:
+                assert not path.exists()
+                stats = json.loads(engine.job(jid)['config'])['sync_metadata_stats']['100']
+                assert stats['failed'] == 1
+            else:
+                assert path.read_bytes() == data
+        finally:
+            release.set()
+            if not job.done():
+                job.cancel()
+                await asyncio.gather(job, return_exceptions=True)
+            await http.aclose()
+            store.close()
+    asyncio.run(scenario())
 
 
 def test_workers_start_independently_and_claim_once(tmp_path):
