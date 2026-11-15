@@ -10,6 +10,7 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from contextvars import ContextVar
+from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
 import httpx
@@ -147,6 +148,7 @@ class Cloud115:
     def __init__(self, store):
         self.store = store
         self.gate = asyncio.Lock()
+        self.share_check_gate = asyncio.Semaphore(4)
         # 播放取链不能用全局互斥：播放器开播会同时发几个请求，以前一把 Lock 把间隔和
         # 请求一起扣住，实测 6 个并发要 1.37 秒（≈ 6 ×（50ms 间隔 + 单次往返）），
         # 开播就卡在这一段。改成有限并发后请求可以同时飞，发车时刻仍由 PLAY_SPACING 把住。
@@ -410,8 +412,21 @@ class Cloud115:
         if wait > 0:
             await self.sleep(wait)
 
+    @asynccontextmanager
+    async def share_check_slot(self):
+        """限制在途数；只在共享锁内预留发起时间，网络等待不占用共享锁。"""
+        async with self.share_check_gate:
+            async with self.gate:
+                self.check_cooldown()
+                await self.sleep(max(0.0, self.next_request - self.clock()))
+                self.check_cooldown()
+                self.next_request = self.clock() + self.interval('read')
+            yield
+
     async def call(self, method, *args, _scope: str = 'generic', _kind: str = 'read', _batch: int = 0,
-                   _channel: str = '', _parents: tuple | None = None, _files: tuple = (), **kwargs):
+                   _channel: str = '', _parents: tuple | None = None, _files: tuple = (), _share_check: bool = False, **kwargs):
+        if _share_check and _kind != 'read':
+            raise ValueError('分享检测并发通道仅支持读取')
         playing = playback_request.get()
         if _kind == 'write':
             if _files:
@@ -429,15 +444,17 @@ class Cloud115:
             self.check_cooldown()
         else:
             self.check_waf()
-        gate, session = (self.play_gate, self.play_http) if playing else (self.gate, self.http)
+        gate, session = ((self.play_gate, self.play_http) if playing else
+                         (self.share_check_slot() if _share_check else self.gate, self.http))
         async with gate:
             if playing:
                 # 发车时刻在这里预留，请求本身不再被全局锁串起来。
                 await self.reserve_play_slot()
-            else:
+            elif not _share_check:
                 # Cooldown may have been entered while this request waited.
                 self.check_cooldown()
                 await self.sleep(max(0.0, self.next_request - self.clock()))
+                self.check_cooldown()
             try:
                 # SDK's parser contract is handled by its maintained httpx transport.
                 async with asyncio.timeout(15 if playing else 30):
@@ -493,12 +510,12 @@ class Cloud115:
                                      % exc.response.status_code, 'RATE_LIMITED', 503) from None
                 raise CloudError('115 请求未完成，请检查登录、网络或接口限制后重试。') from None
             finally:
-                if not playing:
+                if not playing and not _share_check:
                     if _batch:
                         # 一次调用已经覆盖 _batch 个文件，不必再按单文件 3 秒等。
-                        self.next_request = self.clock() + self.BATCH_GAP * self.throttle_scale
+                        self.next_request = max(self.next_request, self.clock() + self.BATCH_GAP * self.throttle_scale)
                     else:
-                        self.next_request = self.clock() + self.interval(_kind)
+                        self.next_request = max(self.next_request, self.clock() + self.interval(_kind))
 
     async def status(self):
         ok = await self.call(self.client().login_status)
@@ -1326,7 +1343,7 @@ class Cloud115:
         try:
             response = await self.call(self.client().share_snap_app,
                 {'share_code': share_code, 'receive_code': receive_code, 'cid': 0, 'limit': 1, 'offset': 0},
-                app='android', _scope='share')
+                app='android', _scope='share', _share_check=True)
         except CloudError as exc:
             # 4100010 是社区观察到的“分享已取消”代码；不要用笼统的“不存在”文案代替。
             if str(exc.errno) == '4100010':
