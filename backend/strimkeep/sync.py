@@ -447,7 +447,6 @@ class Sync:
             checksum = hashlib.sha256(data).hexdigest()
             if not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest() != checksum:
                 plan['local_files'][relative] = checksum
-                self.engine.update_item(row['id'], plan=plan, step='发布本地输出意图')
                 self.mark_changed(jid)
                 plan['output_changed'] = True
                 atomic_write(target, data, self.engine.root)
@@ -470,8 +469,8 @@ class Sync:
                              playback_base=config['playback_base'], target_name=source['name'],
                              dest=source['parent_id'])
                 self.store.jobs.set_item_plan(managed['id'], saved)
-        self.engine.update_item(row['id'], plan=plan, state='done',
-                                step='STRM 与字幕已核实同步', message='；'.join(warnings))
+        self.update_item(row['id'], plan=plan, state='done',
+                         step='STRM 与字幕已核实同步', message='；'.join(warnings))
 
     async def backfill_sidecars(self, jid, row, config):
         """Supplement missing metadata without replacing existing sidecars or STRM."""
@@ -513,6 +512,28 @@ class Sync:
         # Do not write the same plan a second time for every already complete item.
         if json.dumps(plan, sort_keys=True, ensure_ascii=False) != original_plan:
             self.engine.update_item(row['id'], plan=plan)
+
+    # ---- 条目写库批量提交 ----------------------------------------------
+    def begin_batch(self):
+        self._batch = []
+
+    def flush_batch(self):
+        pending, self._batch = getattr(self, '_batch', None), None
+        if not pending:
+            return
+        with self.store.db:
+            for item_id, values in pending:
+                self.engine.jobs.update_item(item_id, **values)
+
+    def update_item(self, item_id, **values):
+        pending = getattr(self, '_batch', None)
+        if pending is None:
+            self.engine.jobs.update_item(item_id, **values)
+            return
+        pending.append((item_id, values))
+        if len(pending) >= 64:
+            self.flush_batch()
+            self._batch = []
 
     def present_ids(self, jid, config):
         """本轮清单里出现过的文件身份（用来判断「本地这份还算不算在范围内」）。"""
@@ -842,6 +863,7 @@ class Sync:
         async with self.engine.publication_gate:
             await self.download_metadata(jid, config)
         next_progress = 0.0
+        self.begin_batch()
         for row in self.store.db.execute("SELECT * FROM organize_items WHERE job_id=? AND state NOT IN ('done','skipped') ORDER BY id",(jid,)).fetchall():
             self.engine.boundary(jid)
             now = time.monotonic()
@@ -864,7 +886,7 @@ class Sync:
                                 'UPDATE output_registry SET trail=? WHERE account_id=? AND file_id=? AND trail=? AND updated<=?',
                                 (json.dumps(repair['new'], ensure_ascii=False, separators=(',', ':')),
                                  self.engine.index.account(config), row['file_id'], repair['old'], started))
-                    self.engine.update_item(row['id'],plan=plan,state='done',step='输出未变更，已复用核对结果')
+                    self.update_item(row['id'],plan=plan,state='done',step='输出未变更，已复用核对结果')
             if plan:
                 await self.backfill_sidecars(jid, row, config)
                 continue
@@ -882,10 +904,11 @@ class Sync:
                 except CloudError as exc:
                     if exc.code in ('LOGIN_REQUIRED','LOGIN_INVALID'):
                         raise
-                    self.engine.update_item(row['id'],state='review',step='本文件同步未完成',message=str(exc))
+                    self.update_item(row['id'],state='review',step='本文件同步未完成',message=str(exc))
                 except UncertainState as exc:
-                    self.engine.update_item(row['id'],state='review',step='本文件同步未完成',message=str(exc))
+                    self.update_item(row['id'],state='review',step='本文件同步未完成',message=str(exc))
                 await self.backfill_sidecars(jid, row, config)
+        self.flush_batch()
         self.engine.boundary(jid)
         # Each source is verified immediately before its output is published.
         # Only missing registered outputs need a live-namespace check in cleanup.
