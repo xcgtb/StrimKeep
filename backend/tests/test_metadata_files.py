@@ -173,3 +173,47 @@ def test_unchanged_sync_schedules_missing_media_info(tmp_path):
         assert not cloud.writes
         await http.aclose();store.close()
     asyncio.run(run())
+
+
+def test_sync_prefers_cloud_nfo_to_generated_and_source_mode_never_identifies(tmp_path):
+    from test_phase5 import sync_config
+    async def run():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        store.set_many({'sync_config': {'generate_nfo': True, 'generate_images': True,
+                                       'metadata_extensions': ['.srt']}})
+        cloud.add_video(name='测试电影 (2024).mkv')['sha1']='A'*40
+        cloud.add_video('1001','测试电影 (2024).nfo')['size']=10
+        cloud.add_video('1002','poster.jpg')['size']=10
+        async def download(*args, **kwargs): return b'cloud nfo'
+        engine.download = download
+        task = {'id':'source', 'name':'已有信息', 'source_cid':'100', 'source_cids':['100'],
+                'source_labels':{'100':'目录'}, 'mode':'incremental', 'metadata_mode':'source'}
+        config=engine.tasks.sync_profile_config(task)
+        config['notify_emby']=False
+        async def no_identify(*args): raise AssertionError('source mode must not call TMDB')
+        engine.identify=no_identify
+        jid=new_job(store,config); await engine.run_job(jid)
+        assert engine.job(jid)['state']=='completed',dict(engine.job(jid))
+        target=next(engine.root.rglob('*.strm'))
+        assert target.with_suffix('.nfo').read_bytes()==b'cloud nfo'
+        assert (target.parent/'poster.jpg').read_bytes()==b'cloud nfo'
+        assert not cloud.writes
+        await http.aclose();store.close()
+    asyncio.run(run())
+
+
+def test_cloud_nfo_downloaded_before_tmdb_backfill(tmp_path):
+    from test_phase5 import sync_config
+    async def run():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        cloud.add_video(name='测试电影 (2024).mkv')['sha1']='A'*40
+        cloud.add_video('1001','测试电影 (2024).nfo')['size']=10
+        async def download(*args, **kwargs): return b'cloud nfo'
+        engine.download = download
+        config={**sync_config(), 'notify_emby':False, 'generate_nfo':True,
+                'metadata_extensions':['.nfo']}
+        jid=new_job(store,config);await engine.run_job(jid)
+        assert engine.job(jid)['state']=='completed',dict(engine.job(jid))
+        assert next(engine.root.rglob('*.strm')).with_suffix('.nfo').read_bytes()==b'cloud nfo'
+        await http.aclose();store.close()
+    asyncio.run(run())

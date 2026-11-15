@@ -139,3 +139,24 @@ def test_profile_multiple_directories_manual_scheduled_and_edit(tmp_path, monkey
     assert client.post('/api/v1/sync/profiles', json={**body,'source_cids':['100','100']}).status_code == 422
     assert client.post('/api/v1/sync/profiles', json={**body,'source_cid':'','source_cids':[]}).status_code == 422
     client.__exit__(None, None, None)
+
+
+def test_profile_source_metadata_preserved_for_manual_scheduled_and_legacy_edit(tmp_path, monkeypatch):
+    app, client = _client(tmp_path, monkeypatch)
+    store = app.state.store
+    store.set_many({'sync_config': {'generate_nfo': True, 'generate_images': True,
+                                    'metadata_extensions': ['.srt']}})
+    body = {**profile('已有信息目录','incremental'), 'metadata_mode':'source'}
+    created = client.post('/api/v1/sync/profiles', json=body).json()
+    assert created['metadata_mode'] == 'source'
+    config = app.state.organizer.tasks.sync_profile_config(created)
+    assert not config['generate_nfo'] and not config['generate_images']
+    assert {'.nfo','.jpg','.png','.srt'} <= set(config['metadata_extensions'])
+    immediate = client.post('/api/v1/sync/profiles/'+created['id']+'/run').json()
+    saved = json.loads(store.db.execute('SELECT config FROM organize_jobs WHERE id=?', (immediate['id'],)).fetchone()[0])
+    assert saved['metadata_mode'] == 'source' and not saved['generate_nfo']
+    legacy = {key:value for key,value in body.items() if key != 'metadata_mode'}
+    edited = client.put('/api/v1/sync/profiles/'+created['id'], json=legacy).json()
+    assert edited['metadata_mode'] == 'source'
+    assert client.post('/api/v1/sync/profiles', json={**body,'metadata_mode':'invalid'}).status_code == 422
+    client.__exit__(None, None, None)

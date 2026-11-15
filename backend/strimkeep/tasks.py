@@ -69,6 +69,13 @@ class Tasks:
         config = self.config('strm_sync', roots, incremental=incremental)
         config['sync_profile_id'] = profile['id']
         config['sync_profile_name'] = profile['name']
+        config['metadata_mode'] = profile.get('metadata_mode') or 'inherit'
+        if config['metadata_mode'] == 'source':
+            config['generate_nfo'] = False
+            config['generate_images'] = False
+            # Keep user-selected subtitles/sidecars and add common pre-existing metadata.
+            extras = {'.nfo', '.jpg', '.jpeg', '.png', '.webp'} - set(config['video_extensions'])
+            config['metadata_extensions'] = sorted(set(config['metadata_extensions']) | extras)
         labels = profile.get('source_labels') or {profile['source_cid']:profile.get('source_label', profile['source_cid'])}
         config['directory_labels'] = {**config.get('directory_labels', {}), **labels}
         if not incremental:

@@ -1214,6 +1214,9 @@ class Sync:
         paths = {cid:await self.cloud.path_info(cid) for cid in config['source_cids']}
         async with self.engine.publication_gate:
             await self.engine.outputs.import_managed(jid,self.engine.index.account(config),paths)
+        # Prefer existing cloud sidecars before generating missing metadata locally.
+        async with self.engine.publication_gate:
+            await self.download_metadata(jid, config)
         next_progress = 0.0
         for row in self.store.db.execute("SELECT * FROM organize_items WHERE job_id=? AND state NOT IN ('done','skipped') ORDER BY id",(jid,)).fetchall():
             self.engine.boundary(jid)
@@ -1259,8 +1262,6 @@ class Sync:
                 except UncertainState as exc:
                     self.engine.update_item(row['id'],state='review',step='本文件同步未完成',message=str(exc))
                 await self.backfill_sidecars(jid, row, config)
-        async with self.engine.publication_gate:
-            await self.download_metadata(jid, config)
         self.engine.boundary(jid)
         # Each source is verified immediately before its output is published.
         # Only missing registered outputs need a live-namespace check in cleanup.
