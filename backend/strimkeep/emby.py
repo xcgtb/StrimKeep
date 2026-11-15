@@ -365,8 +365,8 @@ class EmbyDelivery:
                 managed=self.store.db.execute('SELECT plan FROM organize_items WHERE id=?',(proof.get('managed_item_id'),)).fetchone()
                 if not managed:continue
                 plan=json.loads(managed['plan']);update_type='Modified'
-            if not plan.get('relative_path') or not plan.get('playback_id'): continue
-            identity=(plan['relative_path'],plan['playback_id'])
+            if not plan.get('relative_path'): continue
+            identity=(plan['relative_path'],row['file_id'])
             if identity in seen:continue
             seen.add(identity)
             if job_config.get('job_kind') == 'strm_sync' and not plan.get('output_changed'): continue
@@ -381,7 +381,7 @@ class EmbyDelivery:
             title = details.get('title') or details.get('name') or re.split(r'\s*\(\d{4}\)|\s*\{tmdb-', folder)[0]
             mapping=self.store.get('console_config',{})
             emby_path=str(PurePosixPath(mapping.get('emby_strm_path','/strimkeep'))/relative)
-            result.append({'emby_path':emby_path,'update_type':update_type,'relative':relative, 'pid':plan['playback_id'], 'kind':hint.get('media_type'),
+            result.append({'emby_path':emby_path,'update_type':update_type,'relative':relative, 'pid':row['file_id'], 'kind':hint.get('media_type'),
                            'tmdb':details.get('id') or hint.get('tmdb_id'), 'title':title, 'confirmed':False})
         return result
 

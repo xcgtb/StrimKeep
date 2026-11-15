@@ -2690,16 +2690,12 @@ class Organizer:
                 self.update_job(job_id, state='cancelled', stage='历史分类迁移已停用',
                     message='历史分类迁移功能已移除；保留已有步骤，不再自动移动文件。旧分类可手动移回转存后重新整理。')
                 return
-            # 是就跳过登录/状态检查，115 挂了也能把本地输出修好。
-            sweep_now = (self.sync.should_sweep(config)
-                         if config.get('job_kind') == 'strm_sync' else None)
-            if not sweep_now:
-                await self.cloud.status()
+            await self.cloud.status()
             if config.get('job_kind') == 'transfer':
                 await self.transfer.run(job_id, config)
                 return
             if config.get('job_kind') == 'strm_sync':
-                await self.sync.run(job_id, config, sweep=sweep_now)
+                await self.sync.run(job_id, config)
                 return
             if config.get('cleanup_only'):
                 self.sync.invalidate(self.index.account(config))

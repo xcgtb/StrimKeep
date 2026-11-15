@@ -17,14 +17,14 @@ def test_full_sync_repairs_strm_and_backfills_sidecars_for_both_triggers(tmp_pat
   async def identify_with_art(hint):return {**await identify(hint),'poster_path':'/poster.jpg','backdrop_path':'/backdrop.jpg'}
   engine.identify=identify_with_art
   first=new_job(store,{**sync_config(),'notify_emby':False});await engine.run_job(first)
-  path=engine.root/engine.outputs.get('1','1000')['relative_path'];original=path.read_bytes();path.unlink()
+  path=next(engine.root.rglob('*.strm'));original=path.read_bytes();path.unlink()
   cloud.add_video('1005','测试电影 (2024).1080p.mkv')['sha1']='B'*40
   config={**sync_config(),'scheduled':scheduled,'full_scan':legacy_full_scan,'generate_nfo':True,'generate_images':True,'emby_media_info':True}
   jid=new_job(store,config);await engine.run_job(jid)
   row=engine.job(jid);saved=json.loads(row['config'])
   assert row['state']=='completed', (row['message'], [tuple(r) for r in store.db.execute('select state,message from organize_items where job_id=?',(jid,))])
   assert saved['sync_mode']=='full'
-  assert engine.outputs.get('1','1005') is not None
+  assert any('1005' in p.read_text(encoding='utf-8') for p in engine.root.rglob('*.strm'))
   assert path.read_bytes()==original
   assert path.with_suffix('.nfo').is_file()
   assert (path.parent/'poster.jpg').is_file()
@@ -45,7 +45,7 @@ def test_scheduled_sync_rebuilds_files_deleted_locally(tmp_path):
   store,cloud,http,engine,_=setup(tmp_path)
   cloud.add_video(name='测试电影 (2024).mkv')['sha1']='A'*40
   first=new_job(store,{**sync_config(),'notify_emby':False});await engine.run_job(first)
-  old=engine.outputs.get('1','1000');path=engine.root/old['relative_path'];before=path.read_bytes()
+  path=next(engine.root.rglob('*.strm'));before=path.read_bytes()
   path.unlink()
   jid=new_job(store,{**sync_config(),'scheduled':True,'full_scan':False,'notify_emby':False})
   await engine.run_job(jid)
