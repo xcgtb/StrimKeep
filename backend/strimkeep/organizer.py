@@ -909,6 +909,13 @@ class Organizer:
             self.close_recovered_items()
         except Exception:
             pass
+        # 垃圾回收放到线程里跑一次：现场「事件循环被阻塞 1.1 秒」的栈就停在
+        # notifications 的排序与 httpx 对象析构上，本质是 GC 撞在事件循环里。
+        try:
+            import gc
+            await asyncio.to_thread(gc.collect, 1)
+        except Exception:
+            pass
         # 账本对账：文件没了/已入库/已回到待整理 → 账本自己闭环；再让没活干的任务自己结项。
         try:
             await self.reconcile_ledger()

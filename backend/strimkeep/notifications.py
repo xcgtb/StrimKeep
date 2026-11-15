@@ -5,6 +5,7 @@ import json
 import os
 import time
 import re
+from functools import lru_cache
 from pathlib import Path
 
 import httpx
@@ -70,6 +71,7 @@ def _units(text):
     """Telegram 按 UTF-16 码元计长度，不是字符数。"""
     return len(text.encode('utf-16-le')) // 2
 
+@lru_cache(maxsize=8192)
 def natural_path_key(path):
     return tuple((0, int(part)) if part.isdigit() else (1, part.casefold())
                  for part in re.split(r'(\d+)', path))
