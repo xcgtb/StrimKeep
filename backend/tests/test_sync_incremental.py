@@ -25,7 +25,8 @@ def test_sync_full_and_incremental_endpoints_snapshot_their_mode(tmp_path, monke
         config = json.loads(app.state.store.db.execute(
             'SELECT config FROM organize_jobs WHERE id=?', (full.json()['id'],)).fetchone()['config'])
         assert config['mode'] == 'full' and config['full_scan'] is True
-        assert config['_force_full'] is True and config['trust_scan'] is False
+        # 全量也只重读清单：清单够新、身份齐全时不再逐文件回查云端。
+        assert config['_force_full'] is True and config['trust_scan'] is True
 
         app.state.store.set_meta('sync_watermark', {'at': 1234.5, 'job': 7, 'mode': 'full'})
         incremental = client.post('/api/v1/sync/incremental', json={})

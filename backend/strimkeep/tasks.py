@@ -79,7 +79,7 @@ class Tasks:
         labels = profile.get('source_labels') or {profile['source_cid']:profile.get('source_label', profile['source_cid'])}
         config['directory_labels'] = {**config.get('directory_labels', {}), **labels}
         if not incremental:
-            config.update({'full_scan': True, '_force_full': True, 'trust_scan': False, 'mode': 'full'})
+            config.update({'full_scan': True, '_force_full': True, 'trust_scan': True, 'mode': 'full'})
         return config
 
     @staticmethod

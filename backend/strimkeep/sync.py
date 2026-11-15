@@ -357,7 +357,7 @@ class Sync:
         # 清单即事实：本轮扫描刚拿到的 id/name/size/sha1/pickcode 够新、目录链自洽，
         # 就不再逐文件回查云端（每文件两跳网络正是旧实现慢的主因）。
         trusted = False
-        if config.get('trust_scan', True) and source.get('_scan_at'):
+        if source.get('_scan_at'):
             stamp = source.get('_scan_at')
             trail = source.get('_path') or []
             age = time.time() - stamp if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) else -1

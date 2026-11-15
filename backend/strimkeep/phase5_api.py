@@ -298,7 +298,7 @@ def install_phase5(app,store,admin,job_public):
         roots = body.source_cids or None
         if roots: await validate_roots(roots)
         config = {**config_for('strm_sync', roots), 'full_scan': True, '_force_full': True,
-                  'trust_scan': False, 'mode': 'full'}
+                  'trust_scan': True, 'mode': 'full'}
         jid, _ = engine().tasks.enqueue(config)
         return {**job_public(engine().job(jid)), 'mode': 'full'}
 
