@@ -41,6 +41,18 @@ class Outputs:
     def invalidate(self):
         self._cache, self._cache_at = None, 0.0
 
+    def note(self, relative, path, identity):
+        """刚落盘的一份输出直接写进索引缓存。
+
+        以前每写一个文件就整棵重扫一次，一次全量重写等于 O(文件数²) 次读盘 ——
+        877 个文件要几分钟，全耗在这上面。
+        """
+        if self._cache is None or not identity:
+            return
+        fid = str(identity.get('file_id') or '')
+        if fid:
+            self._cache[fid] = {'relative_path': relative, 'identity': identity, 'path': Path(path)}
+
     def scan(self):
         now = time.time()
         if self._cache is not None and now - self._cache_at < self.CACHE_SECONDS:

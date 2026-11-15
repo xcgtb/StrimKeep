@@ -454,8 +454,8 @@ class Sync:
                 self.mark_changed(jid)
                 plan['output_changed'] = True
                 atomic_write(target, data, self.engine.root)
-                # 刚落盘的文件要立刻能被「按 fid 找本地文件」看到。
-                self.engine.outputs.invalidate()
+                # 刚落盘的文件要立刻能被「按 fid 找本地文件」看到（只更新这一条）。
+                self.engine.outputs.note(relative, target, identity_of_file(target)[0])
             plan['local_files'][relative] = checksum
         plan['warnings'] = warnings
         with self.store.db:
