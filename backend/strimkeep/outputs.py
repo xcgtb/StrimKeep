@@ -1,15 +1,11 @@
-"""本地输出的「查询入口」——数据源就是磁盘，不再有任何登记表。
+"""本地输出的查询入口：事实在磁盘和云端清单，两张表只是索引缓存。
 
-旧版本这里是一张台账（output_registry / owned_outputs）：写过什么、内容指纹、
-播放令牌都往里记，同步时再拿它当「已经同步过」的依据。结果是本地删掉文件后
-同步仍然跳过。现在同一份信息全部可以从磁盘推导：
+旧版本这里是一张台账：写过什么、内容指纹、播放令牌都往里记，同步时再拿它当
+「已经同步过」的依据，于是本地删掉文件后同步仍然跳过。现在：
 
-- 路径：STRM 内容里的 /play115/<pickcode>/<fid>/<sha1>/<size>/<name>；
-- 指纹：直接算文件的 sha256；
-- 归属：身份里的 fid 就是网盘文件。
-
-所以这个类只剩「路径解析 + 按 fid 找本地文件」，写操作是空实现（保留调用点，
-真正落盘在 sync / organizer 里完成）。
+- 同步判定只看「云端清单 + 本地文件」；
+- 两张表由每轮同步结束时的 `reindex()` 按磁盘现状重写，只用于查询加速；
+- `get()` 走索引表（一次主键查询），不再为了一个文件号扫整棵树。
 """
 import hashlib
 import json
@@ -21,7 +17,6 @@ from .media import SUBTITLES
 
 
 class Outputs:
-    # 扫盘结果缓存：同一轮同步里会被逐文件查询，不能每次都走一遍目录树。
     CACHE_SECONDS = 5.0
 
     def __init__(self, engine):
@@ -41,30 +36,20 @@ class Outputs:
     def invalidate(self):
         self._cache, self._cache_at = None, 0.0
 
-    def note(self, relative, path, identity):
-        """刚落盘的一份输出直接写进索引缓存。
-
-        以前每写一个文件就整棵重扫一次，一次全量重写等于 O(文件数²) 次读盘 ——
-        877 个文件要几分钟，全耗在这上面。
-        """
-        if self._cache is None or not identity:
-            return
-        fid = str(identity.get('file_id') or '')
-        if fid:
-            self._cache[fid] = {'relative_path': relative, 'identity': identity, 'path': Path(path)}
-
     def scan(self):
+        """整棵树扫一遍（只给核对类流程用，调用方应放进线程）。"""
         now = time.time()
         if self._cache is not None and now - self._cache_at < self.CACHE_SECONDS:
             return self._cache
         index = {}
         root = self.engine.root
         for path in root.rglob('*.strm'):
-            try:
-                raw = path.read_text(encoding='utf-8')
-            except (OSError, UnicodeError):
-                continue
-            identity = parse_file(path) or hint(raw)
+            identity = parse_file(path)
+            if not identity:
+                try:
+                    identity = hint(path.read_text(encoding='utf-8'))
+                except (OSError, UnicodeError):
+                    identity = None
             if not identity or identity.get('kind') != 'netdisk':
                 continue
             try:
@@ -72,10 +57,7 @@ class Outputs:
             except ValueError:
                 continue
             index[str(identity['file_id'])] = {
-                'relative_path': relative,
-                'identity': identity,
-                'path': path,
-            }
+                'relative_path': relative, 'identity': identity, 'path': path}
         self._cache, self._cache_at = index, now
         return index
 
@@ -86,46 +68,61 @@ class Outputs:
             return None
 
     def get(self, account, fid):
-        """按文件身份取本地输出；没有就是没有（不再有「我记过」这回事）。"""
-        entry = self.scan().get(str(fid))
-        if not entry:
-            # 缓存可能是几秒前建的（文件刚写出来）：用整理登记里的路径定点确认一次。
-            for row in self.store.db.execute(
-                    'SELECT relative_path FROM organized_files WHERE file_id=?', (str(fid),)):
+        """按文件身份取本地输出：一次索引查询，不再为了一个文件号扫整棵树。"""
+        row = self.store.db.execute(
+            'SELECT account_id,file_id,source,trail,playback_id,token_cipher,relative_path,'
+            'files,active,updated FROM output_registry WHERE account_id=? AND file_id=?',
+            (str(account), str(fid))).fetchone()
+        if row and row['active']:
+            return dict(row)
+        # 索引还没建过（例如刚升级）：用整理登记的路径定点确认，只解析这一个文件。
+        for candidate in self.store.db.execute(
+                'SELECT relative_path FROM organized_files WHERE file_id=?', (str(fid),)):
+            try:
+                path = self.engine.root / candidate['relative_path']
+            except (KeyError, TypeError):
+                continue
+            identity = parse_file(path)
+            if not identity:
                 try:
-                    candidate = self.engine.root / row['relative_path']
-                except (KeyError, TypeError):
-                    continue
-                identity = parse_file(candidate) or None
-                if identity and str(identity.get('file_id')) == str(fid):
-                    entry = {'relative_path': row['relative_path'], 'identity': identity, 'path': candidate}
-                    self._cache = {**(self._cache or {}), str(fid): entry}
-                    break
-        if not entry:
-            return None
-        path = entry['path']
+                    identity = hint(path.read_text(encoding='utf-8'))
+                except (OSError, UnicodeError):
+                    identity = None
+            if not identity or str(identity.get('file_id')) != str(fid):
+                continue
+            checksum = self.digest(path)
+            source = {**identity, 'id': str(fid)}
+            return {'account_id': account, 'file_id': str(fid),
+                    'source': json.dumps(source, ensure_ascii=False),
+                    'trail': json.dumps([]), 'playback_id': None, 'token_cipher': '',
+                    'relative_path': candidate['relative_path'],
+                    'files': json.dumps({candidate['relative_path']: checksum}, ensure_ascii=False),
+                    'active': 1, 'updated': path.stat().st_mtime if path.exists() else 0}
+        return None
+
+    def note(self, account, relative, path, identity):
+        """刚落盘的一份输出只更新它自己那一行（O(1)），不扫盘。"""
+        if not identity:
+            return
+        fid = str(identity.get('file_id') or '')
+        if not fid:
+            return
         checksum = self.digest(path)
-        source = {**entry['identity'], 'id': str(fid)}
-        return {
-            'account_id': account,
-            'file_id': str(fid),
-            'source': json.dumps(source, ensure_ascii=False),
-            'trail': json.dumps([]),
-            'playback_id': None,
-            'token_cipher': '',
-            'relative_path': entry['relative_path'],
-            'files': json.dumps({entry['relative_path']: checksum}, ensure_ascii=False),
-            'active': 1,
-            'updated': path.stat().st_mtime if path.exists() else 0,
-        }
+        source = {**identity, 'id': fid}
+        stamp = time.time()
+        with self.store.db:
+            self.store.db.execute(
+                'INSERT OR REPLACE INTO output_registry(account_id,file_id,source,trail,playback_id,'
+                'token_cipher,relative_path,files,active,updated) VALUES(?,?,?,?,?,?,?,?,1,?)',
+                (str(account), fid, json.dumps(source, ensure_ascii=False, separators=(',', ':')),
+                 '[]', '', '', relative,
+                 json.dumps({relative: checksum}, ensure_ascii=False, separators=(',', ':')), stamp))
+            self.store.db.execute('INSERT OR REPLACE INTO owned_outputs VALUES(?,?,?,?)',
+                                  (relative, str(account), fid, checksum))
 
     # ---- 索引重建：两张旧表降级为磁盘缓存 ------------------------------
     def reindex(self, account):
-        """按磁盘现状重写 output_registry / owned_outputs。
-
-        它们不再是「我处理过什么」的记录，只是给旧查询用的索引；
-        本地文件被删掉后，重建一次索引里也就没有了，不会再挡住同步。
-        """
+        """按磁盘现状重写 output_registry / owned_outputs（调用方应放进线程）。"""
         account = str(account)
         now = time.time()
         rows = []
@@ -133,7 +130,8 @@ class Outputs:
             relative = entry['relative_path']
             checksum = self.digest(entry['path'])
             source = {**entry['identity'], 'id': str(fid)}
-            rows.append((account, str(fid), json.dumps(source, ensure_ascii=False, separators=(',', ':')),
+            rows.append((account, str(fid),
+                         json.dumps(source, ensure_ascii=False, separators=(',', ':')),
                          json.dumps([], separators=(',', ':')), relative,
                          json.dumps({relative: checksum}, ensure_ascii=False, separators=(',', ':')), now))
         with self.store.db:

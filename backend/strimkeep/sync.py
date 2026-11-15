@@ -457,7 +457,8 @@ class Sync:
                 plan['output_changed'] = True
                 atomic_write(target, data, self.engine.root)
                 # 刚落盘的文件要立刻能被「按 fid 找本地文件」看到（只更新这一条）。
-                self.engine.outputs.note(relative, target, identity_of_file(target)[0])
+                self.engine.outputs.note(self.engine.index.account(config), relative, target,
+                                         identity_of_file(target)[0])
             plan['local_files'][relative] = checksum
         plan['warnings'] = warnings
         with self.store.db:
@@ -551,7 +552,7 @@ class Sync:
             if plan_row.get('relative_path'):
                 expected[str(row['file_id'])] = plan_row['relative_path']
         removed = 0
-        for relative, identity in scan(self.engine.root).items():
+        for relative, identity in (await asyncio.to_thread(scan, self.engine.root)).items():
             if identity.get('kind') != 'netdisk':
                 continue
             fid = str(identity['file_id'])
@@ -630,7 +631,7 @@ class Sync:
         present = self.present_ids(jid, config)
         missing = []
         probes = 0
-        for relative, identity in scan(self.engine.root).items():
+        for relative, identity in (await asyncio.to_thread(scan, self.engine.root)).items():
             if identity.get('kind') != 'netdisk':
                 continue
             fid = str(identity['file_id'])
