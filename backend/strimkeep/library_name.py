@@ -21,14 +21,6 @@ def migrate(store,root):
     if old.exists() and new.exists():
         store.event('system','新旧媒体库目录同时存在，保留两边文件；全量同步按新目录核对，未强行覆盖。');return
     if not old.exists() and not (state=='started' and new.exists()):return
-    # Check local ownership collisions before moving a single directory.
-    owned=store.db.execute('SELECT * FROM owned_outputs').fetchall()
-    for row in owned:
-        relative=rewrite(row['relative_path'])
-        if relative!=row['relative_path']:
-            other=store.db.execute('SELECT account_id,file_id FROM owned_outputs WHERE relative_path=?',(relative,)).fetchone()
-            if other and tuple(other)!=(row['account_id'],row['file_id']):
-                store.event('system','媒体库新路径已有其他文件记录，保留旧目录，由后续同步逐项处理。');return
     with store.db:store.db.execute("INSERT OR REPLACE INTO meta VALUES('library_name_migration','started')")
     if old.exists():
         try:old.rename(new)
@@ -36,9 +28,7 @@ def migrate(store,root):
             store.event('system','影视媒体库目录更名未完成，原文件保留；请检查本地目录写权限，不阻塞其他任务。');return
     pending={}
     with store.db:
-        for row in store.db.execute('SELECT account_id,file_id,relative_path FROM output_registry').fetchall():
-            if row['relative_path'].startswith(OLD+'/'):pending[row['account_id']+':'+row['file_id']]=row['relative_path']
-        for table,columns in {'playbacks':['relative_path'],'organized_files':['relative_path'],'output_registry':['relative_path','files'],'owned_outputs':['relative_path'],'organize_items':['plan','original'],'organize_jobs':['config'],'emby_deliveries':['payload']}.items():
+        for table,columns in {'playbacks':['relative_path'],'organized_files':['relative_path'],'organize_items':['plan','original'],'organize_jobs':['config'],'emby_deliveries':['payload']}.items():
             for row in store.db.execute('SELECT rowid AS internal_row,* FROM '+table).fetchall():
                 for column in columns:
                     raw=row[column]

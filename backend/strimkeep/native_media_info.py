@@ -321,16 +321,11 @@ class NativeMediaInfo:
                     continue
                 if isinstance(candidate, dict) and candidate:
                     media = candidate
-                    # The archive registry is the ownership evidence for the
-                    # original cloud file; do not use a filename-derived size.
+                    # 源文件大小直接取本地 STRM 地址里的身份段，不再查登记表。
                     try:
-                        account = self.engine.index.account({})
-                        registered = self.store.db.execute(
-                            'SELECT source FROM output_registry WHERE account_id=? AND file_id=? AND relative_path=? AND active=1',
-                            (account, row['file_id'], target['relative'])).fetchone()
-                        source = json.loads(registered['source'] or '{}') if registered else {}
-                        if str(source.get('id') or '') == str(row['file_id']):
-                            source_size = source.get('size')
+                        registered = self.engine.outputs.get(self.engine.index.account({}), row['file_id'])
+                        if registered and registered['relative_path'] == target['relative']:
+                            source_size = json.loads(registered['source'] or '{}').get('size')
                     except Exception:
                         source_size = None
                     break

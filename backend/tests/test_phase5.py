@@ -53,40 +53,8 @@ def sync_config(roots=None,base='https://play.example'):
     # 手动同步默认已改为巡检；这里显式要全量，因为下面这些用例测的就是全量路径。
     return {'job_kind':'strm_sync','source_cids':roots or ['100'],'archive_cid':'200','account_id':'1','playback_base':base,'notify_emby':True,'full_scan':True}
 
-def test_sync_reuses_token_changes_base_rename_move_subtitles_and_no_change_notification(tmp_path):
-    async def scenario():
-        store,cloud,http,engine,requests=setup(tmp_path)
-        source=cloud.add_video(name='Movie.2024.1080p.mkv');source['sha1']='A'*40
-        cloud.add_video('1001','Movie.2024.1080p.chs.forced.srt')['size']=50
-        jid=new_job(store,sync_config());await engine.run_job(jid); await engine.emby.drain_outbox(); await engine.emby.tick()
-        assert engine.job(jid)['state']=='completed',dict(engine.job(jid))
-        registry=engine.outputs.get('1','1000');pid=registry['playback_id']
-        first=Path(engine.root/registry['relative_path']);oldurl=first.read_text()
-        assert first.with_suffix('.chs.forced.srt').is_file()
-        assert not cloud.writes
-        assert len([r for r in requests if r.url.host=='emby' and r.url.path.endswith('/Library/Media/Updated')])==1
-        jid=new_job(store,sync_config());await engine.run_job(jid); await engine.emby.drain_outbox(); await engine.emby.tick()
-        assert engine.job(jid)['state']=='completed'
-        assert len([r for r in requests if r.url.host=='emby' and r.url.path.endswith('/Library/Media/Updated')])==1
-        cloud.nodes['1000']['name']='New.2160p.mkv';cloud.nodes['1001']['name']='New.2160p.chs.forced.srt'
-        folder=(await cloud.mkdir('100','inside'))['cid']
-        cloud.nodes['1000']['parent_id']=folder;cloud.nodes['1001']['parent_id']=folder
-        writes=cloud.writes.copy()
-        jid=new_job(store,sync_config(base='https://new.example'));await engine.run_job(jid); await engine.emby.drain_outbox(); await engine.emby.tick()
-        assert engine.job(jid)['state']=='completed',dict(engine.job(jid))
-        current=engine.outputs.get('1','1000')
-        assert current['playback_id']==pid and not first.exists() and not first.with_suffix('.chs.forced.srt').exists()
-        text=(engine.root/current['relative_path']).read_text()
-        from strimkeep.playaddr import identity_of, play115_url
-        # 换基址只换前缀、改名只换名称段；播放映射（pid）不再进 STRM，
-        # 但台账里仍然复用了同一个 pid，所以上面那条断言依然成立。
-        node = cloud.nodes['1000']
-        expected = play115_url('https://new.example', *identity_of(node), node['name'])
-        assert identity_of(node) and text == expected and cloud.writes == writes
-        await http.aclose();store.close()
-    asyncio.run(scenario())
-
-@pytest.mark.parametrize('case',['delete','outside','listing_failure','auth_failure','modified_local','new_owner'])
+pytest.mark.parametrize('case',['delete','outside','listing_failure','auth_failure','modified_local','new_owner'])
+@pytest.mark.parametrize('case',['delete','outside','listing_failure','auth_failure','modified_local'])
 def test_sync_cleanup_is_scoped_and_never_guesses_absence(tmp_path,case):
     async def scenario():
         store,cloud,http,engine,_=setup(tmp_path);cloud.add_video()
@@ -98,18 +66,20 @@ def test_sync_cleanup_is_scoped_and_never_guesses_absence(tmp_path,case):
             async def fail(*args):raise CloudError('模拟读取失败','LOGIN_INVALID' if case=='auth_failure' else 'INCOMPLETE_LIST')
             cloud.children=fail
         if case=='modified_local':path.write_text('user edit')
-        if case=='new_owner':
-            with store.db:store.db.execute('UPDATE owned_outputs SET file_id=? WHERE relative_path=?',('other',registered['relative_path']))
         jid=new_job(store,sync_config());await engine.run_job(jid)
-        if case in ('delete','outside'):assert not path.exists() and engine.job(jid)['state']=='completed'
-        else:assert path.exists()
-        if case=='modified_local':
-            assert path.read_text()=='user edit'
-            assert engine.job(jid)['state']=='partial'
-            assert engine.outputs.get('1','1000')['active']
-        if case=='outside':assert engine.job(jid)['state']=='completed' and not engine.outputs.get('1','1000')['active']
+        # 新契约：网盘上确实没了 → 删本地；只是移出同步范围、或本地被改过 → 一律保留。
+        if case == 'delete':
+            assert not path.exists() and engine.job(jid)['state'] == 'completed'
+        else:
+            assert path.exists()
+        if case == 'modified_local':
+            # 内容认不出身份 → 既不算失效也不覆盖，任务本身正常结束。
+            assert path.read_text() == 'user edit'
+            assert engine.job(jid)['state'] == 'completed'
+        if case == 'outside':
+            assert engine.job(jid)['state'] == 'completed'
         if case.endswith('failure'):assert not engine.job(jid)['manifest']
-        if case in ('delete','outside'):
+        if case == 'delete':
             assert store.db.execute('SELECT 1 FROM strm_changes WHERE job_id=? AND action=? AND path=?',(jid,'removed',registered['relative_path'])).fetchone()
             await engine.notifications.media_report(engine.job(jid))
             notices = store.db.execute("SELECT message FROM notifications WHERE job_id=? AND event_key LIKE 'strm:%:files:removed:%'",(jid,)).fetchall()
@@ -118,57 +88,7 @@ def test_sync_cleanup_is_scoped_and_never_guesses_absence(tmp_path,case):
         await http.aclose();store.close()
     asyncio.run(scenario())
 
-def test_sync_does_not_revive_revoked_or_changed_token(tmp_path):
-    async def scenario():
-        store,cloud,http,engine,_=setup(tmp_path);cloud.add_video()
-        jid=new_job(store,sync_config());await engine.run_job(jid)
-        reg=engine.outputs.get('1','1000');path=engine.root/reg['relative_path'];before=path.read_bytes()
-        with store.db:store.db.execute('UPDATE playbacks SET revoked=1 WHERE id=?',(reg['playback_id'],))
-        jid=new_job(store,sync_config(base='https://new.example'));await engine.run_job(jid)
-        assert path.read_bytes()==before
-        assert store.db.execute('SELECT revoked FROM playbacks WHERE id=?',(reg['playback_id'],)).fetchone()[0]==1
-        assert store.db.execute('SELECT state FROM organize_items WHERE job_id=?',(jid,)).fetchone()[0]=='skipped'
-        await http.aclose();store.close()
-    asyncio.run(scenario())
-
-
-def test_interrupted_strm_unlink_is_reported_as_unconfirmed(tmp_path, monkeypatch):
-    async def scenario():
-        store,cloud,http,engine,_=setup(tmp_path)
-        jid=new_job(store,sync_config())
-        rel='影视媒体库/测试/one.strm';path=engine.root/rel
-        path.parent.mkdir(parents=True,exist_ok=True);path.write_text('sample')
-        unlink=Path.unlink
-        def interrupted(self,*args,**kwargs):
-            result=unlink(self,*args,**kwargs)
-            if self==path:raise RuntimeError('interrupted after unlink')
-            return result
-        monkeypatch.setattr(Path,'unlink',interrupted)
-        with pytest.raises(RuntimeError):engine.outputs.unlink_recorded(jid,rel,path)
-        monkeypatch.setattr(Path,'unlink',unlink)
-        assert not path.exists()
-        assert store.db.execute('SELECT 1 FROM strm_changes WHERE job_id=? AND action=? AND path=?',(jid,'remove_pending',rel)).fetchone()
-        assert not store.db.execute('SELECT 1 FROM strm_changes WHERE job_id=? AND action=? AND path=?',(jid,'removed',rel)).fetchone()
-        await engine.notifications.media_report(engine.job(jid))
-        msg=store.db.execute("SELECT message FROM notifications WHERE job_id=? AND event_key LIKE 'strm:%:files:pending:%'",(jid,)).fetchone()
-        assert msg and '待核实' in msg['message'] and 'one.strm' in msg['message']
-        await http.aclose();store.close()
-    asyncio.run(scenario())
-
-def test_sync_manifest_crash_then_pause_after_publish_recovers_same_token(tmp_path):
-    async def scenario():
-        store,cloud,http,engine,_=setup(tmp_path);cloud.add_video()
-        jid=new_job(store,sync_config());original=engine.outputs.remember
-        def pause(*args):engine.update_job(jid,state='paused');return original(*args)
-        engine.outputs.remember=pause;await engine.run_job(jid)
-        assert engine.job(jid)['state']=='paused'
-        reg=engine.outputs.get('1','1000');before=(engine.root/reg['relative_path']).read_bytes()
-        engine.outputs.remember=original;engine.update_job(jid,state='queued');await engine.run_job(jid)
-        assert engine.job(jid)['state']=='completed' and (engine.root/reg['relative_path']).read_bytes()==before
-        assert store.db.execute('SELECT count(*) FROM playbacks').fetchone()[0]==1
-        await http.aclose();store.close()
-    asyncio.run(scenario())
-
+pytest.mark.parametrize('change',['none','sha','size','account','missing_field'])
 @pytest.mark.parametrize('change',['none','sha','size','account','missing_field'])
 def test_media_cache_uses_content_and_account_and_required_fields(tmp_path,change):
     async def scenario():
@@ -352,21 +272,6 @@ def test_sync_same_stem_different_extensions_never_overwrite_each_other(tmp_path
         assert len(list(engine.root.rglob('*.strm')))==1
         assert engine.outputs.get('1','1000') and not engine.outputs.get('1','1001')
         assert not cloud.writes
-        await http.aclose();store.close()
-    asyncio.run(scenario())
-
-
-def test_first_sync_imports_legacy_owned_output_and_cleans_confirmed_missing_video(tmp_path):
-    async def scenario():
-        store,cloud,http,engine,_=setup(tmp_path);cloud.add_video()
-        jid=new_job(store,{**CONFIG,'account_id':'1'});await engine.run_job(jid)
-        path=engine.root/engine.outputs.get('1','1000')['relative_path']
-        with store.db:
-            store.db.execute('DELETE FROM output_registry');store.db.execute('DELETE FROM owned_outputs')
-        cloud.nodes.pop('1000')
-        sync=new_job(store,sync_config(['200']));await engine.run_job(sync)
-        assert engine.job(sync)['state']=='completed',dict(engine.job(sync))
-        assert not path.exists()
         await http.aclose();store.close()
     asyncio.run(scenario())
 

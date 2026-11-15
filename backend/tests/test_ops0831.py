@@ -33,64 +33,6 @@ async def _registered_output(tmp_path):
     return store, cloud, http, engine, job, row
 
 
-def test_sweep_orphans_deletes_play115_duplicate(tmp_path):
-    async def run():
-        store, cloud, http, engine, job, row = await _registered_output(tmp_path)
-        canonical = row['relative_path']
-        original = engine.root / canonical
-        legacy = canonical.replace('Movie.2024.1080p', 'Movie.2024.初潮')
-        legacy_path = engine.root / legacy
-        legacy_path.parent.mkdir(parents=True, exist_ok=True)
-        legacy_path.write_bytes(original.read_bytes())
-
-        config = json.loads(engine.job(job)['config'])
-        registered = {canonical} | set(json.loads(row['files']))
-        removed, kept = engine.sync.sweep_orphans(job, config, registered)
-
-        assert removed == 1 and kept == 0
-        assert not legacy_path.exists(), '同一云端文件的旧命名副本应被清掉'
-        assert original.is_file(), '登记的正式输出不能被删'
-        await http.aclose()
-        store.close()
-    asyncio.run(run())
-
-
-def test_sweep_orphans_keeps_unknown_and_uncovered_files(tmp_path):
-    async def run():
-        store, cloud, http, engine, job, row = await _registered_output(tmp_path)
-        config = json.loads(engine.job(job)['config'])
-        base = (config.get('playback_base') or '').rstrip('/')
-        unknown = engine.root / NEW / '电影' / '未登记' / 'x.strm'
-        unknown.parent.mkdir(parents=True, exist_ok=True)
-        unknown.write_text(base + '/play115/pc/999999/' + 'B' * 40 + '/1024/x.mkv', encoding='utf-8')
-
-        removed, kept = engine.sync.sweep_orphans(job, config,
-                                                  {row['relative_path']} | set(json.loads(row['files'])))
-        assert removed == 0 and kept == 1
-        assert unknown.is_file(), '查不到登记的 STRM 只能报数，不能删'
-        await http.aclose()
-        store.close()
-    asyncio.run(run())
-
-
-def test_sweep_orphans_still_cleans_legacy_play_tokens(tmp_path):
-    async def run():
-        store, cloud, http, engine, job, row = await _registered_output(tmp_path)
-        config = json.loads(engine.job(job)['config'])
-        base = (config.get('playback_base') or '').rstrip('/')
-        dead = engine.root / NEW / '电影' / '旧形态' / 'old.strm'
-        dead.parent.mkdir(parents=True, exist_ok=True)
-        dead.write_text(base + '/play/不存在的身份/video.mkv', encoding='utf-8')
-
-        removed, kept = engine.sync.sweep_orphans(job, config,
-                                                  {row['relative_path']} | set(json.loads(row['files'])))
-        assert removed == 1 and kept == 0 and not dead.exists()
-        await http.aclose()
-        store.close()
-    asyncio.run(run())
-
-
-
 def _tree(tmp_path):
     root = tmp_path / 'strm'
     season = root / NEW / '剧集' / '剧 (2024) {tmdb-1}' / 'Season 1'

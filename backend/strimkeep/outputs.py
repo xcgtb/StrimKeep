@@ -16,7 +16,7 @@ import json
 import time
 from pathlib import Path
 
-from .identity import parse_file
+from .identity import hint, parse_file
 from .media import SUBTITLES
 
 
@@ -48,7 +48,11 @@ class Outputs:
         index = {}
         root = self.engine.root
         for path in root.rglob('*.strm'):
-            identity = parse_file(path)
+            try:
+                raw = path.read_text(encoding='utf-8')
+            except (OSError, UnicodeError):
+                continue
+            identity = parse_file(path) or hint(raw)
             if not identity or identity.get('kind') != 'netdisk':
                 continue
             try:
@@ -89,6 +93,35 @@ class Outputs:
             'active': 1,
             'updated': path.stat().st_mtime if path.exists() else 0,
         }
+
+    # ---- 索引重建：两张旧表降级为磁盘缓存 ------------------------------
+    def reindex(self, account):
+        """按磁盘现状重写 output_registry / owned_outputs。
+
+        它们不再是「我处理过什么」的记录，只是给旧查询用的索引；
+        本地文件被删掉后，重建一次索引里也就没有了，不会再挡住同步。
+        """
+        account = str(account)
+        now = time.time()
+        rows = []
+        for fid, entry in self.scan().items():
+            relative = entry['relative_path']
+            checksum = self.digest(entry['path'])
+            source = {**entry['identity'], 'id': str(fid)}
+            rows.append((account, str(fid), json.dumps(source, ensure_ascii=False, separators=(',', ':')),
+                         json.dumps([], separators=(',', ':')), relative,
+                         json.dumps({relative: checksum}, ensure_ascii=False, separators=(',', ':')), now))
+        with self.store.db:
+            self.store.db.execute('DELETE FROM output_registry WHERE account_id=?', (account,))
+            self.store.db.execute('DELETE FROM owned_outputs WHERE account_id=?', (account,))
+            for row in rows:
+                self.store.db.execute(
+                    'INSERT OR REPLACE INTO output_registry(account_id,file_id,source,trail,playback_id,'
+                    'token_cipher,relative_path,files,active,updated) VALUES(?,?,?,?,?,?,?,?,1,?)',
+                    (row[0], row[1], row[2], row[3], '', '', row[4], row[5], row[6]))
+                self.store.db.execute('INSERT OR REPLACE INTO owned_outputs VALUES(?,?,?,?)',
+                                      (row[4], row[0], row[1], json.loads(row[5])[row[4]]))
+        self.invalidate()
 
     # ---- 写操作：不再登记，保留接口 ------------------------------------
     def remember(self, account, source, trail, plan):

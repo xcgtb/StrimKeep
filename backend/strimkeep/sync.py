@@ -14,7 +14,7 @@ from .playaddr import candidates, identity_of, play115_candidates, play115_url, 
 from .store import digest
 from .sync_hash_worker import HashWorker, HashWorkerError
 from .message_templates import sync_task_context
-from .local_scan import scan, identity_of_file
+from .local_scan import fid_of, scan, identity_of_file
 
 
 class Sync:
@@ -444,6 +444,11 @@ class Sync:
         for relative, data in content.items():
             self.engine.boundary(jid)
             target = self.engine.outputs.path(relative)
+            if target.is_file() and fid_of(target) != str(source['id']):
+                # 同名路径已经被别的文件（或用户手写的内容）占着：保留它，不覆盖。
+                self.update_item(row['id'], plan=plan, state='review', step='同名文件已存在',
+                                 message='本地已有同名的其他文件，已保留，未覆盖。')
+                return
             checksum = hashlib.sha256(data).hexdigest()
             if not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest() != checksum:
                 plan['local_files'][relative] = checksum
@@ -578,8 +583,7 @@ class Sync:
                 if not fid or (item.get('account_id') and item['account_id'] != account):
                     rest.append({**item, 'error': '账号或文件身份不匹配，已保留。'}); continue
                 local = self.engine.outputs.path(relative)
-                identity, _ = identity_of_file(local)
-                if not identity or identity.get('kind') != 'netdisk' or str(identity['file_id']) != fid:
+                if fid_of(local) != fid:
                     rest.append({**item, 'error': '本地文件身份对不上，已保留。'}); continue
                 if await self.cloud.live_file_exists(fid):
                     rest.append({**item, 'error': '网盘源文件仍存在，已保留。'}); continue
@@ -595,14 +599,35 @@ class Sync:
 
     async def cleanup(self, jid, config, after=None):
         """清理：本地 STRM 的身份不在本轮清单里、云端也没了 → 删掉。"""
-        if not config.get('cleanup_missing'):
+        if config.get('cleanup_missing', True) is False:
             return 0, []
         present = self.present_ids(jid, config)
+        expected = {}
+        for row in self.store.db.execute('SELECT file_id, plan FROM organize_items WHERE job_id=?', (jid,)):
+            plan_row = json.loads(row['plan'] or '{}')
+            if plan_row.get('relative_path'):
+                expected[str(row['file_id'])] = plan_row['relative_path']
         removed, warnings = 0, []
         for relative, identity in scan(self.engine.root).items():
             if identity.get('kind') != 'netdisk':
                 continue
             fid = str(identity['file_id'])
+            want = expected.get(fid)
+            if want and want != relative and self.engine.outputs.path(want).is_file():
+                # 文件在网盘里换了目录：新位置已经写出来了，旧位置这份是副本。
+                try:
+                    old_path = self.engine.outputs.path(relative)
+                    from .internal_delete import remember
+                    if remember(self.store, [relative]):
+                        old_path.unlink()
+                        with self.store.db:
+                            self.store.db.execute('INSERT OR IGNORE INTO strm_changes VALUES(?,?,?)',
+                                                  (jid, 'removed', relative))
+                        removed += 1
+                        self.mark_changed(jid)
+                except Exception as exc:
+                    warnings.append('旧位置清理失败（%s）：%s' % (relative, str(exc)[:60]))
+                continue
             if fid in present:
                 continue
             self.engine.boundary(jid)
@@ -610,13 +635,15 @@ class Sync:
                 if await self.cloud.live_file_exists(fid):
                     continue
                 local = self.engine.outputs.path(relative)
-                current, _ = identity_of_file(local)
-                if not current or str(current.get('file_id')) != fid:
+                if fid_of(local) != fid:
                     warnings.append('已保留身份变化的本地文件：' + relative); continue
                 from .internal_delete import remember
                 if not remember(self.store, [relative]):
                     warnings.append('内部删除登记失败，已保留：' + relative); continue
                 local.unlink()
+                with self.store.db:
+                    self.store.db.execute('INSERT OR IGNORE INTO strm_changes VALUES(?,?,?)',
+                                          (jid, 'removed', relative))
                 removed += 1
                 self.mark_changed(jid)
             except Exception as exc:
@@ -863,7 +890,6 @@ class Sync:
         async with self.engine.publication_gate:
             await self.download_metadata(jid, config)
         next_progress = 0.0
-        self.begin_batch()
         for row in self.store.db.execute("SELECT * FROM organize_items WHERE job_id=? AND state NOT IN ('done','skipped') ORDER BY id",(jid,)).fetchall():
             self.engine.boundary(jid)
             now = time.monotonic()
@@ -908,7 +934,11 @@ class Sync:
                 except UncertainState as exc:
                     self.update_item(row['id'],state='review',step='本文件同步未完成',message=str(exc))
                 await self.backfill_sidecars(jid, row, config)
-        self.flush_batch()
+        # 把旧的两张索引按磁盘现状重写：删掉本地文件后，索引里也就没有了。
+        try:
+            self.engine.outputs.reindex(self.engine.index.account(config))
+        except Exception as exc:                    # 索引只是缓存，失败不影响本次同步
+            self.store.event('sync', '本地索引重建未完成：%s' % str(exc)[:60])
         self.engine.boundary(jid)
         # Each source is verified immediately before its output is published.
         # Only missing registered outputs need a live-namespace check in cleanup.

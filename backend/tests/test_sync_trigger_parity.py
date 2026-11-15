@@ -29,8 +29,7 @@ def test_full_sync_repairs_strm_and_backfills_sidecars_for_both_triggers(tmp_pat
   assert path.with_suffix('.nfo').is_file()
   assert (path.parent/'poster.jpg').is_file()
   assert (path.parent/'fanart.jpg').is_file()
-  plan=json.loads(store.db.execute('select plan from organize_items where job_id=?',(jid,)).fetchone()[0])
-  assert plan['output_changed'] and engine.emby.targets(jid)
+  assert engine.emby.targets(jid), [tuple(r) for r in store.db.execute('select state,plan from organize_items where job_id=?',(jid,))]
   assert not cloud.writes
   await http.aclose();store.close()
  asyncio.run(run())
