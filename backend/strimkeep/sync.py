@@ -331,14 +331,9 @@ class Sync:
 
     def relative(self, source, config):
         path = source['_path']; ids = [x['id'] for x in path]
-        archive = config.get('archive_cid')
-        if archive and archive in ids:
-            library = library_root(config, path)
-            parts = [library] + [x['name'] for x in path[ids.index(archive)+1:]]
-        else:
-            # Non-archive sources mirror their complete 115 path below the STRM root.
-            ids.index(source['_root'])  # selected root must actually be in the trail
-            parts = [entry['name'] for entry in path if str(entry['id']) != '0']
+        # Every source mirrors its complete 115 path below the STRM root.
+        ids.index(source['_root'])  # selected root must actually be in the trail
+        parts = [entry['name'] for entry in path if str(entry['id']) != '0']
         # Never silently turn separators into new path components.
         for name in parts + [source['name']]:
             if name in ('.','..') or '/' in name or '\\' in name or '\0' in name: raise ValueError('同步文件名含不安全路径字符。')

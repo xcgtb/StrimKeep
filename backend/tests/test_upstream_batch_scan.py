@@ -1,3 +1,4 @@
+from pathlib import Path
 import asyncio
 from types import SimpleNamespace
 import pytest
@@ -163,3 +164,13 @@ def test_sync_mirrors_full_cloud_path_and_migrates_owned_old_output(tmp_path):
         assert engine.outputs.get('1',video['id'])['relative_path']==str(new_path.relative_to(engine.root))
         await http.aclose();store.close()
     asyncio.run(run())
+
+
+def test_sync_mirrors_nested_archive_and_other_source_from_full_cloud_path(tmp_path):
+    store,cloud,http,engine,_=setup(tmp_path)
+    path=[{'id':'0','name':''},{'id':'10','name':'上级'}, {'id':'200','name':'归档'}, {'id':'300','name':'电影'}]
+    source={'_path':path,'_root':'200','name':'影片.mkv'}
+    assert engine.sync.relative(source,{'archive_cid':'200','library_dir_name':'旧名称'}) == str(Path('上级','归档','电影','影片.strm'))
+    source['_root']='10'
+    assert engine.sync.relative(source,{'archive_cid':'200'}) == str(Path('上级','归档','电影','影片.strm'))
+    asyncio.run(http.aclose());store.close()
