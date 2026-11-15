@@ -938,6 +938,20 @@ class Organizer:
         if archived:
             self.store.event('emby', f'历史未确认投递已归档 {archived} 条（超过 24 小时未确认）。')
 
+    def pending_notice_jobs(self):
+        # A completed sync publishes its own summary instead of a generic job notice.
+        # Treat that durable summary as completion evidence, including historical jobs.
+        return self.store.db.execute("""SELECT * FROM organize_jobs AS j
+            WHERE j.updated>=? AND j.state IN ('completed','partial','needs_review','waiting_login','cancelled')
+              AND j.notify_state!='not_needed'
+              AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.event_key='job:'||j.id||':'||j.state)
+              AND NOT (coalesce(json_extract(j.config,'$.job_kind'),'')='strm_sync' AND EXISTS (
+                  SELECT 1 FROM notifications n WHERE n.event_key=CASE
+                      WHEN json_extract(j.config,'$.sync_mode')='sweep' THEN 'strm:'||j.id||':summary'
+                      WHEN j.state='completed' THEN 'strm:'||j.id||':sync-summary'
+                      ELSE NULL END))
+            ORDER BY j.id LIMIT 20""",(float(self.store.meta('phase5_notice_since') or 0),)).fetchall()
+
     async def schedule_loop(self):
         while not self.closing:
             try:
@@ -966,7 +980,7 @@ class Organizer:
                 if time.time() - self._notice_retried >= 30:
                     self._notice_retried = time.time()
                     await self.notifications.retry()
-                rows = self.store.db.execute("SELECT * FROM organize_jobs WHERE updated>=? AND state IN ('completed','partial','needs_review','waiting_login','cancelled') AND notify_state!='not_needed' AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.event_key='job:'||organize_jobs.id||':'||organize_jobs.state) ORDER BY id LIMIT 20",(float(self.store.meta('phase5_notice_since') or 0),)).fetchall()
+                rows = self.pending_notice_jobs()
                 for row in rows:
                     self.queue_notice(row)
             except asyncio.CancelledError:

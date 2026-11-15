@@ -491,18 +491,38 @@ class Notifications:
             changed=sum(bool(plan.get('output_changed')) for items in groups.values() for plan,_ in items)
             unfinished=sum(item_state not in ('done','skipped') for items in groups.values() for _,item_state in items)
             duration=max(0,float(row['updated'])-float(row['created']))
-            lines=[sync_task_context(c).rstrip(), '结果：完成' if state=='completed' else '结果：部分未完成',
-                   f'核对视频：{len(entries)} 个', f'输出有变化的视频：{changed} 个',
-                   f'清理本地：{c.get("sync_removed",0)} 个文件']
+            reused=sum(bool(plan.get('sync_unchanged')) for items in groups.values() for plan,_ in items)
+            lines=[sync_task_context(c).rstrip(), '结果：完成' if state=='completed' else '结果：部分未完成']
+            if len(roots)==1:
+                cid=roots[0]; detail=stats.get(cid) or {}
+                lines.append('云盘目录：'+str(labels.get(cid) or detail.get('name') or cid))
+                if detail.get('local_path'):lines.append('本地目录：'+str(detail['local_path']))
+            if c.get('sync_mode')=='cached':lines.append('扫描方式：复用近期清单')
+            elif stats:
+                dirs=sum(int(item.get('directories',0) or 0) for item in stats.values())
+                files=sum(int(item.get('files',0) or 0) for item in stats.values())
+                label='扫描目录' if all(item.get('directories_exact',True) for item in stats.values()) else '文件路径涉及目录'
+                lines.append(f'{label}：{dirs} 个 · 扫描文件：{files} 个')
+                seconds=sum(float(item.get('scan_seconds',0) or 0) for item in stats.values())
+                if seconds:lines.append(f'目录读取耗时：{seconds:.2f} 秒')
+            lines.extend([f'核对视频：{len(entries)} 个 · 复用：{reused} 个',
+                          f'输出有变化的视频：{changed} 个', f'清理本地：{c.get("sync_removed",0)} 个文件'])
             metadata=list((c.get('sync_metadata_stats') or {}).values())
             downloaded=sum(int(m.get('downloaded',0) or 0) for m in metadata)
+            existing=sum(int(m.get('existing',0) or 0) for m in metadata)
             skipped=sum(int(m.get('skipped',0) or 0) for m in metadata)
             failed=sum(int(m.get('failed',0) or 0) for m in metadata)
-            if downloaded or skipped or failed:
+            if downloaded or existing or skipped or failed:
                 parts=[f'新增 {downloaded} 个']
+                if existing:parts.append(f'已存在 {existing} 个')
                 if skipped:parts.append(f'跳过 {skipped} 个')
                 if failed:parts.append(f'失败 {failed} 个')
                 lines.append('附属文件：'+' · '.join(parts))
+                types={key:sum(int((m.get('types') or {}).get(key,0) or 0) for m in metadata)
+                       for key in ('nfo','image','subtitle','json','other')}
+                labels_by_type={'nfo':'NFO','image':'图片','subtitle':'字幕','json':'JSON','other':'其他'}
+                breakdown=[f'{labels_by_type[key]} {count}' for key,count in types.items() if count]
+                if breakdown:lines.append('新增类型：'+' · '.join(breakdown))
             if unfinished:lines.append(f'待处理：{unfinished} 个')
             if len(roots)>1:
                 lines.append('目录：')
