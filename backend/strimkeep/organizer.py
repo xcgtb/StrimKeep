@@ -600,7 +600,7 @@ class Organizer:
                 if not self.closing:
                     await asyncio.sleep(.5)
 
-    async def start_share_check(self, wait: float = 8.0, scope=None):
+    async def start_share_check(self, wait: float = 8.0):
         """把一次分享存活检测丢到后台跑，不重入。
 
         0.9.56：实测 82 个分享串行取链要 **41 秒**，以前这段时长直接压在 HTTP 请求上
@@ -616,7 +616,7 @@ class Organizer:
 
         async def run():
             try:
-                return await share_service.check_alive(self, scope=scope) if scope else await share_service.check_alive(self)
+                return await share_service.check_alive(self)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

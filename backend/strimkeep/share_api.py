@@ -55,7 +55,7 @@ def install_share(app, store, admin):
         share_check_hours: int = Field(default=0, ge=0, le=8760)
         # 存活检测两种执行方式：固定间隔（按小时，锚在 03:00）或 Cron（5 段，按服务器时区）。
         share_check_mode: Literal['interval', 'cron'] = 'interval'
-        share_check_scope: Literal['file', 'share'] = 'file'
+        share_check_scope: Literal['file', 'share'] | None = None  # 接受旧页面参数，始终按分享检测
         share_check_cron: str = Field(default='0 3 * * *', max_length=100)
         share_prune_cron: str = Field(default='0 5 * * *', max_length=100)
 
@@ -136,7 +136,6 @@ def install_share(app, store, admin):
                 'share_scan_minutes': 5 if store.get('share_scan_minutes') in (None,'') else int(store.get('share_scan_minutes')),
                 'share_check_hours':saved.get('share_check_hours',0),
                 'share_check_mode':saved.get('share_check_mode','interval'),
-                'share_check_scope':saved.get('share_check_scope','file'),
                 'share_check_cron':saved.get('share_check_cron','0 3 * * *'),
                 'share_prune_cron':saved.get('share_prune_cron','0 5 * * *'),
                 'effective':share_effective_settings(store)}
@@ -144,7 +143,7 @@ def install_share(app, store, admin):
     @app.post('/api/v1/share/settings', dependencies=[Depends(admin)])
     async def set_settings(body: ShareSettingsInput):
         previous = store.get('share_settings', {}) or {}
-        changes={'share_settings':body.model_dump(exclude={'share_scan_minutes'}),'share_prune_cron':body.share_prune_cron,'share_prune_due':0}
+        changes={'share_settings':body.model_dump(exclude={'share_scan_minutes','share_check_scope'}),'share_prune_cron':body.share_prune_cron,'share_prune_due':0}
         if any(previous.get(k) != getattr(body, k) for k in ('share_check_mode', 'share_check_hours', 'share_check_cron')):
             changes['share_check_due'] = 0
         if body.share_scan_minutes is not None: changes['share_scan_minutes']=body.share_scan_minutes
@@ -428,4 +427,4 @@ def install_share(app, store, admin):
         压在 HTTP 请求上（页面假死）。小库仍然同步拿到结果；大库返回 pending，
         跑完照旧写 `share_check` 事件与 meta.share_check_last。
         """
-        return await app.state.organizer.start_share_check(wait=8.0, scope=scope) if scope else await app.state.organizer.start_share_check(wait=8.0)
+        return await app.state.organizer.start_share_check(wait=8.0)

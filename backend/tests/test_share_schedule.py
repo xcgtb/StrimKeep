@@ -336,13 +336,14 @@ def test_share_scope_settings_and_manual_route(tmp_path, monkeypatch):
     with TestClient(app) as c:
         login=c.post('/api/v1/auth/login',json={'username':'admin','password':'test-password-1234'})
         c.headers['X-CSRF-Token']=login.json()['csrf']
-        assert c.get('/api/v1/share/settings').json()['share_check_scope']=='file'
-        assert c.post('/api/v1/share/settings',json={'share_check_scope':'share'}).json()['share_check_scope']=='share'
+        assert 'share_check_scope' not in c.get('/api/v1/share/settings').json()
+        assert c.post('/api/v1/share/settings',json={'share_check_scope':'file'}).status_code==200
+        assert 'share_check_scope' not in app.state.store.get('share_settings')
         seen=[]
         async def run_check(wait=8.0, scope=None):
             seen.append(scope);return {'alive':0,'dead_count':0,'skipped':0,'scope':scope}
         app.state.organizer.start_share_check=run_check
-        assert c.post('/api/v1/share/check?scope=share').json()['scope']=='share'
-        assert c.post('/api/v1/share/check?scope=file').json()['scope']=='file'
+        assert c.post('/api/v1/share/check?scope=share').status_code==200
+        assert c.post('/api/v1/share/check?scope=file').status_code==200
         assert c.post('/api/v1/share/check?scope=invalid').status_code==422
-        assert seen==['share','file']
+        assert seen==[None,None]

@@ -269,19 +269,6 @@ def directories(root):
     return pending, lib, unident
 
 
-def share_is_dead(exc):
-    """115 明确判定分享不可用：文件不存在，或分享已被取消（errno 4100010）。
-
-    「分享已取消」返回的是 CLOUD_REJECTED 而不是 SHARE_NOT_FOUND，只认后者会让
-    死分享永远留着：STRM 一直 404，媒体信息提取一直失败，日志里只有「暂时无法判定」。
-    """
-    if not isinstance(exc, CloudError):
-        return False
-    if exc.code == 'SHARE_NOT_FOUND':
-        return True
-    return exc.code == 'CLOUD_REJECTED' and '分享已取消' in str(exc)
-
-
 def finish_share_wash(engine, intent):
     """Complete a published share replacement using its durable intent."""
     from urllib.parse import urlsplit
@@ -1268,17 +1255,15 @@ def _wash(engine, job_id, row, org_dir, dest, target_stem, hint, new_facts, poli
     return 'publish'
 
 
-async def check_alive(engine, scope=None):
-    """检查分享或逐文件取链；仅在确认取消且归属可核实时撤销。"""
+async def check_alive(engine):
+    """按分享核验；仅在确认取消且归属可核实时撤销。"""
     from .internal_delete import remember, recent
     store, root = engine.store, engine.root
     rows = store.db.execute(
         'SELECT id, name, share_code, receive_code, file_id, strm_path FROM share_strms WHERE revoked=0').fetchall()
-    scope = scope or (store.get('share_settings', {}) or {}).get('share_check_scope', 'file')
-    if scope not in ('share', 'file'):
-        scope = 'file'
+    scope = 'share'
     dead, alive, skipped, details = [], 0, 0, []
-    file_checks, avoided_checks, share_checks = 0, 0, 0
+    share_checks = 0
     status_cache = {}
     started = time.time()
     engine._share_check_progress = {'started_at': started, 'total': len(rows), 'processed': 0, 'alive': 0, 'dead': 0, 'skipped': 0, 'scope': scope}
@@ -1288,45 +1273,9 @@ async def check_alive(engine, scope=None):
             details.append({'id': row['id'], 'name': row['name'] or '', 'path': row['strm_path'] or '', 'status': status, 'reason': reason})
 
     for row in rows:
-        engine._share_check_progress.update(processed=alive + len(dead) + skipped, alive=alive, dead=len(dead), skipped=skipped, file_checks=file_checks, avoided_checks=avoided_checks)
+        engine._share_check_progress.update(processed=alive + len(dead) + skipped, alive=alive, dead=len(dead), skipped=skipped)
         share_key = (row['share_code'], row['receive_code'])
         try:
-            if scope == 'share':
-                if share_key not in status_cache:
-                    try:
-                        state = await engine.cloud.share_availability(*share_key)
-                    except Exception:
-                        state = 'unknown'
-                    share_checks += 1
-                    status_cache[share_key] = (state, time.time())
-                state = status_cache[share_key][0]
-                if state == 'accessible':
-                    alive += 1
-                    with store.db:
-                        store.db.execute('DELETE FROM share_check_candidates WHERE id=?', (row['id'],))
-                    continue
-                if state != 'cancelled':
-                    skipped += 1
-                    detail(row, 'unknown', '分享状态未能确认，已保留')
-                    continue
-            # 同一轮已独立确认整个分享取消：同组后续文件无需重复取链。
-            # 本地归属和至少 5 分钟后的第二次分享复核仍逐条执行。
-            if share_key in status_cache and status_cache[share_key][0] == 'cancelled':
-                avoided_checks += 1
-                raise CloudError('分享已取消', 'SHARE_NOT_FOUND', 404)
-            file_checks += 1
-            await engine.cloud.share_url_download(
-                row['file_id'], row['share_code'], row['receive_code'], 'StrimKeep/0.6')
-            alive += 1
-            with store.db:
-                store.db.execute('DELETE FROM share_check_candidates WHERE id=?', (row['id'],))
-        except CloudError as exc:
-            if not share_is_dead(exc):
-                skipped += 1
-                reasons = {'LOGIN_INVALID': '115 登录失效', 'LOGIN_REQUIRED': '115 未登录', 'RATE_LIMITED': '115 请求受限', 'CLOUD_REJECTED': '115 拒绝请求，无法确认分享状态', 'OBJECT_NOT_FOUND': '接口或对象未找到，无法确认分享状态'}
-                detail(row, 'unknown', reasons.get(exc.code, '115 请求失败，无法确认分享状态'))
-                continue
-            # 文件级“不存在”可能是目录、接口或权限错误；分享根状态必须独立核验。
             if share_key not in status_cache:
                 try:
                     state = await engine.cloud.share_availability(*share_key)
@@ -1335,13 +1284,14 @@ async def check_alive(engine, scope=None):
                 share_checks += 1
                 status_cache[share_key] = (state, time.time())
             share_state, observed_at = status_cache[share_key]
-            if share_state != 'cancelled':
+            if share_state == 'accessible':
+                alive += 1
                 with store.db:
                     store.db.execute('DELETE FROM share_check_candidates WHERE id=?', (row['id'],))
+                continue
+            if share_state != 'cancelled':
                 skipped += 1
-                reason = ('分享仍可访问，但此文件取链失败，需人工核实' if share_state == 'accessible'
-                          else '分享状态未能确认，已保留')
-                detail(row, 'unknown', reason)
+                detail(row, 'unknown', '分享状态未能确认，已保留')
                 continue
             # 两次独立检测至少间隔 5 分钟；记录只保存身份摘要，不保存分享码。
             identity = hashlib.sha256(json.dumps([row['share_code'], row['receive_code'], row['file_id']],
@@ -1411,7 +1361,7 @@ async def check_alive(engine, scope=None):
             continue
     finished = time.time()
     report = {'at': finished, 'started_at': started, 'total': len(rows), 'alive': alive,
-              'dead': len(dead), 'skipped': skipped, 'scope': scope, 'share_checks': share_checks, 'file_checks': file_checks, 'avoided_checks': avoided_checks, 'details': details,
+              'dead': len(dead), 'skipped': skipped, 'scope': scope, 'share_checks': share_checks, 'details': details,
               'details_truncated': max(0, len(dead) + skipped - len(details))}
     history = store.meta_json('share_check_history', []) or []
     previous = store.meta_json('share_check_last', {}) or {}
@@ -1419,9 +1369,9 @@ async def check_alive(engine, scope=None):
         history = [{**previous, 'total': sum(previous.get(k, 0) for k in ('alive', 'dead', 'skipped')), 'legacy': True, 'details': []}]
     store.set_meta('share_check_history', ([report] + history)[:20])
     store.set_meta('share_check_last', {'at': finished, 'alive': alive, 'dead': len(dead), 'skipped': skipped})
-    engine._share_check_progress.update(processed=len(rows), alive=alive, dead=len(dead), skipped=skipped, file_checks=file_checks, avoided_checks=avoided_checks)
-    store.event('share_check', '%s检测完成：可访问 %d 条，失效已清理 %d 条，无法判定 %d 条。' % ('分享' if scope == 'share' else '逐文件', alive, len(dead), skipped))
-    return {'alive': alive, 'dead': dead, 'dead_count': len(dead), 'skipped': skipped, 'scope': scope, 'share_checks': share_checks, 'file_checks': file_checks, 'avoided_checks': avoided_checks}
+    engine._share_check_progress.update(processed=len(rows), alive=alive, dead=len(dead), skipped=skipped)
+    store.event('share_check', '分享检测完成：可访问 %d 条，失效已清理 %d 条，无法判定 %d 条。' % (alive, len(dead), skipped))
+    return {'alive': alive, 'dead': dead, 'dead_count': len(dead), 'skipped': skipped, 'scope': scope, 'share_checks': share_checks}
 
 
 def pending_count(store):

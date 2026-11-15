@@ -216,24 +216,34 @@ class Notifications:
         self.report_gate = asyncio.Lock()
         self.group_gate = asyncio.Lock()
         self.send_gate = asyncio.Lock()
+        self.retry_gate = asyncio.Lock()
         self.next_send = 0.0
         self.media_gate = asyncio.Lock()
         with self.store.db:
+            self.store.db.execute('CREATE TABLE IF NOT EXISTS notification_dependencies(event_key TEXT PRIMARY KEY, depends_on TEXT NOT NULL)')
+            self.store.db.execute("UPDATE notifications SET telegram_state='unknown',next_try=0 WHERE telegram_state='inflight'")
             self.store.db.execute('CREATE TABLE IF NOT EXISTS media_notice_outbox(job_id INTEGER PRIMARY KEY)')
             self.store.db.execute("CREATE TABLE IF NOT EXISTS media_notice_groups(event_key TEXT PRIMARY KEY,job_id INTEGER,items TEXT NOT NULL)")
             self.store.db.execute("CREATE TABLE IF NOT EXISTS telegram_message_refs(event_key TEXT PRIMARY KEY,chat_id TEXT NOT NULL,message_id INTEGER NOT NULL,photo INTEGER NOT NULL,edited TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,next_try REAL NOT NULL DEFAULT 0)")
 
-    async def publish(self, key, title, message, level='info', job_id=None, test=False, photo=None, chat_override=None, force=False, category=None):
+    async def publish(self, key, title, message, level='info', job_id=None, test=False, photo=None, chat_override=None, force=False, category=None, depends_on=None):
         config = self.store.get('notification_config', {})
         category=category or category_for(key)
         categories={**CATEGORY_DEFAULTS,**config.get('categories',{})}
         for retired in RETIRED_CATEGORIES:
             categories[retired]=False
         enabled = (config.get('telegram_enabled', False) and categories.get(category,True)) or test or force
+        previous = self.store.db.execute('SELECT telegram_state,attempts FROM notifications WHERE event_key=?', (depends_on,)).fetchone() if depends_on else None
+        waiting = bool(enabled and previous and (previous['telegram_state'] in ('inflight', 'waiting') or
+                       (previous['telegram_state'] == 'unknown' and previous['attempts'] < RETRY_LIMIT)))
+        initial = 'waiting' if waiting else ('inflight' if enabled else 'disabled')
         with self.store.db:
-            cursor = self.store.db.execute('INSERT OR IGNORE INTO notifications(at,level,job_id,event_key,title,message,telegram_state) VALUES(?,?,?,?,?,?,?)',
-                (time.time(), level, job_id, key, title, message, 'inflight' if enabled else 'disabled'))
+            cursor = self.store.db.execute('INSERT OR IGNORE INTO notifications(at,level,job_id,event_key,title,message,telegram_state,photo) VALUES(?,?,?,?,?,?,?,?)',
+                (time.time(), level, job_id, key, title, message, initial, photo))
+            if cursor.rowcount and depends_on:
+                self.store.db.execute('INSERT OR REPLACE INTO notification_dependencies VALUES(?,?)', (key, depends_on))
         if not cursor.rowcount: return 'duplicate'
+        if waiting: return 'waiting'
         state = 'disabled'
         if enabled:
             token, chat = config.get('bot_token'), chat_override or config.get('chat_id')
@@ -280,17 +290,31 @@ class Notifications:
             return 'unknown', safe_telegram_error(exc, token)[:80]
 
     async def retry(self, now=None, limit=20):
+        async with self.retry_gate:
+            return await self._retry(now, limit)
+
+    async def _retry(self, now=None, limit=20):
         """重发临时失败的通知；对方明确拒收的不重发，超过上限的不再重发。"""
         now = time.time() if now is None else now
         config = self.store.get('notification_config', {})
         token, chat = config.get('bot_token'), config.get('chat_id')
         if not config.get('telegram_enabled') or not token or not chat:
             return 0
-        rows = self.store.db.execute(
-            "SELECT * FROM notifications WHERE telegram_state='unknown' AND attempts<? "
-            'AND next_try<=? ORDER BY id LIMIT ?', (RETRY_LIMIT, now, limit)).fetchall()
         sent = 0
-        for row in rows:
+        for _ in range(limit):
+            # 每次选择已到时且前一条已结束的最早消息；成功后同一轮继续放行后续分段。
+            row = self.store.db.execute("""SELECT n.* FROM notifications n
+                LEFT JOIN notification_dependencies d ON d.event_key=n.event_key
+                LEFT JOIN notifications p ON p.event_key=d.depends_on
+                WHERE ((n.telegram_state='unknown' AND n.attempts<? AND n.next_try<=?)
+                    OR n.telegram_state='waiting')
+                  AND (p.event_key IS NULL OR p.telegram_state IN ('sent','disabled','failed')
+                    OR (p.telegram_state='unknown' AND p.attempts>=?))
+                ORDER BY n.id LIMIT 1""", (RETRY_LIMIT, now, RETRY_LIMIT)).fetchone()
+            if not row:
+                break
+            with self.store.db:
+                self.store.db.execute("UPDATE notifications SET telegram_state='inflight' WHERE id=?", (row['id'],))
             state, detail = await self._deliver(row['title'], row['message'], row['photo'], chat, token)
             attempts = row['attempts'] + 1
             with self.store.db:
@@ -388,7 +412,10 @@ class Notifications:
             if pending:summary+=f'\n清理结果待核实：{len(pending)} 个 STRM'
             meta_line=self.metadata_line(job_id,ids)
             if meta_line:summary+='\n'+meta_line
-            await self.publish(prefix+':summary',f'📦 {source} · STRM 批量结果',summary,job_id=job_id,category='strm_summary')
+            previous_key = f'show_done:{job_id}:{group_key}'
+            summary_key = prefix+':summary'
+            await self.publish(summary_key,f'📦 {source} · STRM 批量结果',summary,job_id=job_id,category='strm_summary',depends_on=previous_key)
+            previous_key = summary_key
             for kind,heading,values in [('created','🆕 新增 STRM',created),('replaced','🔄 洗版替换',replaced_paths),
                                         ('removed','🧹 已清理旧 STRM',removed),('pending','⚠️ 清理结果待核实',pending)]:
                 if not values: continue
@@ -398,7 +425,9 @@ class Notifications:
                 title_label = 'STRM 与 NFO 文件明细' if count != len(listed) else 'STRM 文件明细'
                 chunks=strm_tree(listed)
                 for i,(chunk,title) in enumerate(zip(chunks,strm_detail_titles(chunks,count,title_label,source)),1):
-                    await self.publish(prefix+':files:'+kind+':'+str(i),title,heading+'\n'+chunk,job_id=job_id,category='strm_files')
+                    file_key = prefix+':files:'+kind+':'+str(i)
+                    await self.publish(file_key,title,heading+'\n'+chunk,job_id=job_id,category='strm_files',depends_on=previous_key)
+                    previous_key = file_key
         with self.store.db:
             self.store.db.executemany('INSERT OR IGNORE INTO strm_reported_items VALUES(?,?)', [(job_id,i) for i in ids])
             self.store.db.execute('DELETE FROM strm_group_outbox WHERE job_id=? AND group_key=?',(job_id,group_key))

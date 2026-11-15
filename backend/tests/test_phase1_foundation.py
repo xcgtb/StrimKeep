@@ -191,11 +191,11 @@ def test_share_check_alive_skips_unknown_errors_and_only_retires_proven_shares(t
                              ('s3', '2003', '接口'), ('s4', '2004', '失效'), ('s5', '2005', '正常')])
         result = c.post('/api/v1/share/check').json()
         # 缺少独立分享状态证据时均保留。
-        assert result['dead_count'] == 0 and result['skipped'] == 4 and result['alive'] == 1
+        assert result['dead_count'] == 0 and result['skipped'] == 5 and result['alive'] == 0
         report = c.get('/api/v1/share/check').json()['history'][0]
-        assert report['total'] == 5 and report['alive'] == 1 and report['dead'] == 0 and report['skipped'] == 4
-        assert {item['id'] for item in report['details']} == {'s1', 's2', 's3', 's4'}
-        assert next(item for item in report['details'] if item['id'] == 's2')['reason'] == '115 登录失效'
+        assert report['total'] == 5 and report['alive'] == 0 and report['dead'] == 0 and report['skipped'] == 5
+        assert {item['id'] for item in report['details']} == {'s1', 's2', 's3', 's4', 's5'}
+        assert next(item for item in report['details'] if item['id'] == 's2')['reason'] == '分享状态未能确认，已保留'
         assert 'recv' not in str(report) and 'code123' not in str(report)
         store = c.app.state.store
         states = {r['id']: r['revoked'] for r in store.db.execute('SELECT id,revoked FROM share_strms')}

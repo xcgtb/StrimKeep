@@ -51,7 +51,11 @@ def test_alive_check_rechecks_row_after_concurrent_organize(tmp_path):
         await share_service.check_alive(engine)
         store.db.execute('UPDATE share_check_candidates SET first_at=?', (time.time()-301,))
         store.db.commit()
-        cloud.share_url_download = expired
+        async def delayed_cancel(*args):
+            started.set()
+            await release.wait()
+            return 'cancelled'
+        cloud.share_availability = delayed_cancel
         task = asyncio.create_task(share_service.check_alive(engine))
         await started.wait()
         source = engine.root / entry['strm_path']
@@ -120,11 +124,10 @@ def test_share_check_needs_separate_observations_and_resets_after_recovery(tmp_p
         assert (await share_service.check_alive(engine))['dead_count'] == 0
         assert (await share_service.check_alive(engine))['dead_count'] == 0
         assert path.exists()
-        async def available(*args): return 'https://cdn.example/a', {}
-        cloud.share_url_download = available
+        async def available(*args): return 'accessible'
+        cloud.share_availability = available
         assert (await share_service.check_alive(engine))['alive'] == 1
         assert store.db.execute('SELECT count(*) FROM share_check_candidates').fetchone()[0] == 0
-        cloud.share_url_download = expired
         async def accessible(*args): return 'accessible'
         cloud.share_availability = accessible
         assert (await share_service.check_alive(engine))['dead_count'] == 0
@@ -197,35 +200,14 @@ def test_cancelled_share_group_avoids_repeated_file_requests(tmp_path):
         cloud.share_url_download, cloud.share_availability = expired, cancelled
         first = await share_service.check_alive(engine)
         assert first['dead_count'] == 0 and first['skipped'] == 55
-        assert len(calls) == 1 and len(share_calls) == 1
+        assert len(calls) == 0 and len(share_calls) == 1
         report=store.meta_json('share_check_history')[0]
-        assert report['file_checks'] == 1 and report['avoided_checks'] == 54
+        assert report['share_checks'] == 1
         assert all((engine.root / e['strm_path']).exists() for e in entries)
         store.db.execute('UPDATE share_check_candidates SET first_at=?', (time.time()-301,)); store.db.commit()
         second = await share_service.check_alive(engine)
-        assert second['dead_count'] == 55 and len(calls) == 2 and len(share_calls) == 2
+        assert second['dead_count'] == 55 and len(calls) == 0 and len(share_calls) == 2
         assert all(not (engine.root / e['strm_path']).exists() for e in entries)
-        await http.aclose(); store.close()
-    asyncio.run(scenario())
-
-
-def test_accessible_share_never_skips_other_file_checks(tmp_path):
-    async def scenario():
-        store, cloud, http, engine, _ = share_setup(tmp_path)
-        entries=share_service.generate(store, engine.root, {'share_code':'group','receive_code':'pw'},
-            [{'id':'1','name':'one.mkv','size':5000,'path':'Work/'},
-             {'id':'2','name':'two.mkv','size':5000,'path':'Work/'}])['created']
-        calls=[]
-        async def download(file_id,*args):
-            calls.append(file_id)
-            if file_id=='1': raise CloudError('文件不存在','SHARE_NOT_FOUND',404)
-            return 'https://cdn.example/file',{}
-        async def accessible(*args): return 'accessible'
-        cloud.share_url_download,cloud.share_availability=download,accessible
-        report=await share_service.check_alive(engine)
-        assert len(calls)==2 and report['alive']==1 and report['skipped']==1
-        assert store.meta_json('share_check_history')[0]['avoided_checks']==0
-        assert all((engine.root / e['strm_path']).exists() for e in entries)
         await http.aclose(); store.close()
     asyncio.run(scenario())
 
@@ -239,11 +221,11 @@ def test_fast_share_check_reuses_one_status_without_claiming_file_checks(tmp_pat
         async def accessible(*args): status_calls.append(args); return 'accessible'
         async def download(*args): file_calls.append(args); raise AssertionError('fast mode must not fetch file links')
         cloud.share_availability, cloud.share_url_download = accessible, download
-        result=await share_service.check_alive(engine, scope='share')
+        result=await share_service.check_alive(engine)
         assert result['scope']=='share' and result['alive']==55 and result['share_checks']==1
         assert not file_calls and len(status_calls)==1
         report=store.meta_json('share_check_history')[0]
-        assert report['scope']=='share' and report['file_checks']==0 and report['share_checks']==1
+        assert report['scope']=='share' and report['share_checks']==1
         await http.aclose();store.close()
     asyncio.run(scenario())
 
@@ -257,10 +239,10 @@ def test_fast_share_check_confirmation_is_two_independent_runs(tmp_path):
         async def cancelled(*args): calls.append(args); return 'cancelled'
         async def no_file(*args): raise AssertionError('fast mode must not fetch file links')
         cloud.share_availability,cloud.share_url_download=cancelled,no_file
-        first=await share_service.check_alive(engine, scope='share')
+        first=await share_service.check_alive(engine)
         assert first['skipped']==3 and first['dead_count']==0 and len(calls)==1
         store.db.execute('UPDATE share_check_candidates SET first_at=?', (time.time()-301,));store.db.commit()
-        second=await share_service.check_alive(engine, scope='share')
+        second=await share_service.check_alive(engine)
         assert second['dead_count']==3 and len(calls)==2
         assert all(not (engine.root/e['strm_path']).exists() for e in entries)
         await http.aclose();store.close()
@@ -274,7 +256,7 @@ def test_fast_share_unknown_never_triggers_cleanup(tmp_path):
             [{'id':'1','name':'one.mkv','size':5000,'path':'Work/'}])['created'][0]
         async def unavailable(*args): return 'unknown'
         cloud.share_availability=unavailable
-        result=await share_service.check_alive(engine, scope='share')
+        result=await share_service.check_alive(engine)
         assert result['skipped']==1 and result['dead_count']==0
         assert (engine.root/entry['strm_path']).exists()
         await http.aclose();store.close()

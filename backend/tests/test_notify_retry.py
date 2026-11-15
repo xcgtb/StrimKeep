@@ -110,3 +110,75 @@ def test_photo_survives_retry(tmp_path):
         assert 'caption' in http.calls[-1]
         store.close()
     asyncio.run(run())
+
+
+def test_grouped_media_retry_keeps_poster_and_details_in_order_for_both_libraries(tmp_path):
+    from test_organize import new_job
+    async def run(kind):
+        store=Store(tmp_path / kind, 'admin', 'test-password-1234')
+        enable(store)
+        http=FakeHTTP(['down','ok','ok','ok','ok'])
+        notes=Notifications(store,http)
+        async def send(token,method,payload): return await http.post('https://example.invalid/'+method,json=payload)
+        notes.send=send
+        jid=new_job(store,{'job_kind':kind})
+        group='series'
+        card='show_done:%s:%s'%(jid,group)
+        assert await notes.publish(card,'海报','正文',photo='https://img/x.jpg',job_id=jid,category='media')=='unknown'
+        items=[(i,{'relative_path':'library/series/S01E%02d.strm'%i,'strm_created':True}) for i in range(1,26)]
+        await notes.group_strm(jid,group,items)
+        rows=store.db.execute('SELECT event_key,telegram_state FROM notifications WHERE job_id=? ORDER BY id',(jid,)).fetchall()
+        assert len(rows)>=4 and rows[0]['telegram_state']=='unknown'
+        assert all(row['telegram_state']=='waiting' for row in rows[1:])
+        assert len(http.calls)==1
+        due=row_of(store,card)['next_try']
+        assert await notes.retry(now=due+1)==len(rows)
+        sent=[x.get('caption') or x.get('text') for x in http.calls[1:]]
+        assert sent[0].startswith('海报') and 'STRM 批量结果' in sent[1]
+        assert '文件明细 1/' in sent[2] and '文件明细 2/' in sent[3]
+        assert all(row['telegram_state']=='sent' for row in store.db.execute('SELECT telegram_state FROM notifications WHERE job_id=?',(jid,)))
+        store.close()
+    for kind in ('organize','share_organize'):
+        asyncio.run(run(kind))
+
+
+def test_waiting_chain_survives_restart_and_a_second_failure(tmp_path):
+    async def run():
+        store=Store(tmp_path/'data','admin','test-password-1234');enable(store)
+        http=FakeHTTP(['down','down','ok','ok'])
+        notes=Notifications(store,http)
+        async def send(token,method,payload): return await http.post('https://example.invalid/'+method,json=payload)
+        notes.send=send
+        await notes.publish('poster','海报','正文')
+        assert await notes.publish('detail','明细','正文',depends_on='poster')=='waiting'
+        due=row_of(store,'poster')['next_try']
+        assert await notes.retry(now=due+1)==0
+        assert row_of(store,'detail')['telegram_state']=='waiting' and len(http.calls)==2
+        notes=Notifications(store,http);notes.send=send
+        due=row_of(store,'poster')['next_try']
+        assert await notes.retry(now=due+1)==2
+        assert [x['text'].split('\n')[0] for x in http.calls]==['海报','海报','海报','明细']
+        store.close()
+    asyncio.run(run())
+
+
+def test_failed_summary_blocks_later_pages_until_retry(tmp_path):
+    from test_organize import new_job
+    async def run():
+        store=Store(tmp_path/'data','admin','test-password-1234');enable(store)
+        http=FakeHTTP(['ok','down','ok','ok','ok'])
+        notes=Notifications(store,http)
+        async def send(token,method,payload): return await http.post('https://example.invalid/'+method,json=payload)
+        notes.send=send
+        jid=new_job(store,{'job_kind':'organize'});group='series'
+        await notes.publish(f'show_done:{jid}:{group}','海报','正文',job_id=jid,category='media')
+        items=[(i,{'relative_path':f'library/series/S01E{i:02}.strm','strm_created':True}) for i in range(1,26)]
+        await notes.group_strm(jid,group,items)
+        rows=store.db.execute('SELECT * FROM notifications WHERE job_id=? ORDER BY id',(jid,)).fetchall()
+        assert rows[0]['telegram_state']=='sent' and rows[1]['telegram_state']=='unknown'
+        assert all(row['telegram_state']=='waiting' for row in rows[2:]) and len(http.calls)==2
+        assert await notes.retry(now=rows[1]['next_try']+1)==len(rows)-1
+        delivered=[x.get('text','') for x in http.calls]
+        assert 'STRM 批量结果' in delivered[2] and '文件明细 1/' in delivered[3] and '文件明细 2/' in delivered[4]
+        store.close()
+    asyncio.run(run())
