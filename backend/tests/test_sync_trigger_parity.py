@@ -36,24 +36,22 @@ def test_full_sync_repairs_strm_and_backfills_sidecars_for_both_triggers(tmp_pat
  asyncio.run(run())
 
 
-def test_scheduled_sync_without_force_uses_local_sweep(tmp_path):
- """定时 + 没勾全量 = 本地巡检：不改文件、不枚举云端。
+def test_scheduled_sync_rebuilds_files_deleted_locally(tmp_path):
+ """定时同步也按网盘对齐：本地删掉就重新生成，不再靠台账说「同步过了」跳过。
 
- 这是 0.7.7 起的既定契约（省 115 配额），和上一个用例的「完全核对」是两条路。
+ 以前默认走「只核对台账」的本地巡检，本地删掉的文件看不见，永远补不回来。
  """
  async def run():
   store,cloud,http,engine,_=setup(tmp_path)
   cloud.add_video(name='测试电影 (2024).mkv')['sha1']='A'*40
   first=new_job(store,{**sync_config(),'notify_emby':False});await engine.run_job(first)
-  calls=[]
-  async def boom(*args,**kwargs):
-   calls.append(args)
-   raise AssertionError('定时同步不该枚举云端：%r' % (args,))
-  cloud.children=boom;cloud.children_verified=boom
+  old=engine.outputs.get('1','1000');path=engine.root/old['relative_path'];before=path.read_bytes()
+  path.unlink()
   jid=new_job(store,{**sync_config(),'scheduled':True,'full_scan':False,'notify_emby':False})
   await engine.run_job(jid)
-  assert json.loads(engine.job(jid)['config'])['sync_mode']=='sweep'
-  assert calls==[]
+  assert engine.job(jid)['state']=='completed'
+  assert json.loads(engine.job(jid)['config'])['sync_mode']=='full'
+  assert path.is_file() and path.read_bytes()==before
   await http.aclose();store.close()
  asyncio.run(run())
 

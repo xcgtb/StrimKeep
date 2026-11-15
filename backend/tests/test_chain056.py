@@ -214,11 +214,11 @@ def test_sync_always_refreshes_cloud_manifest_for_both_triggers(tmp_path,reason)
     asyncio.run(run())
 
 
-def test_scheduled_sweeps_while_manual_scan_discovers_external_changes(tmp_path):
-    """定时同步只做本地巡检，发现云端增删靠手动全量。
+def test_scheduled_sync_follows_the_cloud_manifest(tmp_path):
+    """定时同步也按网盘清单对齐：云端删了本地跟着清，云端加了能发现。
 
-    0.7.7 起定时同步不再枚举云端（省 115 配额），代价是「云端删了/加了东西」
-    它看不到。这条用例把这个取舍钉住：定时保留下载的 STRM，手动才会清掉。
+    以前默认走「只核对台账」的本地巡检，云端增删看不见；改成按清单对齐后，
+    定时和手动结果一致，也不再有「本地删了补不回来」的问题。
     """
     async def run():
         store,cloud,http,engine,_=setup(tmp_path)
@@ -227,8 +227,9 @@ def test_scheduled_sweeps_while_manual_scan_discovers_external_changes(tmp_path)
         old=engine.outputs.get('1','1000');path=engine.root/old['relative_path']
         cloud.nodes.pop('1000');cloud.add_video('1001','External.mkv')['sha1']='B'*40
         scheduled=new_job(store,{**sync_config(),'full_scan':False,'scheduled':True});await engine.run_job(scheduled)
-        assert json.loads(engine.job(scheduled)['config'])['sync_mode']=='sweep'
-        assert path.exists(),'本地巡检不枚举云端，云端删除不会被它发现'
+        assert json.loads(engine.job(scheduled)['config'])['sync_mode']=='full'
+        assert not path.exists(),'按清单对齐后，云端已删除的文件不应继续留在本地'
+        assert engine.outputs.get('1','1001')['active']
         full=new_job(store,sync_config());await engine.run_job(full)
         assert not path.exists() and engine.outputs.get('1','1001')['active']
         assert engine.job(full)['state']=='completed'

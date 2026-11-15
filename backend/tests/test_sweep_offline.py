@@ -1,7 +1,7 @@
-"""定时同步的分工：默认本地巡检整轮不碰云端；显式 full_scan 才枚举云端。
+"""本地巡检是可选功能：显式打开后整轮不碰云端；默认按网盘清单对齐。
 
-护住 266950c 那类「巡检入口被重构删掉」的回归——死代码不会让别的测试变红，
-只有这条会。
+默认不巡检是因为巡检只认台账里登记过的输出，本地删掉的文件它看不见，
+永远补不回来（见 test_sync_trigger_parity 的回归用例）。
 """
 import asyncio
 
@@ -36,6 +36,7 @@ async def prepared(tmp_path):
     video = cloud.add_video(name='Movie.2024.1080p.mkv')
     video['sha1'] = 'A' * 40
     await engine.run_job(new_job(store, sync_config()))
+    store.set_many({'sync_sweep_enabled': 1})
     return store, cloud, http, engine
 
 

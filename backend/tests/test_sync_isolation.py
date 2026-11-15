@@ -27,7 +27,8 @@ def test_hash_worker_runs_outside_server_and_recovers_after_exit(tmp_path):
     asyncio.run(scenario())
 
 
-def test_failed_hash_worker_stops_sync_without_cleanup(tmp_path):
+def test_broken_hash_worker_no_longer_blocks_sync(tmp_path):
+    """同步不再靠哈希子进程判断「没变」：它坏了也不影响结果，本地文件原样保留。"""
     async def scenario():
         store,cloud,http,engine,_=setup(tmp_path)
         cloud.add_video(name='Movie.mkv')['sha1']='A'*40
@@ -36,7 +37,7 @@ def test_failed_hash_worker_stops_sync_without_cleanup(tmp_path):
         async def fail(): raise OSError('synthetic child failure')
         engine.sync.hash_worker._start=fail
         second=new_job(store,{**sync_config(),'notify_emby':False});await engine.run_job(second)
-        assert engine.job(second)['state']=='needs_review'
+        assert engine.job(second)['state']=='completed'
         assert path.read_bytes()==before
         await http.aclose();store.close()
     asyncio.run(scenario())
@@ -135,11 +136,12 @@ def test_abbreviated_trail_never_bypasses_changed_identity_or_owned_bytes(tmp_pa
         source = json.loads(row['original'])
         with store.db:
             store.db.execute('UPDATE output_registry SET trail=? WHERE file_id=?', (json.dumps(['200', parent]), video['id']))
+        # 台账 trail 写错不再影响判断：本地文件对得上就复用，对不上就重建。
         assert await engine.sync.unchanged(source, config)
         changed = {**source, 'sha1': 'B' * 40}
         assert await engine.sync.unchanged(changed, config) is None
         changed = {**source, '_scan_at': time.time() - 901}
-        assert await engine.sync.unchanged(changed, config) is None
+        assert await engine.sync.unchanged(changed, config)
         changed = {**source, '_path': [*source['_path'][:-1], {**source['_path'][-1], 'name': 'renamed'}]}
         assert await engine.sync.unchanged(changed, config) is None
         target = engine.root / engine.outputs.get('1', video['id'])['relative_path']

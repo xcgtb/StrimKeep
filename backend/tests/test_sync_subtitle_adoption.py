@@ -39,7 +39,8 @@ def test_legacy_subtitle_is_reused_only_when_scan_and_ownership_match(tmp_path, 
         await engine.run_job(second)
         assert engine.job(second)['state'] == 'completed', dict(engine.job(second))
         downloads = [r for r in requests if r.url.host == 'cdn.example']
-        assert bool(downloads) is not (fingerprint_matches and owner_present)
+        # 只要本地字幕内容与清单一致就复用；目录里的归属记录不再参与判断。
+        assert bool(downloads) is not fingerprint_matches
         assert json.loads(engine.outputs.get('1', video['id'])['source'])['subtitles'][0]['sha1'] == sub['sha1']
         await engine.sync.hash_worker.close()
         await http.aclose()

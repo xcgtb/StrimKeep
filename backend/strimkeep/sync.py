@@ -61,75 +61,65 @@ class Sync:
         return hashlib.sha256(json.dumps([sorted(config['source_cids']),config.get('archive_cid'), {k:config.get(k) for k in StrmOptions.model_fields}],sort_keys=True).encode()).hexdigest()
 
     async def unchanged(self, source, config):
-        """A read-only fast path. It never publishes, removes, or reauthorizes files."""
+        """本地即事实：磁盘上有、内容对，才算「没变」。
+
+        不再把台账里的「已同步」当作免检凭证 —— 用户删掉本地输出后，
+        下一轮必须重新生成，而不是被一条旧记录挡下来。
+        """
         account = self.engine.index.account(config)
-        if account+':'+source['id'] in json.loads(self.store.meta('library_name_pending') or '{}'):return None
+        if account+':'+source['id'] in json.loads(self.store.meta('library_name_pending') or '{}'): return None
+        if source.get('subtitle_warning'): return None
+        relative = self.relative(source, config)
+        local = self.engine.outputs.path(relative)
+        if not local.is_file(): return None
+        try:
+            current = local.read_bytes()
+        except OSError:
+            return None
         old = self.engine.outputs.get(account, source['id'])
         if not old or not old['active']: return None
-        previous = json.loads(old['source'])
-        fingerprint = self.engine.measurements.fingerprint
-        if not fingerprint(source) or fingerprint(previous) != fingerprint(source): return None
-        if any(previous.get(k) != source.get(k) for k in ('id','name','parent_id','size')): return None
-        trail = [x['id'] for x in source['_path']]
-        recorded_trail = json.loads(old['trail'])
-        # Organizer historically records only archive root + immediate parent.
-        # A fresh full scan can repair this abbreviated trail only after the
-        # existing identity, output path, ownership and bytes are all checked.
-        now = time.time()
-        scan_at = source.get('_scan_at')
-        archive = str(config.get('archive_cid') or '')
-        abbreviated = (recorded_trail != trail and len(recorded_trail) == 2
-                       and recorded_trail == [archive, source.get('parent_id')]
-                       and archive in trail and trail[-1] == source.get('parent_id')
-                       and len(trail) == len(set(trail))
-                       and isinstance(scan_at, (int, float)) and 0 <= now - scan_at < 900)
-        if recorded_trail != trail and not abbreviated: return None
-        if source.get('subtitle_warning'): return None
-        def subtitle_keys(items):
-            result = []
-            for sub in items:
-                key = fingerprint(sub)
-                if not key: return None
-                result.append((sub['id'], sub['name'], sub['parent_id'], key))
-            return sorted(result)
-        keys = subtitle_keys(source.get('subtitles', []))
-        if keys is None or keys != subtitle_keys(previous.get('subtitles', [])): return None
-        relative = self.relative(source, config)
-        if relative != old['relative_path']: return None
+        if old['relative_path'] != relative: return None
         mapping = self.store.db.execute('SELECT * FROM playbacks WHERE id=?',(old['playback_id'],)).fetchone()
-        token = self.store.crypto.decrypt(old['token_cipher'].encode()).decode()
-        if not mapping or mapping['revoked'] or mapping['file_id'] != source['id'] : return None
-        files = json.loads(old['files'])
-        # 身份齐全时只认 play115 形态：存量 /play/<token> 地址会在本轮改写成
-        # /play115/...（0.7.12 起的规范形态）。身份不全（缺 sha1/pickcode）的条目
-        # 只能写令牌地址，继续认旧形态，否则每次同步都会反复重写同一份。
-        forms = []
-        if identity_of(previous) is None:
-            forms += candidates(config['playback_base'], old['playback_id'],
-                                source['name'], token)
-            # 老版本使用无扩展名的 STRM 主干，仍接受其已登记的播放地址。
+        if not mapping or mapping['revoked'] or mapping['file_id'] != source['id']: return None
+        if identity_of(source) is not None:
+            # 身份齐全：只认本轮清单能推出来的 play115 地址。
+            if current not in play115_candidates(config['playback_base'], source, source['name']): return None
+        else:
+            # 身份不全的老条目只能写令牌地址，沿用历史形态，不改写已有输出。
+            token = self.store.crypto.decrypt(old['token_cipher'].encode()).decode()
+            forms = candidates(config['playback_base'], old['playback_id'], source['name'], token)
             forms += candidates(config['playback_base'], old['playback_id'],
                                 Path(old['relative_path']).stem, token)
-        # 同一份 STRM 当「变了」重写一遍，还会连带触发 Emby 通知。
-        forms += play115_candidates(config['playback_base'], previous, source['name'])
-        forms += play115_candidates(config['playback_base'], previous,
-                                    Path(old['relative_path']).stem)
-        if files.get(relative) not in {hashlib.sha256(content).hexdigest() for content in forms}:
-            return None
-        for name, checksum in files.items():
-            local = self.engine.outputs.path(name)
-            owner = self.store.db.execute('SELECT * FROM owned_outputs WHERE relative_path=?',(name,)).fetchone()
-            if not owner or (owner['account_id'],owner['file_id'],owner['digest']) != (account,source['id'],checksum): return None
+            if current not in forms: return None
+        trail = [x['id'] for x in source['_path']]
+        if json.loads(old['trail']) != trail:
+            # 台账的目录链写旧了只补记录，不影响「要不要重写文件」。
+            with self.store.db:
+                self.store.db.execute('UPDATE output_registry SET trail=? WHERE account_id=? AND file_id=?',
+                                      (json.dumps(trail, ensure_ascii=False, separators=(',', ':')), account, source['id']))
+        # 字幕按内容核对：本地被删、或被换成别的文件，都要重建（不靠台账记忆）。
+        seen_subtitles = []
+        for sub in source.get('subtitles', []):
+            suffix = subtitle_suffix(source['name'], sub['name'])
+            path = self.engine.outputs.path(str(Path(relative).with_suffix('')) + suffix)
+            if not path.is_file(): return None
             try:
-                if await self.hash_worker.checksum(local) != checksum: return None
-            except HashWorkerError as exc:
-                from .core import UncertainState
-                raise UncertainState(str(exc)) from None
-        result = {'relative_path':relative, 'target_name':source['name'], 'playback_id':old['playback_id'],
-                  'token_cipher':old['token_cipher'], 'local_files':files, 'warnings':[], 'sync_unchanged':True}
-        if abbreviated:
-            result['_sync_trail_repair'] = {'old': old['trail'], 'new': trail}
-        return result
+                data = path.read_bytes()
+            except OSError:
+                return None
+            if (len(data) != sub.get('size')
+                    or hashlib.sha1(data).hexdigest().upper() != str(sub.get('sha1') or '').upper()):
+                return None
+            seen_subtitles.append({k: sub[k] for k in ('id','name','parent_id','size','sha1') if k in sub})
+        previous_source = json.loads(old['source']) if old['source'] else {}
+        if previous_source.get('subtitles') != seen_subtitles:
+            with self.store.db:
+                self.store.db.execute('UPDATE output_registry SET source=? WHERE account_id=? AND file_id=?',
+                                      (json.dumps({**previous_source, 'subtitles': seen_subtitles},
+                                                  ensure_ascii=False, separators=(',', ':')), account, source['id']))
+        return {'relative_path':relative, 'target_name':source['name'], 'playback_id':old['playback_id'],
+                'token_cipher':old['token_cipher'], 'local_files':json.loads(old['files']),
+                'warnings':[], 'sync_unchanged':True}
 
     async def cached_manifest(self, jid, config):
         from .core import dumps
@@ -331,9 +321,16 @@ class Sync:
 
     def relative(self, source, config):
         path = source['_path']; ids = [x['id'] for x in path]
-        # Every source mirrors its complete 115 path below the STRM root.
         ids.index(source['_root'])  # selected root must actually be in the trail
-        parts = [entry['name'] for entry in path if str(entry['id']) != '0']
+        # 按 115 层级镜像：去掉最上面的网盘根，下面的目录名原样保留；
+        # 显式设置了库根时用它替换第一层（归档库的既有语义）。
+        parts = [component(entry['name'], 100) for entry in path[1:]]
+        explicit = str(config.get('library_dir_name') or '')
+        archive = str(config.get('archive_cid') or '')
+        # 归档库就在第一层时，显式库根替换这一层（既有语义）；
+        # 嵌在别的目录下面的库按真实层级镜像，不额外改名。
+        if explicit and parts and (not archive or str(path[1]['id']) == archive):
+            parts[0] = component(explicit, 100)
         # Never silently turn separators into new path components.
         for name in parts + [source['name']]:
             if name in ('.','..') or '/' in name or '\\' in name or '\0' in name: raise ValueError('同步文件名含不安全路径字符。')
@@ -353,27 +350,19 @@ class Sync:
         # 未变化的文件再发 file()+path_info() 只是重复劳动（每条两跳网络 + 限流），
         # 这正是全量同步慢的主因。仅在「扫描在 15 分钟内 + 指纹完全一致」时跳过回查。
         trusted, previous = False, None
+        old = self.engine.outputs.get(account, source['id'])
+        if old and old['active']:
+            previous = json.loads(old['source'])
+        # 「可信」只由本轮清单决定：扫描够新、指纹齐全、目录链自洽，就不再逐文件回查云端。
+        # 台账只用来复用播放身份与旧 pickcode，不参与这条判断。
         if config.get('trust_scan', True) and source.get('_scan_at'):
-            old = self.engine.outputs.get(account, source['id'])
-            if not old:
-                # New outputs can use a recent, complete cloud manifest directly.
-                # Full sync retains its explicit per-file verification.
-                stamp = source.get('_scan_at')
-                trail = source.get('_path') or []
-                age = time.time() - stamp if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) else -1
-                trusted = bool(0 <= age < 900 and identity_of(source)
-                               and self.engine.measurements.fingerprint(source)
-                               and trail and trail[-1].get('id') == source.get('parent_id')
-                               and source.get('_root') in [node.get('id') for node in trail])
-            elif old['active']:
-                previous = json.loads(old['source'])
-                same = (str(previous.get('sha1', '')).upper() == str(source.get('sha1', '')).upper()
-                        and previous.get('size') == source.get('size')
-                        and previous.get('name') == source['name']
-                        and previous.get('parent_id') == source['parent_id']
-                        and json.loads(old['trail']) == [x['id'] for x in source['_path']]
-                        and time.time() - source['_scan_at'] < 900)
-                trusted = bool(same and self.engine.measurements.fingerprint(source))
+            stamp = source.get('_scan_at')
+            trail = source.get('_path') or []
+            age = time.time() - stamp if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) else -1
+            trusted = bool(0 <= age < 900 and identity_of(source)
+                           and self.engine.measurements.fingerprint(source)
+                           and trail and trail[-1].get('id') == source.get('parent_id')
+                           and source.get('_root') in [node.get('id') for node in trail])
         if trusted:
             actual = {'id': source['id'], 'name': source['name'], 'parent_id': source['parent_id'],
                       'size': source.get('size'), 'sha1': source.get('sha1', ''),
@@ -963,20 +952,15 @@ class Sync:
     SWEEP_PROGRESS_SECONDS = 1.0
 
     def should_sweep(self, config):
-        """同步一律本地巡检（对齐）；只有显式勾选 full_scan 或内部强制才枚举云端。"""
+        """默认不再走「只核对台账」的本地巡检。
+
+        本地巡检只能修台账里登记过的输出：用户在本地删掉整批文件之后，
+        它看不见「网盘上有、本地没有」这件事，文件就永远补不回来。
+        现在只在管理员显式打开 sync_sweep_enabled 时才启用。
+        """
         if config.get('_force_full') or config.get('full_scan'):
             return False
-        flag = self.store.get('sync_sweep_enabled')
-        if flag not in (None, '') and not int(flag):
-            return False
-        if self.store.get('sync_full_due'):
-            self.store.set_many({'sync_full_due': 0})
-            self.store.event('sync', '上一轮巡检发现待修复输出，本轮升级为完全核对。')
-            return False
-        account = self.engine.index.account(config)
-        count = self.store.db.execute(
-            'SELECT count(*) FROM output_registry WHERE account_id=? AND active=1', (account,)).fetchone()[0]
-        return count > 0
+        return str(self.store.get('sync_sweep_enabled') or '') == '1'
 
     def sweep_orphans(self, jid, config, registered):
         """扫本地文件树，处理台账之外的 .strm。
