@@ -80,8 +80,6 @@ class Sync:
         old = self.engine.outputs.get(account, source['id'])
         if not old or not old['active']: return None
         if old['relative_path'] != relative: return None
-        mapping = self.store.db.execute('SELECT * FROM playbacks WHERE id=?',(old['playback_id'],)).fetchone()
-        if not mapping or mapping['revoked'] or mapping['file_id'] != source['id']: return None
         if identity_of(source) is not None:
             # 身份齐全：只认本轮清单能推出来的 play115 地址。
             if current not in play115_candidates(config['playback_base'], source, source['name']): return None
@@ -420,7 +418,8 @@ class Sync:
                     data = cached
             try:
                 if data is None:
-                    fresh = bool(sub.get('_scan_at')) and time.time() - sub['_scan_at'] < 900
+                    fresh = (bool(sub.get('_scan_at')) and time.time() - sub['_scan_at'] < 900
+                             and identity_of(sub) is not None)
                     pickcode = sub.get('pickcode') if fresh else ''
                     if not pickcode:
                         checked = await self.cloud.file(sub['id'])
@@ -444,7 +443,7 @@ class Sync:
         for relative, data in content.items():
             self.engine.boundary(jid)
             target = self.engine.outputs.path(relative)
-            if target.is_file() and fid_of(target) != str(source['id']):
+            if relative.lower().endswith('.strm') and target.is_file() and fid_of(target) != str(source['id']):
                 # 同名路径已经被别的文件（或用户手写的内容）占着：保留它，不覆盖。
                 self.update_item(row['id'], plan=plan, state='review', step='同名文件已存在',
                                  message='本地已有同名的其他文件，已保留，未覆盖。')
@@ -455,6 +454,8 @@ class Sync:
                 self.mark_changed(jid)
                 plan['output_changed'] = True
                 atomic_write(target, data, self.engine.root)
+                # 刚落盘的文件要立刻能被「按 fid 找本地文件」看到。
+                self.engine.outputs.invalidate()
             plan['local_files'][relative] = checksum
         plan['warnings'] = warnings
         with self.store.db:
@@ -540,6 +541,39 @@ class Sync:
             self.flush_batch()
             self._batch = []
 
+    async def tidy_moved(self, jid, config):
+        """同一文件号出现在两个本地路径时，保留本轮清单算出来的那个，删掉另一个。"""
+        expected = {}
+        for row in self.store.db.execute('SELECT file_id, plan FROM organize_items WHERE job_id=?', (jid,)):
+            plan_row = json.loads(row['plan'] or '{}')
+            if plan_row.get('relative_path'):
+                expected[str(row['file_id'])] = plan_row['relative_path']
+        removed = 0
+        for relative, identity in scan(self.engine.root).items():
+            if identity.get('kind') != 'netdisk':
+                continue
+            fid = str(identity['file_id'])
+            want = expected.get(fid)
+            if not want or want == relative:
+                continue
+            if not self.engine.outputs.path(want).is_file():
+                continue
+            try:
+                old_path = self.engine.outputs.path(relative)
+                from .internal_delete import remember
+                if remember(self.store, [relative]):
+                    old_path.unlink()
+                    with self.store.db:
+                        self.store.db.execute('INSERT OR IGNORE INTO strm_changes VALUES(?,?,?)',
+                                              (jid, 'removed', relative))
+                    removed += 1
+                    self.mark_changed(jid)
+            except Exception as exc:
+                self.store.event('sync', '旧位置清理失败（%s）：%s' % (relative, str(exc)[:60]))
+        if removed:
+            self.engine.outputs.invalidate()
+        return removed
+
     def present_ids(self, jid, config):
         """本轮清单里出现过的文件身份（用来判断「本地这份还算不算在范围内」）。"""
         present = {str(row['file_id']) for row in self.store.db.execute(
@@ -613,21 +647,6 @@ class Sync:
                 continue
             fid = str(identity['file_id'])
             want = expected.get(fid)
-            if want and want != relative and self.engine.outputs.path(want).is_file():
-                # 文件在网盘里换了目录：新位置已经写出来了，旧位置这份是副本。
-                try:
-                    old_path = self.engine.outputs.path(relative)
-                    from .internal_delete import remember
-                    if remember(self.store, [relative]):
-                        old_path.unlink()
-                        with self.store.db:
-                            self.store.db.execute('INSERT OR IGNORE INTO strm_changes VALUES(?,?,?)',
-                                                  (jid, 'removed', relative))
-                        removed += 1
-                        self.mark_changed(jid)
-                except Exception as exc:
-                    warnings.append('旧位置清理失败（%s）：%s' % (relative, str(exc)[:60]))
-                continue
             if fid in present:
                 continue
             self.engine.boundary(jid)
@@ -940,6 +959,8 @@ class Sync:
         except Exception as exc:                    # 索引只是缓存，失败不影响本次同步
             self.store.event('sync', '本地索引重建未完成：%s' % str(exc)[:60])
         self.engine.boundary(jid)
+        # 同一份文件换过目录：新位置写好之后，旧位置那份副本要收掉（与「清理缺失」开关无关）。
+        await self.tidy_moved(jid, config)
         # Each source is verified immediately before its output is published.
         # Only missing registered outputs need a live-namespace check in cleanup.
         warnings = []

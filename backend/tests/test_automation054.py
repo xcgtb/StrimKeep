@@ -27,11 +27,11 @@ def test_missing_subtitle_does_not_abort_video_sync(tmp_path):
         store,cloud,http,engine,_=setup(tmp_path)
         cloud.add_video(name='A.mkv');cloud.add_video('1001','A.chs.srt')['size']=50
         cloud.add_video('2000','B.mkv')
-        read=cloud.file
-        async def file(fid):
-            if fid=='1001':raise CloudError('subtitle disappeared','FILE_NOT_FOUND',404)
-            return await read(fid)
-        cloud.file=file
+        read=cloud.url
+        async def url(pickcode,*args,**kwargs):
+            if 'pc1001' in str(pickcode):raise CloudError('subtitle disappeared','FILE_NOT_FOUND',404)
+            return await read(pickcode,*args,**kwargs)
+        cloud.url=url
         jid=new_job(store,sync_config());await engine.run_job(jid)
         assert engine.job(jid)['state']=='partial',dict(engine.job(jid))
         assert len(list(engine.root.rglob('*.strm')))==2

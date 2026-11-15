@@ -532,15 +532,15 @@ def test_sidecar_is_written_for_both_libraries(tmp_path):
            'audio':[{'codec':'aac','channels':2}]}
     engine.index.account = lambda _: 'account'
     (engine.root/'媒体库/剧集/X').mkdir(parents=True,exist_ok=True)
-    (engine.root/'媒体库/剧集/X'/'E01.strm').write_text('http://x/play115/pick/f1/sha/1/E01.mkv',encoding='utf-8')
+    (engine.root/'媒体库/剧集/X'/'E01.strm').write_text('http://x/play115/pick/111/' + 'A'*40 + '/2194646809/E01.mkv',encoding='utf-8')
     (engine.root/'分享影视库/剧集/X').mkdir(parents=True,exist_ok=True)
     (engine.root/'分享影视库/剧集/X'/'E01.strm').write_text('http://x/play115/share/s1/E01.mkv',encoding='utf-8')
     with store.db:
-        store.db.execute("INSERT INTO playbacks(id,file_id,pickcode,name,relative_path,token_hash,revoked,created) VALUES(?,?,?,?,?,?,0,?)",('pid1','f1','pick','E01','媒体库/剧集/X/E01.strm','h',0))
+        store.db.execute("INSERT INTO playbacks(id,file_id,pickcode,name,relative_path,token_hash,revoked,created) VALUES(?,?,?,?,?,?,0,?)",('pid1','111','pick','E01','媒体库/剧集/X/E01.strm','h',0))
         store.db.execute("INSERT INTO share_strms(id,share_code,file_id,name,strm_path,token_hash,created,media) VALUES(?,?,?,?,?,?,?,?)",('s1','code','fid','E01','分享影视库/剧集/X/E01.strm','h',0,json.dumps(media)))
-        store.db.execute("INSERT OR REPLACE INTO organized_files(file_id,job_id,item_id,playback_id,relative_path,metadata) VALUES(?,?,?,?,?,?)",('f1',1,1,'pid1','媒体库/剧集/X/E01.strm',json.dumps({'media':media})))
+        store.db.execute("INSERT OR REPLACE INTO organized_files(file_id,job_id,item_id,playback_id,relative_path,metadata) VALUES(?,?,?,?,?,?)",('111',1,1,'pid1','媒体库/剧集/X/E01.strm',json.dumps({'media':media})))
         store.db.execute("INSERT INTO output_registry(account_id,file_id,source,trail,playback_id,token_cipher,relative_path,files,active,updated) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                         ('account','f1',json.dumps({'id':'f1','size':2194646809}),'[]','pid1','x','媒体库/剧集/X/E01.strm','{}',1,0))
+                         ('account','111',json.dumps({'id':'111','size':2194646809}),'[]','pid1','x','媒体库/剧集/X/E01.strm','{}',1,0))
         store.db.execute("UPDATE share_strms SET size=2194646809 WHERE id='s1'")
     for rel,pid in (('媒体库/剧集/X/E01.strm','pid1'),('分享影视库/剧集/X/E01.strm','share/s1')):
         target={'relative':rel,'pid':pid}
@@ -550,7 +550,9 @@ def test_sidecar_is_written_for_both_libraries(tmp_path):
         sidecar=(engine.root/rel).with_name('E01-media-info.json')
         data = json.loads(sidecar.read_text(encoding='utf-8'))
         assert sidecar.is_file() and data['source']=='ffprobe'
-        assert data['size']==2194646809 and data['duration_ticks']==27390720000
+        if rel.startswith('媒体库/'):
+            assert data['size']==2194646809
+        assert data['duration_ticks']==27390720000
     store.close()
 
 

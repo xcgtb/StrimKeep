@@ -77,6 +77,19 @@ class Outputs:
         """按文件身份取本地输出；没有就是没有（不再有「我记过」这回事）。"""
         entry = self.scan().get(str(fid))
         if not entry:
+            # 缓存可能是几秒前建的（文件刚写出来）：用整理登记里的路径定点确认一次。
+            for row in self.store.db.execute(
+                    'SELECT relative_path FROM organized_files WHERE file_id=?', (str(fid),)):
+                try:
+                    candidate = self.engine.root / row['relative_path']
+                except (KeyError, TypeError):
+                    continue
+                identity = parse_file(candidate) or None
+                if identity and str(identity.get('file_id')) == str(fid):
+                    entry = {'relative_path': row['relative_path'], 'identity': identity, 'path': candidate}
+                    self._cache = {**(self._cache or {}), str(fid): entry}
+                    break
+        if not entry:
             return None
         path = entry['path']
         checksum = self.digest(path)
@@ -144,6 +157,16 @@ class Outputs:
             if not remember(self.store, [relative]):
                 return ['内部删除登记失败，已保留：' + str(relative)]
             target.unlink()
+            sidecar = target.with_name(target.stem + '-media-info.json')
+            if sidecar.is_file():
+                try:
+                    sidecar.unlink()
+                except OSError:
+                    pass
+            if job_id is not None:
+                with self.store.db:
+                    self.store.db.execute('INSERT OR IGNORE INTO strm_changes VALUES(?,?,?)',
+                                          (job_id, 'removed', relative))
         except Exception as exc:                     # pragma: no cover - 保守失败
             return ['删除失败：' + str(exc)[:60]]
         return []

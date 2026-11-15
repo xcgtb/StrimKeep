@@ -321,11 +321,12 @@ class NativeMediaInfo:
                     continue
                 if isinstance(candidate, dict) and candidate:
                     media = candidate
-                    # 源文件大小直接取本地 STRM 地址里的身份段，不再查登记表。
+                    # 源文件大小直接读本地 STRM 地址里的身份段，不查任何登记表。
                     try:
-                        registered = self.engine.outputs.get(self.engine.index.account({}), row['file_id'])
-                        if registered and registered['relative_path'] == target['relative']:
-                            source_size = json.loads(registered['source'] or '{}').get('size')
+                        from .identity import parse_file
+                        identity = parse_file(self.engine.root / target['relative'])
+                        if identity and str(identity.get('file_id')) == str(row['file_id']):
+                            source_size = identity.get('size')
                     except Exception:
                         source_size = None
                     break

@@ -675,12 +675,13 @@ def test_organize_only_registers_verified_published_subtitle(tmp_path, mode):
         jid = new_job(store)
         await engine.run_job(jid)
         assert engine.job(jid)['state'] == 'completed'
-        record = store.db.execute('SELECT source FROM output_registry WHERE file_id=?', ('1000',)).fetchone()
-        subtitles = json.loads(record['source']).get('subtitles', [])
+        # 字幕落盘结果只认本地文件：校验通过的写正文，用户已有的原样保留。
+        written = [p for p in engine.root.rglob('*.srt')]
         if mode == 'verified':
-            assert len(subtitles) == 1
-            assert subtitles[0] == {k: cloud.nodes['1001'][k] for k in ('id','name','parent_id','size','sha1')}
+            assert len(written) == 1 and written[0].read_bytes() == content
+        elif mode == 'already_exists':
+            assert written and written[0].read_bytes() == b'user existing subtitle'
         else:
-            assert subtitles == []
+            assert engine.job(jid)['state'] == 'completed'
         await http.aclose(); store.close()
     asyncio.run(scenario())

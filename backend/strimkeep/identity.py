@@ -47,7 +47,8 @@ def parse_url(text):
     return None
 
 
-PLAY115_LOOSE = re.compile(r'^/play115/(?P<pickcode>[^/]+)/(?P<file_id>\d+)/')
+PLAY115_LOOSE = re.compile(r'^/play115/(?P<pickcode>[^/]+)/(?P<file_id>\d+)/'
+                            r'(?:(?P<sha1>[^/]*)/(?P<size>\d+)/)?')
 
 
 def hint(text):
@@ -62,8 +63,13 @@ def hint(text):
     match = PLAY115_LOOSE.match(path)
     if not match:
         return None
-    return {'kind': 'netdisk', 'pickcode': match.group('pickcode'),
+    info = {'kind': 'netdisk', 'pickcode': match.group('pickcode'),
             'file_id': match.group('file_id')}
+    if match.group('sha1'):
+        info['sha1'] = match.group('sha1').upper()
+    if match.group('size'):
+        info['size'] = int(match.group('size'))
+    return info
 
 
 def parse_file(path):

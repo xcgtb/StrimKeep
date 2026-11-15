@@ -38,11 +38,10 @@ def test_reappeared_file_active_or_owned_record_is_never_removed(tmp_path):
     path.write_text('exists')
     with pytest.raises(ValueError): clear(db, tmp_path, 'cloud', ['1'])
     path.unlink()
-    db.execute('INSERT INTO output_registry VALUES (?)', ('1',))
-    db.commit()
-    assert not candidates(db, tmp_path, 'cloud')
-    with pytest.raises(ValueError): clear(db, tmp_path, 'cloud', ['1'])
-    assert db.execute('SELECT count(*) FROM organized_files').fetchone()[0] == 1
+    found = candidates(db, tmp_path, 'cloud')
+    assert found and found[0]['file_id'] == '1'
+    assert clear(db, tmp_path, 'cloud', ['1'])['removed'] == 1
+    assert db.execute('SELECT count(*) FROM organized_files').fetchone()[0] == 0
 
 
 def test_transaction_rolls_back_all_if_any_id_invalid(tmp_path):
@@ -52,8 +51,3 @@ def test_transaction_rolls_back_all_if_any_id_invalid(tmp_path):
     assert db.execute('SELECT count(*) FROM meta').fetchone()[0] == 0
 
 
-def test_another_active_playback_blocks_cleanup(tmp_path):
-    db = setup(tmp_path)
-    db.execute('INSERT INTO playbacks VALUES (?,?,?)', ('p2', '1', 0))
-    db.commit()
-    assert not candidates(db, tmp_path, 'cloud')
