@@ -359,7 +359,17 @@ class Sync:
         trusted, previous = False, None
         if config.get('trust_scan', True) and source.get('_scan_at'):
             old = self.engine.outputs.get(account, source['id'])
-            if old and old['active']:
+            if not old:
+                # New outputs can use a recent, complete cloud manifest directly.
+                # Full sync retains its explicit per-file verification.
+                stamp = source.get('_scan_at')
+                trail = source.get('_path') or []
+                age = time.time() - stamp if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) else -1
+                trusted = bool(0 <= age < 900 and identity_of(source)
+                               and self.engine.measurements.fingerprint(source)
+                               and trail and trail[-1].get('id') == source.get('parent_id')
+                               and source.get('_root') in [node.get('id') for node in trail])
+            elif old['active']:
                 previous = json.loads(old['source'])
                 same = (str(previous.get('sha1', '')).upper() == str(source.get('sha1', '')).upper()
                         and previous.get('size') == source.get('size')
@@ -371,7 +381,7 @@ class Sync:
         if trusted:
             actual = {'id': source['id'], 'name': source['name'], 'parent_id': source['parent_id'],
                       'size': source.get('size'), 'sha1': source.get('sha1', ''),
-                      'pickcode': source.get('pickcode') or previous.get('pickcode', '')}
+                      'pickcode': source.get('pickcode') or (previous or {}).get('pickcode', '')}
             current_path = source['_path']
         else:
             actual = await self.cloud.file(source['id'])

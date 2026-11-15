@@ -98,3 +98,40 @@ def test_empty_page_claiming_next_remains_incomplete():
     with pytest.raises(CloudError) as exc:
         asyncio.run(c._download_rows(None,'root','目录','fid'))
     assert exc.value.code=='INCOMPLETE_LIST'
+
+
+def test_fresh_incremental_manifest_creates_new_strm_without_per_file_cloud_reads(tmp_path):
+    async def run():
+        store,cloud,http,engine,_=setup(tmp_path)
+        first=cloud.add_video('1001','Video-A.mkv');first['sha1']='A'*40
+        second=cloud.add_video('1002','Video-B.mkv');second['sha1']='B'*40
+        async def batched(root):return [],[first.copy(),second.copy()]
+        cloud.download_tree=batched
+        async def unexpected_read(fid):raise AssertionError('unexpected per-file cloud lookup')
+        cloud.file=unexpected_read
+        config={**sync_config(['100']),'mode':'incremental','trust_scan':True,
+                'notify_emby':False,'cleanup_missing':False}
+        jid=new_job(store,config);await engine.run_job(jid)
+        assert engine.job(jid)['state']=='completed',dict(engine.job(jid))
+        assert len(list(engine.root.rglob('*.strm')))==2
+        assert not cloud.writes
+        await http.aclose();store.close()
+    asyncio.run(run())
+
+
+def test_full_sync_still_checks_new_files(tmp_path):
+    async def run():
+        store,cloud,http,engine,_=setup(tmp_path)
+        video=cloud.add_video('1001','Video-A.mkv');video['sha1']='A'*40
+        async def batched(root):return [],[video.copy()]
+        cloud.download_tree=batched
+        original=cloud.file; calls=[]
+        async def traced(fid):calls.append(fid);return await original(fid)
+        cloud.file=traced
+        config={**sync_config(['100']),'mode':'full','trust_scan':False,'_force_full':True,
+                'notify_emby':False,'cleanup_missing':False}
+        jid=new_job(store,config);await engine.run_job(jid)
+        assert engine.job(jid)['state']=='completed',dict(engine.job(jid))
+        assert calls.count('1001')>=1
+        await http.aclose();store.close()
+    asyncio.run(run())
