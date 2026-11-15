@@ -14,6 +14,7 @@ from .playaddr import candidates, identity_of, play115_candidates, play115_url, 
 from .store import digest
 from .sync_hash_worker import HashWorker, HashWorkerError
 from .message_templates import sync_task_context
+from .local_scan import fid_of, scan, identity_of_file
 
 
 class Sync:
@@ -79,8 +80,6 @@ class Sync:
         old = self.engine.outputs.get(account, source['id'])
         if not old or not old['active']: return None
         if old['relative_path'] != relative: return None
-        mapping = self.store.db.execute('SELECT * FROM playbacks WHERE id=?',(old['playback_id'],)).fetchone()
-        if not mapping or mapping['revoked'] or mapping['file_id'] != source['id']: return None
         if identity_of(source) is not None:
             # 身份齐全：只认本轮清单能推出来的 play115 地址。
             if current not in play115_candidates(config['playback_base'], source, source['name']): return None
@@ -343,18 +342,21 @@ class Sync:
         self.engine.update_job(jid, config=dumps(config))
 
     async def process(self, jid, row, config):
+        """把一份云端文件落成本地 STRM（+ 字幕）。
+
+        不再写任何「台账」：判断只看本轮清单与本地文件，输出内容自带身份，
+        下一轮从文件本身就能重新认出来。
+        """
         from .core import atomic_write, dumps, UncertainState
-        source, plan = json.loads(row['original']), json.loads(row['plan'])
-        account = self.engine.index.account(config)
-        # 清单即事实：本轮扫描刚用 children_verified 读过 id/name/size/sha1/pickcode，
-        # 未变化的文件再发 file()+path_info() 只是重复劳动（每条两跳网络 + 限流），
-        # 这正是全量同步慢的主因。仅在「扫描在 15 分钟内 + 指纹完全一致」时跳过回查。
-        trusted, previous = False, None
-        old = self.engine.outputs.get(account, source['id'])
-        if old and old['active']:
-            previous = json.loads(old['source'])
-        # 「可信」只由本轮清单决定：扫描够新、指纹齐全、目录链自洽，就不再逐文件回查云端。
-        # 台账只用来复用播放身份与旧 pickcode，不参与这条判断。
+        source = json.loads(row['original'])
+        plan = json.loads(row['plan'] or '{}')
+        if not plan.get('relative_path'):
+            plan = {'relative_path': self.relative(source, config), 'target_name': source['name'],
+                    'local_files': {}, 'warnings': []}
+            self.engine.update_item(row['id'], plan=plan, state='planned', step='同步计划已持久化')
+        # 清单即事实：本轮扫描刚拿到的 id/name/size/sha1/pickcode 够新、目录链自洽，
+        # 就不再逐文件回查云端（每文件两跳网络正是旧实现慢的主因）。
+        trusted = False
         if config.get('trust_scan', True) and source.get('_scan_at'):
             stamp = source.get('_scan_at')
             trail = source.get('_path') or []
@@ -366,7 +368,7 @@ class Sync:
         if trusted:
             actual = {'id': source['id'], 'name': source['name'], 'parent_id': source['parent_id'],
                       'size': source.get('size'), 'sha1': source.get('sha1', ''),
-                      'pickcode': source.get('pickcode') or (previous or {}).get('pickcode', '')}
+                      'pickcode': source.get('pickcode', '')}
             current_path = source['_path']
         else:
             actual = await self.cloud.file(source['id'])
@@ -377,67 +379,25 @@ class Sync:
         if current_path != source['_path']:
             source['_path'] = current_path
             self.engine.update_item(row['id'], original=dumps(source))
-            # A changed directory name is rediscovered automatically. Do not
-            # publish the old local path from a saved plan.
-            if plan:
-                plan['relative_path'] = self.relative(source, config)
-        old = self.engine.outputs.get(account, source['id'])
-        if not plan:
-            relative = self.relative(source, config)
-            plan = {'relative_path':relative, 'target_name':source['name'], 'warnings':[], 'local_files':{},
-                    'previous_files':json.loads(old['files']) if old else {},
-                    'previous_subtitles':json.loads(old['source']).get('subtitles',[]) if old else []}
-            if old:
-                retired = self.store.db.execute('SELECT revoked FROM playbacks WHERE id=?', (old['playback_id'],)).fetchone()
-                if not old['active'] and retired and retired['revoked']:
-                    # A previously retired source reappeared in the configured
-                    # scope. Allocate a new identity; never reactivate its old
-                    # explicitly revoked URL.
-                    plan.update(playback_id=secrets.token_hex(16), token_cipher=self.store.crypto.encrypt(b'').decode(),
-                                retired_playback_id=old['playback_id'])
-                else:
-                    plan.update(playback_id=old['playback_id'],token_cipher=old['token_cipher'])
-            else:
-                plan.update(playback_id=secrets.token_hex(16),token_cipher=self.store.crypto.encrypt(b'').decode())
-            # A legacy organized token remains stable; bootstrap ownership from recorded hashes.
-            if not old:
-                managed = self.store.db.execute('SELECT i.plan,j.config FROM organized_files o JOIN organize_items i ON i.id=o.item_id JOIN organize_jobs j ON j.id=o.job_id WHERE o.file_id=?', (source['id'],)).fetchone()
-                if managed and json.loads(managed['config']).get('account_id') == account:
-                    legacy = json.loads(managed['plan'])
-                    plan.update(playback_id=legacy['playback_id'],token_cipher=legacy['token_cipher'],previous_files=legacy.get('local_files',{}))
-            self.engine.update_item(row['id'], plan=plan, state='planned', step='同步计划已持久化')
-        pid = plan['playback_id']; token = self.store.crypto.decrypt(plan['token_cipher'].encode()).decode()
-        mapping = self.store.db.execute('SELECT * FROM playbacks WHERE id=?', (pid,)).fetchone()
-        if mapping and mapping['revoked']:
-            self.engine.update_item(row['id'],state='skipped',step='保留已撤销播放入口',message='普通同步不会重新启用明确撤销的播放入口。')
-            return
-        if mapping and mapping['file_id'] != source['id']: raise UncertainState('同步播放映射身份冲突。')
-        with self.store.db:
-            self.store.db.execute('INSERT OR IGNORE INTO playbacks(id,file_id,pickcode,name,relative_path,token_hash,created) VALUES(?,?,?,?,?,?,?)', (pid,source['id'],actual['pickcode'],source['name'],plan['relative_path'],digest(token),time.time()))
-        old_files = plan['previous_files']
-        # 公共播放地址构造（B02）：同步不再写旧格式地址，统一为可读格式；
-        # 可读段取 STRM 文件名主干（随改名反映当前名称），播放身份不变。
+            plan['relative_path'] = self.relative(source, config)
         identity = identity_of(actual) or identity_of(source)
-        if identity:
-            # 同步与整理写同一种地址：身份进 STRM，取链不查库。
-            url = play115_url(config['playback_base'], *identity,
-                              actual.get('name') or source['name']).encode()
-        else:
-            url = play_url(config['playback_base'], pid,
-                           plan.get('target_name') or Path(plan['relative_path']).stem, token).encode()
-        # Keep a verified legacy URL until its path or base actually changes.
-        # Old tokenized URLs remain playable and need not all be rewritten.
-        existing = self.engine.outputs.path(plan['relative_path'])
-        if old and old['active'] and existing.is_file() and existing.stat().st_size <= 20*1024*1024:
-            current = existing.read_bytes()
-            # 历史地址（无扩展名等旧形式）只用于归属核对，不再作为可发布内容沿用；
-            # 否则格式升级后旧 STRM 永远停在旧写法。
-            if hashlib.sha256(current).hexdigest() == old_files.get(plan['relative_path']) and current == url:
-                url = current
-        content = {plan['relative_path']:url}
+        if identity is None:
+            # 身份不全就只能回查一次；还缺就明确停下来，不写半成品地址。
+            actual = await self.cloud.file(source['id'])
+            self.engine.check_source(source, actual, source['name'], source['parent_id'])
+            identity = identity_of(actual)
+        if identity is None:
+            self.engine.update_item(row['id'], plan=plan, state='review', step='缺少播放身份',
+                                    message='文件缺少 pickcode / sha1 / 大小，无法生成播放地址。')
+            return
+        url = play115_url(config['playback_base'], *identity,
+                          actual.get('name') or source['name']).encode()
+        content = {plan['relative_path']: url}
         warnings = []
-        if source.get('subtitle_warning'): warnings.append('同主体多个视频的字幕归属不明，已保留原文件。')
         subtitle_cache = []
+        if source.get('subtitle_warning'):
+            warnings.append('同主体多个视频的字幕归属不明，已保留原文件。')
+
         subtitle_suffixes = [subtitle_suffix(source['name'], sub['name']) for sub in source['subtitles']]
         counts = {}
         for suffix in subtitle_suffixes:
@@ -448,111 +408,75 @@ class Sync:
                 warnings.append('多个字幕目标名称相同，保留旧输出并跳过冲突字幕。')
                 continue
             relative = str(Path(plan['relative_path']).with_suffix('')) + suffix
-            # 清单即事实：本轮扫描已经从批量详情拿到 id/name/size/sha1/pickcode，
-            # 字幕不必再逐条回查（旧实现每个字幕两次 file()，138 个字幕就是 276 次请求，
-            fresh = bool(sub.get('_scan_at')) and time.time() - sub['_scan_at'] < 900
-            cached_id = fresh and self.engine.measurements.fingerprint(sub) and isinstance(sub.get('pickcode'), str) and sub['pickcode']
+            local = self.engine.outputs.path(relative)
+            target_size, target_sha1 = sub.get('size'), str(sub.get('sha1') or '').upper()
+            data = None
+            # 本地已有且与清单摘要一致 → 直接用，不下载、不查库。
+            if local.is_file() and local.stat().st_size <= 20 * 1024 * 1024:
+                cached = local.read_bytes()
+                if target_sha1 and len(cached) == target_size and hashlib.sha1(cached).hexdigest().upper() == target_sha1:
+                    data = cached
             try:
-                if cached_id:
-                    checked = {'id': sub['id'], 'name': sub['name'], 'parent_id': sub['parent_id'],
-                               'size': sub['size'], 'sha1': sub['sha1'], 'pickcode': sub['pickcode']}
-                else:
-                    checked = await self.cloud.file(sub['id'])
-                    self.engine.check_source(sub,checked,sub['name'],sub['parent_id'])
-                previous = next((s for s in plan.get('previous_subtitles',[]) if s['id']==sub['id']),None)
-                local = self.engine.outputs.path(relative)
-                key = self.engine.measurements.fingerprint(sub)
-                expected = old_files.get(relative) or plan['local_files'].get(relative)
-                data = None
-                if (key and previous and self.engine.measurements.fingerprint(previous)==key
-                        and local.is_file() and local.stat().st_size <= 20*1024*1024
-                        and hashlib.sha256(local.read_bytes()).hexdigest()==expected):
-                    data = local.read_bytes()
-                elif cached_id and not previous and old_files.get(relative) and local.is_file() and local.stat().st_size <= 20*1024*1024:
-                    # Older registries may lack subtitle identities even though the
-                    # local output is owned. Adopt only if both the ownership digest
-                    # and the fresh 115 size/SHA1 prove it is this exact subtitle.
-                    owner = self.store.db.execute('SELECT * FROM owned_outputs WHERE relative_path=?', (relative,)).fetchone()
-                    if owner and (owner['account_id'], owner['file_id'], owner['digest']) == (account, source['id'], old_files[relative]):
-                        local_data = local.read_bytes()
-                        if (len(local_data) == checked['size']
-                                and hashlib.sha1(local_data).hexdigest().upper() == checked['sha1'].upper()
-                                and hashlib.sha256(local_data).hexdigest() == old_files[relative]):
-                            data = local_data
                 if data is None:
-                    link, headers = await self.cloud.url(checked['pickcode'],'StrimKeep/0.5 Subtitle')
-                    data = await self.engine.download(link, {**headers,'User-Agent':'StrimKeep/0.5 Subtitle'},20*1024*1024)
-                    if cached_id:
-                        # 摘要一致就直接用；只有对不上才回云端核实一次（正常路径零请求）。
-                        # 对不上不升级为告警：旧实现本来就只核对元数据、不核对字节，
-                        # 这里保持一致的任务状态语义，只留一条事件便于排查。
-                        if (len(data) != checked['size'] or
-                                hashlib.sha1(data).hexdigest().upper() != checked['sha1'].upper()):
-                            self.engine.check_source(sub,await self.cloud.file(sub['id']),sub['name'],sub['parent_id'])
-                            self.store.event('sync', '字幕内容与清单摘要不一致，已按云端现状写入：'+sub['name'])
-                    else:
-                        self.engine.check_source(sub,await self.cloud.file(sub['id']),sub['name'],sub['parent_id'])
-                subtitle_cache.append({k:sub[k] for k in ('id','name','parent_id','size','sha1') if k in sub})
+                    fresh = (bool(sub.get('_scan_at')) and time.time() - sub['_scan_at'] < 900
+                             and identity_of(sub) is not None)
+                    pickcode = sub.get('pickcode') if fresh else ''
+                    if not pickcode:
+                        checked = await self.cloud.file(sub['id'])
+                        self.engine.check_source(sub, checked, sub['name'], sub['parent_id'])
+                        pickcode = checked.get('pickcode') or ''
+                    link, headers = await self.cloud.url(pickcode, 'StrimKeep/0.5 Subtitle')
+                    data = await self.engine.download(link, {**headers, 'User-Agent': 'StrimKeep/0.5 Subtitle'},
+                                                      20 * 1024 * 1024)
+                    if target_sha1 and (len(data) != target_size
+                                        or hashlib.sha1(data).hexdigest().upper() != target_sha1):
+                        self.store.event('sync', '字幕内容与清单摘要不一致，已按云端现状写入：' + sub['name'])
+                subtitle_cache.append({k: sub[k] for k in ('id','name','parent_id','size','sha1') if k in sub})
                 content[relative] = data
             except (httpx.HTTPError, ValueError, CloudError) as exc:
-                if isinstance(exc, CloudError) and exc.code in ('LOGIN_REQUIRED','LOGIN_INVALID'):
+                if isinstance(exc, CloudError) and exc.code in ('LOGIN_REQUIRED', 'LOGIN_INVALID'):
                     raise
-                warnings.append('外挂字幕下载失败，未清理本批旧输出。')
-        # Preflight every destination before changing any local file.
-        for relative in content:
-            self.engine.outputs.guard(account,source['id'],relative,{**old_files,**plan['local_files']})
-        # 可信路径不再二次回查：本轮扫描已经用 children_verified 证明了 id/name/size/sha1，
-        # 这里写的是本地 STRM，云端事实不会因为本地写文件而改变。只有非可信路径
-        # （扫描超过 15 分钟或指纹不符）才重新向 115 核实一次。
+                warnings.append('外挂字幕下载失败，本文件下次同步会重试。')
         if not trusted:
-            self.engine.check_source(source,await self.cloud.file(source['id']),source['name'],source['parent_id'])
+            self.engine.check_source(source, await self.cloud.file(source['id']),
+                                     source['name'], source['parent_id'])
         for relative, data in content.items():
             self.engine.boundary(jid)
-            path = self.engine.outputs.path(relative)
+            target = self.engine.outputs.path(relative)
+            if relative.lower().endswith('.strm') and target.is_file() and fid_of(target) != str(source['id']):
+                # 同名路径已经被别的文件（或用户手写的内容）占着：保留它，不覆盖。
+                self.update_item(row['id'], plan=plan, state='review', step='同名文件已存在',
+                                 message='本地已有同名的其他文件，已保留，未覆盖。')
+                return
             checksum = hashlib.sha256(data).hexdigest()
-            if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=checksum:
-                # Persist expected bytes before publishing: crash between write and registry is recoverable.
+            if not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest() != checksum:
                 plan['local_files'][relative] = checksum
-                self.engine.update_item(row['id'],plan=plan,step='发布本地输出意图')
                 self.mark_changed(jid)
-                plan['output_changed']=True
-                atomic_write(path,data,self.engine.root)
+                plan['output_changed'] = True
+                atomic_write(target, data, self.engine.root)
+                # 刚落盘的文件要立刻能被「按 fid 找本地文件」看到。
+                self.engine.outputs.invalidate()
             plan['local_files'][relative] = checksum
-        preserved = {rel:checksum for rel,checksum in old_files.items() if 'metadata_extensions' in config and Path(rel).suffix.lower() != '.strm' and Path(rel).suffix.lower() not in set(config['metadata_extensions'])}
-        plan['local_files'].update(preserved)
-        if not warnings:
-            if set(old_files)-set(content)-set(preserved):
-                self.mark_changed(jid)
-                plan['output_changed']=True
-            warnings.extend(self.engine.outputs.retire(jid,account,source['id'],old_files,set(content)|set(preserved)))
-        else:
-            plan['local_files'] = {**old_files,**plan['local_files']}
         plan['warnings'] = warnings
-        self.engine.outputs.remember(account,{**actual,'subtitles':subtitle_cache},[x['id'] for x in source['_path']],plan)
         with self.store.db:
-            self.store.db.execute('UPDATE playbacks SET name=?,relative_path=?,pickcode=? WHERE id=?', (source['name'],plan['relative_path'],actual['pickcode'],pid))
-            retired_pid = plan.get('retired_playback_id')
-            if retired_pid:
-                self.store.db.execute('UPDATE organized_files SET playback_id=? WHERE file_id=? AND playback_id=?', (pid,source['id'],retired_pid))
-            self.store.db.execute('UPDATE organized_files SET relative_path=? WHERE file_id=? AND playback_id=?', (plan['relative_path'],source['id'],pid))
-            # Preserve metadata and any completed recycle proof while updating the latest managed output.
-            managed = self.store.db.execute('SELECT i.id,i.plan FROM organized_files o JOIN organize_items i ON i.id=o.item_id WHERE o.file_id=? AND o.playback_id=?',(source['id'],pid)).fetchone()
-            if managed:
+            # 整理登记只更新路径（按文件身份，不再按播放身份）。
+            self.store.db.execute('UPDATE organized_files SET relative_path=? WHERE file_id=?',
+                                  (plan['relative_path'], source['id']))
+            managed = self.store.db.execute(
+                'SELECT i.id, i.plan FROM organized_files o JOIN organize_items i ON i.id=o.item_id WHERE o.file_id=?',
+                (source['id'],)).fetchone()
+            if managed and managed['plan']:
                 saved = json.loads(managed['plan'])
                 ids = [x['id'] for x in source['_path']]
                 if config.get('archive_cid') in ids:
                     saved['parts'] = [x['name'] for x in source['_path'][ids.index(config['archive_cid'])+1:]]
                 saved.pop('strm_filtered', None)
-                saved.update(relative_path=plan['relative_path'],local_files=plan['local_files'],playback_base=config['playback_base'],target_name=source['name'],dest=source['parent_id'])
-                if retired_pid:
-                    saved.update(playback_id=pid,token_cipher=plan['token_cipher'])
+                saved.update(relative_path=plan['relative_path'], local_files=plan['local_files'],
+                             playback_base=config['playback_base'], target_name=source['name'],
+                             dest=source['parent_id'])
                 self.store.jobs.set_item_plan(managed['id'], saved)
-        pending=json.loads(self.store.meta('library_name_pending') or '{}');migration_key=account+':'+source['id']
-        if migration_key in pending:
-            previous=pending.pop(migration_key)
-            self.engine.outputs.mark_removed(jid,previous);self.mark_changed(jid);plan['output_changed']=True
-            with self.store.db:self.store.db.execute("INSERT OR REPLACE INTO meta VALUES('library_name_pending',?)",(json.dumps(pending,ensure_ascii=False),))
-        self.engine.update_item(row['id'],plan=plan,state='done',step='STRM 与字幕已核实同步',message='；'.join(warnings))
+        self.update_item(row['id'], plan=plan, state='done',
+                         step='STRM 与字幕已核实同步', message='；'.join(warnings))
 
     async def backfill_sidecars(self, jid, row, config):
         """Supplement missing metadata without replacing existing sidecars or STRM."""
@@ -595,164 +519,166 @@ class Sync:
         if json.dumps(plan, sort_keys=True, ensure_ascii=False) != original_plan:
             self.engine.update_item(row['id'], plan=plan)
 
-    async def stale_check(self, jid, config):
-        """全量扫描后的失效差集：本地 strm 在、云端源没了 → 只标记不删除。"""
-        if not config.get('stale_detect'):
+    # ---- 条目写库批量提交 ----------------------------------------------
+    def begin_batch(self):
+        self._batch = []
+
+    def flush_batch(self):
+        pending, self._batch = getattr(self, '_batch', None), None
+        if not pending:
             return
+        with self.store.db:
+            for item_id, values in pending:
+                self.engine.jobs.update_item(item_id, **values)
+
+    def update_item(self, item_id, **values):
+        pending = getattr(self, '_batch', None)
+        if pending is None:
+            self.engine.jobs.update_item(item_id, **values)
+            return
+        pending.append((item_id, values))
+        if len(pending) >= 64:
+            self.flush_batch()
+            self._batch = []
+
+    async def tidy_moved(self, jid, config):
+        """同一文件号出现在两个本地路径时，保留本轮清单算出来的那个，删掉另一个。"""
+        expected = {}
+        for row in self.store.db.execute('SELECT file_id, plan FROM organize_items WHERE job_id=?', (jid,)):
+            plan_row = json.loads(row['plan'] or '{}')
+            if plan_row.get('relative_path'):
+                expected[str(row['file_id'])] = plan_row['relative_path']
+        removed = 0
+        for relative, identity in scan(self.engine.root).items():
+            if identity.get('kind') != 'netdisk':
+                continue
+            fid = str(identity['file_id'])
+            want = expected.get(fid)
+            if not want or want == relative:
+                continue
+            if not self.engine.outputs.path(want).is_file():
+                continue
+            try:
+                old_path = self.engine.outputs.path(relative)
+                from .internal_delete import remember
+                if remember(self.store, [relative]):
+                    old_path.unlink()
+                    with self.store.db:
+                        self.store.db.execute('INSERT OR IGNORE INTO strm_changes VALUES(?,?,?)',
+                                              (jid, 'removed', relative))
+                    removed += 1
+                    self.mark_changed(jid)
+            except Exception as exc:
+                self.store.event('sync', '旧位置清理失败（%s）：%s' % (relative, str(exc)[:60]))
+        if removed:
+            self.engine.outputs.invalidate()
+        return removed
+
+    def present_ids(self, jid, config):
+        """本轮清单里出现过的文件身份（用来判断「本地这份还算不算在范围内」）。"""
+        present = {str(row['file_id']) for row in self.store.db.execute(
+            'SELECT file_id FROM organize_items WHERE job_id=?', (jid,))}
+        present |= {str(x) for x in config.get('sync_filtered_ids', [])}
+        return present
+
+    async def stale_check(self, jid, config):
+        """失效差集：本地有、清单没有、云端也确实没了 → 只标记不删除。"""
+        if not config.get('stale_detect'):
+            return []
         account = self.engine.index.account(config)
-        sources = set(config.get('source_cids') or [])
+        present = self.present_ids(jid, config)
         missing = []
-        listings = {}
-        for old in self.store.db.execute('SELECT * FROM output_registry WHERE account_id=? AND active=1', (account,)).fetchall():
-            trail = json.loads(old['trail'])
-            if not sources.intersection(trail):
+        for relative, identity in scan(self.engine.root).items():
+            if identity.get('kind') != 'netdisk':
                 continue
-            # 先看该文件所在目录的清单（同一次同步里已读过、有缓存）：命中即「源文件还在」。
-            # 以前每个台账行都打一次存在性查询，库一大就是几千次请求。
-            parent = str(trail[-1]) if trail else ''
-            if parent and hasattr(self.cloud, 'children'):
-                if parent not in listings:
-                    try:
-                        listings[parent] = {str(entry.get('id')) for entry in await self.cloud.children(parent)}
-                    except CloudError:
-                        listings[parent] = None      # 目录读不到：退回逐条确认，不据此判失效
-                ids = listings[parent]
-                if ids is not None and str(old['file_id']) in ids:
-                    continue
-            if await self.cloud.live_file_exists(old['file_id']):
+            fid = str(identity['file_id'])
+            if fid in present:
                 continue
-            for rel in json.loads(old['files']):
-                if rel.lower().endswith('.strm'):
-                    missing.append({'account_id': account, 'file_id': old['file_id'], 'relative_path': rel})
-        dedup = {json.dumps(m, ensure_ascii=False, sort_keys=True) for m in missing}
-        missing = [json.loads(x) for x in sorted(dedup)]
+            if await self.cloud.live_file_exists(fid):
+                continue
+            missing.append({'account_id': account, 'file_id': fid, 'relative_path': relative})
         previous = self.store.get('stale_strms') or '[]'
         current = json.dumps(missing, ensure_ascii=False)
-        self.store.set_many({'stale_strms': current})
-        # 同一批失效重复出现时不再每轮都写一条：只在结果变化时提醒。
-        if missing and current != previous:
-            self.store.event('strm_sync', '失效 STRM 检测：发现 %d 条本地 strm 的网盘源文件已消失，已在 STRM 管理页列出（只标记未删除）。' % len(missing))
+        if current != previous:
+            self.store.set_many({'stale_strms': current})
+            if missing:
+                self.store.event('strm_sync', '失效 STRM 检测：发现 %d 条本地 strm 的网盘源文件已消失（只标记未删除）。'
+                                 % len(missing))
+        return missing
 
     async def stale_cleanup(self):
-        """Legacy manual cleanup: require current account, owner and unchanged bytes."""
+        """删除失效 STRM：只删「身份写在文件里、云端确实没了」的那一份。"""
         stale = json.loads(self.store.get('stale_strms') or '[]')
         account = self.engine.index.account({})
         cleaned, rest = [], []
         for item in stale:
-            rel, fid = item.get('relative_path', ''), item.get('file_id', '')
+            relative, fid = item.get('relative_path', ''), str(item.get('file_id', ''))
             try:
                 if not fid or (item.get('account_id') and item['account_id'] != account):
                     rest.append({**item, 'error': '账号或文件身份不匹配，已保留。'}); continue
-                row = self.store.db.execute('SELECT * FROM output_registry WHERE account_id=? AND file_id=? AND active=1', (account, fid)).fetchone()
-                owner = self.store.db.execute('SELECT account_id,file_id,digest FROM owned_outputs WHERE relative_path=?', (rel,)).fetchone()
-                files = json.loads(row['files']) if row else {}
-                expected = files.get(rel) if isinstance(files, dict) else None
-                if not expected or not owner or (owner['account_id'],owner['file_id'],owner['digest']) != (account,fid,expected):
-                    rest.append({**item, 'error': '本地文件归属无法核实，已保留。'}); continue
-                local = self.engine.outputs.path(rel)
-                if local.is_symlink() or (local.exists() and (not local.is_file() or local.stat().st_size > 20*1024*1024 or hashlib.sha256(local.read_bytes()).hexdigest() != expected)):
-                    rest.append({**item, 'error': '本地文件已修改或路径不安全，已保留。'}); continue
+                local = self.engine.outputs.path(relative)
+                if fid_of(local) != fid:
+                    rest.append({**item, 'error': '本地文件身份对不上，已保留。'}); continue
                 if await self.cloud.live_file_exists(fid):
                     rest.append({**item, 'error': '网盘源文件仍存在，已保留。'}); continue
-                if local.is_symlink() or (local.exists() and (not local.is_file() or local.stat().st_size > 20*1024*1024 or hashlib.sha256(local.read_bytes()).hexdigest() != expected)):
-                    rest.append({**item, 'error': '核查期间本地文件发生变化，已保留。'}); continue
-                if local.is_file():
-                    from .internal_delete import remember
-                    if not remember(self.store, [rel]):
-                        raise RuntimeError('内部删除登记失败，已保留本地文件。')
-                    local.unlink()
-                with self.store.db:
-                    self.store.db.execute('DELETE FROM owned_outputs WHERE relative_path=? AND account_id=? AND file_id=?', (rel,account,fid))
-                    self.store.db.execute('UPDATE playbacks SET revoked=1 WHERE id=? AND file_id=?', (row['playback_id'],fid))
-                    self.store.db.execute('DELETE FROM organized_files WHERE file_id=? AND playback_id=?', (fid,row['playback_id']))
-                    self.store.db.execute('UPDATE output_registry SET active=0 WHERE account_id=? AND file_id=?', (account,fid))
-                cleaned.append(rel)
+                from .internal_delete import remember
+                if not remember(self.store, [relative]):
+                    raise RuntimeError('内部删除登记失败，已保留本地文件。')
+                local.unlink()
+                cleaned.append(relative)
             except Exception as exc:
                 rest.append({**item, 'error': str(exc)[:80]})
         self.store.set_many({'stale_strms': json.dumps(rest, ensure_ascii=False)})
         return cleaned, rest
 
     async def cleanup(self, jid, config, after=None):
-        from .core import UncertainState
-        account = self.engine.index.account(config); roots = set(config['source_cids'])
-        present = {r['file_id'] for r in self.store.db.execute('SELECT file_id FROM organize_items WHERE job_id=?',(jid,))} | set(config.get('sync_filtered_ids', []))
+        """清理：本地 STRM 的身份不在本轮清单里、云端也没了 → 删掉。"""
+        if config.get('cleanup_missing', True) is False:
+            return 0, []
+        present = self.present_ids(jid, config)
+        expected = {}
+        for row in self.store.db.execute('SELECT file_id, plan FROM organize_items WHERE job_id=?', (jid,)):
+            plan_row = json.loads(row['plan'] or '{}')
+            if plan_row.get('relative_path'):
+                expected[str(row['file_id'])] = plan_row['relative_path']
         removed, warnings = 0, []
-        started = float(after or 0)
-        retired = 0
-        def preflight(old):
-            # A group is all-or-nothing: don't remove a subtitle first and then
-            # discover that the STRM belongs to a different owner or was edited.
-            for relative, expected in json.loads(old['files']).items():
-                local = self.engine.outputs.path(relative)
-                owner = self.store.db.execute('SELECT account_id,file_id,digest FROM owned_outputs WHERE relative_path=?', (relative,)).fetchone()
-                if not owner or (owner['account_id'],owner['file_id'],owner['digest']) != (account,old['file_id'],expected):
-                    return '已保留归属不明的本地文件：' + relative
-                if local.is_symlink():
-                    return '已保留符号链接：' + relative
-                if local.exists() and (not local.is_file() or local.stat().st_size > 20*1024*1024 or hashlib.sha256(local.read_bytes()).hexdigest() != expected):
-                    return '已保留被修改的本地文件：' + relative
-            return ''
-        for old in self.store.db.execute('SELECT * FROM output_registry WHERE account_id=? AND active=1',(account,)).fetchall():
-            if old['file_id'] in present: continue
-            if not roots.intersection(json.loads(old['trail'])):
-                # 范围外的旧台账（换过同步源/库根改名留下的）：STRM 已经不在本地就停用。
-                # 否则巡检天天把它算成「需要修复」，而清理又按范围跳过，永远解不开。
-                files = json.loads(old['files'])
-                if not any(f.endswith('.strm') and self.engine.outputs.path(f).is_file() for f in files):
-                    with self.store.db:
-                        self.store.db.execute('UPDATE output_registry SET active=0 WHERE account_id=? AND file_id=?',
-                                              (account, old['file_id']))
-                    retired += 1
+        for relative, identity in scan(self.engine.root).items():
+            if identity.get('kind') != 'netdisk':
                 continue
-            if started and float(old['updated']) > started:
-                # 扫描开始之后才登记的输出来不及进这份清单，不能据此判定失效。
+            fid = str(identity['file_id'])
+            want = expected.get(fid)
+            if fid in present:
                 continue
             self.engine.boundary(jid)
-            problem = preflight(old)
-            if problem:
-                warnings.append(problem)
-                continue
-            if await self.cloud.live_file_exists(old['file_id']):
-                actual = await self.cloud.file(old['file_id'])
-                trail = await self.cloud.directory(actual['parent_id'])
-                if roots.intersection(trail): raise UncertainState('完整清单与当前范围不一致，已停止清理；请重新同步。')
-                # No longer in the selected source: retire only this scope's
-                # old local output, keeping the live playback mapping usable.
-                item_warnings = self.engine.outputs.retire(jid,account,old['file_id'],json.loads(old['files']))
-                warnings.extend(item_warnings)
-                if item_warnings:
+            try:
+                if await self.cloud.live_file_exists(fid):
                     continue
-                with self.store.db:self.store.db.execute('UPDATE output_registry SET active=0 WHERE account_id=? AND file_id=?',(account,old['file_id']))
-                self.mark_changed(jid);removed+=1
-                continue
-            # Only retire bytes that still match the registered owner and digest.
-            item_warnings = self.engine.outputs.retire(jid,account,old['file_id'],json.loads(old['files']))
-            warnings.extend(item_warnings)
-            if item_warnings:
-                continue
-            self.mark_changed(jid)
-            with self.store.db:
-                # Auto-cleanup only retires the output. Explicitly revoked
-                # playback identities remain revoked; an untouched identity
-                # can be reused if its source returns from the recycle bin.
-                self.store.db.execute('UPDATE output_registry SET active=0 WHERE account_id=? AND file_id=?',(account,old['file_id']))
-            removed += 1
-        # Unregistered STRM has no verified 115 identity; do not infer that
-        # a missing manifest entry authorizes its removal.
-        if retired:
-            self.store.event('strm_sync', f'停用 {retired} 条范围外、本地已不存在的旧台账（不删任何文件）。')
-        current=json.loads(self.engine.job(jid)['config']);current['sync_removed']=removed
-        self.engine.update_job(jid,config=json.dumps(current,ensure_ascii=False))
-        return removed,warnings
+                local = self.engine.outputs.path(relative)
+                if fid_of(local) != fid:
+                    warnings.append('已保留身份变化的本地文件：' + relative); continue
+                from .internal_delete import remember
+                if not remember(self.store, [relative]):
+                    warnings.append('内部删除登记失败，已保留：' + relative); continue
+                local.unlink()
+                with self.store.db:
+                    self.store.db.execute('INSERT OR IGNORE INTO strm_changes VALUES(?,?,?)',
+                                          (jid, 'removed', relative))
+                removed += 1
+                self.mark_changed(jid)
+            except Exception as exc:
+                warnings.append('清理失败（%s）：%s' % (relative, str(exc)[:60]))
+        state = json.loads(self.engine.job(jid)['config']); state['sync_removed'] = removed
+        self.engine.update_job(jid, config=json.dumps(state, ensure_ascii=False))
+        return removed, warnings
 
-    async def run(self, jid, config, sweep=None):
+    async def run(self, jid, config):
         if hasattr(self.cloud, 'use_scope'):
             self.cloud.use_scope(self.engine.current_account(), jid)
         if hasattr(self.cloud, 'reset_ledger'):
             self.cloud.reset_ledger()
         started = time.time()
         try:
-            await self._run(jid, config, sweep=sweep)
+            await self._run(jid, config)
             if config.get('stale_detect'):
                 # 全量扫描后做差集（只标记不删除）。这条链路以前只有测试在调，
                 # 打开开关也不会执行——现在真的接进同步流程。
@@ -947,222 +873,9 @@ class Sync:
         verdict, detail = await self.inspect_output(row, config)
         return detail if verdict == 'ok' else None
 
-    SWEEP_PROGRESS_SECONDS = 1.0
-
-    SWEEP_PROGRESS_SECONDS = 1.0
-
-    def should_sweep(self, config):
-        """默认不再走「只核对台账」的本地巡检。
-
-        本地巡检只能修台账里登记过的输出：用户在本地删掉整批文件之后，
-        它看不见「网盘上有、本地没有」这件事，文件就永远补不回来。
-        现在只在管理员显式打开 sync_sweep_enabled 时才启用。
-        """
-        if config.get('_force_full') or config.get('full_scan'):
-            return False
-        return str(self.store.get('sync_sweep_enabled') or '') == '1'
-
-    def sweep_orphans(self, jid, config, registered):
-        """扫本地文件树，处理台账之外的 .strm。
-
-        只删「能证明是旧副本或已失效」的：
-
-        - 旧形态 ``/play/<token>``：播放身份不存在或已撤销 → 删（原行为）；
-        - 新形态 ``/play115/<pickcode>/<fid>/<sha1>/<size>/<name>``：地址里带着 file_id。
-          若同一个云端文件已在本账号下登记到**另一个**路径，且那份文件确实还在 →
-          这一条就是旧命名留下的副本 → 删；登记不到、或登记的正是自己 → 只报数，不猜。
-
-        0.8.31 之前这里只认 ``/play/`` 前缀，而 0.7.12 起 STRM 写的都是 play115 形态，
-        于是「本地多余的 STRM」再也没被清理过（现场遗留 395 个旧命名副本）。
-        返回 (删除数, 保留数)。
-        """
-        base = (config.get('playback_base') or '').rstrip('/')
-        legacy_prefix = base + '/play/'
-        identity_prefix = base + '/play115/'
-        account = self.engine.index.account(config)
-        removed = kept = 0
-        for local in self.engine.root.rglob('*.strm'):
-            relative = local.relative_to(self.engine.root).as_posix()
-            if relative in registered:
-                continue
-            try:
-                head = local.read_text('utf-8', 'ignore')[:400].strip()
-            except OSError:
-                kept += 1
-                continue
-            if head.startswith(identity_prefix):
-                doomed = self._duplicate_output(account, relative, head[len(identity_prefix):])
-            elif head.startswith(legacy_prefix):
-                item = head[len(legacy_prefix):].split('/', 1)[0].split('?', 1)[0].strip()
-                row = self.store.db.execute('SELECT revoked FROM playbacks WHERE id=?', (item,)).fetchone()
-                doomed = not (row and not row['revoked'])
-            else:
-                kept += 1
-                continue
-            if not doomed:
-                kept += 1
-                continue
-            self.engine.outputs.mark_removed(jid, relative)
-            try:
-                # 联动清同名侧车；目录已无视频时再删空目录。删不掉就保留并计入 kept。
-                self.engine.outputs.unlink_recorded(jid, relative, local, purge=True)
-            except (OSError, RuntimeError):
-                kept += 1
-                continue
-            if local.exists():
-                kept += 1
-                continue
-            with self.store.db:
-                self.store.db.execute('DELETE FROM owned_outputs WHERE relative_path=?', (relative,))
-            self.engine.audit(jid, 0, '清理旧命名或已失效的本地 STRM：' + relative)
-            removed += 1
-        return removed, kept
-
-    def _duplicate_output(self, account, relative, tail):
-        """play115 地址里的 file_id 是否已被登记到别的、且仍存在的路径。"""
-        parts = tail.split('/')
-        if len(parts) < 2:
-            return False
-        row = self.store.db.execute(
-            'SELECT relative_path,files,active FROM output_registry WHERE account_id=? AND file_id=?',
-            (account, parts[1])).fetchone()
-        if not row or not row['active']:
-            return False
-        try:
-            files = json.loads(row['files'])
-        except Exception:
-            return False
-        canonical = row['relative_path']
-        if not canonical or canonical == relative or relative in files:
-            return False
-        # 登记的那份必须真的还在，否则删掉这一条等于把唯一的输出删了。
-        return self.engine.outputs.path(canonical).is_file()
-
-    async def sweep(self, jid, config):
-        """本地巡检：只核对已登记的 STRM 输出，不枚举云端、不碰云端。
-
-        对齐每天 00:00 那一轮：自己能修的（主 STRM 缺失、内容口径变旧）就地重写，
-        不需要枚举云端；只有本地修不了的（字幕缺失、归属冲突、播放映射断裂）才置
-        sync_full_due，下一轮自动升级为完全核对。
-        顺带清掉已撤销的本地输出（只删明确撤销的，未登记的一律只报告）。
-        """
-        from .core import dumps
-        account = self.engine.index.account(config)
-        rows = self.store.db.execute(
-            'SELECT * FROM output_registry WHERE account_id=? AND active=1 ORDER BY relative_path',
-            (account,)).fetchall()
-        total = len(rows)
-        pending = json.loads(self.store.meta('library_name_pending') or '{}')
-        ok = broken = healed = skipped = 0
-        problems = []
-        revoked = []          # [(row, files)]：已撤销，直接清掉并停用台账
-        registered = set()    # 有效台账登记的本地文件
-        reported = time.monotonic()
-        current = json.loads(self.engine.job(jid)['config'])
-        current['sync_mode'] = 'sweep'
-        self.engine.update_job(jid, config=dumps(current), stage=f'本地巡检：{total} 条输出', message='')
-        for row in rows:
-            self.engine.boundary(jid)
-            if account + ':' + row['file_id'] in pending:
-                skipped += 1
-                continue
-            try:
-                files = json.loads(row['files'])
-            except Exception:
-                broken += 1
-                problems.append(row['relative_path'])
-                continue
-            dead = self.store.db.execute(
-                'SELECT 1 FROM playbacks WHERE id=? AND revoked=1', (row['playback_id'],)).fetchone()
-            if dead:
-                revoked.append((row, files))
-                continue
-            row = self.heal_stale_paths(row)
-            files = json.loads(row['files'])
-            registered.update(files.keys())
-            # 巡检只读，不抢 publication_gate：整理搬文件时会长时间占用它，
-            # 逐条去等就等于把巡检拖成分钟级。
-            verdict, detail = await self.inspect_output(row, config)
-            if verdict == 'ok':
-                ok += 1
-            elif verdict in ('missing', 'content') and self.heal_output(jid, row, config):
-                healed += 1
-            else:
-                broken += 1
-                problems.append(row['relative_path'])
-            now = time.monotonic()
-            if now - reported >= self.SWEEP_PROGRESS_SECONDS:
-                reported = now
-                self.engine.update_job(jid, stage=f'本地巡检：{ok + healed + broken}/{total}，自愈 {healed}，待修复 {broken}')
-        removed = 0
-        if revoked:
-            from .internal_delete import remember
-            from .fsops import purge_strm
-            if not remember(self.store, [name for _, files in revoked for name in files]):
-                raise RuntimeError('内部删除登记失败，已保留本地文件。')
-            for row, files in revoked:
-                gone = []
-                for name in files:
-                    path = self.engine.root / name
-                    try:
-                        if Path(name).suffix.lower() == '.strm':
-                            # 联动清同名侧车；目录已无视频时再删空目录。
-                            purge_strm(path, self.engine.root, store=self.store)
-                        elif path.exists():
-                            path.unlink()
-                    except (OSError, RuntimeError):
-                        continue
-                    if not path.exists():
-                        gone.append(name)
-                if not gone:
-                    continue          # 一个都没删掉：台账保留，下一轮巡检再试
-                with self.store.db:
-                    for name in gone:
-                        self.store.db.execute('DELETE FROM owned_outputs WHERE relative_path=?', (name,))
-                    self.store.db.execute(
-                        'UPDATE output_registry SET active=0 WHERE account_id=? AND file_id=?',
-                        (row['account_id'], row['file_id']))
-                removed += len(gone)
-        # 其余未登记项只报数，留给完全核对。
-        removed_orphans, kept_orphans = self.sweep_orphans(jid, config, registered)
-        tail = f'；跳过 {skipped} 条（媒体库改名进行中）' if skipped else ''
-        if removed:
-            tail += f'；清理已撤销输出 {removed} 条'
-        if removed_orphans:
-            tail += f'；清理播不了的 STRM {removed_orphans} 条'
-        if kept_orphans:
-            tail += f'；{kept_orphans} 条未登记 STRM 未动（等完全核对）'
-        if broken:
-            # 同一批问题只升级一次：否则完全核对没修好（或没跑完）时，每天都会白跑一次全量。
-            signature = hashlib.sha256('|'.join(sorted(problems)).encode()).hexdigest()[:16]
-            previous = self.store.get('sync_sweep_signature') or ''
-            if signature != previous:
-                self.store.set_many({'sync_full_due': 1, 'sync_sweep_signature': signature})
-                advice = '下一轮自动做完全核对'
-            else:
-                advice = '与上一轮相同，已登记；需要时手动做一次完全核对'
-            healed_text = f'，就地自愈 {healed} 条' if healed else ''
-            message = (f'本地巡检：{ok} 条正常{healed_text}，{broken} 条输出需要修复（{advice}）。'
-                       f'未枚举云端，未执行失效清理{tail}。首个：{problems[0][:80]}')
-            state = 'partial'
-        else:
-            if self.store.get('sync_sweep_signature'):
-                self.store.set_many({'sync_sweep_signature': ''})
-            healed_text = f'，就地自愈 {healed} 条' if healed else ''
-            message = f'本地巡检：{ok} 条输出正常{healed_text}；未枚举云端，未执行失效清理{tail}。'
-            state = 'completed'
-        self.engine.update_job(jid, state=state, stage='STRM 巡检结束', message=message)
-        self.store.event('strm_sync', message)
-        return state
-
-    async def _run(self, jid, config, sweep=None):
+    async def _run(self, jid, config):
         from .core import UncertainState
         self.engine.boundary(jid)
-        # 定时同步默认走本地巡检：不枚举云端，坏输出就地修。
-        if sweep is None:
-            sweep = self.should_sweep(config)
-        if sweep:
-            return await self.sweep(jid, config)
         job = self.engine.job(jid)
         if not job['manifest']:
             labels=config.get('directory_labels') or {}
@@ -1177,16 +890,7 @@ class Sync:
             if self.engine.scan_receive_gate.locked():
                 self.engine.update_job(jid, stage='等待目录扫描或转存核对')
             async with self.engine.scan_receive_gate:
-                # Import proven historical ownership before the scan boundary.
-                # Skip extra root lookups when the ownership registry is complete.
-                account = self.engine.index.account(config)
-                missing_history = self.store.db.execute(
-                    'SELECT 1 FROM organized_files o LEFT JOIN output_registry r ON r.file_id=o.file_id AND r.account_id=? WHERE r.file_id IS NULL LIMIT 1', (account,)).fetchone()
-                if missing_history:
-                    historical_paths = {cid: await self.cloud.path_info(cid) for cid in roots}
-                    async with self.engine.publication_gate:
-                        await self.engine.outputs.import_managed(jid,account,historical_paths)
-                await self.manifest(jid,config)
+                await self.manifest(jid, config)
         else:
             # 续跑的清单可能已经是几小时前的：期间库里新增/移动过的文件不在其中，
             # 拿它去授权清理会被正确拦下（也等于永远做不完）。过期即重建。
@@ -1201,9 +905,6 @@ class Sync:
         saved_config = json.loads(self.engine.job(jid)['config'])
         config.update({k:saved_config[k] for k in ('sync_filtered_ids','sync_metadata','sync_filter_count') if k in saved_config})
         cached = saved_config.get('sync_mode') == 'cached'
-        paths = {cid:await self.cloud.path_info(cid) for cid in config['source_cids']}
-        async with self.engine.publication_gate:
-            await self.engine.outputs.import_managed(jid,self.engine.index.account(config),paths)
         # Prefer existing cloud sidecars before generating missing metadata locally.
         async with self.engine.publication_gate:
             await self.download_metadata(jid, config)
@@ -1230,7 +931,7 @@ class Sync:
                                 'UPDATE output_registry SET trail=? WHERE account_id=? AND file_id=? AND trail=? AND updated<=?',
                                 (json.dumps(repair['new'], ensure_ascii=False, separators=(',', ':')),
                                  self.engine.index.account(config), row['file_id'], repair['old'], started))
-                    self.engine.update_item(row['id'],plan=plan,state='done',step='输出未变更，已复用核对结果')
+                    self.update_item(row['id'],plan=plan,state='done',step='输出未变更，已复用核对结果')
             if plan:
                 await self.backfill_sidecars(jid, row, config)
                 continue
@@ -1248,11 +949,18 @@ class Sync:
                 except CloudError as exc:
                     if exc.code in ('LOGIN_REQUIRED','LOGIN_INVALID'):
                         raise
-                    self.engine.update_item(row['id'],state='review',step='本文件同步未完成',message=str(exc))
+                    self.update_item(row['id'],state='review',step='本文件同步未完成',message=str(exc))
                 except UncertainState as exc:
-                    self.engine.update_item(row['id'],state='review',step='本文件同步未完成',message=str(exc))
+                    self.update_item(row['id'],state='review',step='本文件同步未完成',message=str(exc))
                 await self.backfill_sidecars(jid, row, config)
+        # 把旧的两张索引按磁盘现状重写：删掉本地文件后，索引里也就没有了。
+        try:
+            self.engine.outputs.reindex(self.engine.index.account(config))
+        except Exception as exc:                    # 索引只是缓存，失败不影响本次同步
+            self.store.event('sync', '本地索引重建未完成：%s' % str(exc)[:60])
         self.engine.boundary(jid)
+        # 同一份文件换过目录：新位置写好之后，旧位置那份副本要收掉（与「清理缺失」开关无关）。
+        await self.tidy_moved(jid, config)
         # Each source is verified immediately before its output is published.
         # Only missing registered outputs need a live-namespace check in cleanup.
         warnings = []

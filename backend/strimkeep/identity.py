@@ -47,6 +47,31 @@ def parse_url(text):
     return None
 
 
+PLAY115_LOOSE = re.compile(r'^/play115/(?P<pickcode>[^/]+)/(?P<file_id>\d+)/'
+                            r'(?:(?P<sha1>[^/]*)/(?P<size>\d+)/)?')
+
+
+def hint(text):
+    """宽松提取网盘文件身份：只要求 /play115/<pickcode>/<fid>/。
+
+    用于「按 fid 找本地文件」这类索引用途。删除授权仍然走严格解析
+    （parse_url），避免地址畸形时误判成我们的输出。
+    """
+    if not isinstance(text, str):
+        return None
+    path = urlsplit(text.strip()).path or ''
+    match = PLAY115_LOOSE.match(path)
+    if not match:
+        return None
+    info = {'kind': 'netdisk', 'pickcode': match.group('pickcode'),
+            'file_id': match.group('file_id')}
+    if match.group('sha1'):
+        info['sha1'] = match.group('sha1').upper()
+    if match.group('size'):
+        info['size'] = int(match.group('size'))
+    return info
+
+
 def parse_file(path):
     """读本地 STRM 并解析身份；文件不在/读不了/内容不认识都返回 None。"""
     try:

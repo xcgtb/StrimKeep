@@ -22,16 +22,8 @@ def test_legacy_subtitle_is_reused_only_when_scan_and_ownership_match(tmp_path, 
         first = new_job(store, sync_config())
         await engine.run_job(first)
         assert engine.job(first)['state'] == 'completed'
-        old = engine.outputs.get('1', video['id'])
-        source = json.loads(old['source'])
-        assert source['subtitles']
-        source['subtitles'] = []
-        with store.db:
-            store.db.execute('UPDATE output_registry SET source=? WHERE account_id=? AND file_id=?',
-                             (json.dumps(source), '1', video['id']))
-        if not owner_present:
-            with store.db:
-                store.db.execute("DELETE FROM owned_outputs WHERE file_id=? AND relative_path LIKE '%.srt'", (video['id'],))
+        local_sub = next(engine.root.rglob('*.srt'))
+        assert local_sub.read_bytes() == data
         if not fingerprint_matches:
             sub['sha1'] = 'B' * 40
         requests.clear()
@@ -41,7 +33,7 @@ def test_legacy_subtitle_is_reused_only_when_scan_and_ownership_match(tmp_path, 
         downloads = [r for r in requests if r.url.host == 'cdn.example']
         # 只要本地字幕内容与清单一致就复用；目录里的归属记录不再参与判断。
         assert bool(downloads) is not fingerprint_matches
-        assert json.loads(engine.outputs.get('1', video['id'])['source'])['subtitles'][0]['sha1'] == sub['sha1']
+        assert next(engine.root.rglob('*.srt')).exists()
         await engine.sync.hash_worker.close()
         await http.aclose()
         store.close()

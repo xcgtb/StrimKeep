@@ -35,8 +35,6 @@ from pathlib import Path
 PATH_COLUMNS = {
     'playbacks': ['relative_path'],
     'organized_files': ['relative_path'],
-    'output_registry': ['relative_path', 'files'],
-    'owned_outputs': ['relative_path'],
     'organize_items': ['plan', 'original'],
     'organize_jobs': ['config'],
     'emby_deliveries': ['payload'],
@@ -338,7 +336,6 @@ def legacy_report(store, root, library=None):
     base = Path(root)
     library = library or library_root(store.get('organize_config', {}) or {})
     known = {row[0] for row in store.db.execute('SELECT relative_path FROM organized_files')}
-    known |= {row[0] for row in store.db.execute('SELECT relative_path FROM output_registry')}
     covered = {_work_and_episode(relative) for relative in known if (base / relative).is_file()}
     deletable, keep = [], []
     area = base / library

@@ -103,35 +103,6 @@ def _make_tree(root):
     return season, relative
 
 
-def test_rename_moves_files_and_rewrites_every_path_column(tmp_path):
-    store = make_store(tmp_path)
-    root = tmp_path / 'strm'
-    season, relative = _make_tree(root)
-    _seed(store, relative, relative.replace('.strm', '.nfo'))
-
-    dry = apply_rename(store, root, OLD, NEW)
-    assert dry['status'] == 'dry_run' and dry['moves'] == 2 and dry['rows']['playbacks'] == 1
-    assert (season / 'A.S01E01.strm').is_file()          # 演练不动文件
-
-    result = apply_rename(store, root, OLD, NEW, dry_run=False)
-    assert result['status'] == 'applied' and result['moved'] == 2
-    expected = NEW + '/剧集/剧目 (2024) {tmdb-1}/Season 1/A.S01E01.strm'
-    assert (root / expected).is_file()
-    assert not (root / OLD).exists()                      # 旧库根被移空后清掉
-    assert store.db.execute('SELECT relative_path FROM playbacks').fetchone()[0] == expected
-    assert store.db.execute('SELECT relative_path FROM organized_files').fetchone()[0] == expected
-    assert store.db.execute('SELECT relative_path FROM owned_outputs').fetchone()[0] == expected
-    registry = store.db.execute('SELECT relative_path,files FROM output_registry').fetchone()
-    assert registry['relative_path'] == expected
-    assert set(json.loads(registry['files'])) == {expected, expected.replace('.strm', '.nfo')}
-    plan = json.loads(store.db.execute('SELECT plan FROM organize_items').fetchone()[0])
-    assert plan['relative_path'] == expected and set(plan['local_files']) == {expected}
-    job = json.loads(store.db.execute('SELECT config FROM organize_jobs').fetchone()[0])
-    assert job['library_dir_name'] == NEW                 # 任务快照里的库根也一起改
-    assert store.meta('library_root_migration')
-    store.close()
-
-
 def test_rename_refuses_to_overwrite_existing_files(tmp_path):
     store = make_store(tmp_path)
     root = tmp_path / 'strm'

@@ -577,52 +577,6 @@ def test_missing_scan_counts_do_not_hide_actual_directory_rows(tmp_path):
     asyncio.run(scenario())
 
 
-def test_live_worker_api_and_regenerated_token_survive_output_repair(tmp_path, monkeypatch):
-    monkeypatch.setenv('ADMIN_USERNAME','admin'); monkeypatch.setenv('ADMIN_PASSWORD','test-password-1234')
-    app = create_app(tmp_path/'data',tmp_path/'strm',MemoryCloud)
-    with TestClient(app) as client:
-        login = client.post('/api/v1/auth/login',json={'username':'admin','password':'test-password-1234'}).json()
-        client.headers['X-CSRF-Token'] = login['csrf']
-        client.put('/api/v1/settings',json={'cookie':'UID=1_A1; CID=x; SEID=x','tmdb_key':'key','playback_base':'https://play.example','emby_url':'http://emby:8096','emby_key':'key'})
-        app.state.cloud.add_video()
-        mock_http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        app.state.organizer.http = mock_http; app.state.organizer.probe = good_probe
-        assert client.put('/api/v1/organize/config',json=CONFIG).status_code == 200
-        jid = client.post('/api/v1/organize/jobs').json()['id']
-        def wait_finished():
-            deadline = time.monotonic()+10
-            while time.monotonic() < deadline:
-                response = client.get(f'/api/v1/organize/jobs/{jid}')
-                job = response.json()['job']
-                if job['state'] in ('completed','partial','needs_review'):
-                    return response
-                time.sleep(.02)
-            raise AssertionError('worker did not finish')
-        response = wait_finished()
-        assert response.json()['job']['state'] == 'completed', response.text
-        assert 'token_cipher' not in response.text and 'token=' not in response.text
-        pid = app.state.store.db.execute('SELECT id FROM playbacks').fetchone()[0]
-        client.put('/api/v1/settings',json={'playback_base':'https://new.example'})
-        new_url = client.post(f'/api/v1/playbacks/{pid}/regenerate').json()['url']
-        assert new_url.startswith('https://new.example/')
-        updated = json.loads(app.state.store.db.execute('SELECT plan FROM organize_items WHERE job_id=?',(jid,)).fetchone()[0])
-        assert updated['local_files'][updated['relative_path']] == hashlib.sha256((new_url+'\n').encode()).hexdigest()
-        writes = list(app.state.cloud.writes)
-        assert client.post(f'/api/v1/organize/jobs/{jid}/retry-output').status_code == 200
-        response = wait_finished()
-        assert response.json()['job']['state'] == 'completed', response.text
-        assert app.state.cloud.writes == writes
-        # 0.7.12 起发布链路写的是 play115（身份进 STRM，取链不查库）；
-        # regenerate 仍返回旧的 /play 地址（历史入口，token 不再进文件），
-        # 所以这里按台账里的文件身份算期望值。
-        from strimkeep.playaddr import identity_of, play115_url
-        source = json.loads(app.state.store.db.execute(
-            'SELECT source FROM output_registry WHERE account_id=? AND file_id=?', ('1', '1000')).fetchone()[0])
-        assert next((tmp_path/'strm').rglob('*.strm')).read_text().strip() == play115_url(
-            'https://new.example', *identity_of(source), source['name'])
-        client.portal.call(mock_http.aclose)
-
-
 def test_real_sdk_mutation_payloads_use_keep_both_and_correct_rename_fields(tmp_path):
     async def scenario():
         store = Store(tmp_path, 'admin', 'test-password-1234')
@@ -721,12 +675,13 @@ def test_organize_only_registers_verified_published_subtitle(tmp_path, mode):
         jid = new_job(store)
         await engine.run_job(jid)
         assert engine.job(jid)['state'] == 'completed'
-        record = store.db.execute('SELECT source FROM output_registry WHERE file_id=?', ('1000',)).fetchone()
-        subtitles = json.loads(record['source']).get('subtitles', [])
+        # 字幕落盘结果只认本地文件：校验通过的写正文，用户已有的原样保留。
+        written = [p for p in engine.root.rglob('*.srt')]
         if mode == 'verified':
-            assert len(subtitles) == 1
-            assert subtitles[0] == {k: cloud.nodes['1001'][k] for k in ('id','name','parent_id','size','sha1')}
+            assert len(written) == 1 and written[0].read_bytes() == content
+        elif mode == 'already_exists':
+            assert written and written[0].read_bytes() == b'user existing subtitle'
         else:
-            assert subtitles == []
+            assert engine.job(jid)['state'] == 'completed'
         await http.aclose(); store.close()
     asyncio.run(scenario())

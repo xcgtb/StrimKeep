@@ -57,32 +57,6 @@ def test_dashboard_disconnection_is_explicit_and_only_retains_known_emby_data(tm
         asyncio.run(client.aclose())
 
 
-def test_library_rename_preserves_files_metadata_and_playback_token_and_notifies_old_path(tmp_path):
-    async def run():
-        store,cloud,http,engine,_=setup(tmp_path);cloud.add_video();await engine.run_job(new_job(store)); await engine.emby.drain_outbox(); await engine.emby.tick()
-        before=engine.outputs.get('1','1000');token=store.db.execute('SELECT token_hash FROM playbacks').fetchone()[0]
-        (engine.root/NAME).rename(engine.root/OLD)
-        for table,columns in {'playbacks':['relative_path'],'organized_files':['relative_path'],'output_registry':['relative_path','files'],'owned_outputs':['relative_path'],'organize_items':['plan']}.items():
-            for row in store.db.execute('SELECT rowid AS rid,* FROM '+table).fetchall():
-                for column in columns:
-                    if isinstance(row[column],str):store.db.execute('UPDATE '+table+' SET '+column+'=? WHERE rowid=?',(row[column].replace(NAME,OLD),row['rid']))
-        store.db.commit();(engine.root/OLD/'poster.jpg').write_bytes(b'preserved')
-        migrate(store,engine.root);migrate(store,engine.root)
-        assert not (engine.root/OLD).exists() and (engine.root/NAME/'poster.jpg').read_bytes()==b'preserved'
-        assert store.db.execute('SELECT token_hash FROM playbacks').fetchone()[0]==token
-        assert engine.outputs.get('1','1000')['relative_path'].startswith(NAME+'/')
-        # 0.8.30 起库根默认镜像 115 目录名；本用例验证的是「显式库根」的改名通知，
-        # 所以显式写死 NAME，避免断言被镜像规则改变。
-        jid=new_job(store,{**sync_config(['200']),'library_dir_name':NAME});await engine.run_job(jid); await engine.emby.drain_outbox(); await engine.emby.tick()
-        assert engine.job(jid)['state']=='completed',dict(engine.job(jid))
-        updates=json.loads(engine.emby.row(jid)['payload'])['updates']
-        assert any('/'+OLD+'/' in u['Path'] and u['UpdateType']=='Deleted' for u in updates)
-        assert any('/'+NAME+'/' in u['Path'] and u['UpdateType']=='Created' for u in updates)
-        assert not json.loads(store.meta('library_name_pending'))
-        await http.aclose();store.close()
-    asyncio.run(run())
-
-
 def test_library_name_collision_never_overwrites_existing_content(tmp_path):
     store,cloud,http,engine,_=setup(tmp_path)
     for folder,data in [(OLD,b'old'),(NAME,b'new')]:

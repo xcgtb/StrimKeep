@@ -30,11 +30,8 @@ def _absent(root, relative, library):
 def candidates(db, root, library):
     if not isinstance(library, str) or library in ('', '.', '..') or '/' in library or '\\' in library:
         raise ValueError('网盘库根目录名称无效')
-    rows = db.execute('''SELECT o.* FROM organized_files o JOIN playbacks p ON p.id=o.playback_id AND p.file_id=o.file_id
-        WHERE p.revoked=1 AND NOT EXISTS(SELECT 1 FROM output_registry r WHERE r.file_id=o.file_id)
-        AND NOT EXISTS(SELECT 1 FROM playbacks active WHERE active.file_id=o.file_id AND active.revoked=0)
-        AND NOT EXISTS(SELECT 1 FROM owned_outputs w WHERE w.file_id=o.file_id OR w.relative_path=o.relative_path)
-        ORDER BY o.file_id''').fetchall()
+    # 判据只有一条：整理登记过、而本地文件已经不在了（不再看登记表也不看撤销标记）。
+    rows = db.execute('SELECT * FROM organized_files ORDER BY file_id').fetchall()
     return [dict(row) for row in rows if _absent(root, row['relative_path'], library)]
 
 

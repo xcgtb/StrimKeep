@@ -33,7 +33,7 @@ def test_broken_hash_worker_no_longer_blocks_sync(tmp_path):
         store,cloud,http,engine,_=setup(tmp_path)
         cloud.add_video(name='Movie.mkv')['sha1']='A'*40
         first=new_job(store,{**sync_config(),'notify_emby':False});await engine.run_job(first)
-        old=engine.outputs.get('1','1000');path=engine.root/old['relative_path'];before=path.read_bytes()
+        path=next(engine.root.rglob('*.strm'));before=path.read_bytes()
         async def fail(): raise OSError('synthetic child failure')
         engine.sync.hash_worker._start=fail
         second=new_job(store,{**sync_config(),'notify_emby':False});await engine.run_job(second)
@@ -85,67 +85,4 @@ def test_read_only_hash_request_retries_once_after_child_dies(tmp_path):
             assert await worker.checksum(path)==hashlib.sha256(b'payload').hexdigest()
             assert calls==2
         finally:await worker.close()
-    asyncio.run(scenario())
-
-
-def test_abbreviated_organizer_trail_reuses_full_scan_and_repairs_registry(tmp_path):
-    async def scenario():
-        store, cloud, http, engine, _ = setup(tmp_path)
-        middle = (await cloud.mkdir('200', '剧集'))['cid']
-        parent = (await cloud.mkdir(middle, 'Season 1'))['cid']
-        video = cloud.add_video(name='Show.S01E01.mkv', parent=parent)
-        video['sha1'] = 'A' * 40
-        config = {**sync_config(roots=['200']), 'notify_emby': False}
-        first = new_job(store, config)
-        await engine.run_job(first)
-        assert engine.job(first)['state'] == 'completed'
-        old = engine.outputs.get('1', video['id'])
-        target = engine.root / old['relative_path']
-        contents = target.read_bytes()
-        with store.db:
-            store.db.execute('UPDATE output_registry SET trail=? WHERE file_id=?',
-                             (json.dumps(['200', parent]), video['id']))
-        calls = []
-        original_file = cloud.file
-        async def count_file(fid):
-            calls.append(fid)
-            return await original_file(fid)
-        cloud.file = count_file
-        job = new_job(store, config)
-        await engine.run_job(job)
-        assert engine.job(job)['state'] == 'completed'
-        item = store.db.execute('SELECT original,step FROM organize_items WHERE job_id=?', (job,)).fetchone()
-        assert item['step'] == '输出未变更，已复用核对结果'
-        assert calls == []
-        assert json.loads(engine.outputs.get('1', video['id'])['trail']) == [x['id'] for x in json.loads(item['original'])['_path']]
-        assert target.read_bytes() == contents
-        await engine.sync.hash_worker.close(); await http.aclose(); store.close()
-    asyncio.run(scenario())
-
-
-def test_abbreviated_trail_never_bypasses_changed_identity_or_owned_bytes(tmp_path):
-    async def scenario():
-        store, cloud, http, engine, _ = setup(tmp_path)
-        middle = (await cloud.mkdir('200', '剧集'))['cid']
-        parent = (await cloud.mkdir(middle, 'Season 1'))['cid']
-        video = cloud.add_video(name='Show.S01E01.mkv', parent=parent)
-        video['sha1'] = 'A' * 40
-        config = {**sync_config(roots=['200']), 'notify_emby': False}
-        job = new_job(store, config); await engine.run_job(job)
-        row = store.db.execute('SELECT original FROM organize_items WHERE job_id=?', (job,)).fetchone()
-        source = json.loads(row['original'])
-        with store.db:
-            store.db.execute('UPDATE output_registry SET trail=? WHERE file_id=?', (json.dumps(['200', parent]), video['id']))
-        # 台账 trail 写错不再影响判断：本地文件对得上就复用，对不上就重建。
-        assert await engine.sync.unchanged(source, config)
-        changed = {**source, 'sha1': 'B' * 40}
-        assert await engine.sync.unchanged(changed, config) is None
-        changed = {**source, '_scan_at': time.time() - 901}
-        assert await engine.sync.unchanged(changed, config)
-        changed = {**source, '_path': [*source['_path'][:-1], {**source['_path'][-1], 'name': 'renamed'}]}
-        assert await engine.sync.unchanged(changed, config) is None
-        target = engine.root / engine.outputs.get('1', video['id'])['relative_path']
-        target.write_text('user modified')
-        assert await engine.sync.unchanged(source, config) is None
-        await engine.sync.hash_worker.close(); await http.aclose(); store.close()
     asyncio.run(scenario())

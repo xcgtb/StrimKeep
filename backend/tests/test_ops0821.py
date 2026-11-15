@@ -167,31 +167,6 @@ def test_loop_lag_snapshot_does_not_write_every_sample_when_window_full():
     assert writes == [60, 120, 180, 240, 300, 300]
 
 
-def test_historical_import_query_does_not_block_event_loop():
-    import time
-    from strimkeep.outputs import Outputs
-
-    class SlowDB:
-        def execute(self, *args):
-            time.sleep(0.15)
-            return self
-        def fetchall(self): return []
-    class StoreStub:
-        db = SlowDB()
-        async def run_in_thread(self, fn): return await asyncio.to_thread(fn)
-    class Engine:
-        store = StoreStub()
-
-    async def scenario():
-        task = asyncio.create_task(Outputs(Engine()).import_managed(1, 'account', {}))
-        await asyncio.sleep(0.02)
-        responsive = not task.done()
-        await task
-        return responsive
-
-    assert asyncio.run(scenario())
-
-
 def test_stall_dump_is_persisted_into_the_log_dir(tmp_path):
     """0.9.55：卡顿栈要落盘（stall-YYYYMMDD.log），不能只进 `docker logs`。
 
