@@ -135,3 +135,31 @@ def test_full_sync_still_checks_new_files(tmp_path):
         assert calls.count('1001')>=1
         await http.aclose();store.close()
     asyncio.run(run())
+
+
+def test_sync_mirrors_full_cloud_path_and_migrates_owned_old_output(tmp_path):
+    async def run():
+        store,cloud,http,engine,_=setup(tmp_path)
+        parent=(await cloud.mkdir('0','自建库'))['cid']
+        child=(await cloud.mkdir(parent,'合集'))['cid']
+        video=cloud.add_video('1001','Sample.mkv',child);video['sha1']='A'*40
+        async def batched(root):return [],[video.copy()]
+        cloud.download_tree=batched
+        sync=engine.sync; actual_relative=sync.relative
+        def old_relative(source,config):
+            from pathlib import Path
+            return str(Path('StrimKeep同步', '合集-'+child, Path(source['name']).stem+'.strm'))
+        sync.relative=old_relative
+        config={**sync_config([child]),'mode':'incremental','trust_scan':True,
+                'notify_emby':False,'cleanup_missing':False}
+        first=new_job(store,config);await engine.run_job(first)
+        old_path=engine.root/'StrimKeep同步'/('合集-'+child)/'Sample.strm'
+        assert old_path.is_file()
+        sync.relative=actual_relative
+        second=new_job(store,config);await engine.run_job(second)
+        assert engine.job(second)['state']=='completed',dict(engine.job(second))
+        new_path=engine.root/'自建库'/'合集'/'Sample.strm'
+        assert new_path.is_file() and not old_path.exists()
+        assert engine.outputs.get('1',video['id'])['relative_path']==str(new_path.relative_to(engine.root))
+        await http.aclose();store.close()
+    asyncio.run(run())

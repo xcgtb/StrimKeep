@@ -335,7 +335,7 @@ def test_subtitle_prefix_ambiguity_is_not_assigned_to_two_videos():
 def test_sync_rejects_unknown_same_named_local_file_and_retains_nfo(tmp_path):
     async def scenario():
         store,cloud,http,engine,_=setup(tmp_path);cloud.add_video(name='Movie.mkv')
-        path=engine.root/'StrimKeep同步'/'待整理-100'/'Movie.strm';path.parent.mkdir(parents=True)
+        path=engine.root/'待整理'/'Movie.strm';path.parent.mkdir(parents=True)
         path.write_text('user content');(path.parent/'movie.nfo').write_text('NFO')
         jid=new_job(store,sync_config());await engine.run_job(jid)
         assert engine.job(jid)['state']=='partial' and path.read_text()=='user content'
