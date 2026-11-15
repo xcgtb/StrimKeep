@@ -790,7 +790,7 @@ class Cloud115:
         cids.extend(str(cid) for cid in extra if cid not in (None, ''))
         return tuple(dict.fromkeys(cids))
 
-    async def _children(self, cid, page_size=1000):
+    async def _children(self, cid, page_size=1000, *, _android=False):
         # 大目录要多翻 5 倍请求，正好撞 WAF 的读预算。
         """完整读取目录，并顺带带回平台自报的子项数量（字段缺失时为 None）。"""
         expected = None
@@ -798,7 +798,8 @@ class Cloud115:
             items, seen, offset = [], set(), 0
             while True:
                 try:
-                    result = await self.list_files(int(cid), offset, page_size)
+                    reader = self.list_files_android if _android else self.list_files
+                    result = await reader(int(cid), offset, page_size)
                 except CloudError as exc:
                     # 平台偶尔会把别的目录条目混进来（分页/WAF 抖动）。这是只读操作，
                     # 重读一次即可；不重试就会让「清空目录」整批放弃，把残留图片留下。
@@ -810,6 +811,10 @@ class Cloud115:
                 page = result['items']
                 ids = [entry['id'] for entry in page]
                 if len(ids) != len(set(ids)) or seen.intersection(ids):
+                    # Some web responses wrap an out-of-range offset to page one.
+                    # Re-enumerate via the App endpoint; never accept the duplicate page.
+                    if not _android and seen and expected is not None and expected == len(items):
+                        return await self._children(cid, page_size, _android=True)
                     break  # Concurrent directory changes: restart the read only.
                 seen.update(ids)
                 items.extend({**entry, 'parent_id': str(cid)} for entry in page)
@@ -889,7 +894,7 @@ class Cloud115:
                 if data.get('has_next_page'):
                     raise CloudError('115 %s清单第 %d 页为空但仍声称有下一页。'
                                      % (label, page), 'INCOMPLETE_LIST', 409)
-                break
+                return rows
             for row in batch:
                 if not isinstance(row, dict):
                     raise CloudError('115 %s清单格式发生变化。' % label, 'SCHEMA_CHANGED')

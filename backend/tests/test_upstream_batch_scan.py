@@ -79,3 +79,22 @@ def test_batched_manifest_matches_tree_and_binds_subtitles(tmp_path):
         assert saved['sync_directory_stats']['100']['directories']==3
         await http.aclose();store.close()
     asyncio.run(run())
+
+
+def test_empty_folder_and_file_lists_are_valid(monkeypatch):
+    c=object.__new__(Cloud115)
+    async def call(fn,*args,**kwargs):
+        return {'data':{'list':[],'count':0,'has_next_page':False}}
+    c.call=call
+    assert asyncio.run(c._download_rows(None,'root','目录','fid')) == []
+    assert asyncio.run(c._download_rows(None,'root','文件','pc')) == []
+
+
+def test_empty_page_claiming_next_remains_incomplete():
+    c=object.__new__(Cloud115)
+    async def call(fn,*args,**kwargs):
+        return {'data':{'list':[],'count':0,'has_next_page':True}}
+    c.call=call
+    with pytest.raises(CloudError) as exc:
+        asyncio.run(c._download_rows(None,'root','目录','fid'))
+    assert exc.value.code=='INCOMPLETE_LIST'

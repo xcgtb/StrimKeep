@@ -88,3 +88,23 @@ def test_children_verified_rejects_truncated_listing():
         assert calls == [0, 1, 0, 1]
 
     asyncio.run(run())
+
+
+def test_repeated_terminal_web_page_restarts_with_app_and_checks_all_items():
+    async def run():
+        cloud=object.__new__(Cloud115)
+        web_calls=[]; app_calls=[]
+        def item(value):return {'id':str(value),'name':str(value),'is_dir':False}
+        async def web(cid,offset,limit):
+            web_calls.append(offset)
+            pages={0:[item(1),item(2)],2:[item(3)],3:[item(1),item(2)]}
+            return {'items':pages[offset], 'raw_count':3, 'has_more':True}
+        async def app(cid,offset,limit):
+            app_calls.append(offset)
+            pages={0:[item(1),item(2)],2:[item(3)]}
+            return {'items':pages[offset], 'raw_count':3, 'has_more':offset==0}
+        cloud.list_files=web; cloud.list_files_android=app
+        items=await cloud.children_verified('9')
+        assert [x['id'] for x in items]==['1','2','3']
+        assert web_calls==[0,2,3] and app_calls==[0,2]
+    asyncio.run(run())
