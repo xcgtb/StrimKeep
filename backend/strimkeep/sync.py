@@ -174,9 +174,6 @@ class Sync:
             detail={'id':root,'name':paths[root][-1]['name'],
                     'local_path':str(self.engine.root / Path(self.relative(synthetic,config)).parent),
                     'directories':0,'files':0,'scan_seconds':0.0}
-            await self.engine.notifications.publish(f'strm:{jid}:scan-start:{root}','▶️ [%d/%d] 开始同步目录ID: %s' % (order, len(effective), root),
-                sync_task_context(config)+f'进度：{order}/{len(effective)}\n目录 ID：{root}\n云盘目录：{(config.get("directory_labels") or {}).get(root) or detail["name"]}',
-                job_id=jid,category='strm_summary')
             started=time.monotonic()
             dirs, entries=await self.cloud.download_tree(root)
             nodes={}
@@ -215,9 +212,6 @@ class Sync:
             detail = {'id': root, 'name': paths[root][-1]['name'],
                       'local_path': str(self.engine.root / Path(self.relative(synthetic, config)).parent),
                       'directories': 0, 'directories_exact': False, 'files': 0, 'scan_seconds': 0.0}
-            await self.engine.notifications.publish(f'strm:{jid}:scan-start:{root}', '▶️ [%d/%d] 开始同步目录ID: %s' % (order, len(effective), root),
-                sync_task_context(config)+f'进度：{order}/{len(effective)}\n目录 ID：{root}\n云盘目录：{(config.get("directory_labels") or {}).get(root) or detail["name"]}',
-                job_id=jid, category='strm_summary')
             started = time.monotonic()
             entries = await self.cloud.recursive_files_verified(root)
             parent_paths = {root: paths[root]}
@@ -245,10 +239,6 @@ class Sync:
             seen.update(dirs)
             detail.update(directories=len(dirs), files=len(entries), scan_seconds=time.monotonic()-started)
             stats[root] = detail
-            await self.engine.notifications.publish(
-                'strm:%d:dir-done:%s' % (jid, root), '✅ 目录ID %s' % root,
-                sync_task_context(config)+'文件：%d 个，耗时 %.2f 秒。' % (detail['files'], detail['scan_seconds']),
-                job_id=jid, category='strm_summary')
             self.engine.update_job(jid, stage=f'同步扫描：核实 {len(seen)} 个文件路径目录，{len(files)} 个文件')
         return seen, files, stats
 
@@ -260,9 +250,6 @@ class Sync:
         paths = {cid: await self.cloud.path_info(cid) for cid in roots}
         # Pick the outermost selected root, independent of selection order.
         effective = [cid for cid in roots if not any(other != cid and other in [x['id'] for x in paths[cid]] for other in roots)]
-        await self.engine.notifications.publish(
-            'strm:%d:plan' % jid, '🧾 本次将按顺序同步 %d 个目录ID' % len(effective),
-            sync_task_context(config)+'、'.join(effective), job_id=jid, category='strm_summary')
         batched = getattr(self.cloud, 'download_tree', None)
         fast = getattr(self.cloud, 'recursive_files_verified', None)
         completed_fast = False
@@ -299,9 +286,6 @@ class Sync:
                                  'local_path':str(self.engine.root / Path(self.relative(synthetic,config)).parent),
                                  'directories':0, 'files':0, 'scan_seconds':0.0}
                     order=effective.index(root)+1
-                    await self.engine.notifications.publish(f'strm:{jid}:scan-start:{root}','▶️ [%d/%d] 开始同步目录ID: %s' % (order, len(effective), root),
-                        sync_task_context(config)+f'进度：{order}/{len(effective)}\n目录 ID：{root}\n云盘目录：{(config.get("directory_labels") or {}).get(root) or stats[root]["name"]}',
-                        job_id=jid,category='strm_summary')
                 started=time.monotonic()
                 entries=await read(cid)
                 stats[root]['scan_seconds']+=time.monotonic()-started
@@ -1193,8 +1177,10 @@ class Sync:
         if not job['manifest']:
             labels=config.get('directory_labels') or {}
             roots=config.get('source_cids') or []
+            names = [str(labels.get(cid) or cid)[:80] for cid in roots[:5]]
+            suffix = f' 等 {len(roots)} 个目录' if len(roots) > 5 else ''
             await self.engine.notifications.publish(f'strm:{jid}:start','📋 STRM 同步开始',
-                sync_task_context(config)+f'本次选择 {len(roots)} 个目录：\n'+'\n'.join(f'{i}. {labels.get(cid,cid)} · ID {cid}' for i,cid in enumerate(roots,1)),
+                sync_task_context(config)+'目录：'+'、'.join(names)+suffix,
                 job_id=jid,category='strm_summary')
             # 手动和定时同步都必须发现网盘新增、改名与移动；仅在整理后
             # 的目标目录增量任务缩小范围，普通同步不使用旧快照或本地巡检。

@@ -19,13 +19,13 @@ def test_full_sync_reports_each_selected_root_even_when_empty(tmp_path):
         assert stats['100']['scan_seconds']>=0
         messages=store.db.execute('SELECT event_key,message FROM notifications WHERE job_id=?',(jid,)).fetchall()
         start=next(x['message'] for x in messages if x['event_key']==f'strm:{jid}:start')
-        assert '2 个目录' in start and 'ID 100' in start and 'ID '+empty in start
+        assert '电影来源' in start and '空目录' in start
         reports={x['event_key']:x['message'] for x in messages}
-        assert '目录 ID：100' in reports[f'strm:{jid}:dir:100']
-        assert '云盘目录：电影来源' in reports[f'strm:{jid}:dir:100']
-        assert '云盘目录：电影来源' in reports[f'strm:{jid}:scan-start:100']
-        assert '扫描文件：0 个' in reports[f'strm:{jid}:dir:{empty}']
-        assert '任务总耗时' in reports[f'strm:{jid}:sync-summary']
+        assert set(reports) == {f'strm:{jid}:start',f'strm:{jid}:sync-summary'}
+        summary=reports[f'strm:{jid}:sync-summary']
+        assert '电影来源' in summary and '空目录' in summary
+        assert '核对视频：1 个' in summary and '任务总耗时' in summary
+        assert '本次无变化' not in summary
         if engine.notice_tasks:await asyncio.gather(*engine.notice_tasks)
         await http.aclose();store.close()
     asyncio.run(run())
@@ -42,7 +42,7 @@ def test_sync_profile_notifications_show_task_and_mode(tmp_path,mode,label):
         assert engine.job(jid)['state']=='completed'
         await engine.notifications.job(engine.job(jid))
         messages={row['event_key']:row['message'] for row in store.db.execute('SELECT event_key,message FROM notifications WHERE job_id=?',(jid,))}
-        for key in (f'strm:{jid}:start',f'strm:{jid}:scan-start:100',f'strm:{jid}:dir:100',f'strm:{jid}:sync-summary'):
+        for key in (f'strm:{jid}:start',f'strm:{jid}:sync-summary'):
             assert '任务：电影库同步' in messages[key] and '方式：'+label in messages[key]
         assert '结果：完成' in messages[f'strm:{jid}:sync-summary']
         if engine.notice_tasks:await asyncio.gather(*engine.notice_tasks)

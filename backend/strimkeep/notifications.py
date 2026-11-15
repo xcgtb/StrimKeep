@@ -479,7 +479,6 @@ class Notifications:
             return
         if kind=='strm_sync' and state in ('completed','partial'):
             entries=self.store.db.execute('SELECT original,plan,state FROM organize_items WHERE job_id=?',(row['id'],)).fetchall()
-            plans=[json.loads(r['plan']) for r in entries]
             c=json.loads(row['config']); labels=c.get('directory_labels') or {}
             stats=c.get('sync_directory_stats') or {}
             groups={}
@@ -487,48 +486,37 @@ class Notifications:
                 root=(json.loads(entry['original']) or {}).get('_root') or '未标注来源'
                 groups.setdefault(root,[]).append((json.loads(entry['plan']),entry['state']))
             roots=c.get('sync_effective_roots') or list(groups)
-            for cid in roots:
-                items=groups.get(cid,[]); detail=stats.get(cid) or {}
-                updated=sum(bool(p.get('output_changed')) for p,_ in items)
-                unfinished=sum(state!='done' for _,state in items)
-                lines=[sync_task_context(c).rstrip(), f'目录 ID：{cid}', f'云盘目录：{labels.get(cid) or detail.get("name") or cid}']
-                lines=[line for line in lines if line]
-                if detail.get('local_path'):lines.append('本地目录：'+detail['local_path'])
-                if c.get('sync_mode')=='cached':lines.append('扫描方式：复用近期清单（未重扫云端）')
-                elif detail:
-                    directory_label = '扫描目录' if detail.get('directories_exact', True) else '文件路径涉及目录（不含空目录）'
-                    lines.extend([f'{directory_label}：{detail["directories"]} 个', f'扫描文件：{detail["files"]} 个',
-                                  f'目录读取耗时：{detail["scan_seconds"]:.2f} 秒'])
-                reused=sum(bool(p.get('sync_unchanged')) for p,_ in items)
-                lines.extend([f'核对视频：{len(items)} 个', f'本地复用：{reused} 个', f'重新处理或待核查：{len(items)-reused} 个', f'STRM 更新：{updated} 个'])
-                if not updated and reused == len(items) and not unfinished:
-                    lines.append('本次无变化：全部沿用已有 STRM，未重写任何文件。')
-                scope=sync_scope_lines(c)
-                if scope:lines.append(scope)
-                metadata=(c.get('sync_metadata_stats') or {}).get(cid)
-                if metadata:
-                    # 附属文件（.nfo/.jpg/.ass）绝大多数是「本地已有，不重复下载」。
-                    # 以前把它算成「跳过」，全量同步每天写「跳过 47 个」，看起来像失败。
-                    downloaded=int(metadata.get('downloaded',0) or 0)
-                    existing=int(metadata.get('existing',0) or 0)
-                    dropped=int(metadata.get('skipped',0) or 0)
-                    failed=int(metadata.get('failed',0) or 0)
-                    if downloaded or dropped or failed:
-                        meta_line=f'附属文件：新增 {downloaded} 个'
-                        if existing:meta_line+=f' · 已存在 {existing} 个'
-                        if dropped:meta_line+=f' · 跳过 {dropped} 个'
-                        if failed:meta_line+=f' · 失败 {failed} 个'
-                        lines.append(meta_line)
-                        lines.append(f'附属文件处理耗时：{metadata.get("seconds",0):.2f} 秒')
-                if unfinished:lines.append(f'未完成或跳过：{unfinished} 个')
-                await self.publish(f'strm:{row["id"]}:dir:{cid}','⚠️ 目录同步有待处理' if unfinished or state=='partial' else '✅ 目录同步完成',
-                    '\n'.join(lines),
-                    job_id=row['id'],category='strm_summary')
-            changed=sum(bool(p.get('output_changed')) for p in plans)
+            changed=sum(bool(plan.get('output_changed')) for items in groups.values() for plan,_ in items)
+            unfinished=sum(item_state not in ('done','skipped') for items in groups.values() for _,item_state in items)
             duration=max(0,float(row['updated'])-float(row['created']))
+            lines=[sync_task_context(c).rstrip(), '结果：完成' if state=='completed' else '结果：部分未完成',
+                   f'核对视频：{len(entries)} 个', f'输出有变化的视频：{changed} 个',
+                   f'清理本地：{c.get("sync_removed",0)} 个文件']
+            metadata=list((c.get('sync_metadata_stats') or {}).values())
+            downloaded=sum(int(m.get('downloaded',0) or 0) for m in metadata)
+            skipped=sum(int(m.get('skipped',0) or 0) for m in metadata)
+            failed=sum(int(m.get('failed',0) or 0) for m in metadata)
+            if downloaded or skipped or failed:
+                parts=[f'新增 {downloaded} 个']
+                if skipped:parts.append(f'跳过 {skipped} 个')
+                if failed:parts.append(f'失败 {failed} 个')
+                lines.append('附属文件：'+' · '.join(parts))
+            if unfinished:lines.append(f'待处理：{unfinished} 个')
+            if len(roots)>1:
+                lines.append('目录：')
+                for cid in roots[:5]:
+                    name=str(labels.get(cid) or (stats.get(cid) or {}).get('name') or cid)[:80]
+                    items=groups.get(cid,[])
+                    count=sum(bool(plan.get('output_changed')) for plan,_ in items)
+                    lines.append(f'· {name}：核对 {len(items)}，变化 {count}')
+                if len(roots)>5:lines.append(f'其余 {len(roots)-5} 个目录请查看任务详情')
+            lines.append(f'任务总耗时（含排队）：{duration:.2f} 秒')
             await self.publish(f'strm:{row["id"]}:sync-summary','📦 STRM 同步结果',
-                sync_task_context(c)+('结果：完成\n' if state=='completed' else '结果：部分未完成\n')+f'选择目录：{len(c.get("source_cids") or [])} 个\n实际扫描范围：{len(roots)} 个\n核对视频：{len(plans)} 个\nSTRM 更新：{changed} 个\n清理本地：{c.get("sync_removed",0)} 个文件\n任务总耗时（含排队）：{duration:.2f} 秒',
-                job_id=row['id'],category='strm_summary')
+                '\n'.join(line for line in lines if line),
+                'success' if state=='completed' else 'warning',row['id'],category='strm_summary',
+                depends_on=f'strm:{row["id"]}:start')
+            if state=='completed':
+                return
         category='transfer' if kind=='transfer' or (kind=='organize' and json.loads(row['config']).get('transfer_parent') and empty and filtered.get('scanned')) else 'errors' if state in ('partial','needs_review','waiting_login') else 'task'
         message=row['message'] or row['stage']
         if kind=='transfer' and state=='completed':
@@ -677,8 +665,9 @@ class Notifications:
         summary=f'同步视频：{len(paths)} 个\nSTRM 更新：{changed if config.get("job_kind")=="strm_sync" else len(paths)} 个\n清理 STRM：{len(removed)} 个文件'
         if replaced: summary += f'\n同路径覆盖：{len(replaced)} 个 STRM'
         if pending: summary += f'\n清理结果待核实：{len(pending)} 个 STRM'
-        await self.publish(f'strm:{job["id"]}:summary',f'📦 {strm_source(config)} · STRM 批次结果',summary,job_id=job['id'])
-        # 全量同步只发汇总：几百条更新逐条列出来没有信息量。
+        if config.get('job_kind') != 'strm_sync':
+            await self.publish(f'strm:{job["id"]}:summary',f'📦 {strm_source(config)} · STRM 批次结果',summary,job_id=job['id'])
+        # 同步任务使用统一结果；整理任务继续保留批次汇总和明细。
         # 明细只留给整理触发的增量（见 _group_strm）。
         if config.get('job_kind') != 'strm_sync':
             expanded = sidecar_paths(paths, strm_root())
