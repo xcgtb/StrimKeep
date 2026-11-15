@@ -1,4 +1,5 @@
 """Read-only cloud synchronization; cleanup requires a complete, rechecked manifest."""
+import asyncio
 import hashlib
 import json
 import secrets
@@ -19,6 +20,7 @@ from .local_scan import fid_of, scan, identity_of_file
 
 class Sync:
     FULL_SCAN_SECONDS = 1800
+    MAX_CLOUD_PROBES = 300
     def __init__(self, engine):
         self.engine, self.store = engine, engine.store
         self.hash_worker = HashWorker()
@@ -574,6 +576,45 @@ class Sync:
             self.engine.outputs.invalidate()
         return removed
 
+    def scan_prefixes(self, jid, config):
+        """本轮任务真正管理的顶层目录。
+
+        两个来源：
+        1. 本轮清单里每个输出的顶层目录（`待整理/…` → `待整理`）；
+        2. 清单扫描时记下的每个来源根的本地根目录（整目录被删空时也能覆盖）。
+
+        以前扫整个 STRM 根：分享 STRM、别的库都被当成「清单外」的候选，
+        于是对上千个无关文件逐个向云端确认存在性，一轮能挂十几分钟。
+        """
+        prefixes = set()
+        for row in self.store.db.execute('SELECT plan FROM organize_items WHERE job_id=?', (jid,)):
+            plan_row = json.loads(row['plan'] or '{}')
+            relative = plan_row.get('relative_path')
+            if relative:
+                prefixes.add(relative.split('/')[0])
+        root = self.engine.root
+        for stat in (config.get('sync_directory_stats') or {}).values():
+            local = str((stat or {}).get('local_path') or '')
+            if not local:
+                continue
+            try:
+                relative = Path(local).resolve().relative_to(root.resolve())
+            except (ValueError, OSError):
+                continue
+            if relative.parts:
+                prefixes.add(relative.parts[0])
+        return prefixes
+
+    def scan_scope(self, jid, config):
+        found = {}
+        for prefix in self.scan_prefixes(jid, config):
+            base = self.engine.root / prefix
+            if not base.is_dir():
+                continue
+            for relative, identity in scan(base).items():
+                found[str(Path(prefix) / relative)] = identity
+        return found
+
     def present_ids(self, jid, config):
         """本轮清单里出现过的文件身份（用来判断「本地这份还算不算在范围内」）。"""
         present = {str(row['file_id']) for row in self.store.db.execute(
@@ -588,12 +629,17 @@ class Sync:
         account = self.engine.index.account(config)
         present = self.present_ids(jid, config)
         missing = []
+        probes = 0
         for relative, identity in scan(self.engine.root).items():
             if identity.get('kind') != 'netdisk':
                 continue
             fid = str(identity['file_id'])
             if fid in present:
                 continue
+            if probes >= self.MAX_CLOUD_PROBES:
+                self.store.event('strm_sync', '失效检测达到单轮上限（%d），其余候选下次再看。' % self.MAX_CLOUD_PROBES)
+                break
+            probes += 1
             if await self.cloud.live_file_exists(fid):
                 continue
             missing.append({'account_id': account, 'file_id': fid, 'relative_path': relative})
@@ -642,13 +688,18 @@ class Sync:
             if plan_row.get('relative_path'):
                 expected[str(row['file_id'])] = plan_row['relative_path']
         removed, warnings = 0, []
-        for relative, identity in scan(self.engine.root).items():
+        probes = 0
+        for relative, identity in self.scan_scope(jid, config).items():
             if identity.get('kind') != 'netdisk':
                 continue
             fid = str(identity['file_id'])
             want = expected.get(fid)
             if fid in present:
                 continue
+            if probes >= self.MAX_CLOUD_PROBES:
+                warnings.append('清理达到单轮上限（%d 个候选），其余下次再看。' % self.MAX_CLOUD_PROBES)
+                break
+            probes += 1
             self.engine.boundary(jid)
             try:
                 if await self.cloud.live_file_exists(fid):
@@ -903,7 +954,8 @@ class Sync:
                 async with self.engine.scan_receive_gate:
                     await self.manifest(jid, config)
         saved_config = json.loads(self.engine.job(jid)['config'])
-        config.update({k:saved_config[k] for k in ('sync_filtered_ids','sync_metadata','sync_filter_count') if k in saved_config})
+        config.update({k:saved_config[k] for k in ('sync_filtered_ids','sync_metadata','sync_filter_count',
+                                                'sync_directory_stats','sync_effective_roots') if k in saved_config})
         cached = saved_config.get('sync_mode') == 'cached'
         # Prefer existing cloud sidecars before generating missing metadata locally.
         async with self.engine.publication_gate:
@@ -955,12 +1007,15 @@ class Sync:
                 await self.backfill_sidecars(jid, row, config)
         # 把旧的两张索引按磁盘现状重写：删掉本地文件后，索引里也就没有了。
         try:
-            self.engine.outputs.reindex(self.engine.index.account(config))
+            await asyncio.to_thread(self.engine.outputs.reindex, self.engine.index.account(config))
         except Exception as exc:                    # 索引只是缓存，失败不影响本次同步
             self.store.event('sync', '本地索引重建未完成：%s' % str(exc)[:60])
         self.engine.boundary(jid)
         # 同一份文件换过目录：新位置写好之后，旧位置那份副本要收掉（与「清理缺失」开关无关）。
-        await self.tidy_moved(jid, config)
+        try:
+            await self.tidy_moved(jid, config)
+        except Exception as exc:
+            self.store.event('sync', '旧副本清理跳过：%s' % str(exc)[:60])
         # Each source is verified immediately before its output is published.
         # Only missing registered outputs need a live-namespace check in cleanup.
         warnings = []
@@ -988,7 +1043,10 @@ class Sync:
                     if not isinstance(started, (int, float)) or isinstance(started, bool) or started <= 0:
                         warnings.append('缺少本次扫描起始时间，已跳过失效清理；请重新同步。')
                     else:
-                        cleanup_removed, cleanup_warnings = await self.cleanup(jid,config,after=started)
+                        try:
+                            cleanup_removed, cleanup_warnings = await self.cleanup(jid,config,after=started)
+                        except Exception as exc:
+                            cleanup_removed, cleanup_warnings = 0, ['失效清理未能完成：%s' % str(exc)[:60]]
                         removed += cleanup_removed; warnings.extend(cleanup_warnings)
         if json.loads(self.engine.job(jid)['config']).get('output_changed') and config.get('notify_emby',True):
             await self.engine.notify_emby(jid)

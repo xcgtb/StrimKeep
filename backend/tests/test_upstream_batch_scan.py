@@ -120,7 +120,7 @@ def test_fresh_incremental_manifest_creates_new_strm_without_per_file_cloud_read
     asyncio.run(run())
 
 
-def test_full_sync_still_checks_new_files(tmp_path):
+def test_full_sync_trusts_a_fresh_manifest_instead_of_per_file_checks(tmp_path):
     async def run():
         store,cloud,http,engine,_=setup(tmp_path)
         video=cloud.add_video('1001','Video-A.mkv');video['sha1']='A'*40
@@ -129,11 +129,12 @@ def test_full_sync_still_checks_new_files(tmp_path):
         original=cloud.file; calls=[]
         async def traced(fid):calls.append(fid);return await original(fid)
         cloud.file=traced
-        config={**sync_config(['100']),'mode':'full','trust_scan':False,'_force_full':True,
+        config={**sync_config(['100']),'mode':'full','_force_full':True,
                 'notify_emby':False,'cleanup_missing':False}
         jid=new_job(store,config);await engine.run_job(jid)
         assert engine.job(jid)['state']=='completed',dict(engine.job(jid))
-        assert calls.count('1001')>=1
+        # 清单是刚读的、身份齐全：不再逐文件回查云端（这正是全量变快的原因）。
+        assert calls.count('1001')==0
         await http.aclose();store.close()
     asyncio.run(run())
 
