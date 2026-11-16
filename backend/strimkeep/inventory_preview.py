@@ -27,8 +27,7 @@ import math
 import time
 
 from .inventory_rules import (best_index, cmp_versions, compare_outcome, episode_gaps, multi_protect_mode,
-                              protect_s00, share_covers_local,
-                              share_protect_verdict)
+                              protect_s00, share_protect_verdict)
 from .media import NeedsReview
 
 
@@ -618,15 +617,45 @@ def governance_preview(snapshot, policy, tie='cloud', threshold=0.9,
 
         mode, zero_sum = None, False
         if decision in ('keep_local', 'keep_share'):
-            # 决策模型：逐共同季直接取舍，不比画质，优先级高于多季保护
+            # 决策模型按「季」处理：保留侧必须自己完整、并且覆盖另一侧全部集号，
+            # 才自动清理另一侧；保留侧不完整或比对方少集时不自动动手，
+            # 转「需人工核实」，由用户在页面上手动选择清理哪一侧。
+            keep_side = 'cloud' if decision == 'keep_local' else 'share'
+            keep_name, other_name = (('网盘库', '分享库') if keep_side == 'cloud'
+                                     else ('分享库', '网盘库'))
             for season in sorted(set(proper_sp) & set(proper_lp)):
-                if decision == 'keep_local':
-                    actions.append(_action('share', 'decision_keep_local', '保留本地-删分享', season))
-                    continue
                 compare = _season_compare(proper_sp[season], proper_lp[season], policy, tie)
-                if not share_covers_local(set(compare['share']), set(compare['cloud'])):
+                share_eps, cloud_eps = set(compare['share']), set(compare['cloud'])
+                keep_eps, other_eps = ((cloud_eps, share_eps) if keep_side == 'cloud'
+                                       else (share_eps, cloud_eps))
+                uncovered = sorted(other_eps - keep_eps)
+                complete = compare['complete'][keep_side]
+                if complete and not uncovered:
+                    if keep_side == 'cloud':
+                        actions.append(_action('share', 'decision_keep_local', '保留本地-删分享', season))
+                    else:
+                        actions.append(_action('cloud', 'decision_keep_share', '保留分享-删本地', season))
                     continue
-                actions.append(_action('cloud', 'decision_keep_share', '保留分享-删本地', season))
+                why = []
+                if not complete:
+                    why.append('自身缺 %s' % (_gap_desc(compare[keep_side]) or '集'))
+                if uncovered:
+                    why.append('缺 %s（%s有）' % (_fmt_nums(uncovered), other_name))
+                output['blocked'].append({
+                    **common, 'season': season,
+                    'reason': 'keep_side_incomplete',
+                    'detail': ('保留%s，但第 %d 季%s：不做自动清理，请手动决定清理哪一侧。'
+                               % (keep_name, season, ' 且 '.join(why))),
+                    'manual_choice': True, 'keep_side': keep_side,
+                    'cloud_complete': compare['complete']['cloud'],
+                    'share_complete': compare['complete']['share'],
+                    'cloud_episodes': sorted(cloud_eps), 'share_episodes': sorted(share_eps),
+                    'common_episodes': sorted(cloud_eps & share_eps),
+                    'cloud_only': sorted(cloud_eps - share_eps),
+                    'share_only': sorted(share_eps - cloud_eps),
+                    # 手动清理时按季取文件，不需要再扫一遍目录。
+                    'cloud_files': proper_lp.get(season, []),
+                    'share_files': proper_sp.get(season, [])})
         elif multi_season_protect == 'compare' and (len(proper_lp) >= 2 or len(proper_sp) >= 2):
             mode = multi_protect_mode(set(proper_sp), set(proper_lp))
             inner_sp = {season: rows for season, rows in proper_sp.items() if season > 0}

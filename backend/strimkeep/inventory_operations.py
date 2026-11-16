@@ -24,9 +24,12 @@ def manual_actions(projection, selections, unsupported=()):
     for selection in selections:
         key = (selection['kind'], selection['tmdb_id'])
         side = selection['side']
-        if (key, side) in seen or side not in ('cloud', 'share', 'both'):
+        # 治理页「保留侧不完整」的人工兜底：可以只清理某一季。
+        season = selection.get('season')
+        marker = (key, side, season)
+        if marker in seen or side not in ('cloud', 'share', 'both'):
             raise ValueError('作品选择重复或库类型无效')
-        seen.add((key, side))
+        seen.add(marker)
         matches = works.get(key) or []
         if not matches:
             raise ValueError('作品不在当前库存中')
@@ -34,7 +37,11 @@ def manual_actions(projection, selections, unsupported=()):
             raise ValueError('同一 TMDB 编号对应多个作品目录，请先核对身份')
         item = matches[0]
         for library in ('cloud', 'share') if side == 'both' else (side,):
-            for file in item[library]:
+            picked = [file for file in item[library]
+                      if season is None or file.get('season') == season]
+            if season is not None and not picked:
+                raise ValueError('该季在所选库中没有文件')
+            for file in picked:
                 actions.append({'side': library, 'id': str(file['id']), 'path': file['path']})
     keys = [(x['side'], x['id'], x['path']) for x in actions]
     if not actions or len(actions) > 10000 or len(set(keys)) != len(keys):

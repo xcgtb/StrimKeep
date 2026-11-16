@@ -168,13 +168,15 @@ def test_residual_season_suppresses_duplicate_version_item():
 
 
 # ── 决策模型「保留本地」：本地这季不完整也不删本地（1.2.12 直接按决策取舍）──
-def test_keep_local_never_deletes_an_incomplete_local_season():
+def test_keep_local_never_deletes_a_complete_share_when_local_is_broken():
+    """保留网盘，但网盘自身缺 E03：删分享会丢集，转人工自己决定留哪边。"""
     cloud = [tv_file('l', 1, n) for n in (1, 2, 4)]
     share = [tv_file('s', 1, n) for n in range(1, 5)]
-    rows = by_reason(governance_preview(snap(cloud, share), policy(), decision='keep_local'))
-    assert set(rows) == {'decision_keep_local'}
-    assert rows['decision_keep_local']['action_kind'] == 'shr'
-    assert len(rows['decision_keep_local']['share_files']) == 4
+    result = governance_preview(snap(cloud, share), policy(), decision='keep_local')
+    assert not by_reason(result)
+    row = [item for item in result['blocked'] if item.get('manual_choice')][0]
+    assert row['keep_side'] == 'cloud' and row['cloud_complete'] is False
+    assert len(row['share_files']) == 4 and len(row['cloud_files']) == 3
 
 
 # ── 多季保护 full 档：本地某季残次时，「删本地残次」和「淘汰分享该季」两条都要在 ──

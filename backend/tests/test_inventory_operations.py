@@ -166,3 +166,11 @@ def test_recover_source_from_matching_organized_evidence_without_modifying_index
     import pytest
     with pytest.raises(ValueError):source_fingerprints(store.db,[('cloud','1001',relative)],'1')
     asyncio.run(http.aclose());store.close()
+
+
+def test_manual_selection_can_target_one_season(projection):
+    """人工兜底可以只清理某一季，别的季不动。"""
+    season_one = [{'kind': 'tv', 'tmdb_id': 1, 'side': 'cloud', 'season': 1}]
+    assert manual_actions(projection, season_one) == [{'side': 'cloud', 'id': '1', 'path': 'c/1'}]
+    with pytest.raises(ValueError):
+        manual_actions(projection, [{'kind': 'tv', 'tmdb_id': 1, 'side': 'share', 'season': 2}])

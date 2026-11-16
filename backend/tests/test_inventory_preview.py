@@ -258,13 +258,15 @@ def test_no_effective_rules_falls_back_to_tie():
     assert not any(row['reason'] == 'quality_rules_disabled' for row in result['blocked'])
 
 
-def test_keep_local_eliminates_share_directly():
+def test_keep_local_leaves_shorter_local_season_to_manual():
+    """保留网盘，但网盘只有 1 集而分享有 2 集：删分享会丢集，转人工选择。"""
     result = governance_preview(snap([file('l', 1, 1, '1080p')],
                                      [file('s', 1, 1, '2160p'), file('s', 1, 2, '2160p')]),
                                 policy(), decision='keep_local')
-    row = result['dual'][0]
-    assert (row['action_kind'], row['reason']) == ('shr', 'decision_keep_local')
-    assert len(row['share_files']) == 2
+    assert not result['dual']
+    row = [item for item in result['blocked'] if item.get('manual_choice')][0]
+    assert row['keep_side'] == 'cloud' and row['share_only'] == [2]
+    assert len(row['share_files']) == 2 and len(row['cloud_files']) == 1
 
 
 def test_multi_version_does_not_block_multi_season_decision():
@@ -413,3 +415,43 @@ def test_single_library_dedupe_only_deletes_duplicate_copies():
     assert len(row['delete_paths']) == 2
     assert len(row['keep_paths']) == 28
     assert all('720p' in path for path in row['delete_paths'])
+
+
+def test_keep_local_leaves_incomplete_local_season_to_manual():
+    """保留网盘，但网盘比分享少 28 集：不自动删，转人工自己选。"""
+    cloud = [file('l', 1, episode, '1080p') for episode in range(1, 21)]
+    share = [file('s', 1, episode, '2160p') for episode in range(1, 49)]
+    result = governance_preview(snap(cloud, share), policy(), decision='keep_local')
+    assert not result['dual'], '保留侧不完整时不该自动生成删除动作'
+    row = [item for item in result['blocked'] if item.get('manual_choice')][0]
+    assert row['reason'] == 'keep_side_incomplete' and row['keep_side'] == 'cloud'
+    assert row['share_only'] == list(range(21, 49))
+    assert len(row['cloud_files']) == 20 and len(row['share_files']) == 48
+
+
+def test_keep_share_deletes_cloud_when_share_is_complete_and_covers_it():
+    """保留分享，分享完整且覆盖网盘：照常清掉网盘。"""
+    cloud = [file('l', 1, episode, '1080p') for episode in range(1, 21)]
+    share = [file('s', 1, episode, '2160p') for episode in range(1, 49)]
+    result = governance_preview(snap(cloud, share), policy(), decision='keep_share')
+    row = result['dual'][0]
+    assert row['action_kind'] == 'loc' and row['reason'] == 'decision_keep_share'
+
+
+def test_keep_share_blocks_when_share_misses_episodes():
+    """保留分享，但分享只有前 20 集：不自动删完整的网盘，转人工。"""
+    cloud = [file('l', 1, episode, '1080p') for episode in range(1, 49)]
+    share = [file('s', 1, episode, '2160p') for episode in range(1, 21)]
+    result = governance_preview(snap(cloud, share), policy(), decision='keep_share')
+    assert not result['dual']
+    row = [item for item in result['blocked'] if item.get('manual_choice')][0]
+    assert row['keep_side'] == 'share' and row['cloud_only'] == list(range(21, 49))
+
+
+def test_keep_local_cleans_share_even_if_share_is_incomplete():
+    """保留网盘且网盘完整覆盖：分享完整与否都照清理。"""
+    cloud = [file('l', 1, episode, '1080p') for episode in range(1, 25)]
+    share = [file('s', 1, episode, '2160p') for episode in range(1, 21)]
+    result = governance_preview(snap(cloud, share), policy(), decision='keep_local')
+    row = result['dual'][0]
+    assert row['reason'] == 'decision_keep_local' and row['action_kind'] == 'shr'
