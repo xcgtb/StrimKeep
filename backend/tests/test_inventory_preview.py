@@ -368,13 +368,33 @@ def test_multi_season_protection_suppresses_library_dedupe():
     assert result['single'] == []
 
 
-def test_decision_model_suppresses_library_dedupe():
+def test_multi_protection_overrides_decision_model():
+    """多季保护优先：两侧季对齐且逐季达标 → 整剧零和，不再听「保留本地」."""
     cloud = [file('l', 1, 1, '1080p'), file('l', 1, 1, '720p'),
              file('l', 2, 1, '1080p')]
     share = [file('s', 1, 1, '2160p'), file('s', 2, 1, '2160p')]
     result = governance_preview(snap(cloud, share), policy(), decision='keep_local')
-    assert {row['reason'] for row in result['dual']} == {'decision_keep_local'}
+    assert {row['reason'] for row in result['dual']} == {'multi_full_share'}
     assert result['single'] == []
+
+
+def test_partial_share_seasons_do_not_empty_the_whole_show():
+    """网盘 18 季、分享只有 5 季（各季完整）：多季保护淘汰分享，网盘一季都不删."""
+    cloud = [file('l', season, 1, '1080p') for season in range(1, 19)]
+    share = [file('s', season, 1, '2160p') for season in range(1, 6)]
+    result = governance_preview(snap(cloud, share), policy(), decision='keep_share')
+    assert {row['reason'] for row in result['dual']} == {'multi_protect_partial_share'}
+    assert {row['action_kind'] for row in result['dual']} == {'shr'}, '只能删分享，不能动网盘'
+
+
+def test_per_season_mode_follows_decision_model():
+    """关闭多季保护（逐季）：分享覆盖的季按「保留分享」清网盘，别的季不动."""
+    cloud = [file('l', season, 1, '1080p') for season in range(1, 19)]
+    share = [file('s', season, 1, '2160p') for season in range(1, 6)]
+    result = governance_preview(snap(cloud, share), policy(), decision='keep_share',
+                                multi_season_protect='off')
+    assert {row['action_kind'] for row in result['dual']} == {'loc'}
+    assert {row['season'] for row in result['dual']} == {1, 2, 3, 4, 5}
 
 
 def test_quiet_gate_does_not_block_when_timestamps_missing():

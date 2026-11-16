@@ -143,26 +143,85 @@ def install_inventory_operations(app, store, admin):
                             projection, preview, selections, snapshot['unsupported'])
                 plan_id = await asyncio.to_thread(
                     create_plan, store.db, {'inventory': snapshot, 'actions': actions}, ttl=ttl)
-                # 计划上下文（片名/季/原因）单独存一条 meta：历史里点开就能看懂删了什么。
-                titles = {}
-                for item in projection.get('items') or []:
-                    titles[(item.get('kind'), item.get('tmdb_id'))] = item.get('title') or ''
-                reasons = {}
+                # 计划上下文：沿用治理生成的判定（为什么删 / 平局 / 决胜维度 / 达标率）。
+                by_key = {(item.get('kind'), item.get('tmdb_id')): item
+                          for item in projection.get('items') or []}
+                preview_rows = {}
                 for row in list((preview or {}).get('dual') or []) + list((preview or {}).get('single') or []):
-                    reasons.setdefault((row.get('kind'), row.get('tmdb_id'), row.get('season')),
-                                       row.get('reason_label') or row.get('reason') or '')
-                context_items = []
+                    preview_rows.setdefault((row.get('kind'), row.get('tmdb_id'), row.get('season')),
+                                            []).append(row)
+
+                def common_dir(paths):
+                    groups = [str(path).split('/')[:-1] for path in paths if str(path)]
+                    if not groups:
+                        return ''
+                    shared = []
+                    for column in zip(*groups):
+                        if len(set(column)) != 1:
+                            break
+                        shared.append(column[0])
+                    return '/'.join(shared)
+
+                def pick_row(key, season, selection):
+                    candidates = preview_rows.get((key[0], key[1], season)) or []
+                    for row in candidates:
+                        if selection.get('action_kind') and row.get('action_kind') != selection.get('action_kind'):
+                            continue
+                        if selection.get('reason') and row.get('reason') != selection.get('reason'):
+                            continue
+                        return row
+                    return candidates[0] if candidates else None
+
+                entries = []
                 for selection in selections:
                     key = (selection.get('kind'), selection.get('tmdb_id'))
-                    context_items.append({
-                        'kind': key[0], 'tmdb_id': key[1], 'title': titles.get(key, ''),
-                        'season': selection.get('season'),
-                        'side': selection.get('side'),
-                        'reason_label': (reasons.get((key[0], key[1], selection.get('season')))
-                                         or ('手动清理' if body.mode == 'manual' else ''))})
+                    season = selection.get('season')
+                    item = by_key.get(key) or {}
+                    prefixes = {}
+                    for side in ('cloud', 'share'):
+                        paths = [row.get('path') for row in item.get(side) or []
+                                 if season is None or row.get('season') == season]
+                        if paths:
+                            prefixes[side] = common_dir(paths)
+                    row = pick_row(key, season, selection)
+                    entry = {'kind': key[0], 'tmdb_id': key[1], 'title': item.get('title') or '',
+                             'season': season, 'side': selection.get('side'),
+                             'prefixes': prefixes, 'files': []}
+                    if row:
+                        entry.update({
+                            'reason': row.get('reason'), 'reason_label': row.get('reason_label'),
+                            'decisive': row.get('decisive') or '', 'tie': bool(row.get('tie')),
+                            'decision': row.get('decision') or '', 'outcome': row.get('outcome') or '',
+                            'gap': row.get('gap') or '', 'ratio': row.get('ratio'),
+                            'threshold': row.get('threshold'),
+                            'episodes': {'share': len(row.get('share_episodes') or row.get('share_files') or []),
+                                         'cloud': len(row.get('cloud_episodes') or row.get('cloud_files') or [])},
+                            'dup_episodes': list(row.get('dup_episodes') or [])[:50],
+                            'lost_episodes': list(row.get('lost_episodes') or [])[:50],
+                            'single_side': bool(row.get('single_side')),
+                            'manual': bool(row.get('manual_choice'))})
+                    elif body.mode == 'manual':
+                        entry['reason_label'] = '手动清理'
+                    entries.append(entry)
+                used = [False] * len(actions)
+                for entry in entries:
+                    for index, action in enumerate(actions):
+                        if used[index]:
+                            continue
+                        prefix = (entry.get('prefixes') or {}).get(action.get('side'))
+                        path = str(action.get('path') or '')
+                        if prefix and (path == prefix or path.startswith(prefix + '/')):
+                            used[index] = True
+                            entry['files'].append({'side': action.get('side'),
+                                                   'id': str(action.get('id')),
+                                                   'path': path})
+                others = [{'side': action.get('side'), 'id': str(action.get('id')),
+                           'path': action.get('path')}
+                          for index, action in enumerate(actions) if not used[index]]
                 if hasattr(store, 'set_meta'):
                     store.set_meta('inventory-plan-context:' + plan_id,
-                                   {'mode': body.mode, 'items': context_items})
+                                   {'mode': body.mode, 'entries': entries[:500],
+                                    'others': others[:2000]})
                 # 计划类型单独存一条 meta：_validate 只认 inventory/actions，别塞进去。
                 if hasattr(store, 'set_meta'):
                     store.set_meta('inventory-plan-mode:' + plan_id, {'mode': body.mode})
@@ -274,6 +333,22 @@ def install_inventory_operations(app, store, admin):
             with store.db:
                 store.db.execute('UPDATE meta SET value=? WHERE key=?',
                                  (json.dumps(value, ensure_ascii=False, separators=(',', ':')), row['key']))
+        # 过期没执行的计划：以前一直显示「待执行」，历史里越堆越多，看着像没收拾干净。
+        for row in store.db.execute(
+                "SELECT key,value FROM meta WHERE key LIKE 'inventory-plan:%' "
+                "AND json_valid(value) AND json_extract(value,'$.state')='planned'"):
+            try:
+                value = json.loads(row['value'])
+            except (TypeError, ValueError):
+                continue
+            expires = value.get('expires')
+            if not isinstance(expires, (int, float)) or now <= expires:
+                continue
+            value.update(state='expired', finished=now,
+                         message='计划已过期（超过有效期未执行），请重新扫描后生成新计划。')
+            with store.db:
+                store.db.execute('UPDATE meta SET value=? WHERE key=?',
+                                 (json.dumps(value, ensure_ascii=False, separators=(',', ':')), row['key']))
 
     @app.get('/api/v1/inventory/plans/{plan_id}/detail', dependencies=[Depends(admin)])
     async def plan_detail(plan_id: str):
@@ -296,9 +371,22 @@ def install_inventory_operations(app, store, admin):
         files = [{'side': action.get('side'), 'path': action.get('path'),
                   'done': (action.get('side'), str(action.get('id'))) in finished}
                  for action in actions]
+        def marked(items):
+            return [{'side': item.get('side'), 'path': item.get('path'),
+                     'done': (item.get('side'), str(item.get('id'))) in finished}
+                    for item in items or []]
+
+        entries = []
+        for entry in context.get('entries') or []:
+            grouped = marked(entry.get('files'))
+            entries.append({**{key: item for key, item in entry.items()
+                                if key not in ('files', 'prefixes')},
+                            'files': grouped,
+                            'done': sum(1 for file in grouped if file['done'])})
         return {'plan_id': plan_id, 'state': value.get('state'),
                 'message': value.get('message', ''), 'created': value.get('created'),
                 'finished': value.get('finished'), 'mode': context.get('mode', ''),
+                'entries': entries, 'others': marked(context.get('others')),
                 'items': context.get('items') or [], 'count': len(files),
                 'done': sum(1 for file in files if file['done']), 'files': files}
 

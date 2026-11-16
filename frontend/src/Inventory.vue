@@ -371,18 +371,39 @@ async function openAuditFromMapping() {
 const planDetails = ref<Record<string, any>>({})
 const planDetailBusy = ref('')
 const historyBusy = ref(false)
+function onPlanToggle(row:any, event:Event) {
+  const opened = (event.target as HTMLDetailsElement)?.open
+  if (opened) void loadPlanDetail(row)
+}
 async function loadPlanDetail(row:any) {
   const id = row?.plan_id
   if (!id || planDetails.value[id] || planDetailBusy.value) return
   planDetailBusy.value = id
-  try { planDetails.value = {...planDetails.value, [id]: await props.api(`/inventory/plans/${id}/detail`)} }
-  catch (e) { historyError.value = (e as Error).message }
+  try {
+    planDetails.value = {...planDetails.value, [id]: await props.api(`/inventory/plans/${id}/detail`)}
+  } catch (e) { historyError.value = (e as Error).message }
   finally { planDetailBusy.value = '' }
+}
+function entryBasis(entry:any) {
+  const bits:string[] = []
+  if (entry.decisive) bits.push('决胜维度：' + entry.decisive)
+  if (entry.tie) bits.push('全部打平，按平局设置保留')
+  if (entry.ratio != null && entry.threshold != null)
+    bits.push(`分享达标率 ${Math.round(entry.ratio * 100)}%（阈值 ${Math.round(entry.threshold * 100)}%）`)
+  if (entry.episodes?.share || entry.episodes?.cloud)
+    bits.push(`网盘 ${entry.episodes.cloud || 0} 集 / 分享 ${entry.episodes.share || 0} 集`)
+  if (entry.gap) bits.push(entry.gap)
+  if (entry.dup_episodes?.length) bits.push(`重复集 ${entry.dup_episodes.length} 集：${episodeList(entry.dup_episodes)}`)
+  if (entry.lost_episodes?.length) bits.push(`删后两库都不再有：${episodeList(entry.lost_episodes)}`)
+  if (entry.single_side) bits.push('另一侧没有这一季')
+  if (entry.manual) bits.push('人工选择清理')
+  return bits.join(' · ')
 }
 function itemLabel(item:any) { return item?.title || ('TMDB ' + (item?.tmdb_id ?? '')) }
 function resultLabel(done:boolean) { return done ? '已删除' : '未执行' }
 function stateLabel(value:string) {
-  return ({planned:'待执行', executing:'执行中', completed:'已完成', failed:'失败'} as Record<string,string>)[value] || value || '未知'
+  return ({planned:'待执行', executing:'执行中', completed:'已完成', failed:'失败',
+           expired:'已过期'} as Record<string,string>)[value] || value || '未知'
 }
 function stateType(value:string) {
   return value === 'completed' ? 'success' : value === 'failed' ? 'danger' : value === 'executing' ? 'warning' : 'info'
@@ -699,10 +720,10 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize); if(orp
    </section>
    <div class="gov-save"><el-button type="primary" :loading="configBusy" @click="saveConfig">保存设置</el-button><span v-if="settingsDirty" class="gov-dirty">设置未保存</span><span class="muted">{{ configMessage }}</span></div>
   </div></details>
-   <details ref="auditPanel" class="gov-panel gov-utility"><summary><span><strong>目录核对</strong><small>查看扫描范围，核查失效记录</small></span><span class="gov-chevron">展开</span></summary><div class="gov-panel-body">
-   <div><el-button :loading="auditBusy" @click="auditLibraries">核对两库目录</el-button><p class="muted">只读核对已配置的两库根目录；结果反映扫描时刻，不构成删除授权。</p></div>
+   <details ref="auditPanel" class="gov-panel gov-utility"><summary><span><strong>目录核对</strong><small>磁盘 STRM 与取链登记是否对得上（只读）</small></span><span class="gov-chevron">展开</span></summary><div class="gov-panel-body">
+   <div><el-button :loading="auditBusy" @click="auditLibraries">核对两库目录</el-button><p class="muted">只读比对：磁盘上每个 .strm 有没有对应的取链登记（登记决定能不能播，不是清理台账）。「失效记录」＝有登记、磁盘没有；「无取链记录」＝磁盘有、没登记（播不了，需要重新入库）。不删任何文件。</p></div>
    <el-alert v-if="auditError" :title="auditError" type="error" :closable="false" />
-   <div v-if="audit"><el-alert :title="audit.clean ? '两库目录与登记数量一致' : '发现目录与登记不一致，请先核实'" :type="audit.clean ? 'success' : 'warning'" :closable="false" /><div v-for="(lib, key) in audit.libraries" :key="key"><p>{{ side(String(key)) }}（{{ lib.root }}）：登记 {{ lib.registered }}，磁盘 {{ lib.on_disk }}，缺失 {{ lib.missing_count }}，未登记 {{ lib.unregistered_count }}</p><details v-if="lib.missing_count || lib.unregistered_count"><summary>查看路径（各最多 200 条）</summary><p v-for="path in lib.missing" :key="path">有登记、磁盘无：{{ path }}</p><p v-for="path in lib.unregistered" :key="path">磁盘有、无登记：{{ path }}</p></details></div><p v-if="audit.duplicate_count || audit.outside_count">重复台账 {{ audit.duplicate_count }} 条，库根外台账 {{ audit.outside_count }} 条。</p></div>
+   <div v-if="audit"><el-alert :title="audit.clean ? '两库磁盘与取链登记完全一致' : '发现磁盘与取链登记不一致，请先核实'" :type="audit.clean ? 'success' : 'warning'" :closable="false" /><div v-for="(lib, key) in audit.libraries" :key="key"><p>{{ side(String(key)) }}（{{ lib.root }}）：登记 {{ lib.registered }}，磁盘 {{ lib.on_disk }}，失效记录 {{ lib.missing_count }}，无取链记录 {{ lib.unregistered_count }}</p><details v-if="lib.missing_count || lib.unregistered_count"><summary>查看路径（各最多 200 条）</summary><p v-for="path in lib.missing" :key="path">失效记录（有登记、磁盘无）：{{ path }}</p><p v-for="path in lib.unregistered" :key="path">无取链记录（磁盘有、播不了）：{{ path }}</p></details></div><p v-if="audit.duplicate_count || audit.outside_count">重复登记 {{ audit.duplicate_count }} 条，库根外登记 {{ audit.outside_count }} 条。</p></div>
    <div v-if="audit && !audit.clean"><el-button :loading="staleBusy" @click="checkStale">核查可修复的失效台账</el-button><p class="muted">只检查本地文件缺失、播放已撤销且没有输出归属的网盘记录。</p><el-alert v-if="staleError" :title="staleError" type="error" :closable="false" /><div v-if="stale.length"><p v-for="row in stale" :key="row.file_id">{{ row.relative_path }}</p><el-button type="warning" :loading="staleBusy" @click="clearStale">备份并修复上述记录</el-button></div></div><p v-if="staleBackup" class="muted">台账备份编号：{{ staleBackup }}</p>
    </div></details>
    <el-alert v-if="previewError" :title="previewError" type="error" :closable="false" />
@@ -788,29 +809,32 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize); if(orp
     </template>
     </section>
    </template>
-   <details class="gov-panel gov-history"><summary><span><strong>最近清理计划</strong><small>展开可看每条计划删了什么、结果如何</small></span><span class="gov-chevron">展开</span></summary><div class="gov-panel-body">
-    <div class="inventory-tools"><el-button :loading="historyBusy" @click="loadHistory">刷新状态</el-button><span class="muted">执行中断的计划不会自动重试；点开某一行的「+」可以看这次到底删了哪些文件。</span></div>
+   <details class="gov-panel gov-history"><summary><span><strong>最近清理计划</strong><small>一次计划一个框，点开看清理了什么、为什么</small></span><span class="gov-chevron">展开</span></summary><div class="gov-panel-body">
+    <div class="inventory-tools"><el-button :loading="historyBusy" @click="loadHistory">刷新状态</el-button><span class="muted">执行中断的计划不会自动重试；旧计划没有留详情，只能看到数量与状态。</span></div>
     <el-alert v-if="historyError" :title="historyError" type="error" :closable="false" />
-    <el-table :data="history" empty-text="暂无清理计划" @expand-change="(row:any, expanded:any[]) => expanded.length && loadPlanDetail(row)">
-     <el-table-column type="expand"><template #default="s"><div class="plan-detail">
-      <p v-if="planDetailBusy === s.row.plan_id" class="muted">正在读取详情…</p>
-      <template v-else-if="planDetails[s.row.plan_id]">
-       <p class="muted">共 {{ planDetails[s.row.plan_id].count }} 个文件 · 已删除 {{ planDetails[s.row.plan_id].done }} 个<template v-if="planDetails[s.row.plan_id].finished"> · 完成于 {{ new Date(planDetails[s.row.plan_id].finished * 1000).toLocaleString() }}</template></p>
-       <div v-if="planDetails[s.row.plan_id].items?.length" class="plan-items"><p v-for="(item, index) in planDetails[s.row.plan_id].items" :key="index">{{ itemLabel(item) }}<span v-if="item.season != null"> · 第 {{ item.season }} 季</span><span v-if="item.reason_label"> · {{ item.reason_label }}</span></p></div>
-       <el-table :data="planDetails[s.row.plan_id].files || []" size="small" empty-text="这份计划没有文件明细">
-        <el-table-column label="库" width="90"><template #default="f">{{ side(f.row.side) }}</template></el-table-column>
-        <el-table-column prop="path" label="文件路径" />
-        <el-table-column label="结果" width="90"><template #default="f">{{ resultLabel(f.row.done) }}</template></el-table-column>
-       </el-table>
+    <p v-if="!history.length && !historyBusy" class="muted">暂无清理计划</p>
+    <details v-for="row in history" :key="row.plan_id" class="plan-box" @toggle="onPlanToggle(row, $event)">
+     <summary><span><strong>{{ row.mode_label }} · {{ stateLabel(row.state) }}</strong><small>{{ new Date(row.created * 1000).toLocaleString() }} · 共 {{ row.count }} 个文件，已处理 {{ row.done }} 个<span v-if="row.error"> · {{ row.error }}</span></small></span><span><el-tag :type="stateType(row.state)" size="small">{{ stateLabel(row.state) }}</el-tag></span></summary>
+     <div class="plan-box-body">
+      <p v-if="planDetailBusy === row.plan_id" class="muted">正在读取详情…</p>
+      <template v-else-if="planDetails[row.plan_id]">
+       <p class="plan-summary">共 {{ planDetails[row.plan_id].count }} 个文件 · 已删除 {{ planDetails[row.plan_id].done }} 个<template v-if="planDetails[row.plan_id].finished"> · 完成于 {{ new Date(planDetails[row.plan_id].finished * 1000).toLocaleString() }}</template><template v-if="planDetails[row.plan_id].message"> · {{ planDetails[row.plan_id].message }}</template></p>
+       <div v-for="(entry, index) in planDetails[row.plan_id].entries || []" :key="index" class="plan-entry">
+        <p class="plan-entry-title"><strong>{{ itemLabel(entry) }}</strong><span v-if="entry.season != null"> · 第 {{ entry.season }} 季</span><el-tag size="small" class="plan-entry-tag">{{ entry.reason_label || '治理清理' }}</el-tag></p>
+        <p v-if="entryBasis(entry)" class="plan-entry-basis">{{ entryBasis(entry) }}</p>
+        <details v-if="entry.files?.length"><summary>文件 {{ entry.files.length }} 个（已删除 {{ entry.done }}）</summary><p v-for="file in entry.files" :key="file.path" class="file-path">{{ side(file.side) }} · {{ file.path }} · {{ resultLabel(file.done) }}</p></details>
+        <p v-else class="muted">这条没有对应到文件。</p>
+       </div>
+       <div v-if="planDetails[row.plan_id].others?.length" class="plan-entry">
+        <p class="plan-entry-title"><strong>未归入条目的文件（{{ planDetails[row.plan_id].others.length }}）</strong></p>
+        <p v-for="file in planDetails[row.plan_id].others" :key="file.path" class="file-path">{{ side(file.side) }} · {{ file.path }} · {{ resultLabel(file.done) }}</p>
+       </div>
+       <p v-if="planDetails[row.plan_id].items?.length" class="muted">旧计划的条目：{{ planDetails[row.plan_id].items.map(itemLabel).join('、') }}</p>
       </template>
-      <p v-else class="muted">这份计划没有留下详情（旧版本只记录了数量）。</p>
-     </div></template></el-table-column>
-     <el-table-column label="类型" width="110"><template #default="s">{{ s.row.mode_label }}</template></el-table-column>
-     <el-table-column label="创建时间" min-width="150"><template #default="s">{{ new Date(s.row.created * 1000).toLocaleString() }}</template></el-table-column>
-     <el-table-column label="状态" width="90"><template #default="s"><el-tag :type="stateType(s.row.state)" size="small">{{ stateLabel(s.row.state) }}</el-tag></template></el-table-column>
-     <el-table-column label="进度" width="90"><template #default="s">{{ s.row.done }}/{{ s.row.count }}</template></el-table-column>
-     <el-table-column label="说明" min-width="160"><template #default="s">{{ s.row.error }}</template></el-table-column>
-    </el-table></div></details>
+      <p v-else class="muted">这份计划没有留下详情（旧版本只记录了数量，无法还原清理条目）。</p>
+     </div>
+    </details>
+   </div></details>
   </template>
   <template v-else>
    <section class="orphan-hero"><div><h2>目录残留清理</h2><p>扫描本地两库和 115 归档目录</p></div><div class="orphan-actions"><el-button type="primary" :loading="orphanBusy" @click="scanOrphans">扫描残留</el-button><el-button type="danger" :loading="orphanBusy" :disabled="!orphanSelected.length || orphanSelected.length > 100" @click="cleanOrphans">清理选中（{{orphanSelected.length}}）</el-button></div><details class="inventory-help orphan-help"><summary>清理范围与规则</summary><p>网盘侧同一作品可联动清理本地残留及 115 字幕、元数据和空目录；分享侧只清理本地。只处理带 TMDB 标识且没有视频或未知文件的目录；115 文件进入回收站，每次最多 100 项。</p></details></section>
@@ -890,7 +914,7 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize); if(orp
 .library-season-heading{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.library-season-heading strong{margin-right:auto}.season-status{border-radius:5px;padding:3px 7px;font-size:12px;background:var(--el-fill-color-light)}.season-status.complete{color:var(--el-color-success)}.season-status.missing{color:var(--el-color-danger)}.season-status.extra,.season-status.unknown{color:var(--el-color-warning)}.season-progress-row{display:flex;align-items:center;gap:10px;margin-top:8px}.season-progress{height:6px;flex:1;border-radius:6px;background:var(--el-fill-color);overflow:hidden}.season-progress i{display:block;height:100%;border-radius:inherit;background:var(--el-color-success)}.season-progress-row span{font-size:12px;color:var(--el-text-color-secondary);white-space:nowrap}
 </style>
 <style scoped>
-.rule-summary{padding:14px;border:1px solid var(--el-border-color-lighter);border-radius:9px;background:var(--el-fill-color-blank)}.rule-summary p{font-size:12px;margin:8px 0}.rule-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}.rule-list span{padding:4px 8px;border-radius:6px;background:var(--el-color-primary-light-9);font-size:12px;color:var(--el-color-primary)}.governance-evidence{display:grid;gap:8px}.governance-evidence p{margin:3px 0;font-size:12px;overflow-wrap:anywhere}.comparison-rule{font-size:12px;color:var(--el-text-color-secondary)}.gov-manual{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}.plan-detail{padding:6px 2px}.plan-detail p{margin:4px 0;font-size:12px}.plan-items p{margin:3px 0;font-size:12px;color:var(--el-text-color-regular)}.gov-caution{margin:8px 0}.gov-caution :deep(.el-alert__title){font-size:13px;line-height:1.5}.gov-caution :deep(.el-alert__description){font-size:12px;margin:4px 0 0}
+.rule-summary{padding:14px;border:1px solid var(--el-border-color-lighter);border-radius:9px;background:var(--el-fill-color-blank)}.rule-summary p{font-size:12px;margin:8px 0}.rule-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}.rule-list span{padding:4px 8px;border-radius:6px;background:var(--el-color-primary-light-9);font-size:12px;color:var(--el-color-primary)}.governance-evidence{display:grid;gap:8px}.governance-evidence p{margin:3px 0;font-size:12px;overflow-wrap:anywhere}.comparison-rule{font-size:12px;color:var(--el-text-color-secondary)}.gov-manual{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}.plan-box{margin-top:10px;padding:12px;border:1px solid var(--el-border-color-lighter);border-radius:10px;background:var(--el-fill-color-blank)}.plan-box>summary{display:flex;justify-content:space-between;gap:12px;cursor:pointer;align-items:center}.plan-box>summary strong{display:block;font-size:13px}.plan-box>summary small{display:block;margin-top:4px;color:var(--el-text-color-secondary);font-size:12px}.plan-box-body{padding-top:8px}.plan-summary{font-size:13px;margin:6px 0}.plan-entry{border:1px solid var(--el-border-color-lighter);border-radius:9px;padding:10px 12px;margin:10px 0}.plan-entry-title{margin:0;font-size:13px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}.plan-entry-basis{margin:6px 0 4px;font-size:12px;color:var(--el-text-color-secondary)}.plan-entry summary{cursor:pointer;font-size:12px;color:var(--el-text-color-secondary)}.plan-entry .file-path{font-size:12px;margin:3px 0;overflow-wrap:anywhere}.plan-detail{padding:6px 2px}.plan-detail p{margin:4px 0;font-size:12px}.plan-items p{margin:3px 0;font-size:12px;color:var(--el-text-color-regular)}.gov-caution{margin:8px 0}.gov-caution :deep(.el-alert__title){font-size:13px;line-height:1.5}.gov-caution :deep(.el-alert__description){font-size:12px;margin:4px 0 0}
 .governance-detail{padding:8px 20px;overflow-wrap:anywhere}.governance-detail p{margin:8px 0}.governance-detail details{margin:10px 0}.selection-reason{font-size:11px;margin:3px 0;line-height:1.4}
 .gov-hero{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:24px 26px;border:1px solid var(--el-border-color-lighter);border-radius:16px;background:linear-gradient(125deg,var(--el-color-primary-light-9),var(--el-bg-color) 70%)}
 .gov-hero h2{margin:5px 0 6px;font-size:23px;letter-spacing:-.02em}.gov-hero p{margin:0;color:var(--el-text-color-secondary);font-size:13px;line-height:1.6}.gov-eyebrow{font-size:10px;letter-spacing:.16em;font-weight:700;color:var(--el-color-primary)}

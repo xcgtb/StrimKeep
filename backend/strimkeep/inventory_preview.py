@@ -654,7 +654,28 @@ def governance_preview(snapshot, policy, tie='cloud', threshold=0.9,
                                            sample=sample))
 
         mode, zero_sum = None, False
-        if decision in ('keep_local', 'keep_share'):
+        # 多季保护优先于「保留网盘/分享」决策模型：
+        # 分享只有个别季（比如 18 季里来 5 季）时，不能拿这几季去掏空整剧；
+        # 只有两侧季集合对齐、逐季都过 90% 阈值，才做整剧零和。
+        multi_active = (multi_season_protect == 'compare'
+                        and (len(proper_lp) >= 2 or len(proper_sp) >= 2))
+        if multi_active:
+            mode = multi_protect_mode(set(proper_sp), set(proper_lp))
+            inner_sp = {season: rows for season, rows in proper_sp.items() if season > 0}
+            inner_lp = {season: rows for season, rows in proper_lp.items() if season > 0}
+            acts, zero_sum = _multi_actions(mode, inner_sp, inner_lp, policy, tie, threshold)
+            actions.extend(acts)
+            # S00 跟随多季保护结论（1.2.12 `_emit_s00_follow`），overlap 不动
+            if s00 and l00 and mode != 'overlap':
+                if mode == 'share_protect':
+                    actions.append(_action('cloud', 'multi_protect_partial_local',
+                                           '多季保护-淘汰本地', 0))
+                elif zero_sum:
+                    actions.append(_action('cloud', 'multi_full_share', '整剧零和-分享替代', 0))
+                else:
+                    actions.append(_action('share', 'multi_protect_partial_share',
+                                           '多季保护-淘汰分享', 0))
+        elif decision in ('keep_local', 'keep_share'):
             # 决策模型按「季」处理：保留侧必须自己完整、并且覆盖另一侧全部集号，
             # 才自动清理另一侧；保留侧不完整或比对方少集时不自动动手，
             # 转「需人工核实」，由用户在页面上手动选择清理哪一侧。
@@ -694,30 +715,12 @@ def governance_preview(snapshot, policy, tie='cloud', threshold=0.9,
                     # 手动清理时按季取文件，不需要再扫一遍目录。
                     'cloud_files': proper_lp.get(season, []),
                     'share_files': proper_sp.get(season, [])})
-        elif multi_season_protect == 'compare' and (len(proper_lp) >= 2 or len(proper_sp) >= 2):
-            mode = multi_protect_mode(set(proper_sp), set(proper_lp))
-            inner_sp = {season: rows for season, rows in proper_sp.items() if season > 0}
-            inner_lp = {season: rows for season, rows in proper_lp.items() if season > 0}
-            acts, zero_sum = _multi_actions(mode, inner_sp, inner_lp, policy, tie, threshold)
-            actions.extend(acts)
-            # S00 跟随多季保护结论（1.2.12 `_emit_s00_follow`），overlap 不动
-            if s00 and l00 and mode != 'overlap':
-                if mode == 'share_protect':
-                    actions.append(_action('cloud', 'multi_protect_partial_local',
-                                           '多季保护-淘汰本地', 0))
-                elif zero_sum:
-                    actions.append(_action('cloud', 'multi_full_share', '整剧零和-分享替代', 0))
-                else:
-                    actions.append(_action('share', 'multi_protect_partial_share',
-                                           '多季保护-淘汰分享', 0))
         else:
             for season in sorted(set(proper_sp) & set(proper_lp)):
                 compare = _season_compare(proper_sp[season], proper_lp[season], policy, tie)
                 acts, _outcome = _season_actions(compare, season, threshold)
                 actions.extend(acts)
 
-        multi_active = (multi_season_protect == 'compare'
-                        and (len(proper_lp) >= 2 or len(proper_sp) >= 2))
         if decision == 'quality_first' and not multi_active:
             # 单季剧 / 关闭多季保护：缺集的一侧整季剔除，该季不再比画质。
             residual_actions, residual_seasons = _emit_residual_actions(

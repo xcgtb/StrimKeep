@@ -75,7 +75,12 @@ def test_plan_detail_lists_files_and_results(tmp_path, monkeypatch):
     put(db, 'inventory-plan:' + pid, json.dumps(payload))
     put(db, 'inventory-plan-context:' + pid, json.dumps({
         'mode': 'governance',
-        'items': [{'title': '走马上任 (2026)', 'season': 1, 'reason_label': '库内多版本-删低版'}]}))
+        'entries': [{
+            'title': '走马上任 (2026)', 'season': 1, 'reason_label': '库内多版本-删低版',
+            'decisive': '音频规格', 'tie': False, 'ratio': 1.0, 'threshold': 0.9,
+            'episodes': {'share': 2, 'cloud': 2}, 'dup_episodes': [28],
+            'files': [{'side': 'share', 'id': '1', 'path': 'x/a.strm'}]}],
+        'others': [{'side': 'cloud', 'id': '2', 'path': 'y/b.strm'}]}))
     db.commit()
 
     with TestClient(app) as client:
@@ -86,5 +91,29 @@ def test_plan_detail_lists_files_and_results(tmp_path, monkeypatch):
     data = response.json()
     assert data['count'] == 2 and data['done'] == 1
     assert [file['done'] for file in data['files']] == [True, False]
-    assert data['items'][0]['title'] == '走马上任 (2026)'
     assert data['finished'] == 200
+    entry = data['entries'][0]
+    assert entry['title'] == '走马上任 (2026)' and entry['reason_label'] == '库内多版本-删低版'
+    assert entry['decisive'] == '音频规格' and entry['dup_episodes'] == [28]
+    assert entry['done'] == 1 and entry['files'][0]['done'] is True
+    assert data['others'][0]['done'] is False
+
+
+def test_expired_plan_is_marked_expired(tmp_path, monkeypatch):
+    """超过有效期没执行的计划：列表刷新时标「已过期」，不再一直显示待执行。"""
+    app, admin, path, db = setup_app(tmp_path, monkeypatch)
+    pid = 'b' * 32
+    payload = {'state': 'planned', 'created': 100, 'expires': 200, 'message': '',
+               'snapshot': {'actions': []}}
+    put(db, 'inventory-plan:' + pid, json.dumps(payload))
+    db.commit()
+
+    with TestClient(app) as client:
+        app.dependency_overrides[admin] = lambda: None
+        response = client.get('/api/v1/inventory-plans')
+
+    assert response.status_code == 200, response.text
+    value = json.loads(db.execute('select value from meta where key=?',
+                                  ('inventory-plan:' + pid,)).fetchone()[0])
+    assert value['state'] == 'expired'
+    assert '过期' in value['message']
