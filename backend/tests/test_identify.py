@@ -25,6 +25,8 @@ EN_CANDIDATES = [
      'first_air_date': '2026-11-02', 'popularity': 21.84},
     {'id': 302824, 'name': "Let's Go 怪奇组", 'original_name': 'レッツゴー怪奇組',
      'first_air_date': '2026-07-05', 'popularity': 4.33},
+    {'id': 109553, 'name': "Let's Go", 'original_name': '咱们穿越吧',
+     'first_air_date': '2015-07-26', 'popularity': 5.10},
     {'id': 81157, 'name': "Bakusou Kyoudai Let's & Go!!",
      'original_name': '爆走兄弟レッツ＆ゴー!!', 'first_air_date': '1996-01-08',
      'popularity': 21.46},
@@ -196,6 +198,8 @@ def test_detail_404_does_not_swap_to_a_subtitle_similar_show():
             await engine_with(fake).identify(hint)
         assert '275297' in str(exc.value) and '404' in str(exc.value)
         assert not hint.get('tmdb_fallback')
+        # year_ok 会探测同名候选的季/集年份（tv/109553 属正常证据查询），
+        # 但换候选时不能再接受 2015 年那部或同年的《怪奇组》。
         assert not any(path == 'tv/302824' for path, _ in fake.calls)
     asyncio.run(run())
 
@@ -227,4 +231,54 @@ def test_unverifiable_year_is_unknown_not_a_mismatch():
         ok, evidence = await engine_with(fake).year_ok(
             'tv', {'id': 7}, {'year': 2026, 'season': 1, 'episode': 1})
         assert not ok and evidence == 'unknown'
+    asyncio.run(run())
+
+
+# -------------------------------------------- 候选缺失不能中断整条识别
+class EpisodeFake:
+    """真实失败现场：同名候选 109553 只有 2015 年的 13 集，第 14 集不存在。"""
+
+    def __init__(self):
+        self.calls = []
+
+    async def __call__(self, path, params=None):
+        self.calls.append(path)
+        if path.startswith('search/'):
+            return {'results': EN_CANDIDATES}
+        if path.endswith('/alternative_titles'):
+            return {'results': []}
+        if path == 'tv/109553':
+            return {'id': 109553, 'name': "Let's Go", 'first_air_date': '2015-07-26',
+                    'seasons': [{'season_number': 1, 'air_date': '2015-07-26'}]}
+        if path == 'tv/275297':
+            return {'id': 275297, 'name': '走马上任', 'first_air_date': '2026-11-02',
+                    'seasons': [{'season_number': 1, 'air_date': '2026-11-02'}]}
+        if path == 'tv/109553/season/1/episode/14':
+            raise CloudError('TMDB 中找不到该条目（GET %s → HTTP 404）。' % path,
+                             'TMDB_NOT_FOUND', 404)
+        if '/episode/' in path:
+            return {'air_date': '2015-08-02'}
+        return {'id': int(path.split('/')[1]), 'seasons': []}
+
+
+def test_candidate_with_missing_episode_does_not_abort_identification():
+    """E14+ 曾整批未识别：无关候选的 episode 404 冒泡，连精确同名的正确条目也没选。"""
+    async def run():
+        fake = EpisodeFake()
+        hint = parse_name("Let's Go.S01E14.2026.2160p.MIGUTV.WEB-DL.AAC2.0.HFR.H.265.mkv", '')
+        details = await engine_with(fake).identify(hint)
+        assert details['id'] == 275297
+        assert any(a.get('evidence') == 'episode_not_found'
+                   for a in hint['tmdb_attempt']), hint['tmdb_attempt']
+    asyncio.run(run())
+
+
+def test_year_ok_detail_404_is_candidate_evidence():
+    """候选详情本身 404：只排除这个候选，不能把整条识别判成失败。"""
+    async def run():
+        fake = FakeTMDB(details={}, missing=(9,))
+        ok, evidence = await engine_with(fake).year_ok(
+            'tv', {'id': 9, 'first_air_date': '2015-01-01'},
+            {'year': 2026, 'season': 1, 'episode': 14})
+        assert not ok and evidence == 'detail_not_found'
     asyncio.run(run())

@@ -1110,6 +1110,12 @@ class Organizer:
         extra = {k: str(v) for k, v in (params or {}).items() if k not in ('api_key',)}
         return path + ('?' + '&'.join(f'{k}={extra[k]}' for k in sorted(extra)) if extra else '')
 
+    @staticmethod
+    def tmdb_missing_error(exc):
+        """TMDB「条目不存在」的两种历史写法：新代码 TMDB_NOT_FOUND，旧代码 404 + UNAVAILABLE。"""
+        return getattr(exc, 'code', '') == 'TMDB_NOT_FOUND' or (
+            getattr(exc, 'code', '') == 'TMDB_UNAVAILABLE' and getattr(exc, 'status', None) == 404)
+
     async def tmdb(self, path, params=None):
         key = self.store.get('tmdb_key')
         if not key:
@@ -1248,7 +1254,13 @@ class Organizer:
         if kind != 'tv':
             return False, 'mismatch' if known else 'unknown'
         season, episode = int(hint.get('season') or 0), int(hint.get('episode') or 0)
-        details = candidate if candidate.get('seasons') is not None else await self.tmdb('tv/%s' % candidate['id'])
+        try:
+            details = candidate if candidate.get('seasons') is not None else await self.tmdb('tv/%s' % candidate['id'])
+        except CloudError as exc:
+            if self.tmdb_missing_error(exc):
+                # 详情都取不到：这个候选本身不可用，换下一个，不能让整条识别中断。
+                return False, 'detail_not_found'
+            raise
         for item in details.get('seasons') or []:
             air = str(item.get('air_date') or '')[:4]
             if air:
@@ -1259,7 +1271,7 @@ class Organizer:
             try:
                 data = await self.tmdb('tv/%s/season/%s/episode/%s' % (candidate['id'], season, episode))
             except CloudError as exc:
-                if exc.code == 'TMDB_UNAVAILABLE' and exc.status == 404:
+                if self.tmdb_missing_error(exc):
                     # 候选剧集没有这一集，只能排除此候选，不能当成 TMDB 服务故障。
                     return False, 'episode_not_found'
                 raise
@@ -1305,7 +1317,7 @@ class Organizer:
                              'year': hint.get('year'), 'evidence': evidence,
                              'match': relation, 'score': round(score, 3)})
             # 已知年份/集数不符才排除；'unknown' 只是无从核实，保留候选。
-            if evidence in ('mismatch', 'episode_not_found'):
+            if evidence in ('mismatch', 'episode_not_found', 'detail_not_found'):
                 continue
             ranked.append((match_rank(score, relation, ok,
                                       has_cjk(candidate.get('name') or candidate.get('title')),
@@ -1404,15 +1416,28 @@ class Organizer:
         try:
             details = await self.tmdb(f'{kind}/{tmdb_id}')
         except CloudError as exc:
-            if exc.code != 'TMDB_NOT_FOUND':
+            if not self.tmdb_missing_error(exc):
                 raise
             # 搜索结果里的这个 id 可能已失效：换同一次搜索的其它候选再试，最多 2 个。
-            # 只换 id、不改作品：候选必须与关键词精确同名（归一化后），避免
-            # 「Let's Go」的详情 404 后，顺手把同年的《Let's Go 怪奇组》当成它。
+            # 只换 id、不改作品：候选必须与关键词精确同名（归一化后），并且是
+            # pick() 已经接受的候选（年份/集数已知不符的不算）。
+            accepted = {str(a.get('endpoint', '')).split('/')[-1] for a in (hint.get('tmdb_attempt') or [])
+                        if a.get('variant') == 'year_evidence'
+                        and a.get('evidence') not in ('mismatch', 'episode_not_found', 'detail_not_found')}
+            want_year = str(hint.get('year') or '')
+
+            def fallback_ok(row):
+                if title_relation(hint, row) != 'exact':
+                    return False
+                if accepted:
+                    return str(row.get('id')) in accepted
+                # 电影走 choose_match，没有 year_evidence 记录：至少不能是已知的错年份。
+                released = str(row.get('release_date') or row.get('first_air_date') or '')[:4]
+                return not want_year or not released or released == want_year
+
             candidates = [row.get('id') for row in picked_pool
                           if isinstance(row, dict) and row.get('id')
-                          and int(row['id']) != int(tmdb_id)
-                          and title_relation(hint, row) == 'exact']
+                          and int(row['id']) != int(tmdb_id) and fallback_ok(row)]
             details = None
             for alt in candidates[:2]:
                 try:
