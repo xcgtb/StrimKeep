@@ -334,7 +334,7 @@ TgtoDrive 是功能面最接近的竞品，值得借的是「集成广度」和�
 | 分享撤销状态阻止重新入库 | `share_service.generate` 查 `share_revocations` 后跳过 | 删表、删检查、启动 DROP |
 | `internal_delete` 空壳仍在 15 个模块调用 | `internal_delete.py` 只剩 no-op | 删模块、删调用、删 `drop_internal/recently_deleted` |
 | 死代码 | `recover_share_batch.py`、`sync_worker.py` 无调用方 | 删除 |
-| 热路径全表扫描 | `playbacks.relative_path`、`share_strms.strm_path` 无索引 | 加 8 个索引 |
+| 热路径全表扫描 | `playbacks.relative_path`、`share_strms.strm_path` 无索引 | 加 13 个索引（含 NOCASE 前缀索引） |
 | 前端内联请求 | 请求闭包写在 `App.vue`，页面无法单测 | 抽到 `src/api/client.ts`，保留兼容签名 |
 | 打 tag 不跑测试 | 只有 docker-publish | CI 先跑后端全量 + 前端测试/构建，再发布 |
 
