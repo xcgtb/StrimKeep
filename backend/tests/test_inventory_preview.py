@@ -380,3 +380,24 @@ def test_quiet_gate_does_not_block_when_timestamps_missing():
     result = governance_preview(snap([file('l', 1, 1, '1080p')], [file('s', 1, 1, '2160p')]),
                                 policy(), quiet_minutes=15)
     assert 'recent_activity' not in _blocked_reasons(result)
+
+
+def test_single_library_versions_explain_why_one_is_kept():
+    """单库多版本要能说清「留这份、删那份」的依据。"""
+    result = governance_preview(snap([file('l', 0, 0, '1080p'), file('l', 0, 0, '2160p')], [],
+                                     kind='movie'), policy())
+    row = result['single'][0]
+    assert row['keeps'][0]['name'].endswith('2160p.strm')
+    assert row['comparisons'], '缺少逐文件比较依据'
+    assert row['comparisons'][0]['winner_name'].endswith('2160p.strm')
+    assert row['comparisons'][0]['loser_name'].endswith('1080p.strm')
+    assert any(rule['result'] for rule in row['comparisons'][0]['rules']), '规则明细里没有胜负'
+    assert row['decisive'], '缺少决胜维度'
+
+
+def test_dual_rows_expose_decisive_dimension():
+    """双库对比要标明是哪一维分出高下。"""
+    result = governance_preview(snap([file('l', 0, 0, '1080p', 'M.1080p.strm')],
+                                     [file('s', 0, 0, '2160p', 'M.2160p.strm')],
+                                     kind='movie'), policy())
+    assert result['dual'][0]['decisive']

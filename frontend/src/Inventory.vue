@@ -632,7 +632,7 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize); if(orp
   </template>
   <template v-else-if="tab === 'governance'">
    <div class="gov-hero"><div><h2>双库治理</h2><p>{{ scanTime ? `上次扫描：${new Date(scanTime * 1000).toLocaleString()}` : '扫描后比较两库版本和集数' }}</p></div><el-button type="primary" :loading="previewBusy" @click="loadPreview">{{ preview ? '重新扫描' : '扫描双库' }}</el-button></div>
-   <div class="gov-summary"><span>当前策略</span><strong>{{ decision === 'quality_first' ? '洗版优先' : decision === 'keep_local' ? '保留网盘库' : '保留分享库' }}</strong><i></i><span>平局保留{{ tie === 'cloud' ? '网盘库' : '分享库' }}</span><i></i><span>多季剧怎么处理{{ multiProtect === 'compare' ? '已开启' : '已关闭' }}</span><span v-if="settingsDirty" class="gov-unsaved">设置未保存</span></div>
+   <div class="gov-summary"><span>当前策略</span><strong>{{ decision === 'quality_first' ? '按画质洗版（用影视整理的洗版规则逐维比较）' : decision === 'keep_local' ? '保留网盘库' : '保留分享库' }}</strong><i></i><span>平局保留{{ tie === 'cloud' ? '网盘库' : '分享库' }}</span><i></i><span>多季剧怎么处理{{ multiProtect === 'compare' ? '已开启' : '已关闭' }}</span><span v-if="settingsDirty" class="gov-unsaved">设置未保存</span></div>
    <details class="gov-panel gov-settings"><summary><span><strong>治理设置</strong><small>怎么选、怎么保护、什么时候不动</small></span><span class="gov-chevron">展开</span></summary><div class="gov-panel-body gov-settings-body">
    <section class="gov-group">
     <h4>怎么选</h4>
@@ -682,6 +682,14 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize); if(orp
        <p><strong>{{ label(s.row) }}</strong> · {{ s.row.reason_label || (s.row.reason === 'quality' ? '单库多版本' : reason(s.row.reason)) }}<el-button link type="primary" size="small" class="gov-detail-link" @click="openWork(s.row)">查看作品详情</el-button></p>
        <p v-if="s.row.actionType === 'dual'">保留 {{ side(s.row.winner) }} · 将清理 {{ side(s.row.deleteSide) }} {{ s.row.fileCount }} 个文件</p>
        <p v-else>清理 {{ side(s.row.deleteSide) }} {{ s.row.fileCount }} 个文件</p>
+       <p v-if="s.row.decisive">决胜维度：{{ s.row.decisive }}</p>
+       <template v-if="s.row.actionType === 'single' && s.row.comparisons?.length">
+        <p>判断依据（同片同集多份，保留最优、其余清理）：</p>
+        <div v-for="(comparison, index) in s.row.comparisons" :key="index">
+         <p class="file-path">保留：{{ comparison.winner_name }}<span v-if="comparison.episode != null">（第 {{ comparison.episode }} 集）</span><br />清理：{{ comparison.loser_name }}</p>
+         <p v-for="rule in comparison.rules" :key="rule.rule" class="comparison-rule">{{ rule.label }}：保留 {{ ruleValue(rule.new) }} / 清理 {{ ruleValue(rule.old) }} · {{ rule.result === 0 ? '平局，按规则顺序保留先出现的' : rule.result > 0 ? '保留项胜出' : '清理项胜出' }}</p>
+        </div>
+       </template>
       <p v-if="s.row.lost_episodes?.length" class="gov-loss">删后两库都不再有：{{ episodeList(s.row.lost_episodes) }}<span v-if="s.row.clears_show">（这部剧会被清空，需要重新入库）</span></p>
        <p v-if="s.row.present?.length">现有集号：{{ episodeList(s.row.present) }}；缺失集号：{{ episodeList(s.row.missing) }}</p>
        <p v-if="s.row.cloud_seasons || s.row.share_seasons">网盘季：{{ (s.row.cloud_seasons || []).join('、') || '无' }}；分享季：{{ (s.row.share_seasons || []).join('、') || '无' }}</p>
@@ -702,6 +710,14 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize); if(orp
       <p v-if="row.lost_episodes?.length" class="gov-loss">删后两库都不再有：{{ episodeList(row.lost_episodes) }}<span v-if="row.clears_show">（这部剧会被清空）</span></p>
       <details class="gov-action-detail"><summary>查看判断依据与文件</summary>
        <p v-if="row.actionType === 'dual'">保留 {{ side(row.winner) }} · 清理 {{ side(row.deleteSide) }}</p>
+       <p v-if="row.decisive">决胜维度：{{ row.decisive }}</p>
+       <template v-if="row.actionType === 'single' && row.comparisons?.length">
+        <p>判断依据（同片同集多份，保留最优、其余清理）：</p>
+        <div v-for="(comparison, index) in row.comparisons" :key="index">
+         <p class="file-path">保留：{{ comparison.winner_name }}<span v-if="comparison.episode != null">（第 {{ comparison.episode }} 集）</span><br />清理：{{ comparison.loser_name }}</p>
+         <p v-for="rule in comparison.rules" :key="rule.rule" class="comparison-rule">{{ rule.label }}：保留 {{ ruleValue(rule.new) }} / 清理 {{ ruleValue(rule.old) }} · {{ rule.result === 0 ? '平局，按规则顺序保留先出现的' : rule.result > 0 ? '保留项胜出' : '清理项胜出' }}</p>
+        </div>
+       </template>
        <p v-if="row.present?.length">现有：{{ episodeList(row.present) }}；缺失：{{ episodeList(row.missing) }}</p>
        <p v-if="row.cloud_seasons || row.share_seasons">网盘季：{{ (row.cloud_seasons || []).join('、') || '无' }}；分享季：{{ (row.share_seasons || []).join('、') || '无' }}</p>
        <p v-for="(why, index) in row.reasons || []" :key="index">{{ why }}</p>

@@ -303,6 +303,8 @@ def _to_dual(common, season, action, sp, lp, policy, tie, threshold, decision, m
             'reason_label': action['reason_label'],
             'share_ratio': action.get('ratio'), 'sample': sample,
             'rules': (sample or {}).get('rules', []),
+            'decisive': next((rule.get('label') or rule.get('rule')
+                              for rule in (sample or {}).get('rules', []) if rule.get('result')), ''),
             'gap': action.get('gap', ''), 'reasons': action.get('reasons', []),
             'comparison': detail, 'comparisons': (detail or {}).get('comparisons', []),
             'decision': decision, 'multi_mode': mode,
@@ -326,7 +328,29 @@ def _version_verdict(rows, policy):
     winner = best_index(names, policy)
     tie = any(index != winner and cmp_versions(names[winner], name, policy) == 0
               for index, name in enumerate(names))
-    return {'winner': winner, 'reason': 'quality', 'tie': tie}
+    # 决胜维度：保留项和第一个落选项第一处不同的规则，页面直接显示「按什么赢的」。
+    decisive = ''
+    for index, name in enumerate(names):
+        if index == winner:
+            continue
+        _outcome, evidence = compare_outcome(names[winner], name, policy)
+        decisive = next((rule.get('label') or rule.get('rule') for rule in evidence
+                         if rule.get('result')), '')
+        if decisive:
+            break
+    return {'winner': winner, 'reason': 'quality', 'tie': tie, 'decisive': decisive}
+
+
+def _version_evidence(rows, winner, policy, episode=None):
+    """逐个落选项记下「保留项 vs 它」的规则明细，页面据此展示依据。"""
+    evidence = []
+    for index, row in enumerate(rows):
+        if index == winner:
+            continue
+        outcome, rules = compare_outcome(rows[winner]['name'], row['name'], policy)
+        evidence.append({'episode': episode, 'winner_name': rows[winner]['name'],
+                         'loser_name': row['name'], 'result': outcome, 'rules': rules})
+    return evidence
 
 
 def _dedupe_candidates(item, sp, lp, covered, policy):
@@ -350,7 +374,10 @@ def _dedupe_candidates(item, sp, lp, covered, policy):
             verdict = _version_verdict(files, policy)
             rows.append({'side': side, 'season': None, 'episode': None, 'files': files,
                          'losers': [row for index, row in enumerate(files) if index != verdict['winner']],
-                         'reason_label': '库内多版本-删低版', 'dup_count': len(files), **verdict})
+                         'reason_label': '库内多版本-删低版', 'dup_count': len(files),
+                         'keeps': [{'episode': None, 'name': files[verdict['winner']]['name']}],
+                         'comparisons': _version_evidence(files, verdict['winner'], policy),
+                         **verdict})
         return rows
     for side, step, seasons in (('cloud', 'loc', lp), ('share', 'shr', sp)):
         for season in sorted(seasons):
@@ -367,16 +394,19 @@ def _dedupe_candidates(item, sp, lp, covered, policy):
             dupes = {episode: group for episode, group in grouped.items() if len(group) > 1}
             if not dupes:
                 continue
-            losers, keeps, tie = [], [], False
+            losers, keeps, tie, comparisons, decisive = [], [], False, [], ''
             for episode in sorted(dupes):
                 group = dupes[episode]
                 verdict = _version_verdict(group, policy)
                 tie = tie or verdict['tie']
+                decisive = decisive or verdict.get('decisive', '')
                 losers.extend(row for index, row in enumerate(group) if index != verdict['winner'])
                 keeps.append({'episode': episode, 'name': group[verdict['winner']]['name']})
+                comparisons.extend(_version_evidence(group, verdict['winner'], policy, episode))
             rows.append({'side': side, 'season': season, 'episode': None, 'files': files,
                          'losers': losers, 'keeps': keeps, 'dup_episodes': sorted(dupes),
                          'reason_label': '库内多版本-删低版', 'dup_count': len(files),
+                         'comparisons': comparisons, 'decisive': decisive,
                          'winner': None, 'reason': 'quality', 'tie': tie})
     return rows
 
