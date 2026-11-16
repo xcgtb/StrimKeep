@@ -582,3 +582,22 @@ def test_recently_deleted_is_stateless(tmp_path):
     remember(store, [relative])
     assert not recently_deleted(store, '/media/' + relative)
     assert not recently_deleted(store, '')
+
+
+def test_purge_history_removes_revoked_rows_under_work(tmp_path):
+    """整部剧/整季删除时，历史 revoked 行也一起清掉，重新入库查不到旧痕迹。"""
+    from strimkeep.deep_delete import purge_history
+    store = make_store(tmp_path)
+    work = '分享影视库/电影/旧作品 (2026) {tmdb-9}'
+    with store.db:
+        store.db.execute(
+            "INSERT INTO share_strms(id,share_code,receive_code,file_id,pickcode,name,strm_path,token_hash,revoked,created)"
+            " VALUES('old','c','','9','','x',?,'',1,1)", (work + '/Season 1/x.strm',))
+        store.db.execute(
+            "INSERT INTO playbacks(id,file_id,pickcode,name,relative_path,token_hash,created,revoked)"
+            " VALUES('p','9','','x',?,'',1,1)", (work + '/Season 1/x.mkv',))
+    assert purge_history(store, [work], True) == 2
+    assert store.db.execute('SELECT count(*) FROM share_strms WHERE id=?', ('old',)).fetchone()[0] == 0
+    assert store.db.execute('SELECT count(*) FROM playbacks WHERE id=?', ('p',)).fetchone()[0] == 0
+    store.close()
+

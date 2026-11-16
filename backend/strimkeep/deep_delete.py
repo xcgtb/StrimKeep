@@ -123,7 +123,32 @@ def match_targets(store, event):
     for row in store.db.execute('SELECT id, share_code, file_id, strm_path FROM share_strms WHERE revoked=0'):
         if _hits(row['strm_path'], path, is_dir, candidates):
             share.append(dict(row))
-    return {'managed': managed, 'share': share, 'type': event['type'], 'path': path}
+    return {'managed': managed, 'share': share, 'type': event['type'], 'path': path,
+            'candidates': candidates}
+
+
+def purge_history(store, candidates, is_dir):
+    """目录事件（整部剧/整季）下，清掉该作品的历史失效记录。
+
+    只删 revoked/active=0 的行，不碰仍在使用的输出；目的是「删了就是没了」，
+    重新入库时连旧行都查不到，不会命中任何历史状态。
+    """
+    if not is_dir:
+        return 0
+    removed = 0
+    with store.db:
+        for raw in candidates or []:
+            prefix = str(raw).strip('/')
+            if not prefix:
+                continue
+            like = prefix + '/%'
+            removed += store.db.execute(
+                'DELETE FROM share_strms WHERE revoked=1 AND strm_path LIKE ?', (like,)).rowcount
+            removed += store.db.execute(
+                'DELETE FROM playbacks WHERE revoked=1 AND relative_path LIKE ?', (like,)).rowcount
+            removed += store.db.execute(
+                'DELETE FROM output_registry WHERE active=0 AND relative_path LIKE ?', (like,)).rowcount
+    return removed
 
 
 def recently_deleted(store, path):

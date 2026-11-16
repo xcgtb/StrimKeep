@@ -1312,6 +1312,10 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
                 store.event('deep_delete', '深度删除：事件缺少具体文件或作品路径，仅有 TMDB 编号不能确认删除范围；未执行。')
             return {'accepted': False, 'matched': 0, 'reason': '缺少可核对的文件或作品路径，未执行删除。'}
         targets = deep_delete.match_targets(store, event)
+        if event.get('type') in ('Season', 'Series'):
+            purged = deep_delete.purge_history(store, targets.get('candidates') or [], True)
+            if purged and not quiet:
+                store.event('deep_delete', '深度删除 · 已清除该作品/季 %d 条历史失效记录（revoked/已停用）。' % purged)
         # 0.8.32：程序自己删掉的本地 STRM 也会让 Emby 发删除通知；这些不能删云端。
         targets, internal_skipped = deep_delete.drop_internal(store, targets, app.state.strms)
         if internal_skipped and not quiet:
