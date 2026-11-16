@@ -24,7 +24,7 @@ def test_full_sync_reports_each_selected_root_even_when_empty(tmp_path):
         assert set(reports) == {f'strm:{jid}:start',f'strm:{jid}:sync-summary'}
         summary=reports[f'strm:{jid}:sync-summary']
         assert '电影来源' in summary and '空目录' in summary
-        assert '扫描目录：2 个' in summary and '扫描文件：1 个' in summary
+        assert '扫描目录：2 个' in summary and '扫描条目：1 个' in summary
         assert '核对视频：1 个' in summary and '执行耗时' in summary
         assert '含排队' not in summary
         assert '本次无变化' not in summary
@@ -133,8 +133,37 @@ def test_single_directory_summary_keeps_scan_and_sidecar_details(tmp_path):
         jid=new_job(store,config);engine.update_job(jid,state='completed',stage='结束',notify_state='not_started')
         await engine.notifications.job(engine.job(jid))
         message=store.db.execute('select message from notifications where event_key=?',(f'strm:{jid}:sync-summary',)).fetchone()[0]
-        for text in ('云盘目录：115 / 自建库','本地目录：/strm/自建库','扫描目录：3 个','扫描文件：17 个',
+        for text in ('云盘目录：115 / 自建库','本地目录：/strm/自建库','扫描目录：3 个','扫描条目：17 个',
                      '目录读取耗时：1.25 秒','已存在 4 个','失败 1 个','NFO 2','图片 1'):
             assert text in message
         await http.aclose();store.close()
+    asyncio.run(run())
+
+
+def test_summary_separates_created_updated_and_unchanged(tmp_path):
+    """通知要说清 STRM 新增/更新/未变化，以及写入的附属文件数量。"""
+    async def run():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        config = {**sync_config(['100']), 'mode': 'incremental', 'sync_effective_roots': ['100'],
+                  'directory_labels': {'100': '115 / 自建库'},
+                  'sync_directory_stats': {'100': {'directories': 2, 'files': 5,
+                                                   'scan_seconds': 0.5}}}
+        jid = new_job(store, config)
+        plans = ({'sync_created': True}, {'sync_updated': True},
+                 {'sync_unchanged': True},
+                 {'output_changed': True, 'sync_attachment_created': True})
+        with store.db:
+            for index, plan in enumerate(plans):
+                store.db.execute("INSERT INTO organize_items(job_id,file_id,original,plan,state)"
+                                 " VALUES(?,?,?,?,'done')",
+                                 (jid, 'f%d' % index, '{}', json.dumps(plan)))
+        engine.update_job(jid, state='completed', stage='结束', notify_state='not_started')
+        await engine.notifications.job(engine.job(jid))
+        message = store.db.execute('select message from notifications where event_key=?',
+                                   (f'strm:{jid}:sync-summary',)).fetchone()[0]
+        for text in ('方式：增量同步', 'STRM：新增 1 个 · 更新 1 个 · 未变化 1 个',
+                     '附属文件：写入 1 个（新增 1、更新 0）',
+                     '扫描条目里含字幕/NFO/图片等非视频 1 个'):
+            assert text in message
+        await http.aclose(); store.close()
     asyncio.run(run())

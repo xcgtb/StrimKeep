@@ -466,9 +466,15 @@ class Sync:
                     plan['local_files'].pop(relative, None)
                     continue
             if not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest() != checksum:
+                existed = target.is_file()
                 plan['local_files'][relative] = checksum
                 self.mark_changed(jid)
                 plan['output_changed'] = True
+                # 通知要能说清「新增了几条 STRM、更新了几条、附属文件写了几个」。
+                if relative.lower().endswith('.strm'):
+                    plan['sync_created' if not existed else 'sync_updated'] = True
+                else:
+                    plan['sync_attachment_created' if not existed else 'sync_attachment_updated'] = True
                 atomic_write(target, data, self.engine.root)
                 # 刚落盘的文件要立刻能被「按 fid 找本地文件」看到（只更新这一条）。
                 self.engine.outputs.note(self.engine.index.account(config), relative, target,

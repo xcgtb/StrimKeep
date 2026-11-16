@@ -503,11 +503,17 @@ class Notifications:
                 dirs=sum(int(item.get('directories',0) or 0) for item in stats.values())
                 files=sum(int(item.get('files',0) or 0) for item in stats.values())
                 label='扫描目录' if all(item.get('directories_exact',True) for item in stats.values()) else '文件路径涉及目录'
-                lines.append(f'📊 {label}：{dirs} 个 · 扫描文件：{files} 个')
+                lines.append(f'📊 {label}：{dirs} 个 · 扫描条目：{files} 个')
                 seconds=sum(float(item.get('scan_seconds',0) or 0) for item in stats.values())
                 if seconds:lines.append(f'目录读取耗时：{seconds:.2f} 秒')
-            lines.extend(['', f'🎬 核对视频：{len(entries)} 个 · 复用：{reused} 个',
-                          f'输出有变化的视频：{changed} 个', f'清理本地：{c.get("sync_removed",0)} 个文件'])
+            created = sum(bool(plan.get('sync_created')) for items in groups.values() for plan, _ in items)
+            updated = sum(bool(plan.get('sync_updated')) for items in groups.values() for plan, _ in items)
+            att_created = sum(bool(plan.get('sync_attachment_created')) for items in groups.values() for plan, _ in items)
+            att_updated = sum(bool(plan.get('sync_attachment_updated')) for items in groups.values() for plan, _ in items)
+            lines.extend(['', f'🎬 STRM：新增 {created} 个 · 更新 {updated} 个 · 未变化 {reused} 个',
+                          f'核对视频：{len(entries)} 个', f'清理本地：{c.get("sync_removed",0)} 个文件'])
+            if att_created or att_updated:
+                lines.append(f'附属文件：写入 {att_created + att_updated} 个（新增 {att_created}、更新 {att_updated}）')
             metadata=list((c.get('sync_metadata_stats') or {}).values())
             downloaded=sum(int(m.get('downloaded',0) or 0) for m in metadata)
             existing=sum(int(m.get('existing',0) or 0) for m in metadata)
@@ -524,6 +530,13 @@ class Notifications:
                 labels_by_type={'nfo':'NFO','image':'图片','subtitle':'字幕','json':'JSON','other':'其他'}
                 breakdown=[f'{labels_by_type[key]} {count}' for key,count in types.items() if count]
                 if breakdown:lines.append('新增类型：'+' · '.join(breakdown))
+            # 云盘条目里除了视频还有字幕/NFO/图片，也会被格式规则跳过一部分；
+            # 这行把差额说清楚，避免「扫描 960、核对 877」看起来像少扫了。
+            total = sum(int(item.get('files', 0) or 0) for item in (stats or {}).values())
+            if total and total > len(entries):
+                filtered = len(c.get('sync_filtered_ids') or [])
+                extra = f'，其中按规则跳过 {filtered} 个' if filtered else ''
+                lines.append(f'扫描条目里含字幕/NFO/图片等非视频 {total - len(entries)} 个{extra}')
             if unfinished:lines.append(f'待处理：{unfinished} 个')
             if len(roots)>1:
                 lines.append('目录：')

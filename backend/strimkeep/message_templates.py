@@ -12,7 +12,9 @@ def sync_task_context(config):
     lines=[]
     name=str(config.get('sync_profile_name') or '').strip()
     if name: lines.append('任务：'+name)
-    mode={'incremental':'增量同步','full':'全量同步'}.get(config.get('mode'))
+    # 任务配置里写的是 sync_mode（mode 是老字段），两个都认，免得通知里看不到方式。
+    mode={'incremental':'增量同步','full':'全量同步','sweep':'本地巡检'}.get(
+        config.get('mode') or config.get('sync_mode'))
     if mode: lines.append('方式：'+mode)
     return '\n'.join(lines)+'\n' if lines else ''
 
