@@ -42,6 +42,7 @@ class EmbyDelivery:
         self.media_info = NativeMediaInfo(self)
         self.libraries = {}
         self.scan_windows = {}
+        self._share_identity_done = False
         # emby_outbox 也由 store 启动 schema 建好；这里保留幂等 DDL，因为交付器会被
         # 单独实例化（测试/后台），不能假定 store 的 schema 一定先跑过。
         with self.store.db:
@@ -351,6 +352,9 @@ class EmbyDelivery:
         # 0.8.20：任务配置在循环外取一次。以前每个目标都要查一次 organize_jobs
         # 再解析一遍 config JSON（一季 24 集就是 24 次多余的查询）。
         job_config = json.loads(self.engine.job(jid)['config'])
+        # 分享 STRM 在 Emby 里以 share/<share_id> 作为播放身份；任务里只有 115
+        # 文件 ID，两边永远对不上，整批就会被判「入库未确认」。
+        shares = self.share_pids()
         for row in self.store.db.execute("SELECT i.id,i.file_id,i.plan,i.state FROM organize_items i WHERE job_id=? AND state IN ('done','recycled') ORDER BY id", (jid,)):
             if only_ids is not None and row['id'] not in only_ids:
                 continue
@@ -381,9 +385,18 @@ class EmbyDelivery:
             title = details.get('title') or details.get('name') or re.split(r'\s*\(\d{4}\)|\s*\{tmdb-', folder)[0]
             mapping=self.store.get('console_config',{})
             emby_path=str(PurePosixPath(mapping.get('emby_strm_path','/strimkeep'))/relative)
-            result.append({'emby_path':emby_path,'update_type':update_type,'relative':relative, 'pid':row['file_id'], 'kind':hint.get('media_type'),
+            pid = 'share/' + shares[relative] if relative in shares else row['file_id']
+            result.append({'emby_path':emby_path,'update_type':update_type,'relative':relative, 'pid':pid, 'kind':hint.get('media_type'),
                            'tmdb':details.get('id') or hint.get('tmdb_id'), 'title':title, 'confirmed':False})
         return result
+
+    def share_pids(self):
+        """分享入库的播放身份：Emby 里是 share/<share_id>，不是 115 文件 ID。
+
+        分享 STRM 的播放地址是 /play115/share/<sid>/…，Emby 条目只带这个地址。
+        """
+        return {row['strm_path']: str(row['id']) for row in self.store.db.execute(
+            'SELECT id,strm_path FROM share_strms WHERE revoked=0')}
 
     def row(self, jid):
         return self.store.db.execute('SELECT * FROM emby_deliveries WHERE job_id=?', (jid,)).fetchone()
@@ -632,6 +645,17 @@ class EmbyDelivery:
 
     async def verify(self, jid):
         row = self.row(jid); payload = json.loads(row['payload'])
+        # 旧投递按 115 文件 ID 建的目标在这里就地纠正，不必等重建任务。
+        repaired = False
+        shares = self.share_pids()
+        for target in payload.get('targets', []):
+            share_id = shares.get(target.get('relative') or '')
+            if share_id and target.get('pid') != 'share/' + share_id:
+                target['pid'] = 'share/' + share_id
+                target['confirmed'] = False
+                repaired = True
+        if repaired:
+            self.save(jid, payload=json.dumps(payload, ensure_ascii=False))
         connection = self.connection()
         if not connection or digest('|'.join(connection)) != payload['connection']:
             return None
@@ -732,6 +756,46 @@ class EmbyDelivery:
                         '请在 Emby 核对这些路径的媒体库与扫描结果。', progress)
         return 'unconfirmed', '30 分钟内未确认本批 STRM 入库，请检查 Emby 挂载、媒体库与连接。', progress
 
+    def repair_share_identities(self, now):
+        """把旧投递里的 115 文件 ID 换成分享身份，并重新排队核对一次。
+
+        旧版本按 115 file_id 建目标，Emby 里存的是 share/<sid>，两边永远对不上，
+        海报就一直是「Emby 入库未确认」。改成正身并放回核对队列后，确认到就
+        会把那条通知改成已入库。
+        """
+        if self._share_identity_done:
+            return 0
+        self._share_identity_done = True
+        shares = self.share_pids()
+        if not shares:
+            return 0
+        repaired = 0
+        for row in self.store.db.execute(
+                "SELECT job_id,payload,state,deadline FROM emby_deliveries "
+                "WHERE state IN ('accepted','checking','unconfirmed','partial')").fetchall():
+            try:
+                payload = json.loads(row['payload'])
+            except (TypeError, ValueError):
+                continue
+            changed = False
+            for target in payload.get('targets', []):
+                share_id = shares.get(target.get('relative') or '')
+                if share_id and target.get('pid') != 'share/' + share_id:
+                    target['pid'] = 'share/' + share_id
+                    target['confirmed'] = False
+                    changed = True
+            if not changed:
+                continue
+            repaired += 1
+            state = row['state'] if row['state'] in ('accepted', 'checking') else 'accepted'
+            self.save(row['job_id'], payload=json.dumps(payload, ensure_ascii=False),
+                      state=state, attempts=1, next_due=now,
+                      deadline=max(float(row['deadline'] or 0), now + self.DEADLINE_SECONDS),
+                      message='分享入库身份已更正，重新核对 Emby 入库。')
+        if repaired:
+            self.store.event('emby', f'{repaired} 条分享入库的身份已更正，重新核对 Emby 入库。')
+        return repaired
+
     async def tick(self, now=None):
         now = time.time() if now is None else now
         async with self.gate:
@@ -787,6 +851,7 @@ class EmbyDelivery:
     async def loop(self):
         while not self.engine.closing:
             try:
+                self.repair_share_identities(time.time())
                 await self.drain_outbox()
                 await self.tick()
             except asyncio.CancelledError: raise
