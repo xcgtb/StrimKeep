@@ -609,9 +609,12 @@ class ChannelMonitor:
                         self.store.db.execute('INSERT OR IGNORE INTO channel_cancelled_shares VALUES(?,?)', (code, time.time()))
                     self.store.event('channel', '频道 %s：分享 %s 已取消，已跳过，不再自动重试。' % (title or name, code))
                     continue
-                tries = (attempt['attempts'] if attempt else 0) + 1
-                skipped = tries >= 4  # 首次尝试 + 最多三次重试
                 detail = str(exc)[:120] or type(exc).__name__
+                # 读不出来就别反复重试：提取码失效、分享已取消这类语义错误重试再多次
+                # 也不会变，第一次就跳过；只有网络/限流这类临时故障才多试一次。
+                tries = (attempt['attempts'] if attempt else 0) + 1
+                semantic = '访问码' in detail or '提取码' in detail
+                skipped = semantic or tries >= 2
                 with self.store.db:
                     self.store.db.execute('DELETE FROM channel_share_attempts WHERE name=? AND share_code=?',
                                           (name, code))
@@ -619,7 +622,8 @@ class ChannelMonitor:
                         'INSERT OR REPLACE INTO channel_share_attempts VALUES(?,?,?,?,?,?,?)',
                         (name, message['id'], code, tries, int(skipped), detail, time.time()))
                 if skipped:
-                    self.store.event('channel', '频道 %s：分享 %s 已尝试 %d 次仍失败，已跳过：%s' % (title or name, code, tries, detail))
+                    self.store.event('channel', '频道 %s：分享 %s 已跳过（%s）。若帖子里的提取码已更换，请到频道核对后手动提交。'
+                                     % (title or name, code, detail))
                 else:
                     self.store.event('channel', '频道 %s：分享 %s 读取失败（第 %d/4 次），稍后重试：%s' % (title or name, code, tries, detail))
                     if pending_error is None:

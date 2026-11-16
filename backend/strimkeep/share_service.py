@@ -993,7 +993,9 @@ async def run_organize(engine, job_id, config):
     for row, item, reason, deterministic, extra_settings in deferred_unidentified:
         engine.boundary(job_id)
         layout = layouts.get(row['id'])
-        relative = layout[1] if layout and layout[0] in preserve else (Path(row['strm_path']).name,)
+        # 没有明确布局时按原目录镜像（只去掉待整理根和分享码目录）：平铺会把
+        # 一个整包摊成几十个同名文件加哈希后缀，清理时只能一个个勾。
+        relative = layout[1] if layout and layout[0] in preserve else None
         await _to_unident(engine, job_id, row, item, reason, deterministic=deterministic,
                           settings=extra_settings, target_parts=relative)
         try:

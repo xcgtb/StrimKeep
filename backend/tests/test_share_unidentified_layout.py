@@ -101,7 +101,7 @@ def test_mixed_episode_results_move_only_failed_file_and_preserve_neighbors(tmp_
         await engine.run_job(jid)
         found = {row['file_id']: dict(row) for row in store.db.execute('SELECT * FROM share_strms')}
         assert found['301']['strm_path'].startswith('分享影视库/')
-        assert found['302']['strm_path'] == '分享STRM未识别/S01E02.mkv.strm'
+        assert found['302']['strm_path'] == '分享STRM未识别/测试剧集 (2024)/Season 1/S01E02.mkv.strm'
         assert (engine.root / found['301']['strm_path']).is_file()
         assert (engine.root / found['302']['strm_path']).is_file()
         assert marker.read_text() == 'keep' and empty.is_dir()
@@ -151,7 +151,7 @@ def test_all_unidentified_group_keeps_work_folder_not_category(tmp_path, monkeyp
     asyncio.run(scenario())
 
 
-def test_uncertain_interrupted_group_flattens_individual_failures(tmp_path, monkeypatch):
+def test_uncertain_interrupted_group_keeps_work_folder(tmp_path, monkeypatch):
     from strimkeep.media import NeedsReview
     async def scenario():
         store, cloud, http, engine, _ = share_setup(tmp_path)
@@ -166,7 +166,7 @@ def test_uncertain_interrupted_group_flattens_individual_failures(tmp_path, monk
         jid = share_service.enqueue_organize(engine, origin='web')
         await engine.run_job(jid)
         result = store.db.execute('SELECT strm_path FROM share_strms WHERE id=?',(entry['id'],)).fetchone()[0]
-        assert result == '分享STRM未识别/S01E01.mkv.strm'
+        assert result == '分享STRM未识别/作品 (2024)/Season 1/S01E01.mkv.strm'
         if engine.notice_tasks: await asyncio.gather(*engine.notice_tasks)
         await http.aclose(); store.close()
     asyncio.run(scenario())
@@ -186,7 +186,7 @@ def test_unregistered_new_member_prevents_assuming_full_failure(tmp_path, monkey
         jid = share_service.enqueue_organize(engine, origin='web')
         await engine.run_job(jid)
         result = store.db.execute('SELECT strm_path FROM share_strms WHERE id=?',(entry['id'],)).fetchone()[0]
-        assert result == '分享STRM未识别/S01E01.mkv.strm'
+        assert result == '分享STRM未识别/作品 (2024)/Season 1/S01E01.mkv.strm'
         assert unknown.read_text() == 'keep'
         if engine.notice_tasks: await asyncio.gather(*engine.notice_tasks)
         await http.aclose(); store.close()
@@ -213,7 +213,7 @@ def test_pending_new_share_preserves_work_without_share_code_and_distinguishes_s
     asyncio.run(scenario())
 
 
-def test_later_failed_episode_of_accepted_group_is_flat(tmp_path, monkeypatch):
+def test_later_failed_episode_of_accepted_group_keeps_work_folder(tmp_path, monkeypatch):
     from strimkeep.media import NeedsReview
     async def scenario():
         store, cloud, http, engine, _ = share_setup(tmp_path)
@@ -229,7 +229,7 @@ def test_later_failed_episode_of_accepted_group_is_flat(tmp_path, monkeypatch):
         monkeypatch.setattr(share_service, 'share_recognition_hint', fail)
         jid=share_service.enqueue_organize(engine,origin='web')
         await engine.run_job(jid)
-        assert store.db.execute('SELECT strm_path FROM share_strms WHERE file_id=?', ('302',)).fetchone()[0] == '分享STRM未识别/S01E02.mkv.strm'
+        assert store.db.execute('SELECT strm_path FROM share_strms WHERE file_id=?', ('302',)).fetchone()[0] == '分享STRM未识别/测试剧集 (2024)/Season 1/S01E02.mkv.strm'
         if engine.notice_tasks: await asyncio.gather(*engine.notice_tasks)
         await http.aclose(); store.close()
     asyncio.run(scenario())

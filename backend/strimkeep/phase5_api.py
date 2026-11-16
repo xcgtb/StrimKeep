@@ -152,7 +152,16 @@ def install_phase5(app,store,admin,job_public):
     async def list_unidentified():
         files = await asyncio.to_thread(unidentified_files)
         empty = await asyncio.to_thread(unidentified_empty_directories)
-        return {'total':len(files), 'items':files[:500], 'empty_total':len(empty), 'empty_dirs':empty[:500]}
+        # 按一级子目录分组：一个未识别的整包通常就是几个目录，勾目录比勾几百个文件省事。
+        tally = {}
+        for rel in files:
+            parts = rel.split('/')
+            key = '/'.join(parts[:2]) if len(parts) > 2 else parts[0] + '/'
+            tally[key] = tally.get(key, 0) + 1
+        groups = [{'dir': key, 'count': count}
+                  for key, count in sorted(tally.items(), key=lambda item: (-item[1], item[0]))]
+        return {'total':len(files), 'items':files[:500], 'groups':groups[:200],
+                'empty_total':len(empty), 'empty_dirs':empty[:500]}
 
     @app.post('/api/v1/strm/unidentified/cleanup',dependencies=[Depends(admin)])
     async def cleanup_unidentified(body: UnidentifiedCleanupInput):
@@ -161,11 +170,29 @@ def install_phase5(app,store,admin,job_public):
         root = Path(engine().root)
         prefix = UNIDENT_NAME + '/'
         requested = list(dict.fromkeys(body.paths))
+        # 允许直接选文件夹：一个未识别的整包有三五个目录，逐个勾文件太累。
+        targets = []
         for rel in requested:
-            parts = rel.split('/')
-            if (not rel.startswith(prefix) or len(parts) < 2 or any(p in ('', '.', '..') or '\\' in p or '\0' in p for p in parts)
-                    or Path(parts[-1]).suffix.lower() != '.strm'):
-                raise HTTPException(422, '只能选择分享STRM未识别目录中的 STRM 文件。')
+            # 目录以 / 结尾；「分享STRM未识别/」表示整根清理（界面已有二次确认）。
+            whole_root = rel == prefix
+            parts = [UNIDENT_NAME] if whole_root else rel.split('/')
+            if (not rel.startswith(prefix) or len(parts) < 1 or (not whole_root and len(parts) < 2)
+                    or any(p in ('', '.', '..') or '\\' in p or '\0' in p for p in parts)):
+                raise HTTPException(422, '只能选择分享STRM未识别目录中的文件或文件夹。')
+            if not whole_root and Path(parts[-1]).suffix.lower() == '.strm':
+                targets.append(rel)
+                continue
+            folder = root.joinpath(*parts)
+            if folder.is_symlink() or not folder.is_dir():
+                continue
+            for parent, dirs, files in os.walk(folder, followlinks=False):
+                dirs[:] = [name for name in dirs if not (Path(parent) / name).is_symlink()]
+                for name in files:
+                    candidate = Path(parent) / name
+                    if (candidate.suffix.lower() == '.strm' and not candidate.is_symlink()
+                            and candidate.is_file()):
+                        targets.append(candidate.relative_to(root).as_posix())
+        requested = list(dict.fromkeys(targets))
         removed, failed, empty_dirs = [], [], 0
         async with engine().publication_gate:
             for rel in requested:

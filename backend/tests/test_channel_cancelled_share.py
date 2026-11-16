@@ -55,7 +55,7 @@ def test_cancellation_words_in_network_error_are_not_cached(tmp_path):
 
 
 
-def test_share_retries_three_times_then_skips_and_advances(tmp_path):
+def test_share_retries_once_then_skips_and_advances(tmp_path):
     async def run():
         pages = {('testchan', None): FakeResponse(200, page([(100, 'old', [])]))}
         store, monitor, http, _ = make(tmp_path, pages, {'enabled': True, 'notify': False, 'channels': ['testchan']})
@@ -71,18 +71,18 @@ def test_share_retries_three_times_then_skips_and_advances(tmp_path):
         http.pages[('testchan', None)] = FakeResponse(200, page([
             (101, 'mixed', ['https://115.com/s/swbad123', 'https://115.com/s/swgood12']),
             (102, 'later post', [])]))
-        for attempt in range(1, 5):
-            if attempt == 3:
+        for attempt in range(1, 3):
+            if attempt == 2:
                 restarted = ChannelMonitor(monitor.engine)
                 restarted.clock, restarted.sleep = monitor.clock, monitor.sleep
                 monitor = restarted
             await monitor.refresh('testchan')
             row = store.db.execute('select attempts,skipped from channel_share_attempts where share_code=?', ('swbad123',)).fetchone()
-            assert row['attempts'] == attempt and bool(row['skipped']) == (attempt == 4)
-            assert monitor.sources()[0]['last_message_id'] == (102 if attempt == 4 else 100)
-        assert calls.count('swbad123') == 4
+            assert row['attempts'] == attempt and bool(row['skipped']) == (attempt == 2)
+            assert monitor.sources()[0]['last_message_id'] == (102 if attempt == 2 else 100)
+        assert calls.count('swbad123') == 2
         assert generated(store) == 1
         await monitor.refresh('testchan')
-        assert calls.count('swbad123') == 4
+        assert calls.count('swbad123') == 2
         store.close()
     asyncio.run(run())

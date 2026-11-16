@@ -20,6 +20,8 @@ const baseline=ref(''),ready=ref(false)
 const busy=ref(false),error=ref(''),query=ref('')
 const profileEditor=ref<any>(null)
 const unidentified=ref<any>(null),selectedUnidentified=ref<string[]>([])
+// 按文件夹勾选：一个未识别的整包通常就是几个目录，勾目录比勾几百个文件省事。
+const selectedUnidentifiedDirs=ref<string[]>([])
 // 一次勾几百条时全铺开会把页面拉得很长，默认只显示前 50 条。
 const unidentifiedExpanded=ref(false)
 const visibleUnidentified=computed(()=>{
@@ -52,19 +54,19 @@ await ElMessageBox.alert(rows.join('\n'),'深度删除链路自检',{confirmButt
 
 const rewriteMsg=ref('')
 const cleanupMsg=ref('')
-async function loadUnidentified(){await run(async()=>{unidentified.value=await props.api('/strm/unidentified');selectedUnidentified.value=[]})}
+async function loadUnidentified(){await run(async()=>{unidentified.value=await props.api('/strm/unidentified');selectedUnidentified.value=[];selectedUnidentifiedDirs.value=[]})}
 async function cleanupUnidentified(){
   if(!selectedUnidentified.value.length)return
   try{await ElMessageBox.confirm(`将删除勾选的 ${selectedUnidentified.value.length} 个飞牛本地分享未识别 STRM。会清理空目录，保留网盘源文件、NFO 和图片。`,'清理分享未识别 STRM',{confirmButtonText:'删除所选 STRM',cancelButtonText:'取消',type:'warning'})}catch{return}
   await run(async()=>{
     // 请求体有 64KB 上限，几百条路径一次发会被判「内容过大」；按 100 条一批提交。
-    const all=[...selectedUnidentified.value],chunk=100
+    const all=[...selectedUnidentifiedDirs.value,...selectedUnidentified.value],chunk=100
     let removed=0,emptyDirs=0;const failed:string[]=[]
     for(let i=0;i<all.length;i+=chunk){
       const r:any=await props.api('/strm/unidentified/cleanup','POST',{paths:all.slice(i,i+chunk)})
       removed+=r.removed||0;emptyDirs+=r.empty_dirs||0;failed.push(...(r.failed||[]))
     }
-    unidentified.value=await props.api('/strm/unidentified');selectedUnidentified.value=[]
+    unidentified.value=await props.api('/strm/unidentified');selectedUnidentified.value=[];selectedUnidentifiedDirs.value=[]
     if(failed.length)ElMessage.warning(`已删除 ${removed} 个，${failed.length} 个未删除，请刷新列表检查`)
     else ElMessage.success(`已删除 ${removed} 个本地 STRM，清理 ${emptyDirs} 个空目录`)
   })
@@ -98,7 +100,7 @@ useVisiblePolling(async()=>{if(!ready.value||busy.value||dirty.value)return;cons
 <SettingCard title="分享未识别 STRM" description="查看本机未识别的分享 STRM，选择不再需要的文件清理。" :summary="unidentified?`共 ${unidentified.total} 个`:'点击查看文件'" :icon="DocumentChecked" :query="query" keywords="STRM 分享 未识别 清理 删除" :default-open="false">
   <div class="button-row"><el-button :disabled="busy" @click="loadUnidentified">查看未识别文件</el-button><el-button :disabled="busy||!unidentified?.items.length" @click="selectedUnidentified=[...unidentified.items]">全选当前列表</el-button><el-button :disabled="busy||!selectedUnidentified.length" @click="selectedUnidentified=[]">取消选择</el-button><el-button :disabled="busy||!unidentified||!unidentified.empty_total" @click="cleanupUnidentifiedEmpty">清理空目录（{{unidentified?.empty_total||0}}）</el-button><el-button type="danger" plain :disabled="busy||!selectedUnidentified.length" @click="cleanupUnidentified">清理所选（{{selectedUnidentified.length}}）</el-button></div>
   <p class="hint">删除勾选的本地 STRM，并清理空目录；保留网盘源文件、NFO 和图片。未识别文件可能是本程序生成的，不代表外部文件。</p>
-  <template v-if="unidentified"><p class="hint">{{`未识别 STRM ${unidentified.total} 个，空目录 ${unidentified.empty_total||0} 个`}}</p><p v-if="unidentified.total>unidentified.items.length" class="hint">每次最多显示 500 个，清理后可再次查看。</p><details v-if="unidentified.empty_total"><summary>查看空目录（{{unidentified.empty_total}} 个）</summary><p v-for="path in unidentified.empty_dirs" :key="path" class="hint">{{path}}</p></details><p v-if="unidentified.items.length>50" class="hint"><el-button link type="primary" @click="unidentifiedExpanded=!unidentifiedExpanded">{{unidentifiedExpanded?'收起':'展开全部 '+unidentified.items.length+' 条'}}</el-button></p><div v-for="path in visibleUnidentified" :key="path" class="directory-item"><el-checkbox v-model="selectedUnidentified" :value="path" :disabled="busy">{{path}}</el-checkbox></div></template>
+  <template v-if="unidentified"><p class="hint">{{`未识别 STRM ${unidentified.total} 个，空目录 ${unidentified.empty_total||0} 个`}}</p><p v-if="unidentified.total>unidentified.items.length" class="hint">每次最多显示 500 个，清理后可再次查看。</p><details v-if="unidentified.empty_total"><summary>查看空目录（{{unidentified.empty_total}} 个）</summary><p v-for="path in unidentified.empty_dirs" :key="path" class="hint">{{path}}</p></details><div v-if="unidentified.groups?.length" class="directory-item"><span class="hint">按文件夹（勾选整个目录一起清理）：</span></div><div v-for="group in unidentified.groups" :key="group.dir" class="directory-item"><el-checkbox v-model="selectedUnidentifiedDirs" :value="group.dir" :disabled="busy">{{group.dir}}（{{group.count}} 个）</el-checkbox></div><p v-if="unidentified.items.length>50" class="hint"><el-button link type="primary" @click="unidentifiedExpanded=!unidentifiedExpanded">{{unidentifiedExpanded?'收起':'展开全部 '+unidentified.items.length+' 条'}}</el-button></p><div v-for="path in visibleUnidentified" :key="path" class="directory-item"><el-checkbox v-model="selectedUnidentified" :value="path" :disabled="busy">{{path}}</el-checkbox></div></template>
 </SettingCard>
 <SettingCard title="STRM 生成过滤与附属文件" description="与整理格式分开控制；分享 STRM 自动继承这里的生成规则。" :icon="DocumentChecked" :query="query" keywords="扩展名 过滤 视频 元数据 字幕 大小 阈值" default-open>
 <div class="workflow-switch-row"><strong>视频扩展名沿用影视整理</strong><el-switch v-model="config.inherit_video_extensions" :disabled="busy"/></div>
