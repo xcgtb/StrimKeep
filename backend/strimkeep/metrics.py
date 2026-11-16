@@ -162,17 +162,6 @@ class Metrics:
             add('strimkeep_media_info_emby', value,
                 'Managed STRM by Emby-side media info state', labels={'state': state})
 
-        # 0.9.50：账本体检（ledger_audit 只读算出来的三个偏差），让「索引与文件不同步」
-        # 变成可告警的数字，而不是等到某天一条 STRM 静默地没人管。
-        ledger = self.store.meta_json('ledger_audit_last', {}) or {}
-        for kind in ('stale_active', 'unregistered', 'orphan_sidecar'):
-            if isinstance(ledger.get(kind), (int, float)):
-                add('strimkeep_ledger_drift', ledger[kind],
-                    'Ledger rows that disagree with the filesystem', labels={'kind': kind})
-        if isinstance(ledger.get('at'), (int, float)):
-            add('strimkeep_ledger_audit_timestamp', ledger['at'],
-                'Unix time of the last ledger audit')
-
         lag = self.store.meta_json('loop_lag', {}) or {}
         for key, field in (('p50', 'p50_ms'), ('p95', 'p95_ms'), ('max', 'max_ms')):
             if lag.get(field) is not None:

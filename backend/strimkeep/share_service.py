@@ -156,34 +156,6 @@ def migrate_share_play_paths(store, root):
     return changed
 
 
-def prune_missing_share_strms(store, root, min_age=3600):
-    """把 STRM 文件已经不在的记录标成撤销，返回清理数量。
-
-    只处理创建超过 min_age 秒的记录：刚生成的条目可能还没落盘完成。
-    一级目录都不在时直接放弃本轮（挂载抖动不能当成文件被删）。
-    """
-    root = Path(root).resolve()
-    cutoff = time.time() - min_age
-    rows = store.db.execute('SELECT id,strm_path FROM share_strms WHERE revoked=0 AND created<?',
-                            (cutoff,)).fetchall()
-    stale = []
-    for row in rows:
-        path = root / row['strm_path']
-        try:
-            if path.is_file():
-                continue
-            if not (root / row['strm_path'].split('/')[0]).is_dir():
-                return 0
-        except OSError:
-            return 0
-        stale.append(row['id'])
-    if stale:
-        with store.db:
-            store.db.executemany('UPDATE share_strms SET revoked=1 WHERE id=?', [(value,) for value in stale])
-        store.event('share', '清理了 %d 条文件已不存在的分享 STRM 记录。' % len(stale))
-    return len(stale)
-
-
 def quality_rank(stem):
     """文件名质量证据（分辨率标签缺失=未知 None）。保留给展示与测试；
     洗版决策已统一走 quality.compare，不再按排名淘汰。"""
@@ -1021,6 +993,14 @@ async def run_organize(engine, job_id, config):
         except Exception:
             pass  # Cache persistence must not turn successful output into failure.
 
+    # 收尾统一扫一遍：正常发布、未识别转移、洗版丢弃都可能留下空目录。
+    try:
+        pruned = await asyncio.to_thread(prune_empty_pending, root / PENDING_NAME)
+        if pruned:
+            store.event('share_organize', '分享待整理清理空目录 %d 个。' % pruned)
+    except Exception:
+        pass
+
     message_parts = [f'入库 {moved}', f'未识别 {unident_count}', f'跳过 {skipped_count}']
     if reasons:
         message_parts.extend(reasons)
@@ -1197,6 +1177,7 @@ async def _to_unident(engine, job_id, row, item, reason, deterministic=False, se
             store.db.execute('UPDATE share_strms SET strm_path=?, revoked=1 WHERE id=?',
                              (target_dir.relative_to(root).as_posix(), row['id']))
         pending_file.unlink()
+        cleanup_empty_pending(pending_file.parent, root / PENDING_NAME)
         moved = True
     except OSError as exc:
         detail = '待确认目录已有同名文件，原文件已保留' if isinstance(exc, FileExistsError) else '移动待确认目录失败，原文件已保留'
@@ -1459,6 +1440,27 @@ def refresh_share_address(store, row, path, base, display_name=None):
         if content != wanted:atomic_write(path,wanted.encode(),path.parent)
         return True
     except (OSError,UnicodeError,ValueError):return False
+
+
+def prune_empty_pending(root):
+    """删掉「分享STRM待整理」下的空目录（自底向上），返回删除数量。
+
+    整理走的路径不止一条（正常发布、未识别转移、洗版丢弃），只在发布成功那一步
+    清父目录会漏掉其余路径，现场就留下一堆空目录。
+    """
+    boundary = Path(root)
+    removed = 0
+    for parent, dirs, _ in os.walk(boundary, topdown=False, followlinks=False):
+        for name in dirs:
+            path = Path(parent) / name
+            if path.is_symlink():
+                continue
+            try:
+                path.rmdir()
+                removed += 1
+            except OSError:
+                pass
+    return removed
 
 
 def cleanup_empty_pending(directory,root):

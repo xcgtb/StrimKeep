@@ -58,7 +58,6 @@ def install_share(app, store, admin):
         share_check_concurrency: int | None = Field(default=None, ge=1, le=4)
         share_check_scope: Literal['file', 'share'] | None = None  # 接受旧页面参数，始终按分享检测
         share_check_cron: str = Field(default='0 3 * * *', max_length=100)
-        share_prune_cron: str = Field(default='0 5 * * *', max_length=100)
 
         @model_validator(mode='after')
         def _validate_cron(self):
@@ -67,10 +66,6 @@ def install_share(app, store, admin):
                 if len(expression.split()) != 5 or not croniter.is_valid(expression):
                     raise ValueError('cron 需要 5 段表达式，例如 0 3 * * *')
                 self.share_check_cron = expression
-            prune = (self.share_prune_cron or '').strip() or '0 5 * * *'
-            if len(prune.split()) != 5 or not croniter.is_valid(prune):
-                raise ValueError('台账核对 cron 需要 5 段表达式，例如 0 5 * * *')
-            self.share_prune_cron = prune
             return self
 
     class ShareProfileInput(BaseModel):
@@ -139,7 +134,6 @@ def install_share(app, store, admin):
                 'share_check_mode':saved.get('share_check_mode','interval'),
                 'share_check_concurrency':saved.get('share_check_concurrency',3),
                 'share_check_cron':saved.get('share_check_cron','0 3 * * *'),
-                'share_prune_cron':saved.get('share_prune_cron','0 5 * * *'),
                 'effective':share_effective_settings(store)}
 
     @app.post('/api/v1/share/settings', dependencies=[Depends(admin)])
@@ -148,18 +142,12 @@ def install_share(app, store, admin):
         new_settings = body.model_dump(exclude={'share_scan_minutes','share_check_scope'})
         if new_settings['share_check_concurrency'] is None:
             new_settings['share_check_concurrency'] = previous.get('share_check_concurrency') or 3
-        changes={'share_settings':new_settings,'share_prune_cron':body.share_prune_cron,'share_prune_due':0}
+        changes={'share_settings':new_settings}
         if any(previous.get(k) != getattr(body, k) for k in ('share_check_mode', 'share_check_hours', 'share_check_cron')):
             changes['share_check_due'] = 0
         if body.share_scan_minutes is not None: changes['share_scan_minutes']=body.share_scan_minutes
         store.set_many(changes)
         return await get_settings()
-
-    @app.post('/api/v1/share/strms/prune', dependencies=[Depends(admin)])
-    async def prune_strms():
-        from .share_service import prune_missing_share_strms
-        removed = prune_missing_share_strms(store, app.state.strms, min_age=0)
-        return {'removed': removed, 'message': '清理了 %d 条文件已不存在的记录。' % removed}
 
     @app.get('/api/v1/share/strms', dependencies=[Depends(admin)])
     async def list_strms(state: str = Query('all', pattern='^(all|pending|library|revoked)$'),

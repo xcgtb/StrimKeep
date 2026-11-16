@@ -686,62 +686,6 @@ class Organizer:
         nxt = croniter(cron, base, max_years_between_matches=8).get_next(datetime)
         return max(now + 30.0, nxt.timestamp())
 
-    async def share_prune_tick(self):
-        """每天核对一次分享 STRM 台账：文件已不在的记录标撤销。
-
-        默认 cron 是每天凌晨 5 点；`share_prune_cron` 可以改，空值或无效时回到默认。
-        """
-        from croniter import croniter
-        cron = str(self.store.get('share_prune_cron') or '0 5 * * *')
-        now = time.time()
-        due = float(self.store.get('share_prune_due') or 0)
-        if not croniter.is_valid(cron):
-            cron = '0 5 * * *'
-        if not due:
-            self.store.set_many({'share_prune_due': self.next_cron_due(cron, now)})
-            return
-        if now < due:
-            return
-        self.store.set_many({'share_prune_due': self.next_cron_due(cron, now)})
-        from .share_service import prune_missing_share_strms
-        try:
-            prune_missing_share_strms(self.store, self.root, min_age=86400)
-        except Exception as exc:
-            self.store.event('share', '核对分享 STRM 台账失败：%s' % str(exc)[:120])
-
-    async def ledger_audit_tick(self):
-        """账本体检：用「文件自带身份」反向核对登记表，只读不改。
-
-        排期按「上次体检时间」判断，而不是另存一个 due 键：升级后上次体检已经过期
-        就立刻补跑（0.9.50 用 due 键，结果 0.9.51 启动时看到「还没到点」直接跳过，
-        /metrics 空等了 6 小时）。失败也只等 10 分钟再试，不刷日志。
-        """
-        from .ledger_audit import INTERVAL, audit
-        now = time.time()
-        last = self.store.meta_json('ledger_audit_last', {}) or {}
-        try:
-            last_at = float(last.get('at') or 0)
-        except (TypeError, ValueError):
-            last_at = 0.0
-        if last_at and now - last_at < INTERVAL:
-            return
-        tried = getattr(self, '_ledger_tried', 0.0)
-        if now - tried < 600:
-            return
-        self._ledger_tried = now
-        try:
-            result = await asyncio.to_thread(audit, self.store, self.root)
-        except Exception as exc:
-            self.store.event('system', '账本体检未完成：%s' % str(exc)[:120])
-            return
-        self.store.set_meta('ledger_audit_last', result)
-        drift = result['stale_active'] + result['unregistered'] + result['orphan_sidecar']
-        if drift:
-            self.store.event('system', '账本体检：%d 处登记与磁盘不一致（悬空登记 %d、'
-                                       '未登记 STRM %d、孤儿侧车 %d）。'
-                             % (drift, result['stale_active'], result['unregistered'],
-                                result['orphan_sidecar']))
-
     async def maintenance_tick(self):
         """115 签到与回收站清空：各自按 Cron 执行，互不影响。"""
         config = self.store.get('cloud_maintenance_config', {}) or {}
@@ -971,8 +915,6 @@ class Organizer:
                     self.media_notice_task.add_done_callback(media_drain_done)
                 await self.share_check_tick()
                 await self.maintenance_tick()
-                await self.ledger_audit_tick()
-                await self.share_prune_tick()
                 await self.share_scan_tick()
                 await self.offline_scan_tick()
                 await self.cover.tick_daily()
@@ -3204,7 +3146,7 @@ class Organizer:
         return settled
 
     async def reconcile_ledger(self, now=None, limit=150):
-        """账本对账：文件没了 / 已入库 / 已回到待整理，账本自己闭环。
+        """文件状态对账：文件没了 / 已入库 / 已回到待整理时把条目闭环。
 
         只读 115 文件语义接口 + 只改账本状态：不移动文件、不删除文件、不碰扫描范围。
         现场教训：用户在 115 里手动删除或移回待整理之后，账本一直挂着，还要人来点完结。
@@ -3269,7 +3211,7 @@ class Organizer:
             closed += 1
             touched.add(row['job_id'])
         if closed:
-            self.store.event('organize', '账本自动对账闭环 %d 条（文件已归档/已入库/分享失效/已不在网盘/已移回待整理）。' % closed)
+            self.store.event('organize', '文件状态自动闭环 %d 条（已归档/已入库/分享失效/已不在网盘/已移回待整理）。' % closed)
             self.settle_jobs()
         return closed
 

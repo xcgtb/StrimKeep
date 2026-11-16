@@ -88,11 +88,8 @@ def prune(store, dry_run=False):
 
 
 async def housekeeping_loop(app, store, tick=6 * 3600):
-    """启动后先裁一次，之后每 6 小时一次；顺带每 24 小时做一次三表对账。"""
+    """启动后先裁一次，之后每 6 小时一次。"""
     import asyncio
-    from .output_reconcile import fix as reconcile
-
-    ticked = 0
     while True:
         try:
             await asyncio.to_thread(purge_dead_config, store)
@@ -102,20 +99,6 @@ async def housekeeping_loop(app, store, tick=6 * 3600):
             await asyncio.to_thread(prune, store)
         except Exception:
             pass
-        ticked += 1
-        if ticked % 4 == 1:          # 6h × 4 = 每天一次
-            try:
-                result = await asyncio.to_thread(reconcile, store, str(app.state.strms))
-                changed = sum(result.get(kind, 0) for kind in
-                              ('ghost_ownership', 'orphan_ownership', 'missing_owned',
-                               'stale_in_registry', 'share_missing'))
-                if changed:
-                    store.event('strm', '三表自动对账：删归属 %d、补归属 %d、摘台账 %d、撤销分享 %d。'
-                                % (result['ghost_ownership'] + result['orphan_ownership'],
-                                   result['missing_owned'], result['stale_in_registry'],
-                                   result['share_missing']))
-            except Exception:
-                pass
         await asyncio.sleep(tick)
 
 

@@ -104,7 +104,8 @@ def test_mixed_episode_results_move_only_failed_file_and_preserve_neighbors(tmp_
         assert found['302']['strm_path'] == '分享STRM未识别/测试剧集 (2024)/Season 1/S01E02.mkv.strm'
         assert (engine.root / found['301']['strm_path']).is_file()
         assert (engine.root / found['302']['strm_path']).is_file()
-        assert marker.read_text() == 'keep' and empty.is_dir()
+        # 有文件的目录留着；纯粹的空目录会被收尾清理扫掉（3.6.13 起）。
+        assert marker.read_text() == 'keep' and not empty.exists()
         unident = engine.root / share_service.UNIDENT_NAME
         assert sorted(p.name for p in unident.rglob('*.strm')) == ['S01E02.mkv.strm']
         if engine.notice_tasks: await asyncio.gather(*engine.notice_tasks)
@@ -231,5 +232,20 @@ def test_later_failed_episode_of_accepted_group_keeps_work_folder(tmp_path, monk
         await engine.run_job(jid)
         assert store.db.execute('SELECT strm_path FROM share_strms WHERE file_id=?', ('302',)).fetchone()[0] == '分享STRM未识别/测试剧集 (2024)/Season 1/S01E02.mkv.strm'
         if engine.notice_tasks: await asyncio.gather(*engine.notice_tasks)
+        await http.aclose(); store.close()
+    asyncio.run(scenario())
+
+
+def test_unidentified_move_removes_empty_pending_folder(tmp_path):
+    """文件移进未识别后，待整理里那个空目录要跟着消失。"""
+    async def scenario():
+        store, cloud, http, engine, _ = share_setup(tmp_path)
+        entry = share_service.generate(store, engine.root, {'share_code':'codeA','receive_code':''}, [
+            {'id':'301','name':'S01E01.mkv','size':5000,'path':'作品 (2024)/Season 1/'}])['created'][0]
+        row = store.db.execute('SELECT * FROM share_strms WHERE id=?', (entry['id'],)).fetchone()
+        pending_dir = (engine.root / row['strm_path']).parent
+        await share_service._to_unident(engine, 1, row, None, '未识别', deterministic=True)
+        assert not pending_dir.exists()
+        assert not (pending_dir.parent).exists()
         await http.aclose(); store.close()
     asyncio.run(scenario())

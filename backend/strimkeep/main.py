@@ -40,8 +40,6 @@ from .metrics import Metrics, install_metrics, is_streaming
 from .emby_proxy import EmbyProxyManager
 from .emby_proxy_api import install_emby_proxy
 from .media_info_api import inject_loop, install_media_info
-from .orphan_registry import install as install_orphans, prune_loop
-from .output_reconcile import install as install_reconcile
 from .housekeeping import housekeeping_loop, install as install_housekeeping
 
 
@@ -335,8 +333,6 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         app.state.stall_task = asyncio.create_task(start_stall_watchdog(log_dir=store.log_dir))
         # 媒体信息：定时把 sidecar 写进 Emby（间隔在设置页配，0 = 关）。
         app.state.media_info_task = asyncio.create_task(inject_loop(app, store))
-        # 台账孤儿：任一任务跑完顺手清一次「记录还在、文件没了」的行。
-        app.state.orphan_task = asyncio.create_task(prune_loop(app, store))
         app.state.inventory_scan_task = asyncio.create_task(app.state.inventory_scan_loop())
         # 日常维护：操作记录按时间/行数裁剪（启动先跑一次，之后每 6 小时）。
         app.state.housekeep_task = asyncio.create_task(housekeeping_loop(app, store))
@@ -345,7 +341,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
             yield
         finally:
             for name in ('coverage_task', 'lag_task', 'stall_task', 'media_info_task',
-                         'orphan_task', 'housekeep_task', 'inventory_scan_task'):
+                         'housekeep_task', 'inventory_scan_task'):
                 task = getattr(app.state, name, None)
                 if task and not task.done():
                     task.cancel()
@@ -768,8 +764,6 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
     install_phase5(app, store, admin, job_public)
     install_emby_proxy(app, store, admin, lambda: app.state.emby_proxy)
     install_media_info(app, store, admin)
-    install_orphans(app, store, admin)
-    install_reconcile(app, store, admin)
     install_housekeeping(app, store, admin)
     install_metrics(app, store)
     from .console_api import install_console
