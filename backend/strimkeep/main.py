@@ -384,8 +384,14 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         # 这是「页面为什么慢」的第一手证据；正常请求不产生任何写入。
         if elapsed >= 1.0 and not is_streaming(request.url.path):
             app.state.metrics.record_slow_request()
-            store.event('perf', '慢请求：%s %s %.1f 秒（rid %s）'
-                        % (request.method, request.url.path[:80], elapsed, request_id))
+            # 带上当时的循环延迟：区分「接口本身慢」和「事件循环被同步调用占住」。
+            lag_ms = 0
+            try:
+                lag_ms = int((store.meta_json('loop_lag', {}) or {}).get('p95_ms') or 0)
+            except Exception:
+                lag_ms = 0
+            store.event('perf', '慢请求：%s %s %.1f 秒（循环延迟 %d ms，rid %s）'
+                        % (request.method, request.url.path[:80], elapsed, lag_ms, request_id))
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'no-referrer'
         response.headers['X-Frame-Options'] = 'DENY'
