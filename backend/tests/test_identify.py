@@ -117,19 +117,20 @@ def test_title_relation_separates_exact_title_from_subtitle():
 
 
 # --------------------------------------------------------------- pick 打分
-def test_exact_title_beats_same_year_subtitle_extension():
-    """中文搜索只有「怪奇组」时，也不能把同年的它判成本剧。
+def test_exact_title_without_year_evidence_is_not_accepted():
+    """标准：给了年份就必须有年份证据。
 
-    旧实现按「相似度×100 + 年份 65」排序，302824（0.8 分、2026 年）会压过
-    精确同名但没有首播日期的 11932；现在精确同名优先，年份只是加分。
+    精确同名但 TMDB 没有首播日期 → 不选，转未识别。为了某部剧放宽这一条会让
+    所有「同名不同剧」都有机会被判成目标，代价太大。
     """
     async def run():
-        fake = FakeTMDB(search={'tv': {'zh-CN': ZH_CANDIDATES}})
+        hint = lets_go_hint()
+        bare = [{'id': 11932, 'name': "Let's Go", 'original_name': "Let's Go",
+                 'first_air_date': '', 'popularity': 0.13}]
+        fake = FakeTMDB(details={11932: {'id': 11932, 'seasons': []}})
         attempts = []
-        picked = await engine_with(fake).pick('tv', lets_go_hint(), ZH_CANDIDATES, attempts)
-        assert picked == 11932, attempts
-        assert any(a.get('match') == 'extended' and a.get('evidence') == 'first_air'
-                   for a in attempts)
+        assert await engine_with(fake).pick('tv', hint, bare, attempts) is None
+        assert any(a.get('evidence') == 'unknown' for a in attempts), attempts
     asyncio.run(run())
 
 
@@ -148,10 +149,10 @@ def test_lets_go_picks_zou_ma_shang_ren_end_to_end():
     asyncio.run(run())
 
 
-def test_pick_best_uses_the_same_ranking():
-    """电影走的 pick_best 与剧集共用一套排序：精确同名优先于「同名+副标题」。"""
+def test_pick_best_uses_title_score_and_year_bonus():
+    """电影走的 pick_best 仍按「标题分 + 年份加分」取最高，不引入额外分档。"""
     best = pick_best({'query': "Let's Go", 'year': 2026}, ZH_CANDIDATES)
-    assert best['id'] == 11932
+    assert best['id'] == 11932   # 精确同名 1.55 > 副标题相似度 0.8 + 0.15
 
 
 # ------------------------------------------------------------- 404 负缓存

@@ -513,17 +513,6 @@ def title_relation(hint, row):
     return 'partial'
 
 
-def match_rank(score, relation, year_evidence, cjk, popularity):
-    """统一排序键：标题关系 > 标题分 > 年份证据 > 中文优先 > 热度。
-
-    year_evidence: True（年份有正面证据）/ None（无从核实，不算反证）/ False（已知不符）。
-    年份只加分，不把精确同名的候选挤掉——TMDB 缺首播日期不等于年份不对。
-    """
-    relation_rank = {'exact': 2, 'extended': 1}.get(relation, 0)
-    return (relation_rank, round(float(score), 4) + (0.15 if year_evidence is True else 0.0),
-            1 if cjk else 0, float(popularity or 0))
-
-
 TITLE_EXACT_SCORE = 1.55
 
 
@@ -589,7 +578,7 @@ def scored_candidates(hint, results):
 
 
 def pick_best(hint, results):
-    """最高分候选：标题关系 > 标题分 > 年份证据 > 中文优先 > 热度；不要求唯一。"""
+    """最高分候选：标题相似度 + 年份加分 + 中文优先；不要求唯一。"""
     year = str(hint.get('year') or '')
     threshold = match_threshold(hint)
     eligible = [(score, row) for score, row in scored_candidates(hint, results) if score >= threshold]
@@ -599,10 +588,9 @@ def pick_best(hint, results):
     def key(item):
         score, row = item
         released = str(row.get('release_date') or row.get('first_air_date') or '')[:4]
-        # 没有日期只能算「无从核实」，不能当成年份不符。
-        evidence = (released == year) if (year and released) else None
-        cjk = any(has_cjk(row.get(k)) for k in ('title', 'name'))
-        return match_rank(score, title_relation(hint, row), evidence, cjk, row.get('popularity'))
+        year_bucket = 3 if (year and released == year) else 0
+        cjk = 1 if any(has_cjk(row.get(k)) for k in ('title', 'name')) else 0
+        return (round(score, 4) + 0.15 * year_bucket, cjk, row.get('popularity') or 0)
 
     eligible.sort(key=key, reverse=True)
     return eligible[0][1]

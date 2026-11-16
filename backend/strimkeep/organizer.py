@@ -26,7 +26,7 @@ from .strm_options import StrmOptions, skip_reason, copy_cloud_metadata
 from .archive import ArchiveIndex
 from .media import (METADATA, SUBTITLES, VIDEOS, NeedsReview, choose_match, title_candidates, numeral_variants,
                     pick_best, scored_candidates, match_threshold, has_cjk,
-                    title_relation, match_rank,
+                    title_relation,
                     naming, work_parts, parse_name, bind_subtitles, require_single_episode, split_video_marker, chinese_split_marker, normal, subtitle_suffix,
                     media_from_filename, format_skip_message, require_work_identity, episode_key)
 from .probe import probe
@@ -1285,11 +1285,11 @@ class Organizer:
         return False, 'mismatch' if known else 'unknown'
 
     async def pick(self, kind, hint, results, attempts):
-        """挑最高分：标题关系 > 标题分 > 年份证据 > 中文优先 > 热度。
+        """挑最高分：标题分 + 年份证据 + 中文优先，不要求唯一。
 
-        电影先走精确匹配（同年同名的唯一解最省事），多候选时才退回同一套评分；
-        剧集直接评分：已知年份不符的候选剔除，年份无法核实的保留（TMDB 缺首播
-        日期不等于年份不对，精确同名的候选不能被「年份档」挤掉）。
+        电影先走精确匹配（同年同名的唯一解最省事），多候选时才退回评分；
+        剧集直接评分：给了年份就必须有「首播年/季年份/该集播出年」证据，
+        没有任何证据的候选一律不选——宁可转未识别，也不按标题猜。
         """
         if kind != 'tv':
             try:
@@ -1299,7 +1299,7 @@ class Organizer:
                 return best['id'] if best else None
         threshold = match_threshold(hint)
         scored = scored_candidates(hint, results)
-        pool = [(score, row) for score, row in scored if score >= threshold]
+        pool = [(score, row) for score, row in scored if score >= threshold][:8]
         if not pool:
             attempts.append({'endpoint': 'pick', 'variant': 'score_below_threshold',
                              'threshold': threshold,
@@ -1308,24 +1308,24 @@ class Organizer:
                                  (row.get('first_air_date') or row.get('release_date') or '')[:4],
                                  score) for score, row in scored[:3])})
             return None
+        # 给了年份但「首播年/季年份/集播出年」都不符或无据可查时直接拒绝，不按标题硬选。
+        want_year = bool(str(hint.get('year') or ''))
         ranked = []
         for score, candidate in pool:
-            relation = title_relation(hint, candidate)
             ok, evidence = await self.year_ok(kind, candidate, hint)
             attempts.append({'endpoint': 'tv/%s' % candidate.get('id'), 'variant': 'year_evidence',
                              'title': candidate.get('name') or candidate.get('title'),
                              'year': hint.get('year'), 'evidence': evidence,
-                             'match': relation, 'score': round(score, 3)})
-            # 已知年份/集数不符才排除；'unknown' 只是无从核实，保留候选。
-            if evidence in ('mismatch', 'episode_not_found', 'detail_not_found'):
+                             'score': round(score, 3)})
+            if want_year and not ok:
                 continue
-            ranked.append((match_rank(score, relation, ok,
-                                      has_cjk(candidate.get('name') or candidate.get('title')),
-                                      candidate.get('popularity')), candidate))
+            rank = round(score * 100 + (65 if ok else 0) + float(candidate.get('popularity') or 0), 2)
+            ranked.append((rank, 1 if has_cjk(candidate.get('name') or candidate.get('title')) else 0,
+                           candidate))
         if not ranked:
             return None
-        ranked.sort(key=lambda item: item[0], reverse=True)
-        return ranked[0][1]['id']
+        ranked.sort(key=lambda item: item[:2], reverse=True)
+        return ranked[0][2]['id']
 
     async def identify(self, hint):
         require_work_identity(hint)
@@ -1423,7 +1423,7 @@ class Organizer:
             # pick() 已经接受的候选（年份/集数已知不符的不算）。
             accepted = {str(a.get('endpoint', '')).split('/')[-1] for a in (hint.get('tmdb_attempt') or [])
                         if a.get('variant') == 'year_evidence'
-                        and a.get('evidence') not in ('mismatch', 'episode_not_found', 'detail_not_found')}
+                        and a.get('evidence') in ('first_air', 'season', 'episode', 'no_year')}
             want_year = str(hint.get('year') or '')
 
             def fallback_ok(row):
