@@ -128,10 +128,10 @@ def match_targets(store, event):
 
 
 def purge_history(store, candidates, is_dir):
-    """目录事件（整部剧/整季）下，清掉该作品的历史失效记录。
+    """目录事件（整部剧/整季）下，清掉该作品的历史台账。
 
-    只删 revoked/active=0 的行，不碰仍在使用的输出；目的是「删了就是没了」，
-    重新入库时连旧行都查不到，不会命中任何历史状态。
+    只删已失效/无本地文件的行（revoked / active=0 / 媒体信息队列 / 库存快照），
+    不碰仍在使用的输出；目的是「删了就是没了」，重新入库时连旧行都查不到。
     """
     if not is_dir:
         return 0
@@ -142,12 +142,27 @@ def purge_history(store, candidates, is_dir):
             if not prefix:
                 continue
             like = prefix + '/%'
+            # 先收集要清掉的源文件 id，用于内容缓存。
+            ids = [row[0] for row in store.db.execute(
+                'SELECT file_id FROM playbacks WHERE revoked=1 AND relative_path LIKE ?', (like,))]
+            ids += [row[0] for row in store.db.execute(
+                'SELECT file_id FROM output_registry WHERE active=0 AND relative_path LIKE ?', (like,))]
             removed += store.db.execute(
                 'DELETE FROM share_strms WHERE revoked=1 AND strm_path LIKE ?', (like,)).rowcount
             removed += store.db.execute(
                 'DELETE FROM playbacks WHERE revoked=1 AND relative_path LIKE ?', (like,)).rowcount
             removed += store.db.execute(
                 'DELETE FROM output_registry WHERE active=0 AND relative_path LIKE ?', (like,)).rowcount
+            removed += store.db.execute(
+                "DELETE FROM native_media_info_queue WHERE json_extract(target,'$.emby_path') LIKE ? "
+                "OR json_extract(target,'$.relative') LIKE ?", ('%' + prefix + '%', like)).rowcount
+            # 库存快照里的相对路径不带库根（剧集/...），补一份去根前缀。
+            bare = prefix.split('/', 1)[1] if '/' in prefix else prefix
+            removed += store.db.execute(
+                'DELETE FROM archive_entries WHERE relative_path LIKE ?', (bare + '/%',)).rowcount
+            for fid in set(ids):
+                removed += store.db.execute(
+                    'DELETE FROM media_cache WHERE file_id=?', (fid,)).rowcount
     return removed
 
 
