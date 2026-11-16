@@ -62,3 +62,29 @@ def test_broken_plan_rows_are_skipped_without_breaking_the_list(tmp_path, monkey
     assert '%032x' % 8 not in plan_ids and '%032x' % 9 not in plan_ids
     # 非 32 位编号的不是合法计划，和 _load 的口径一致：列表里不出现
     assert 'legacy-1' not in plan_ids
+
+
+def test_plan_detail_lists_files_and_results(tmp_path, monkeypatch):
+    """历史计划点开要能看到：治理条目、文件清单、逐条结果。"""
+    app, admin, path, db = setup_app(tmp_path, monkeypatch)
+    pid = 'a' * 32
+    payload = {'state': 'completed', 'created': 100, 'finished': 200, 'message': '',
+               'snapshot': {'actions': [{'side': 'share', 'id': '1', 'path': 'x/a.strm'},
+                                        {'side': 'cloud', 'id': '2', 'path': 'y/b.strm'}]},
+               'progress': [{'side': 'share', 'id': '1', 'path': 'x/a.strm'}]}
+    put(db, 'inventory-plan:' + pid, json.dumps(payload))
+    put(db, 'inventory-plan-context:' + pid, json.dumps({
+        'mode': 'governance',
+        'items': [{'title': '走马上任 (2026)', 'season': 1, 'reason_label': '库内多版本-删低版'}]}))
+    db.commit()
+
+    with TestClient(app) as client:
+        app.dependency_overrides[admin] = lambda: None
+        response = client.get('/api/v1/inventory/plans/%s/detail' % pid)
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data['count'] == 2 and data['done'] == 1
+    assert [file['done'] for file in data['files']] == [True, False]
+    assert data['items'][0]['title'] == '走马上任 (2026)'
+    assert data['finished'] == 200

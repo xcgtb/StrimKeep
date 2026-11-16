@@ -122,9 +122,12 @@ def finish_plan(db, plan_id, claim, state, *, now=None, message=''):
         value.update(state=state, finished=time.time() if now is None else now,
                      message=str(message)[:180])
         value.pop('claim_hash', None)
-        _write(db, plan_id, value)
+        # 执行完的逐条结果要留在计划里：进度表会被清空，不清空历史就没法回溯了。
+        # 注意 _load 已经把进度表合并进 value['progress']，这里只做裁剪，别重复追加。
         if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='inventory_plan_progress'").fetchone():
             db.execute('DELETE FROM inventory_plan_progress WHERE plan_id=?', (plan_id,))
+        value['progress'] = list(value.get('progress') or [])[:10000]
+        _write(db, plan_id, value)
         db.commit()
     except BaseException:
         db.rollback()

@@ -82,3 +82,18 @@ def test_corrupt_plan_and_existing_transaction_fail_closed(database):
         db.rollback()
     with pytest.raises(PlanError):
         snapshot_hash({'invalid': float('nan')})
+
+
+def test_finish_keeps_progress_for_history(database):
+    """执行完的计划要留下逐条结果，否则历史里只能看到数量。"""
+    from strimkeep.inventory_plans import _load, record_progress
+    snap = {'inventory': {'x': 1}, 'actions': [{'side': 'share', 'id': '1', 'path': 'a.strm'}]}
+    with connect(database) as db:
+        plan = create_plan(db, snap, now=100)
+        claim = claim_plan(db, plan, snap, now=101)
+        record_progress(db, plan, claim, {'side': 'share', 'id': '1', 'path': 'a.strm'})
+        finish_plan(db, plan, claim, 'completed', now=103)
+    with connect(database) as db:
+        value = _load(db, plan)
+    assert value['state'] == 'completed'
+    assert value['progress'] == [{'side': 'share', 'id': '1', 'path': 'a.strm'}]

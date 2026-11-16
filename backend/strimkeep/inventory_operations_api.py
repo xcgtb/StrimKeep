@@ -89,6 +89,7 @@ def install_inventory_operations(app, store, admin):
                                   project, rows, app.state.strms,
                                   snapshot['policy']['inventory'].get('match_strategy', 'title_year')))
                 selections = [v.model_dump() for v in body.selections]
+                preview = None
                 if body.mode == 'manual':
                     actions = await asyncio.to_thread(
                         manual_actions, projection, selections, snapshot['unsupported'])
@@ -142,6 +143,26 @@ def install_inventory_operations(app, store, admin):
                             projection, preview, selections, snapshot['unsupported'])
                 plan_id = await asyncio.to_thread(
                     create_plan, store.db, {'inventory': snapshot, 'actions': actions}, ttl=ttl)
+                # 计划上下文（片名/季/原因）单独存一条 meta：历史里点开就能看懂删了什么。
+                titles = {}
+                for item in projection.get('items') or []:
+                    titles[(item.get('kind'), item.get('tmdb_id'))] = item.get('title') or ''
+                reasons = {}
+                for row in list((preview or {}).get('dual') or []) + list((preview or {}).get('single') or []):
+                    reasons.setdefault((row.get('kind'), row.get('tmdb_id'), row.get('season')),
+                                       row.get('reason_label') or row.get('reason') or '')
+                context_items = []
+                for selection in selections:
+                    key = (selection.get('kind'), selection.get('tmdb_id'))
+                    context_items.append({
+                        'kind': key[0], 'tmdb_id': key[1], 'title': titles.get(key, ''),
+                        'season': selection.get('season'),
+                        'side': selection.get('side'),
+                        'reason_label': (reasons.get((key[0], key[1], selection.get('season')))
+                                         or ('手动清理' if body.mode == 'manual' else ''))})
+                if hasattr(store, 'set_meta'):
+                    store.set_meta('inventory-plan-context:' + plan_id,
+                                   {'mode': body.mode, 'items': context_items})
                 # 计划类型单独存一条 meta：_validate 只认 inventory/actions，别塞进去。
                 if hasattr(store, 'set_meta'):
                     store.set_meta('inventory-plan-mode:' + plan_id, {'mode': body.mode})
@@ -254,6 +275,33 @@ def install_inventory_operations(app, store, admin):
                 store.db.execute('UPDATE meta SET value=? WHERE key=?',
                                  (json.dumps(value, ensure_ascii=False, separators=(',', ':')), row['key']))
 
+    @app.get('/api/v1/inventory/plans/{plan_id}/detail', dependencies=[Depends(admin)])
+    async def plan_detail(plan_id: str):
+        """历史计划详情：治理条目、文件清单与逐条执行结果。"""
+        try:
+            value = await asyncio.to_thread(_load, store.db, plan_id)
+        except PlanError as exc:
+            raise HTTPException(404, str(exc)) from None
+        actions = value.get('snapshot', {}).get('actions') or []
+        done = value.get('progress') or []
+        finished = {(item.get('side'), str(item.get('id'))) for item in done if isinstance(item, dict)}
+        try:
+            row = store.db.execute('SELECT value FROM meta WHERE key=?',
+                                   ('inventory-plan-context:' + plan_id,)).fetchone()
+            context = json.loads(row[0]) if row and row[0] else {}
+        except (TypeError, ValueError):
+            context = {}
+        if not isinstance(context, dict):
+            context = {}
+        files = [{'side': action.get('side'), 'path': action.get('path'),
+                  'done': (action.get('side'), str(action.get('id'))) in finished}
+                 for action in actions]
+        return {'plan_id': plan_id, 'state': value.get('state'),
+                'message': value.get('message', ''), 'created': value.get('created'),
+                'finished': value.get('finished'), 'mode': context.get('mode', ''),
+                'items': context.get('items') or [], 'count': len(files),
+                'done': sum(1 for file in files if file['done']), 'files': files}
+
     @app.get('/api/v1/inventory-plans', dependencies=[Depends(admin)])
     async def plan_history():
         sweep_stale_plans()
@@ -263,6 +311,7 @@ def install_inventory_operations(app, store, admin):
         rows = store.db.execute(
             "SELECT key, "
             " json_extract(value, '$.created') AS created, "
+            " json_extract(value, '$.finished') AS finished, "
             " json_extract(value, '$.state') AS state, "
             " json_extract(value, '$.message') AS message, "
             " COALESCE(json_array_length(json_extract(value, '$.snapshot.actions')), 0) AS total, "
@@ -297,7 +346,9 @@ def install_inventory_operations(app, store, admin):
                 # 旧版本核查异常（已修复），别让用户看到这种看不懂的报错。
                 message = '旧版本核查异常（已在 0.9.136 修复），请重新生成计划。'
             created = row['created'] if isinstance(row['created'], (int, float)) else 0
+            finished = row['finished'] if isinstance(row['finished'], (int, float)) else 0
             result.append({'plan_id': pid, 'state': row['state'] or 'unknown', 'mode': mode,
+                           'finished': finished,
                            'mode_label': labels.get(mode, '旧计划'),
                            'count': int(row['total'] or 0),
                            'done': int(row['done'] or 0) + extra_progress.get(pid, 0),

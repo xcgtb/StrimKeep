@@ -368,10 +368,31 @@ async function openAuditFromMapping() {
   if (auditPanel.value) auditPanel.value.open = true
   void auditLibraries()
 }
+const planDetails = ref<Record<string, any>>({})
+const planDetailBusy = ref('')
+const historyBusy = ref(false)
+async function loadPlanDetail(row:any) {
+  const id = row?.plan_id
+  if (!id || planDetails.value[id] || planDetailBusy.value) return
+  planDetailBusy.value = id
+  try { planDetails.value = {...planDetails.value, [id]: await props.api(`/inventory/plans/${id}/detail`)} }
+  catch (e) { historyError.value = (e as Error).message }
+  finally { planDetailBusy.value = '' }
+}
+function itemLabel(item:any) { return item?.title || ('TMDB ' + (item?.tmdb_id ?? '')) }
+function resultLabel(done:boolean) { return done ? '已删除' : '未执行' }
+function stateLabel(value:string) {
+  return ({planned:'待执行', executing:'执行中', completed:'已完成', failed:'失败'} as Record<string,string>)[value] || value || '未知'
+}
+function stateType(value:string) {
+  return value === 'completed' ? 'success' : value === 'failed' ? 'danger' : value === 'executing' ? 'warning' : 'info'
+}
 async function loadHistory() {
   historyError.value = ''
+  historyBusy.value = true
   try { history.value = (await props.api('/inventory-plans')).items || [] }
   catch (e) { historyError.value = (e as Error).message }
+  finally { historyBusy.value = false }
 }
 async function checkStale() {
   staleBusy.value = true; staleError.value = ''; stale.value = []
@@ -767,7 +788,29 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize); if(orp
     </template>
     </section>
    </template>
-   <details class="gov-panel gov-history"><summary><span><strong>最近清理计划</strong><small>查看执行记录与进度</small></span><span class="gov-chevron">展开</span></summary><div class="gov-panel-body"><div class="inventory-tools"><el-button @click="loadHistory">刷新状态</el-button><span class="muted">执行中断的计划不会自动重试。</span></div><el-alert v-if="historyError" :title="historyError" type="error" :closable="false" /><el-table :data="history" empty-text="暂无清理计划"><el-table-column prop="mode_label" label="类型" width="110" /><el-table-column label="创建时间" min-width="160"><template #default="s">{{ new Date(s.row.created * 1000).toLocaleString() }}</template></el-table-column><el-table-column prop="state" label="状态" width="110" /><el-table-column label="进度" width="100"><template #default="s">{{ s.row.done }}/{{ s.row.count }}</template></el-table-column><el-table-column prop="error" label="说明" min-width="160" /></el-table></div></details>
+   <details class="gov-panel gov-history"><summary><span><strong>最近清理计划</strong><small>展开可看每条计划删了什么、结果如何</small></span><span class="gov-chevron">展开</span></summary><div class="gov-panel-body">
+    <div class="inventory-tools"><el-button :loading="historyBusy" @click="loadHistory">刷新状态</el-button><span class="muted">执行中断的计划不会自动重试；点开某一行的「+」可以看这次到底删了哪些文件。</span></div>
+    <el-alert v-if="historyError" :title="historyError" type="error" :closable="false" />
+    <el-table :data="history" empty-text="暂无清理计划" @expand-change="(row:any, expanded:any[]) => expanded.length && loadPlanDetail(row)">
+     <el-table-column type="expand"><template #default="s"><div class="plan-detail">
+      <p v-if="planDetailBusy === s.row.plan_id" class="muted">正在读取详情…</p>
+      <template v-else-if="planDetails[s.row.plan_id]">
+       <p class="muted">共 {{ planDetails[s.row.plan_id].count }} 个文件 · 已删除 {{ planDetails[s.row.plan_id].done }} 个<template v-if="planDetails[s.row.plan_id].finished"> · 完成于 {{ new Date(planDetails[s.row.plan_id].finished * 1000).toLocaleString() }}</template></p>
+       <div v-if="planDetails[s.row.plan_id].items?.length" class="plan-items"><p v-for="(item, index) in planDetails[s.row.plan_id].items" :key="index">{{ itemLabel(item) }}<span v-if="item.season != null"> · 第 {{ item.season }} 季</span><span v-if="item.reason_label"> · {{ item.reason_label }}</span></p></div>
+       <el-table :data="planDetails[s.row.plan_id].files || []" size="small" empty-text="这份计划没有文件明细">
+        <el-table-column label="库" width="90"><template #default="f">{{ side(f.row.side) }}</template></el-table-column>
+        <el-table-column prop="path" label="文件路径" />
+        <el-table-column label="结果" width="90"><template #default="f">{{ resultLabel(f.row.done) }}</template></el-table-column>
+       </el-table>
+      </template>
+      <p v-else class="muted">这份计划没有留下详情（旧版本只记录了数量）。</p>
+     </div></template></el-table-column>
+     <el-table-column label="类型" width="110"><template #default="s">{{ s.row.mode_label }}</template></el-table-column>
+     <el-table-column label="创建时间" min-width="150"><template #default="s">{{ new Date(s.row.created * 1000).toLocaleString() }}</template></el-table-column>
+     <el-table-column label="状态" width="90"><template #default="s"><el-tag :type="stateType(s.row.state)" size="small">{{ stateLabel(s.row.state) }}</el-tag></template></el-table-column>
+     <el-table-column label="进度" width="90"><template #default="s">{{ s.row.done }}/{{ s.row.count }}</template></el-table-column>
+     <el-table-column label="说明" min-width="160"><template #default="s">{{ s.row.error }}</template></el-table-column>
+    </el-table></div></details>
   </template>
   <template v-else>
    <section class="orphan-hero"><div><h2>目录残留清理</h2><p>扫描本地两库和 115 归档目录</p></div><div class="orphan-actions"><el-button type="primary" :loading="orphanBusy" @click="scanOrphans">扫描残留</el-button><el-button type="danger" :loading="orphanBusy" :disabled="!orphanSelected.length || orphanSelected.length > 100" @click="cleanOrphans">清理选中（{{orphanSelected.length}}）</el-button></div><details class="inventory-help orphan-help"><summary>清理范围与规则</summary><p>网盘侧同一作品可联动清理本地残留及 115 字幕、元数据和空目录；分享侧只清理本地。只处理带 TMDB 标识且没有视频或未知文件的目录；115 文件进入回收站，每次最多 100 项。</p></details></section>
@@ -847,7 +890,7 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize); if(orp
 .library-season-heading{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.library-season-heading strong{margin-right:auto}.season-status{border-radius:5px;padding:3px 7px;font-size:12px;background:var(--el-fill-color-light)}.season-status.complete{color:var(--el-color-success)}.season-status.missing{color:var(--el-color-danger)}.season-status.extra,.season-status.unknown{color:var(--el-color-warning)}.season-progress-row{display:flex;align-items:center;gap:10px;margin-top:8px}.season-progress{height:6px;flex:1;border-radius:6px;background:var(--el-fill-color);overflow:hidden}.season-progress i{display:block;height:100%;border-radius:inherit;background:var(--el-color-success)}.season-progress-row span{font-size:12px;color:var(--el-text-color-secondary);white-space:nowrap}
 </style>
 <style scoped>
-.rule-summary{padding:14px;border:1px solid var(--el-border-color-lighter);border-radius:9px;background:var(--el-fill-color-blank)}.rule-summary p{font-size:12px;margin:8px 0}.rule-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}.rule-list span{padding:4px 8px;border-radius:6px;background:var(--el-color-primary-light-9);font-size:12px;color:var(--el-color-primary)}.governance-evidence{display:grid;gap:8px}.governance-evidence p{margin:3px 0;font-size:12px;overflow-wrap:anywhere}.comparison-rule{font-size:12px;color:var(--el-text-color-secondary)}.gov-manual{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}.gov-caution{margin:8px 0}.gov-caution :deep(.el-alert__title){font-size:13px;line-height:1.5}.gov-caution :deep(.el-alert__description){font-size:12px;margin:4px 0 0}
+.rule-summary{padding:14px;border:1px solid var(--el-border-color-lighter);border-radius:9px;background:var(--el-fill-color-blank)}.rule-summary p{font-size:12px;margin:8px 0}.rule-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}.rule-list span{padding:4px 8px;border-radius:6px;background:var(--el-color-primary-light-9);font-size:12px;color:var(--el-color-primary)}.governance-evidence{display:grid;gap:8px}.governance-evidence p{margin:3px 0;font-size:12px;overflow-wrap:anywhere}.comparison-rule{font-size:12px;color:var(--el-text-color-secondary)}.gov-manual{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}.plan-detail{padding:6px 2px}.plan-detail p{margin:4px 0;font-size:12px}.plan-items p{margin:3px 0;font-size:12px;color:var(--el-text-color-regular)}.gov-caution{margin:8px 0}.gov-caution :deep(.el-alert__title){font-size:13px;line-height:1.5}.gov-caution :deep(.el-alert__description){font-size:12px;margin:4px 0 0}
 .governance-detail{padding:8px 20px;overflow-wrap:anywhere}.governance-detail p{margin:8px 0}.governance-detail details{margin:10px 0}.selection-reason{font-size:11px;margin:3px 0;line-height:1.4}
 .gov-hero{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:24px 26px;border:1px solid var(--el-border-color-lighter);border-radius:16px;background:linear-gradient(125deg,var(--el-color-primary-light-9),var(--el-bg-color) 70%)}
 .gov-hero h2{margin:5px 0 6px;font-size:23px;letter-spacing:-.02em}.gov-hero p{margin:0;color:var(--el-text-color-secondary);font-size:13px;line-height:1.6}.gov-eyebrow{font-size:10px;letter-spacing:.16em;font-weight:700;color:var(--el-color-primary)}
