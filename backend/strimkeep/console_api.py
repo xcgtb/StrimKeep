@@ -212,20 +212,26 @@ def install_console(app,store,admin):
                     emby.update(cached[1]);emby.update(connected=False,playing=[],stale=True)
         else:errors.append('请先配置 Emby 服务地址和 API Key。')
         emby['error']='；'.join(errors)
-        usage=shutil.disk_usage(app.state.strms)
-        now=time.time()
-        midnight=datetime.datetime.now().replace(hour=0,minute=0,second=0,microsecond=0).timestamp()
-        by_state={r[0]:r[1] for r in store.db.execute('SELECT state,count(*) FROM organize_jobs GROUP BY state')}
-        active=by_state.get('queued',0)+by_state.get('running',0)
-        stats={'today':store.db.execute('SELECT count(*) FROM organize_jobs WHERE CAST(created AS REAL)>=?',(midnight,)).fetchone()[0],
-               'week':store.db.execute('SELECT count(*) FROM organize_jobs WHERE CAST(created AS REAL)>=?',(now-7*86400,)).fetchone()[0],
-               'total':sum(by_state.values()),
-               'completed':by_state.get('completed',0),
-               'partial':by_state.get('partial',0),
-               'active':active,
-               'last_at':store.db.execute('SELECT max(CAST(updated AS REAL)) FROM organize_jobs').fetchone()[0],
-               'files':store.db.execute('SELECT count(*) FROM organized_files').fetchone()[0],
-               'unread':store.db.execute('SELECT count(*) FROM notifications WHERE read_at IS NULL').fetchone()[0]}
+
+        def local_stats():
+            """磁盘占用与统计全是同步操作：放线程池，别占事件循环（每次 100~400ms）。"""
+            usage=shutil.disk_usage(app.state.strms)
+            now=time.time()
+            midnight=datetime.datetime.now().replace(hour=0,minute=0,second=0,microsecond=0).timestamp()
+            by_state={r[0]:r[1] for r in store.db.execute('SELECT state,count(*) FROM organize_jobs GROUP BY state')}
+            active=by_state.get('queued',0)+by_state.get('running',0)
+            stats={'today':store.db.execute('SELECT count(*) FROM organize_jobs WHERE CAST(created AS REAL)>=?',(midnight,)).fetchone()[0],
+                   'week':store.db.execute('SELECT count(*) FROM organize_jobs WHERE CAST(created AS REAL)>=?',(now-7*86400,)).fetchone()[0],
+                   'total':sum(by_state.values()),
+                   'completed':by_state.get('completed',0),
+                   'partial':by_state.get('partial',0),
+                   'active':active,
+                   'last_at':store.db.execute('SELECT max(CAST(updated AS REAL)) FROM organize_jobs').fetchone()[0],
+                   'files':store.db.execute('SELECT count(*) FROM organized_files').fetchone()[0],
+                   'unread':store.db.execute('SELECT count(*) FROM notifications WHERE read_at IS NULL').fetchone()[0]}
+            return usage, stats, active
+
+        usage, stats, active = await asyncio.to_thread(local_stats)
         payload={'local':local,'recent':recent,'emby':emby,'stats':stats,'system':{'version':app.version,'free_bytes':usage.free,'total_bytes':usage.total,'used_bytes':usage.used,'115_configured':bool(store.get('cookie')),'tmdb_configured':bool(store.get('tmdb_key')),'active_tasks':active,'scheduler_ok':not engine.scheduler_fault,'strm_root':str(app.state.strms),'loop_lag':store.meta_json('loop_lag',{})}}
         return payload
 
