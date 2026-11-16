@@ -26,6 +26,7 @@ from .strm_options import StrmOptions, skip_reason, copy_cloud_metadata
 from .archive import ArchiveIndex
 from .media import (METADATA, SUBTITLES, VIDEOS, NeedsReview, choose_match, title_candidates, numeral_variants,
                     pick_best, scored_candidates, match_threshold, has_cjk,
+                    title_relation, match_rank,
                     naming, work_parts, parse_name, bind_subtitles, require_single_episode, split_video_marker, chinese_split_marker, normal, subtitle_suffix,
                     media_from_filename, format_skip_message, require_work_identity, episode_key)
 from .probe import probe
@@ -113,6 +114,9 @@ class Organizer:
         self._disk_checked = 0.0
         self._account_cache = None
         self._season_lookup_unavailable = {}
+        # TMDB 详情/季集 404 的负缓存：同一个失效 id 在一批文件里会被反复请求，
+        # 每集都等一次超时/404 会把整批整理拖慢；记住一段时间内直接判缺失。
+        self._tmdb_missing = {}
         self.notice_tasks = set()
         self.notice_keys = set()
         self.show_notices = {}
@@ -1096,6 +1100,8 @@ class Organizer:
     TMDB_SEARCH_SECONDS = 86400
     TMDB_DETAIL_SECONDS = 7 * 86400
     TMDB_EPISODE_SECONDS = 30 * 86400
+    # 404 负缓存的时长：失效 id 不会马上复活；新集数据到位后最多等一小时。
+    TMDB_MISSING_SECONDS = 3600
 
     @staticmethod
     def tmdb_cache_key(path, params=None):
@@ -1122,6 +1128,11 @@ class Organizer:
                 return result
             except ValueError:
                 pass
+        misses = getattr(self, '_tmdb_missing', None)
+        if misses and misses.get(cache_key, 0) > time.monotonic():
+            _count_tmdb('404 负缓存')
+            raise CloudError('TMDB 中找不到该条目（GET %s → HTTP 404，%d 秒内不重试）。'
+                             % (path, self.TMDB_MISSING_SECONDS), 'TMDB_NOT_FOUND', 404)
         try:
             _count_tmdb('网络请求')
             response = await self.http.get('https://api.themoviedb.org/3/' + path,
@@ -1133,7 +1144,12 @@ class Organizer:
             if status == 404:
                 # 404 = 「TMDB 里没有这个条目」。用专门的 code 让调用方自己决定：
                 # 作品详情缺失 → 转人工；单集缺失 → 按文件名兜底照常归档。
-                raise CloudError('TMDB 中找不到该条目（GET %s → 404）。' % path, 'TMDB_NOT_FOUND', 404) from None
+                # 同时记进负缓存：同一个失效 id 不必在一批文件里被逐集重试。
+                if misses is not None:
+                    if len(misses) > 512:
+                        misses.clear()
+                    misses[cache_key] = time.monotonic() + self.TMDB_MISSING_SECONDS
+                raise CloudError('TMDB 中找不到该条目（GET %s → HTTP 404）。' % path, 'TMDB_NOT_FOUND', 404) from None
             raise CloudError(f'TMDB 请求失败（HTTP {status}）。', 'TMDB_UNAVAILABLE', 502) from None
         except httpx.TimeoutException:
             raise CloudError('TMDB 请求失败（连接或响应超时）。', 'TMDB_UNAVAILABLE') from None
@@ -1141,6 +1157,8 @@ class Organizer:
             raise CloudError('TMDB 请求失败（网络连接异常）。', 'TMDB_UNAVAILABLE') from None
         except ValueError:
             raise CloudError('TMDB 请求失败（返回数据无效）。', 'TMDB_UNAVAILABLE') from None
+        if misses is not None:
+            misses.pop(cache_key, None)
         with self.store.db:
             self.store.db.execute('INSERT OR REPLACE INTO tmdb_cache VALUES(?,?,?)',
                                   (cache_key, json.dumps(data, ensure_ascii=False), now))
@@ -1215,19 +1233,27 @@ class Organizer:
         return results
 
     async def year_ok(self, kind, candidate, hint):
-        """年份证据：电影看上映年；剧集允许首播年 / 本季年份 / 该集播出年（对齐 ）。"""
+        """年份证据：电影看上映年；剧集允许首播年 / 本季年份 / 该集播出年（对齐 ）。
+
+        返回 evidence='unknown' 表示 TMDB 没有可用日期：这是「无从核实」，
+        不是「年份不符」，调用方不能拿它当反证把候选扔掉。
+        """
         year = str(hint.get('year') or '')
         if not year:
             return True, 'no_year'
         first = str(candidate.get('first_air_date') or candidate.get('release_date') or '')[:4]
         if first and first == year:
             return True, 'first_air'
+        known = bool(first)
         if kind != 'tv':
-            return False, 'mismatch'
+            return False, 'mismatch' if known else 'unknown'
         season, episode = int(hint.get('season') or 0), int(hint.get('episode') or 0)
         details = candidate if candidate.get('seasons') is not None else await self.tmdb('tv/%s' % candidate['id'])
         for item in details.get('seasons') or []:
-            if int(item.get('season_number') or -1) == season and str(item.get('air_date') or '')[:4] == year:
+            air = str(item.get('air_date') or '')[:4]
+            if air:
+                known = True
+            if int(item.get('season_number') or -1) == season and air == year:
                 return True, 'season'
         if season and episode:
             try:
@@ -1239,15 +1265,19 @@ class Organizer:
                 raise
             except Exception:
                 data = {}
-            if str(data.get('air_date') or '')[:4] == year:
+            air = str(data.get('air_date') or '')[:4]
+            if air:
+                known = True
+            if air == year:
                 return True, 'episode'
-        return False, 'mismatch'
+        return False, 'mismatch' if known else 'unknown'
 
     async def pick(self, kind, hint, results, attempts):
-        """挑最高分：对齐——标题评分 + 中文优先，不要求唯一。
+        """挑最高分：标题关系 > 标题分 > 年份证据 > 中文优先 > 热度。
 
-        电影先走精确匹配（同年同名的唯一解最省事），多候选时才退回评分；
-        剧集直接评分，年份只作加分证据、不作硬过滤（「年份档:0」仍会选中）。
+        电影先走精确匹配（同年同名的唯一解最省事），多候选时才退回同一套评分；
+        剧集直接评分：已知年份不符的候选剔除，年份无法核实的保留（TMDB 缺首播
+        日期不等于年份不对，精确同名的候选不能被「年份档」挤掉）。
         """
         if kind != 'tv':
             try:
@@ -1257,7 +1287,7 @@ class Organizer:
                 return best['id'] if best else None
         threshold = match_threshold(hint)
         scored = scored_candidates(hint, results)
-        pool = [(score, row) for score, row in scored if score >= threshold][:8]
+        pool = [(score, row) for score, row in scored if score >= threshold]
         if not pool:
             attempts.append({'endpoint': 'pick', 'variant': 'score_below_threshold',
                              'threshold': threshold,
@@ -1266,28 +1296,31 @@ class Organizer:
                                  (row.get('first_air_date') or row.get('release_date') or '')[:4],
                                  score) for score, row in scored[:3])})
             return None
-        # 给了年份但「首播年/季年份/集播出年」都不符时直接拒绝，不按标题硬选。
-        want_year = bool(str(hint.get('year') or ''))
         ranked = []
         for score, candidate in pool:
+            relation = title_relation(hint, candidate)
             ok, evidence = await self.year_ok(kind, candidate, hint)
             attempts.append({'endpoint': 'tv/%s' % candidate.get('id'), 'variant': 'year_evidence',
                              'title': candidate.get('name') or candidate.get('title'),
-                             'year': hint.get('year'), 'evidence': evidence})
-            if want_year and not ok:
+                             'year': hint.get('year'), 'evidence': evidence,
+                             'match': relation, 'score': round(score, 3)})
+            # 已知年份/集数不符才排除；'unknown' 只是无从核实，保留候选。
+            if evidence in ('mismatch', 'episode_not_found'):
                 continue
-            rank = round(score * 100 + (65 if ok else 0) + float(candidate.get('popularity') or 0), 2)
-            ranked.append((rank, 1 if has_cjk(candidate.get('name') or candidate.get('title')) else 0,
-                           candidate))
+            ranked.append((match_rank(score, relation, ok,
+                                      has_cjk(candidate.get('name') or candidate.get('title')),
+                                      candidate.get('popularity')), candidate))
         if not ranked:
             return None
-        ranked.sort(key=lambda item: item[:2], reverse=True)
-        return ranked[0][2]['id']
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        return ranked[0][1]['id']
 
     async def identify(self, hint):
         require_work_identity(hint)
         kind = hint['media_type']
         tmdb_id = hint['tmdb_id']
+        # 记下最终选中的候选池：详情 404 时只在这个池里换 id，不能换成另一部作品。
+        picked_pool = []
         if tmdb_id is None:
             attempts = []
             # 文件名语言决定搜索语言：英文等拉丁文字走 en-US，中日韩走 zh-CN。
@@ -1299,6 +1332,7 @@ class Organizer:
                 results = await self.search_tmdb(kind, hint['query'], previous, attempts,
                                                  'previous_release_year')
             first_count = len(results)
+            picked_pool = results
             tmdb_id = await self.pick(kind, hint, results, attempts)
             if tmdb_id is None and 0 < len(results) <= 5:
                 # 中文别名可能与 TMDB 当前显示名不同：补齐别名再判一次，仍要求唯一。
@@ -1307,6 +1341,7 @@ class Organizer:
                     alt = await self.tmdb(f'{kind}/{candidate["id"]}/alternative_titles')
                     enriched.append({**candidate,
                                      'aliases': [x.get('title', '') for x in alt.get('results', alt.get('titles', []))]})
+                picked_pool = enriched
                 tmdb_id = await self.pick(kind, hint, enriched, attempts)
             # 中文数字尾数兜底：原查询一无所获时，试「转阿拉伯数字」与「去尾数按分季」。
             # 每一步仍要求唯一匹配；季必须真实存在，否则照旧进未识别，绝不猜。
@@ -1315,6 +1350,7 @@ class Organizer:
                     variant_hint = {**hint, 'query': variant_query}
                     variant_results = await self.search_tmdb(kind, variant_query, hint['year'], attempts,
                                                              'numeral:' + variant_query)
+                    picked_pool = variant_results
                     variant_id = await self.pick(kind, variant_hint, variant_results, attempts)
                     if variant_id is None:
                         continue
@@ -1344,9 +1380,11 @@ class Organizer:
                 except Exception:
                     alt_results = []
                 if alt_results:
+                    picked_pool = alt_results
                     tmdb_id = await self.pick(kind, hint, alt_results, attempts)
                 if tmdb_id is None and results:
                     alt_results = results
+                    picked_pool = results
             if tmdb_id is None and hint.get('year'):
                 # 唯一命中 + 年份可核实的兜底（TMDB 原名与发布名不同语言时）。
                 for pool in (alt_results, results):
@@ -1354,6 +1392,7 @@ class Organizer:
                         ok, _evidence = await self.year_ok(kind, pool[0], hint)
                         if ok:
                             tmdb_id = pool[0]['id']
+                            picked_pool = pool
                             break
             hint['tmdb_attempt'] = attempts
             if tmdb_id is None:
@@ -1368,10 +1407,12 @@ class Organizer:
             if exc.code != 'TMDB_NOT_FOUND':
                 raise
             # 搜索结果里的这个 id 可能已失效：换同一次搜索的其它候选再试，最多 2 个。
-            # 只换 id、不改判定标准：候选本身已经过 pick() 的年份/标题筛选。
-            candidates = [row.get('id') for row in (locals().get('results') or [])
+            # 只换 id、不改作品：候选必须与关键词精确同名（归一化后），避免
+            # 「Let's Go」的详情 404 后，顺手把同年的《Let's Go 怪奇组》当成它。
+            candidates = [row.get('id') for row in picked_pool
                           if isinstance(row, dict) and row.get('id')
-                          and int(row['id']) != int(tmdb_id)]
+                          and int(row['id']) != int(tmdb_id)
+                          and title_relation(hint, row) == 'exact']
             details = None
             for alt in candidates[:2]:
                 try:

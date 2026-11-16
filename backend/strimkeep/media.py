@@ -36,6 +36,17 @@ def normal(value):
     return re.sub(r'[\W_]+', '', unicodedata.normalize('NFKC', value).casefold())
 
 
+def normal_title(value):
+    """标题归一化：全半角、大小写、撇号、连字符、& 与拉丁重音都不影响比对。
+
+    与 normal() 分开：normal() 还承担「作品身份 / 去重键」的职责，不能把
+    「Let's & Go」和「Let's and Go」这类标点差异悄悄合并成同一个身份。
+    """
+    text = unicodedata.normalize('NFKD', str(value or '')).casefold()
+    text = ''.join(ch for ch in text if not unicodedata.combining(ch))
+    return re.sub(r'[\W_]+', '', text.replace('&', 'and'))
+
+
 CN_NUM = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10}
 SEASON_MARK = re.compile(r'(?i)(?:\bS(\d{1,2})\b|第\s*([一二三四五六七八九十\d]{1,3})\s*季|Season\s*(\d{1,2}))')
 # 只表示季号的目录（Season 1 / S02 / 第二季），作品名在上一层。
@@ -445,25 +456,72 @@ def require_work_identity(hint):
 
 
 def query_variants(query):
-    """查询词候选：整串 → 中文段 → 拉丁段。
+    """查询词候选：整串 → 按分隔符切开的段 → 段内的中文段 / 拉丁段。
 
     文件名常把中英文标题拼在一起（如「群体.Colony」），而 TMDB 的返回标题
     通常只有其中一种语言；拿拼接后的整串去等值比较必然匹配不到。
+
+    拉丁词按「短语」保留，不再拆成单词：「Let's Go」拆开后「Go」会与另一部
+    叫《Go》的作品精确命中（1.55 分），把真正的主标题顶掉。
     """
     text = str(query or '').strip()
-    parts = [p for p in re.split(r'[\s._·・/|,，、\-–—]+', text) if p]
-    cjk = [p for p in parts if re.search(r'[\u3400-\u9fff]', p)]
-    latin = [p for p in parts if not re.search(r'[\u3400-\u9fff]', p)
-             and re.fullmatch(r"[A-Za-z0-9'&:!?.\-]+", p)]
     ordered, seen = [], set()
-    for value in [text, *cjk, *latin]:
-        value = value.strip()
-        key = value.casefold()
-        if len(value) < 2 or key in seen:
-            continue
+
+    def add(value):
+        value = re.sub(r'\s+', ' ', value).strip(' ._-–—_·・/|,，、:：;；')
+        key = normal_title(value)
+        # 纯数字（多为文件名里的年份/集号）不是标题，别拿去精确命中。
+        if len(key) < 2 or key in seen or re.fullmatch(r'\d{1,4}', key):
+            return
         seen.add(key)
         ordered.append(value)
+
+    add(text)
+    for chunk in re.split(r'[/|／、,，;；:：·・]+', text):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        add(chunk)
+        for part in re.findall(r'[\u3400-\u9fff]+|[^\u3400-\u9fff]+', chunk):
+            add(part)
     return ordered
+
+
+def candidate_titles(row):
+    """候选的全部可比对标题（含 TMDB 别名），已归一化。"""
+    names = [row.get(k, '') for k in ('title', 'original_title', 'name', 'original_name')]
+    names += row.get('aliases') or []
+    return [normal_title(name) for name in names if name]
+
+
+def title_relation(hint, row):
+    """查询与候选标题的关系：exact（归一化后完全相等）/ extended / partial。
+
+    exact 必须单独分出来：「Let's Go」与「Let's Go 怪奇组」都是 2026 年，
+    只看相似度 0.8 会把后者当成本剧；它只是共享前缀的另一部作品。
+    """
+    targets = [normal_title(v) for v in query_variants(hint.get('query'))]
+    names = candidate_titles(row)
+    if not any(targets) or not names:
+        return 'none'
+    if any(target == name for target in targets if target for name in names):
+        return 'exact'
+    # 互为前缀（忽略空格标点后）＝「同名 + 副标题」，仍是另一部作品。
+    if any((name.startswith(target) or target.startswith(name)) and min(len(target), len(name)) >= 2
+           for target in targets if target for name in names):
+        return 'extended'
+    return 'partial'
+
+
+def match_rank(score, relation, year_evidence, cjk, popularity):
+    """统一排序键：标题关系 > 标题分 > 年份证据 > 中文优先 > 热度。
+
+    year_evidence: True（年份有正面证据）/ None（无从核实，不算反证）/ False（已知不符）。
+    年份只加分，不把精确同名的候选挤掉——TMDB 缺首播日期不等于年份不对。
+    """
+    relation_rank = {'exact': 2, 'extended': 1}.get(relation, 0)
+    return (relation_rank, round(float(score), 4) + (0.15 if year_evidence is True else 0.0),
+            1 if cjk else 0, float(popularity or 0))
 
 
 TITLE_EXACT_SCORE = 1.55
@@ -508,13 +566,11 @@ def match_threshold(hint):
 
 def scored_candidates(hint, results):
     """按标题相似度给候选打分；中文标题略优先，年份只作加分（对齐口径）。"""
-    variants = [normal(v) for v in query_variants(hint.get('query'))]
+    variants = [normal_title(v) for v in query_variants(hint.get('query'))]
     variants = [v for v in variants if v]
     scored = []
     for row in results:
-        names = [row.get(k, '') for k in ('title', 'original_title', 'name', 'original_name')]
-        names += row.get('aliases', [])
-        names = [normal(n) for n in names if n]
+        names = candidate_titles(row)
         if not names or not variants:
             continue
         best = 0.0
@@ -533,7 +589,7 @@ def scored_candidates(hint, results):
 
 
 def pick_best(hint, results):
-    """最高分候选：标题相似度 + 年份加分 + 中文优先；不要求唯一。"""
+    """最高分候选：标题关系 > 标题分 > 年份证据 > 中文优先 > 热度；不要求唯一。"""
     year = str(hint.get('year') or '')
     threshold = match_threshold(hint)
     eligible = [(score, row) for score, row in scored_candidates(hint, results) if score >= threshold]
@@ -543,9 +599,10 @@ def pick_best(hint, results):
     def key(item):
         score, row = item
         released = str(row.get('release_date') or row.get('first_air_date') or '')[:4]
-        year_bucket = 3 if (year and released == year) else 0
-        cjk = 1 if any(has_cjk(row.get(k)) for k in ('title', 'name')) else 0
-        return (round(score, 4) + 0.15 * year_bucket, cjk, row.get('popularity') or 0)
+        # 没有日期只能算「无从核实」，不能当成年份不符。
+        evidence = (released == year) if (year and released) else None
+        cjk = any(has_cjk(row.get(k)) for k in ('title', 'name'))
+        return match_rank(score, title_relation(hint, row), evidence, cjk, row.get('popularity'))
 
     eligible.sort(key=key, reverse=True)
     return eligible[0][1]
@@ -555,12 +612,10 @@ def choose_match(hint, results):
     """按候选词逐个匹配，先整串、再中文、再英文；命中多个同名片仍判为无法确认。"""
     year = str(hint['year']) if hint.get('year') else ''
     for variant in query_variants(hint.get('query')):
-        target = normal(variant)
+        target = normal_title(variant)
         candidates = {}
         for row in results:
-            names = [row.get(k, '') for k in ('title', 'original_title', 'name', 'original_name')]
-            names += row.get('aliases', [])
-            if target not in {normal(n) for n in names if n}:
+            if target not in candidate_titles(row):
                 continue
             released = (row.get('release_date') or row.get('first_air_date') or '')[:4]
             if year and released != year:
@@ -580,11 +635,9 @@ def title_candidates(hint, results):
     """
     ordered, seen = [], set()
     for variant in query_variants(hint.get('query')):
-        target = normal(variant)
+        target = normal_title(variant)
         for row in results:
-            names = [row.get(k, '') for k in ('title', 'original_title', 'name', 'original_name')]
-            names += row.get('aliases', [])
-            if target not in {normal(n) for n in names if n}:
+            if target not in candidate_titles(row):
                 continue
             if row.get('id') in seen:
                 continue
