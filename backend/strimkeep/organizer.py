@@ -1133,7 +1133,7 @@ class Organizer:
             if status == 404:
                 # 404 = 「TMDB 里没有这个条目」。用专门的 code 让调用方自己决定：
                 # 作品详情缺失 → 转人工；单集缺失 → 按文件名兜底照常归档。
-                raise CloudError('TMDB 中找不到该条目（HTTP 404）。', 'TMDB_NOT_FOUND', 404) from None
+                raise CloudError('TMDB 中找不到该条目（GET %s → 404）。' % path, 'TMDB_NOT_FOUND', 404) from None
             raise CloudError(f'TMDB 请求失败（HTTP {status}）。', 'TMDB_UNAVAILABLE', 502) from None
         except httpx.TimeoutException:
             raise CloudError('TMDB 请求失败（连接或响应超时）。', 'TMDB_UNAVAILABLE') from None
@@ -1365,9 +1365,28 @@ class Organizer:
         try:
             details = await self.tmdb(f'{kind}/{tmdb_id}')
         except CloudError as exc:
-            if exc.code == 'TMDB_NOT_FOUND':
-                raise NeedsReview('TMDB 中找不到对应条目（HTTP 404），已转人工核查。') from None
-            raise
+            if exc.code != 'TMDB_NOT_FOUND':
+                raise
+            # 搜索结果里的这个 id 可能已失效：换同一次搜索的其它候选再试，最多 2 个。
+            # 只换 id、不改判定标准：候选本身已经过 pick() 的年份/标题筛选。
+            candidates = [row.get('id') for row in (locals().get('results') or [])
+                          if isinstance(row, dict) and row.get('id')
+                          and int(row['id']) != int(tmdb_id)]
+            details = None
+            for alt in candidates[:2]:
+                try:
+                    candidate = await self.tmdb(f'{kind}/{alt}')
+                except CloudError:
+                    continue
+                if int(candidate.get('id', 0)) == int(alt):
+                    details = candidate
+                    tmdb_id = alt
+                    hint['tmdb_id'] = alt
+                    hint['tmdb_fallback'] = True
+                    break
+            if details is None:
+                raise NeedsReview(
+                    'TMDB 中找不到对应条目（GET %s/%s → 404），已转人工核查。' % (kind, tmdb_id)) from None
         if int(details.get('id', 0)) != int(tmdb_id):
             raise NeedsReview('TMDB 详情身份不匹配。')
         return details
