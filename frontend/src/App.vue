@@ -26,7 +26,6 @@ const headerSearch=ref('')
 function searchMedia(){const q=headerSearch.value.trim();if(!q)return;mobile.value=false;void router.push({name:'explore',query:{q}})}
 const ORDER_KEY='sk.sidebar.order'
 const savedOrder=ref<Record<string,string[]>>((()=>{try{return JSON.parse(localStorage.getItem(ORDER_KEY)||'{}')||{}}catch{return {}}})())
-const sortMode=ref(false)
 const orderedMenu=computed(()=>{
   const out:any[]=[]
   for(const group of ['media','system']){
@@ -38,18 +37,6 @@ const orderedMenu=computed(()=>{
   }
   return out
 })
-function moveItem(id:string, delta:number){
-  const item=orderedMenu.value.find((m:any)=>m.id===id)
-  if(!item) return
-  const groupItems=orderedMenu.value.filter((m:any)=>m.group===item.group)
-  const index=groupItems.findIndex((m:any)=>m.id===id)
-  const target=index+delta
-  if(target<0||target>=groupItems.length) return
-  const ids=groupItems.map((m:any)=>m.id)
-  const swap=ids[index]; ids[index]=ids[target]; ids[target]=swap
-  savedOrder.value={...savedOrder.value,[item.group]:ids}
-  try{localStorage.setItem(ORDER_KEY,JSON.stringify(savedOrder.value))}catch{}
-}
 const quickMenu=computed(()=>{
   const media=orderedMenu.value.filter((m:any)=>m.group==='media')
   const tasks=orderedMenu.value.find((m:any)=>m.id==='tasks')
@@ -81,6 +68,9 @@ async function api(path:string,method='GET',body?:unknown):Promise<any>{
  try{return await request}finally{if(pendingReads.get(path)===request)pendingReads.delete(path)}
 }
 watch(title,value=>{document.title=value+' · StrimKeep'},{immediate:true})
+const reloadOrder=()=>{try{savedOrder.value=JSON.parse(localStorage.getItem(ORDER_KEY)||'{}')||{}}catch{}}
+window.addEventListener('sk-sidebar-order',reloadOrder)
+onUnmounted(()=>window.removeEventListener('sk-sidebar-order',reloadOrder))
 watch([dark,mobile],()=>{document.querySelector('meta[name="theme-color"]')?.setAttribute('content',dark.value?'#192434':'#ffffff');document.body.classList.toggle('menu-open',mobile.value)})
 function closeMenu(event:KeyboardEvent){if(event.key==='Escape')mobile.value=false}
 window.addEventListener('keydown',closeMenu)
@@ -112,7 +102,7 @@ onUnmounted(()=>{matcher.removeEventListener('change',systemTheme)})
 <main v-else-if="!logged" class="auth-page"><section class="auth-card"><div class="app-logo">S</div><h1>StrimKeep</h1><p class="muted">让资源归位，让观看更简单。</p><el-form label-position="top" @submit.prevent="login"><el-form-item label="管理员账号"><el-input v-model="draft.username" autocomplete="username" size="large"/></el-form-item><el-form-item label="密码"><el-input v-model="draft.password" type="password" show-password autocomplete="current-password" size="large"/></el-form-item><el-alert v-if="error" :title="error" type="error" :closable="false"/><el-button type="primary" native-type="submit" :loading="busy" size="large" class="full">登录</el-button></el-form><small class="muted">{{version}} · 响应式工作台</small></section></main>
 <div v-else class="app-shell" :class="{'has-wallpaper':appearance.background_url}">
  <aside id="main-navigation" :class="['app-sidebar',{open:mobile}]"><div class="app-brand"><div class="app-logo">S</div><div><strong>StrimKeep</strong><small>私人媒体工作台</small></div><button class="sidebar-close icon-button" aria-label="关闭导航" @click="mobile=false">×</button></div>
-  <nav aria-label="主导航"><template v-for="group in ['media','system']" :key="group"><p class="nav-group-heading">{{group==='media'?'媒体管理':'运行与系统'}}<button class="nav-sort-toggle" :aria-pressed="sortMode" @click="sortMode=!sortMode">{{sortMode?'完成':'排序'}}</button></p><div v-for="m in orderedMenu.filter(m=>m.group===group)" :key="m.id" class="nav-item"><button :class="{active:page===m.id}" :aria-current="page===m.id?'page':undefined" @click="sortMode?null:go(m.id)"><el-icon><component :is="m.icon"/></el-icon><span>{{m.title}}</span></button><template v-if="sortMode"><button class="nav-move" aria-label="上移" @click.stop="moveItem(m.id,-1)">↑</button><button class="nav-move" aria-label="下移" @click.stop="moveItem(m.id,1)">↓</button></template></div></template></nav>
+  <nav aria-label="主导航"><template v-for="group in ['media','system']" :key="group"><p class="nav-group-heading">{{group==='media'?'媒体管理':'运行与系统'}}</p><button v-for="m in orderedMenu.filter(m=>m.group===group)" :key="m.id" :class="{active:page===m.id}" :aria-current="page===m.id?'page':undefined" @click="go(m.id)"><el-icon><component :is="m.icon"/></el-icon><span>{{m.title}}</span></button></template></nav>
   <div class="sidebar-info"><span class="status-light"/>服务运行状态以总览为准<small>版本 {{version}}</small></div>
  </aside><div v-if="mobile" class="app-scrim" @click="mobile=false"/>
  <main class="app-main"><header class="app-header"><div class="header-leading"><button class="icon-button mobile-menu" aria-label="打开导航" aria-controls="main-navigation" :aria-expanded="mobile" @click="mobile=true"><el-icon><Menu/></el-icon></button><span class="desktop-crumb">工作空间</span><span class="muted desktop-crumb">/</span><strong class="desktop-crumb">{{title}}</strong><div class="mobile-brand"><span class="mini-logo">S</span><span><b>StrimKeep</b><small>私人媒体工作台</small></span></div></div><div class="header-actions"><form class="header-search" @submit.prevent="searchMedia"><el-icon><Search/></el-icon><input v-model="headerSearch" aria-label="搜索电影或剧集" placeholder="搜索电影、剧集或关键词…"/></form><button class="icon-button" :aria-label="dark?'切换浅色':'切换深色'" @click="toggleTheme()"><el-icon><Sunny v-if="dark"/><Moon v-else/></el-icon></button><span class="user-name">{{username}}</span><el-button text :icon="SwitchButton" @click="logout">退出</el-button></div></header>

@@ -4,6 +4,40 @@ import {ElMessage} from 'element-plus'
 import {useRoute} from 'vue-router'
 const route=useRoute()
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>;tab?:string}>();const emit=defineEmits<{appearance:[value:any]}>()
+const SIDEBAR_MENU=[
+ {key:'media',label:'媒体管理',items:[
+  {id:'overview',title:'媒体总览'},{id:'explore',title:'影视探索'},{id:'inventory',title:'库存管理'},
+  {id:'account',title:'115 网盘'},{id:'transfer',title:'资源入库'},{id:'sharestrm',title:'分享 STRM'},
+  {id:'channels',title:'频道监控'},{id:'organize',title:'影视整理'},{id:'recognize',title:'识别测试'},
+  {id:'sync',title:'STRM 管理'}]},
+ {key:'system',label:'运行与系统',items:[
+  {id:'embyproxy',title:'Emby 反代'},{id:'tasks',title:'任务中心'},{id:'logs',title:'实时日志'},
+  {id:'settings',title:'系统设置'}]}]
+const sidebarOrder=ref<Record<string,string[]>>({})
+function loadSidebarOrder(){try{sidebarOrder.value=JSON.parse(localStorage.getItem('sk.sidebar.order')||'{}')||{}}catch{sidebarOrder.value={}}}
+function sidebarItems(group:any){
+  const saved=sidebarOrder.value[group.key]||[]
+  const byId=new Map<string,any>(group.items.map((i:any)=>[String(i.id),i]))
+  const out=saved.map((id:string)=>byId.get(id)).filter(Boolean) as any[]
+  for(const i of group.items) if(!out.includes(i)) out.push(i)
+  return out
+}
+function moveSidebar(group:any,id:string,delta:number){
+  const items=sidebarItems(group)
+  const index=items.findIndex((i:any)=>i.id===id)
+  const target=index+delta
+  if(target<0||target>=items.length) return
+  const ids=items.map((i:any)=>i.id)
+  const swap=ids[index]; ids[index]=ids[target]; ids[target]=swap
+  sidebarOrder.value={...sidebarOrder.value,[group.key]:ids}
+  localStorage.setItem('sk.sidebar.order',JSON.stringify(sidebarOrder.value))
+  window.dispatchEvent(new CustomEvent('sk-sidebar-order'))
+}
+function resetSidebarOrder(){
+  localStorage.removeItem('sk.sidebar.order')
+  sidebarOrder.value={}
+  window.dispatchEvent(new CustomEvent('sk-sidebar-order'))
+}
 const connections=ref({tmdb_key:'',emby_url:'',emby_key:'',playback_base:''}),mask=ref<any>({}),mediaBusy=ref(false),mediaMsg=ref(''),mediaInfo=ref<any>({enabled:true,extract:true,cron_enabled:false,cron:'0 4 * * *',timezone:'Asia/Shanghai'}),tg=ref<any>({telegram_enabled:false,bot_token:'',chat_id:'',categories:{}}),tgMask=ref<any>({}),appearance=ref<any>({theme:'system',background_url:'',background_opacity:.12,strm_container_path:'/strm',emby_strm_path:'/strimkeep'}),network=ref<any>({enabled:false,proxy_emby:false,proxy_url:''}),networkMask=ref<any>({}),throttle=ref<any>({read_ms:350,write_ms:3000,burst:15,pause_ms:30000}),busy=ref(false),error=ref(''),tab=ref(['resource','telegram','emby'].includes(String(route.query.section))?String(route.query.section):props.tab||'services'),checks=ref<Record<string,string>>({}),coverBusy=ref(false),coverMsg=ref(''),transferBot=ref<any>({bot_enabled:false,allowed_user_id:''}),transferBotAll=ref<any>(null),botState=ref<any>({state:'disabled'}),botCmds=ref<any[]>([])
 const coverStatus=ref<any>(null),coverStatusError=ref('')
 async function loadCoverStatus(){try{coverStatus.value=await props.api('/cover/status');coverStatusError.value=''}catch(e){coverStatusError.value=(e as Error).message}}
@@ -48,15 +82,33 @@ onMounted(()=>{if(tab.value==='resource')void loadResource();run(async()=>{
  try{const m=await props.api('/emby/media-info/config');mediaInfo.value={enabled:m.enabled!==false,extract:!!m.extract,cron_enabled:!!m.cron_enabled,cron:m.cron||'0 4 * * *',timezone:m.timezone||'Asia/Shanghai'};loaded.value.media=true}catch(e){error.value+=(error.value?'；':'')+'媒体信息设置读取失败：'+(e as Error).message}
  });void loadTransferBot();void loadBotCommands()})
 </script>
-<template><div class="page-title"><div><h1>系统设置</h1><p class="muted">连接服务、通知分类、网络代理与工作台外观。</p></div></div><el-alert v-if="error" :title="error" type="error"/><el-tabs v-model="tab" class="settings-tabs"><el-tab-pane label="服务连接" name="services"/><el-tab-pane label="资源来源" name="resource"/><el-tab-pane label="Telegram 通知" name="telegram"/><el-tab-pane label="网络代理" name="network"/><el-tab-pane label="外观" name="appearance"/></el-tabs>
+<template><div class="page-title"><div><h1>系统设置</h1><p class="muted">连接服务、通知分类、网络代理与工作台外观。</p></div></div><el-alert v-if="error" :title="error" type="error"/><el-tabs v-model="tab" class="settings-tabs"><el-tab-pane label="服务连接" name="services"/><el-tab-pane label="资源来源" name="resource"/><el-tab-pane label="Telegram 通知" name="telegram"/><el-tab-pane label="网络代理" name="network"/><el-tab-pane label="外观" name="appearance"/><el-tab-pane label="侧边栏" name="sidebar"/></el-tabs>
 <template v-if="tab==='services'"><section class="panel settings-panel"><h2>TMDB</h2><el-form label-position="top" :disabled="busy"><el-form-item label="TMDB API Key"><el-input v-model="connections.tmdb_key" type="password" autocomplete="new-password" show-password :placeholder="mask.tmdb_key_configured?'已保存，留空保留原值':'填写 API Key'"/></el-form-item></el-form><el-button :loading="busy" @click="check('tmdb')">检查连接</el-button><span class="hint">{{checks.tmdb}}</span></section><section class="panel settings-panel"><h2>115 请求节奏</h2><el-form label-position="top" :disabled="busy"><el-form-item label="读接口最小间隔（毫秒）"><el-input-number v-model="throttle.read_ms" :min="0" :max="5000" :step="50"/></el-form-item><el-form-item label="写接口最小间隔（移动/重命名/删除，毫秒）"><el-input-number v-model="throttle.write_ms" :min="0" :max="15000" :step="500"/></el-form-item></el-form><p class="hint">后台请求按设置的读写间隔执行；115 返回限流时会自动放慢并冷却。批量整理不再按固定写入次数额外暂停。</p><el-button :loading="busy" @click="saveThrottle">保存请求节奏</el-button></section><div class="save-bar"><el-button type="primary" :loading="busy" @click="saveConnections">保存服务连接</el-button></div></template>
 <section v-if="tab==='resource'" class="panel settings-panel"><h2> 资源来源</h2><p class="hint">用于影视探索检索资源；转存目标在「资源入库 → 保存目录」里单独设置（留空则跟随 Web 转存目录）。</p><el-form label-position="top" :disabled="busy"><el-form-item label=" 服务地址"><el-input v-model="resource.base_url" placeholder="http://192.0.2.10:12366"/></el-form-item><el-form-item label="OpenAPI 令牌"><el-input v-model="resource.token" type="password" show-password autocomplete="new-password" :placeholder="resourceConfigured?'已加密保存，地址不变时留空保留原值':'填写  OpenAPI 令牌'"/></el-form-item></el-form><p class="hint">更换服务地址时需要重新填写令牌。获取需要积分的资源前会单独提示确认。</p><div class="button-row"><el-button type="primary" :loading="busy" @click="saveResource">保存资源来源</el-button><el-button v-if="resourceConfigured" :disabled="busy" @click="clearResource">清除本地令牌</el-button></div></section>
 <section v-if="tab==='telegram'" class="panel settings-panel"><h2>Telegram 机器人与通知</h2><el-form label-position="top" :disabled="busy"><el-form-item label="启用 Telegram 推送"><el-switch v-model="tg.telegram_enabled"/></el-form-item><el-form-item label="Bot Token"><el-input v-model="tg.bot_token" type="password" autocomplete="new-password" show-password :placeholder="tgMask.bot_token_configured?'已加密保存，留空保留原值':'填写 Bot Token'"/></el-form-item><el-form-item label="通知接收 Chat ID"><el-input v-model="tg.chat_id" autocomplete="off" :placeholder="tgMask.chat_id_configured?'已保存，留空保留原值':'用户、群组或频道 ID'"/></el-form-item></el-form><h3>选择要发送的消息</h3><div class="notification-choices"><div v-for="[key,label] in categories" :key="key"><span>{{label}}</span><el-switch v-model="tg.categories[key]" :aria-label="label"/></div></div><p class="hint">定时整理未发现资源只写入日志，不推送 TG。机器人私聊的指令回执正常回复；是否接收链接、谁能操作在「资源入库」页的「Telegram 接收链接」中设置。</p><div class="button-row"><el-button type="primary" :loading="busy" @click="saveTg">保存通知设置</el-button><el-button :disabled="busy||!tgMask.bot_token_configured" @click="testTg">发送测试通知</el-button></div></section>
 <section v-if="tab==='telegram'" class="panel settings-panel"><h2>Telegram 接收链接</h2><p class="hint">私聊机器人发送链接即可转存，复用上面的 Bot Token；落盘后是否立即整理在「资源入库」页的「落盘后处理」里设置。</p><el-form label-position="top" :disabled="busy"><el-form-item label="启用转存机器人"><el-switch v-model="transferBot.bot_enabled"/></el-form-item><el-form-item label="允许操作的 TG 用户数字 ID"><el-input v-model="transferBot.allowed_user_id" placeholder="仅此用户可以私聊机器人发起转存"/></el-form-item></el-form><p v-if="transferBot.bot_enabled" class="hint">{{botState.state==='ready'?'机器人已连接，可发送新链接':botState.state==='error'?botState.message:'机器人正在连接，请稍候再发链接'}}。启用前的旧消息不会自动执行。</p><div class="button-row"><el-button type="primary" :loading="busy" @click="saveTransferBot">保存接收设置</el-button></div><h3>机器人指令</h3><p class="hint">使用上下按钮调整菜单顺序；关闭的指令不会显示在菜单中，也不会执行。帮助始终显示在最前面。</p><div class="bot-command-grid"><div v-for="(c,index) in botCmds" :key="c.name" class="bot-command-row"><div class="command-label"><strong>{{c.label}}</strong><code>/{{c.name}}</code></div><div class="command-actions"><el-button size="small" :disabled="busy||index===0" :aria-label="`上移${c.label}`" @click="moveBotCommand(index,-1)">↑</el-button><el-button size="small" :disabled="busy||index===botCmds.length-1" :aria-label="`下移${c.label}`" @click="moveBotCommand(index,1)">↓</el-button><el-switch v-model="c.enabled" :aria-label="c.label"/></div></div></div><div class="button-row"><el-button :loading="busy" @click="saveBotCommands">保存指令设置</el-button></div></section>
+<section v-if="tab==='sidebar'" class="panel settings-panel"><h2>侧边栏顺序</h2>
+<p class="hint">只在同一分组内上下移动；保存后左侧导航和底部常用导航都会按这个顺序显示。</p>
+<div v-for="group in SIDEBAR_MENU" :key="group.key" class="sidebar-order-group">
+  <h3>{{ group.label }}</h3>
+  <div v-for="(item, index) in sidebarItems(group)" :key="item.id" class="sidebar-order-row">
+    <span class="sidebar-order-name">{{ index + 1 }}. {{ item.title }}</span>
+    <span class="sidebar-order-actions">
+      <el-button size="small" :disabled="index === 0" @click="moveSidebar(group, item.id, -1)">上移</el-button>
+      <el-button size="small" :disabled="index === sidebarItems(group).length - 1" @click="moveSidebar(group, item.id, 1)">下移</el-button>
+    </span>
+  </div>
+</div>
+<el-button @click="resetSidebarOrder">恢复默认顺序</el-button></section>
 <section v-if="tab==='network'" class="panel settings-panel"><h2>HTTP 代理</h2><el-form label-position="top" :disabled="busy"><el-form-item label="启用代理"><el-switch v-model="network.enabled"/></el-form-item><el-form-item label="代理地址"><el-input v-model="network.proxy_url" type="password" autocomplete="new-password" show-password :placeholder="networkMask.proxy_configured?'已保存，留空保留原值':'http://192.0.2.10:7890'"/></el-form-item><el-form-item label="远程 Emby 请求也通过代理"><el-switch v-model="network.proxy_emby"/></el-form-item></el-form><p class="hint">用于 TMDB、Telegram 等服务。同机 Emby 固定直连；远程 Emby 可启用代理。115 文件传输与播放取链保持独立直连。</p><el-button type="primary" :loading="busy" @click="saveNetwork">保存网络设置</el-button></section>
 <section v-if="tab==='appearance'" class="panel settings-panel"><h2>工作台外观</h2><el-form label-position="top" :disabled="busy"><el-form-item label="显示模式"><el-radio-group v-model="appearance.theme" @change="emit('appearance',appearance)"><el-radio-button value="light">浅色</el-radio-button><el-radio-button value="dark">深色</el-radio-button><el-radio-button value="system">跟随系统</el-radio-button></el-radio-group></el-form-item><el-form-item label="自定义背景图片地址"><el-input v-model="appearance.background_url" clearable placeholder="https://example.com/background.jpg"/></el-form-item><el-form-item label="背景显示强度"><el-slider v-model="appearance.background_opacity" :min="0" :max=".5" :step=".01"/></el-form-item></el-form><p class="hint">图片地址留空使用默认背景。深色模式同时适配导航、表单、弹窗、目录表格与日志。</p><el-button type="primary" :loading="busy" @click="saveAppearance">保存外观</el-button></section></template>
 
 <style scoped>
+.sidebar-order-group{margin:14px 0}
+.sidebar-order-group h3{font-size:13px;margin:0 0 8px;color:var(--el-text-color-secondary)}
+.sidebar-order-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--el-border-color-lighter)}
+.sidebar-order-name{font-size:13px}
+
 
 .media-diagnostics{margin:16px 0;padding:12px;border:1px solid var(--line);border-radius:9px}.media-diagnostics summary{cursor:pointer}.media-diagnostics .file-path{overflow-wrap:anywhere;font-size:12px;color:var(--muted)}.media-failure{padding:9px 0;border-top:1px solid var(--line);font-size:13px}
 .settings-tabs :deep(.el-tabs__header){margin-bottom:18px}.settings-panel h2{padding-bottom:12px;border-bottom:1px solid var(--line);margin-bottom:18px}.settings-panel :deep(.el-form-item__label){font-weight:600}.settings-panel .hint{line-height:1.75}.notification-choices>div{padding:13px 2px;gap:14px}.settings-panel :deep(.el-input__wrapper){min-height:36px}.settings-panel :deep(.el-input-number){max-width:100%}
