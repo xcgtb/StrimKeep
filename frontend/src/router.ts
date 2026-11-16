@@ -13,6 +13,7 @@ const routes: RouteRecordRaw[] = [
   {path: '/organize', name: 'organize', component: () => import('./Organize.vue'), meta: {title: '影视整理'}},
   {path: '/recognize', name: 'recognize', component: () => import('./Recognize.vue'), meta: {title: '识别测试'}},
   {path: '/sync', name: 'sync', component: () => import('./Sync.vue'), meta: {title: 'STRM 管理'}},
+  {path: '/emby-proxy', name: 'embyproxy', component: () => import('./EmbyProxy.vue'), meta: {title: 'Emby 反代'}},
   {path: '/tasks', name: 'tasks', component: () => import('./Tasks.vue'), meta: {title: '任务中心'}},
   {path: '/logs', name: 'logs', component: () => import('./Logs.vue'), meta: {title: '实时日志'}},
   {path: '/notifications', name: 'notifications', redirect: {name:'settings',query:{section:'telegram'}}},

@@ -1,0 +1,9 @@
+{
+  "name": "StrimKeep · 私人媒体工作台",
+  "short_name": "StrimKeep",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#192434",
+  "theme_color": "#3b82f6",
+  "icons": [{"src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]
+}
