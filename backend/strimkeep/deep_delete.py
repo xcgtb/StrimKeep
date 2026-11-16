@@ -126,6 +126,29 @@ def match_targets(store, event):
     return {'managed': managed, 'share': share, 'type': event['type'], 'path': path}
 
 
+def recently_deleted(store, path):
+    """事件路径是不是我们刚清理掉的本地文件。
+
+    台账（播放/分享登记）被清空后，Emby 仍会为这些文件发删除通知；
+    这里按「内部删除登记」直接认出来，避免每删一次就刷三条未命中。
+    """
+    if not path:
+        return False
+    from .internal_delete import recent
+    try:
+        seen = recent(store)
+    except Exception:
+        return False
+    normalized = str(path).replace('\\', '/').rstrip('/')
+    if not normalized or not seen:
+        return False
+    for marker in seen:
+        marker = str(marker).replace('\\', '/').lstrip('/')
+        if normalized.endswith('/' + marker) or normalized == marker:
+            return True
+    return False
+
+
 def drop_internal(store, targets):
     """剔除「本地文件是程序自己删的」目标（0.8.32）。
 

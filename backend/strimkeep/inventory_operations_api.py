@@ -90,14 +90,18 @@ def install_inventory_operations(app, store, admin):
                                   snapshot['policy']['inventory'].get('match_strategy', 'title_year')))
                 selections = [v.model_dump() for v in body.selections]
                 if body.mode == 'manual':
-                    actions = manual_actions(projection, selections, snapshot['unsupported'])
+                    actions = await asyncio.to_thread(
+                        manual_actions, projection, selections, snapshot['unsupported'])
                 else:
-                    current_revision = governance_revision(projection, snapshot['policy']['upgrade'], snapshot['policy']['inventory'], snapshot['sources'])
+                    current_revision = await asyncio.to_thread(
+                        governance_revision, projection, snapshot['policy']['upgrade'],
+                        snapshot['policy']['inventory'], snapshot['sources'])
                     if not body.scan_revision or body.scan_revision != current_revision:
                         raise ValueError('库存或规则已变化，请重新扫描后再执行')
                     tie = snapshot['policy']['inventory'].get('tie', 'cloud')
                     settings = snapshot['policy']['inventory']
-                    preview = governance_preview(
+                    preview = await asyncio.to_thread(
+                        governance_preview,
                         projection, snapshot['policy']['upgrade'], tie,
                         threshold=settings['season_ratio'],
                         quiet_minutes=settings['quiet_minutes'],
@@ -122,19 +126,22 @@ def install_inventory_operations(app, store, admin):
                     if body.mode == 'governance':
                         actions = []
                         if singles:
-                            actions.extend(single_actions(projection, preview, [v.model_dump() for v in singles],
-                                                          snapshot['unsupported']))
+                            actions.extend(await asyncio.to_thread(
+                                single_actions, projection, preview,
+                                [v.model_dump() for v in singles], snapshot['unsupported']))
                         if duals:
-                            actions.extend(dual_actions(projection, preview, [v.model_dump() for v in duals],
-                                                        snapshot['unsupported']))
+                            actions.extend(await asyncio.to_thread(
+                                dual_actions, projection, preview,
+                                [v.model_dump() for v in duals], snapshot['unsupported']))
                         keys = [(v['side'], v['id'], v['path']) for v in actions]
                         if not actions or len(actions) > 10000 or len(set(keys)) != len(keys):
                             raise ValueError('治理目标为空、重复或超过 10000 条')
                     else:
-                        actions = (dual_actions(projection, preview, selections, snapshot['unsupported'])
-                                   if body.mode == 'dual'
-                                   else single_actions(projection, preview, selections, snapshot['unsupported']))
-                plan_id = create_plan(store.db, {'inventory': snapshot, 'actions': actions}, ttl=ttl)
+                        actions = await asyncio.to_thread(
+                            dual_actions if body.mode == 'dual' else single_actions,
+                            projection, preview, selections, snapshot['unsupported'])
+                plan_id = await asyncio.to_thread(
+                    create_plan, store.db, {'inventory': snapshot, 'actions': actions}, ttl=ttl)
                 # 计划类型单独存一条 meta：_validate 只认 inventory/actions，别塞进去。
                 if hasattr(store, 'set_meta'):
                     store.set_meta('inventory-plan-mode:' + plan_id, {'mode': body.mode})

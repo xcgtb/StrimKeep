@@ -1297,14 +1297,22 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
                         '（旧命名副本/退役输出），不代表用户要删云端。' % internal_skipped)
         matched = len(targets['managed']) + len(targets['share'])
         if not matched:
+            # 程序自己清理过的本地文件也会触发 Emby 的删除通知：按内部删除登记认出来，
+            # 不再写成「未命中」（那种提示既吓人又没法据此排查）。
+            if deep_delete.recently_deleted(store, event.get('path')):
+                if not quiet:
+                    store.event('deep_delete', '深度删除 · 跳过：这是本程序刚清理的本地文件（%s），不需要处理。'
+                                % (event.get('path') or '')[:160])
+                return {'accepted': True, 'matched': 0, 'skipped': True,
+                        'reason': '本地文件是本程序清理的，已跳过'}
             if not quiet:
-                store.event('deep_delete', '深度删除 · 未命中：收到「%s」事件 %s，台账里没有对应条目（未执行任何删除）'
+                store.event('deep_delete', '深度删除 · 未匹配：收到「%s」事件 %s，没有找到这条文件的取链记录（未执行任何删除）'
                             % (event['type'], event.get('path') or ('tmdb:%s' % event.get('tmdb'))))
-                store.set_meta('deep_delete_last', {'at': time.time(), 'mode': '未命中',
+                store.set_meta('deep_delete_last', {'at': time.time(), 'mode': '未匹配',
                                                     'path': event.get('path') or ('tmdb:%s' % event.get('tmdb')),
                                                     'errors': 0, 'details': []})
             return {'accepted': True, 'matched': 0,
-                    'reason': '事件路径没有对齐到本项目台账，未执行任何删除'}
+                    'reason': '没有找到这条文件的取链记录，未执行任何删除'}
         dry_run = bool((store.get('sync_config') or {}).get('deep_delete_dry_run', True))
         mode = '预演' if dry_run else '执行'
         source = event.get('path') or ('tmdb:%s' % event.get('tmdb'))

@@ -3,6 +3,8 @@
 The caller must verify identities, scan completeness and execution snapshots;
 these functions neither enumerate nor delete files.
 """
+from functools import lru_cache
+
 from .media import NeedsReview, media_from_filename
 from .quality import LABELS, compare, facts, rule_value
 from .legacy_1212_quality import recognize_dims
@@ -57,7 +59,8 @@ def single_library_versions(filenames, policy):
         return {'winner': None, 'reason': 'unknown_quality', 'detail': str(exc)}
 
 
-def _filename_facts(name):
+@lru_cache(maxsize=8192)
+def _filename_facts_cached(name):
     """Use the original 1.2.12 recognizer with the organizer's rule ordering."""
     media = media_from_filename(name)
     legacy = recognize_dims(name)
@@ -92,6 +95,14 @@ def _filename_facts(name):
     if dv == 'HDR Vivid':
         result['dynamic_range'] = 'hdrvivid'
     return result
+
+
+def _filename_facts(name):
+    """同一批文件在一次扫描里会被比较很多次：解析结果按文件名缓存。
+
+    返回浅拷贝，调用方想改字段也不会污染缓存。
+    """
+    return dict(_filename_facts_cached(name))
 
 
 def _governance_rule(rule):

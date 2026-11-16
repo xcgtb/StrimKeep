@@ -370,15 +370,28 @@ def _dedupe_candidates(item, sp, lp, covered, policy):
                 continue
             if (step, _media_key('movie', item['title'], None)) in covered:
                 continue
-            verdict = _version_verdict(files, policy)
-            losers = [row for index, row in enumerate(files) if index != verdict['winner']]
+            playable = [row for row in files if row.get('registered', True)]
+            if not playable:
+                # 全都没有取链记录：删了就没得播了，一条都不动，只报给用户。
+                rows.append({'side': side, 'season': None, 'episode': None, 'files': files,
+                             'losers': [], 'keep_paths': [row['path'] for row in files],
+                             'delete_paths': [], 'broken_paths': [row['path'] for row in files],
+                             'reason_label': '库内多版本-无取链记录', 'dup_count': len(files),
+                             'keeps': [], 'comparisons': [], 'winner': None,
+                             'reason': 'unplayable', 'tie': False, 'decisive': ''})
+                continue
+            verdict = _version_verdict(playable, policy)
+            winner = playable[verdict['winner']]
+            losers = [row for row in files if row['path'] != winner['path']]
             rows.append({'side': side, 'season': None, 'episode': None, 'files': files,
                          'losers': losers,
-                         'keep_paths': [files[verdict['winner']]['path']],
+                         'keep_paths': [winner['path']],
                          'delete_paths': [row['path'] for row in losers],
+                         'broken_paths': [row['path'] for row in losers
+                                          if not row.get('registered', True)],
                          'reason_label': '库内多版本-删低版', 'dup_count': len(files),
-                         'keeps': [{'episode': None, 'name': files[verdict['winner']]['name']}],
-                         'comparisons': _version_evidence(files, verdict['winner'], policy),
+                         'keeps': [{'episode': None, 'name': winner['name']}],
+                         'comparisons': _version_evidence(playable, verdict['winner'], policy),
                          **verdict})
         return rows
     for side, step, seasons in (('cloud', 'loc', lp), ('share', 'shr', sp)):
@@ -394,22 +407,47 @@ def _dedupe_candidates(item, sp, lp, covered, policy):
                 if len(episodes) == 1 and episodes[0] > 0:
                     grouped[episodes[0]].append(row)
             dupes = {episode: group for episode, group in grouped.items() if len(group) > 1}
-            if not dupes:
+            # 这一集只有「无取链」副本：播不了，但也不该悄悄留着，报给用户重新入库。
+            playless = [row for group in grouped.values()
+                        if not any(row.get('registered', True) for row in group) for row in group]
+            if not dupes and not playless:
                 continue
-            losers, keeps, tie, comparisons, decisive = [], [], False, [], ''
+            losers, keeps, tie, comparisons, decisive, broken = [], [], False, [], '', []
             for episode in sorted(dupes):
                 group = dupes[episode]
-                verdict = _version_verdict(group, policy)
+                # 没有取链记录的副本播不了，不能拿来跟能播的比：先筛出可播的。
+                playable = [row for row in group if row.get('registered', True)]
+                if not playable:
+                    broken.extend(group)
+                    continue
+                verdict = _version_verdict(playable, policy)
                 tie = tie or verdict['tie']
                 decisive = decisive or verdict.get('decisive', '')
-                losers.extend(row for index, row in enumerate(group) if index != verdict['winner'])
-                keeps.append({'episode': episode, 'name': group[verdict['winner']]['name']})
-                comparisons.extend(_version_evidence(group, verdict['winner'], policy, episode))
+                winner = playable[verdict['winner']]
+                # 落选的可播副本 + 全部无取链副本一起清理（后者本来就播不了）。
+                losers.extend(row for row in group if row['path'] != winner['path'])
+                keeps.append({'episode': episode, 'name': winner['name']})
+                comparisons.extend(_version_evidence(playable, verdict['winner'], policy, episode))
+            known = {row['path'] for row in broken}
+            broken.extend(row for row in playless if row['path'] not in known)
+            if not losers and broken:
+                # 这一季只有「无取链」副本：先别动，报给用户重新入库。
+                rows.append({'side': side, 'season': season, 'episode': None, 'files': files,
+                             'losers': [], 'keeps': [], 'dup_episodes': sorted(dupes),
+                             'keep_paths': [row['path'] for row in files],
+                             'delete_paths': [], 'broken_paths': [row['path'] for row in broken],
+                             'reason_label': '库内多版本-无取链记录', 'dup_count': len(dupes),
+                             'comparisons': [], 'decisive': '', 'winner': None,
+                             'reason': 'unplayable', 'tie': False})
+                continue
             doomed = {row['path'] for row in losers}
+            broken_paths = ([row['path'] for row in broken]
+                            + [row['path'] for row in losers if not row.get('registered', True)])
             rows.append({'side': side, 'season': season, 'episode': None, 'files': files,
                          'losers': losers, 'keeps': keeps, 'dup_episodes': sorted(dupes),
                          'keep_paths': [row['path'] for row in files if row['path'] not in doomed],
                          'delete_paths': [row['path'] for row in losers],
+                         'broken_paths': broken_paths,
                          'reason_label': '库内多版本-删低版', 'dup_count': len(dupes),
                          'comparisons': comparisons, 'decisive': decisive,
                          'winner': None, 'reason': 'quality', 'tie': tie})
@@ -733,8 +771,21 @@ def governance_preview(snapshot, policy, tie='cloud', threshold=0.9,
         # 1.2.12 在多季保护 / 决策模型命中后直接 continue：这些剧不再做库内去重，
         # 否则同一部剧会同时出现「整组动作」和「库内多版本」两类条目。
         if decision == 'quality_first' and not multi_active:
-            output['single'].extend({**common, **row} for row in
-                                    _dedupe_candidates(item, sp, lp, covered, policy))
+            for row in _dedupe_candidates(item, sp, lp, covered, policy):
+                if row.get('reason') == 'unplayable':
+                    # 没有取链记录：删了也没得播，只提示，不进自动计划。
+                    output['blocked'].append({
+                        **common, 'season': row.get('season'),
+                        'reason': 'unplayable',
+                        'detail': ('第 %s 季有 %d 个副本没有取链记录（无法播放），'
+                                   '未自动清理；请重新入库这一季。'
+                                   % (row.get('season'), len(row.get('broken_paths') or []))),
+                        'files': row['files'],
+                        'cloud_files': row['files'] if row['side'] == 'cloud' else [],
+                        'share_files': row['files'] if row['side'] == 'share' else [],
+                        'broken_paths': row.get('broken_paths') or []})
+                    continue
+                output['single'].append({**common, **row})
 
     output['executable'] = bool(output['dual'] or output['single'])
     return output

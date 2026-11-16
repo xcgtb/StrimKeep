@@ -455,3 +455,34 @@ def test_keep_local_cleans_share_even_if_share_is_incomplete():
     result = governance_preview(snap(cloud, share), policy(), decision='keep_local')
     row = result['dual'][0]
     assert row['reason'] == 'decision_keep_local' and row['action_kind'] == 'shr'
+
+
+def _season_with_duplicate(quality_better='2160p'):
+    """E01-E05 完整，只有 E05 有两份；返回 (网盘, 分享)。"""
+    share = [file('s', 1, episode, '1080p') for episode in range(1, 6)]
+    dup = dict(file('s', 1, 5, quality_better))
+    return [], share + [dup]
+
+
+def test_dedupe_keeps_the_playable_copy_when_best_has_no_source():
+    """画质更好的那份没有取链记录（播不了）：保留能播的，删掉播不了的那份。"""
+    _, share = _season_with_duplicate()
+    share[-1]['registered'] = False          # 更优的那份没有取链记录
+    result = governance_preview(snap([], share), policy())
+    row = result['single'][0]
+    assert len(row['delete_paths']) == 1
+    assert '2160p' in row['delete_paths'][0], '应当是删掉无取链的那份'
+    assert len(row['keep_paths']) == 5
+    assert row['broken_paths'] == row['delete_paths']
+
+
+def test_dedupe_reports_unplayable_duplicates_instead_of_deleting():
+    """两份都没有取链记录：一条都不删，转需人工重新入库。"""
+    _, share = _season_with_duplicate()
+    share[-1]['registered'] = False
+    share[4]['registered'] = False
+    result = governance_preview(snap([], share), policy())
+    assert not result['single']
+    row = [item for item in result['blocked'] if item.get('reason') == 'unplayable'][0]
+    assert len(row['broken_paths']) == 2
+    assert '重新入库' in row['detail']

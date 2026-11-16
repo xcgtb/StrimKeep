@@ -573,3 +573,14 @@ def test_guarded_delete_keeps_cloud_directory_when_cloud_still_has_content(tmp_p
 
     asyncio.run(run())
 
+
+def test_recently_deleted_recognises_our_own_cleanup(tmp_path):
+    """程序自己删掉的本地文件：Emby 发来的删除通知要认得出来，别再报未命中。"""
+    from strimkeep.deep_delete import recently_deleted
+    from strimkeep.internal_delete import remember
+    store = make_store(tmp_path)
+    relative = '分享影视库/剧集/国产剧集/剧名 (2024) {tmdb-10}/Season 1/剧名.2024.S01E01.strm'
+    remember(store, [relative])
+    assert recently_deleted(store, '/media/' + relative)
+    assert not recently_deleted(store, '/media/别的东西.strm')
+    assert not recently_deleted(store, '')

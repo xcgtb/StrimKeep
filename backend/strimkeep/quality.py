@@ -37,6 +37,18 @@ PLATFORM_ALIASES = {'atvp': ('ATVP', 'AppleTV'), 'hulu': ('HULU',), 'itunes': ('
                     'mytvsuper': ('MyTVSuper',), 'wetv': ('WeTV', 'Tencent'), 'iq': ('IQ', 'IQIYI'),
                     'youku': ('YOUKU',), 'bili': ('Bili', 'Bilibili')}
 COMMON_FPS = (24, 25, 30, 48, 50, 60, 72, 90, 100, 120, 144, 165, 240)
+# 平台别名一次编译：facts() 会被库存扫描反复调用，逐次 re.escape + 重编是纯浪费。
+PLATFORM_PATTERNS = {key: tuple(re.compile(r'(?i)(?<![a-z0-9])' + re.escape(alias) + r'(?![a-z0-9])')
+                                for alias in aliases)
+                     for key, aliases in PLATFORM_ALIASES.items()}
+_FACTS_REVISION = re.compile(r'(?i)(?<![a-z0-9])V([1-9]\d?)(?![a-z0-9])')
+_FACTS_UHD = re.compile(r'(?i)\bUHD\b')
+_FACTS_REMUX = re.compile(r'(?i)\b(?:BDREMUX|REMUX)\b')
+_FACTS_BLURAY = re.compile(r'(?i)\b(?:BLU[ ._-]?RAY|BDREMUX)\b')
+_FACTS_WEB_DL = re.compile(r'(?i)\bWEB[ ._-]?DL\b')
+_FACTS_WEBRIP = re.compile(r'(?i)\bWEBRIP\b')
+_FACTS_HDTV = re.compile(r'(?i)\bHDTV\b')
+_FACTS_DVD = re.compile(r'(?i)\bDVD(?:RIP)?\b')
 # UI catalogues are suggestions, never automatically enabled deletion rules.
 OPTIONS = {
     'source': {**{v: v.upper() for v in CHOICES['source']},
@@ -192,24 +204,24 @@ def facts(original_name, media, size):
     stem = Path(original_name).stem
     # 与命名共用同一个判定：WEB-DL 的 -DL 不是发布组，否则洗版会拿假组名比对。
     group = release_group(original_name)
-    revision = re.search(r'(?i)(?<![a-z0-9])V([1-9]\d?)(?![a-z0-9])', stem)
+    revision = _FACTS_REVISION.search(stem)
     source = None
-    uhd = bool(re.search(r'(?i)\bUHD\b', stem))
-    if re.search(r'(?i)\b(?:BDREMUX|REMUX)\b', stem):
+    uhd = bool(_FACTS_UHD.search(stem))
+    if _FACTS_REMUX.search(stem):
         # REMUX alone does not establish UHD vs Blu-ray provenance.
-        source = 'uhd-remux' if uhd else 'bluray-remux' if re.search(r'(?i)\b(?:BLU[ ._-]?RAY|BDREMUX)\b', stem) else None
+        source = 'uhd-remux' if uhd else 'bluray-remux' if _FACTS_BLURAY.search(stem) else None
     elif re.search(r'(?i)\bBLU[ ._-]?RAY\b', stem):
         source = 'uhd-bluray' if uhd else 'bluray'
-    elif re.search(r'(?i)\bWEB[ ._-]?DL\b', stem):
+    elif _FACTS_WEB_DL.search(stem):
         source = 'web-dl'
-    elif re.search(r'(?i)\bWEBRIP\b', stem):
+    elif _FACTS_WEBRIP.search(stem):
         source = 'webrip'
-    elif re.search(r'(?i)\bHDTV\b', stem):
+    elif _FACTS_HDTV.search(stem):
         source = 'hdtv'
-    elif re.search(r'(?i)\bDVD(?:RIP)?\b', stem):
+    elif _FACTS_DVD.search(stem):
         source = 'dvd'
-    platforms = [key for key, aliases in PLATFORM_ALIASES.items()
-                 if any(re.search(r'(?i)(?<![a-z0-9])' + re.escape(alias) + r'(?![a-z0-9])', stem) for alias in aliases)]
+    platforms = [key for key, patterns in PLATFORM_PATTERNS.items()
+                 if any(pattern.search(stem) for pattern in patterns)]
     return {'group': group.casefold() if group else None, 'source': source,
             'platform': platforms[0] if len(platforms) == 1 else None, 'platform_ambiguous': len(platforms) > 1,
             'resolution': resolution(media),
