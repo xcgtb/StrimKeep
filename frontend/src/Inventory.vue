@@ -38,9 +38,16 @@ const governanceFilter = ref('all')
 const selectionNote = ref('')
 const governanceActions = computed(() => [
   ...(preview.value?.dual || []).map((row:any) => ({...row, actionType:'dual', deleteSide:row.action_kind === 'loc' ? 'cloud' : 'share', fileCount:actionCount(row)})),
-  ...(preview.value?.single || []).filter((row:any) => ['quality','episode_gap','covered_episode'].includes(row.reason)).map((row:any) => ({...row, actionType:'single', deleteSide:row.side, fileCount:row.reason === 'quality' ? ((row.losers || []).length || Math.max(0,(row.files || []).length - 1)) : (row.files || []).length}))
+  ...(preview.value?.single || []).filter((row:any) => ['quality','episode_gap','covered_episode'].includes(row.reason)).map((row:any) => ({...row, actionType:'single', deleteSide:row.side, fileCount:row.reason === 'quality' ? (Array.isArray(row.delete_paths) ? row.delete_paths.length : ((row.losers || []).length || Math.max(0,(row.files || []).length - 1))) : (row.files || []).length}))
 ])
 const visibleGovernanceActions = computed(() => governanceActions.value.filter(row => governanceFilter.value === 'all' || row.deleteSide === governanceFilter.value))
+// 后端给了 delete_paths / keep_paths 就照着标；老数据回退到「按 winner 下标」。
+function fileMark(row:any,file:any){
+  if (Array.isArray(row.delete_paths)) return row.delete_paths.includes(file.path) ? '将删除' : '保留'
+  if (Array.isArray(row.losers)) return row.losers.some((loser:any) => loser.path === file.path) ? '将删除' : '保留'
+  const index=(row.files||[]).indexOf(file)
+  return row.reason === 'quality' && row.winner === index ? '保留' : '将删除'
+}
 function selectedAction(row:any) { return governanceSelected.value.some(value => actionKey(value) === actionKey(row)) }
 function actionDisabledReason(row:any) {
   if (!preview.value?.scan_complete) return '库存未完整核实，请先处理扫描问题。'
@@ -132,7 +139,12 @@ async function cleanOrphans() {
     catch { orphanBusy.value=false; orphanError.value='提交状态无法确认，请刷新清理记录并重新扫描后再操作：'+(e as Error).message }
   }
 }
-function episodeList(values:any[]) { return values?.length ? values.map((ep:number) => `E${String(ep).padStart(2,'0')}`).join('、') : '无' }
+function episodeList(values:any[], limit = 12) {
+  if (!values?.length) return '无'
+  const text = values.slice(0, limit).map((ep:number) => `E${String(ep).padStart(2,'0')}`).join('、')
+  return values.length > limit ? `${text} 等 ${values.length} 集` : text
+}
+function capped(values:any[], limit:number) { return (values || []).slice(0, limit) }
 function ruleValue(value:any) { if (value == null) return '未知'; return typeof value === 'object' ? Object.values(value).filter(v => v != null && v !== '').join(' / ') || '未知' : String(value) }
 const rows = ref<any[]>([]), mappingTotal = ref(0), pageBusy = ref(false), pageFallback = ref(false)
 let pageRequest = 0
@@ -682,20 +694,24 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize); if(orp
        <p><strong>{{ label(s.row) }}</strong> · {{ s.row.reason_label || (s.row.reason === 'quality' ? '单库多版本' : reason(s.row.reason)) }}<el-button link type="primary" size="small" class="gov-detail-link" @click="openWork(s.row)">查看作品详情</el-button></p>
        <p v-if="s.row.actionType === 'dual'">保留 {{ side(s.row.winner) }} · 将清理 {{ side(s.row.deleteSide) }} {{ s.row.fileCount }} 个文件</p>
        <p v-else>清理 {{ side(s.row.deleteSide) }} {{ s.row.fileCount }} 个文件</p>
+       <p v-if="s.row.actionType === 'single'" class="muted">只有标「将删除」的文件会被清理，其余文件保持不动。</p>
        <p v-if="s.row.decisive">决胜维度：{{ s.row.decisive }}</p>
-       <template v-if="s.row.actionType === 'single' && s.row.comparisons?.length">
-        <p>判断依据（同片同集多份，保留最优、其余清理）：</p>
-        <div v-for="(comparison, index) in s.row.comparisons" :key="index">
-         <p class="file-path">保留：{{ comparison.winner_name }}<span v-if="comparison.episode != null">（第 {{ comparison.episode }} 集）</span><br />清理：{{ comparison.loser_name }}</p>
-         <p v-for="rule in comparison.rules" :key="rule.rule" class="comparison-rule">{{ rule.label }}：保留 {{ ruleValue(rule.new) }} / 清理 {{ ruleValue(rule.old) }} · {{ rule.result === 0 ? '平局，按规则顺序保留先出现的' : rule.result > 0 ? '保留项胜出' : '清理项胜出' }}</p>
-        </div>
-       </template>
-      <p v-if="s.row.lost_episodes?.length" class="gov-loss">删后两库都不再有：{{ episodeList(s.row.lost_episodes) }}<span v-if="s.row.clears_show">（这部剧会被清空，需要重新入库）</span></p>
-       <p v-if="s.row.present?.length">现有集号：{{ episodeList(s.row.present) }}；缺失集号：{{ episodeList(s.row.missing) }}</p>
-       <p v-if="s.row.cloud_seasons || s.row.share_seasons">网盘季：{{ (s.row.cloud_seasons || []).join('、') || '无' }}；分享季：{{ (s.row.share_seasons || []).join('、') || '无' }}</p>
-       <template v-if="s.row.sample"><p>画质对比依据<span v-if="s.row.sample.episode != null">（代表集 E{{ String(s.row.sample.episode).padStart(2,'0') }}）</span></p><p class="file-path">分享：{{ s.row.sample.share_name }}<br />网盘：{{ s.row.sample.cloud_name }}</p><p v-for="rule in s.row.rules || []" :key="rule.rule" class="comparison-rule">{{ rule.label }}：分享 {{ ruleValue(rule.new) }} / 网盘 {{ ruleValue(rule.old) }} · {{ rule.result === 0 ? '平局' : rule.result > 0 ? '分享胜出' : '网盘胜出' }}</p></template>
-       <template v-if="s.row.actionType === 'dual'"><details v-for="lib in ['cloud','share']" :key="lib"><summary>{{ side(lib) }} · {{ lib === s.row.deleteSide ? '将删除' : '保留' }} · {{ (s.row[lib + '_files'] || []).length }} 个文件</summary><p v-for="file in s.row[lib + '_files'] || []" :key="file.id" class="file-path">{{ file.path }}</p></details></template>
-       <details v-else><summary>查看文件（{{ (s.row.files || []).length }}）</summary><p v-for="(file, index) in s.row.files || []" :key="file.id" class="file-path">{{ file.path }} · {{ s.row.reason === 'quality' && s.row.winner === index ? '保留' : '将删除' }}</p></details>
+       <p v-if="s.row.lost_episodes?.length" class="gov-loss">删后两库都不再有：{{ episodeList(s.row.lost_episodes) }}<span v-if="s.row.clears_show">（这部剧会被清空，需要重新入库）</span></p>
+       <details class="gov-evidence"><summary>查看判断依据与文件</summary>
+        <p v-if="s.row.present?.length">现有集号：{{ episodeList(s.row.present) }}；缺失集号：{{ episodeList(s.row.missing) }}</p>
+        <p v-if="s.row.cloud_seasons || s.row.share_seasons">网盘季：{{ (s.row.cloud_seasons || []).join('、') || '无' }}；分享季：{{ (s.row.share_seasons || []).join('、') || '无' }}</p>
+        <template v-if="s.row.actionType === 'single' && s.row.comparisons?.length">
+         <p>判断依据（同片同集多份，保留最优、其余清理，共 {{ s.row.comparisons.length }} 集）：</p>
+         <div v-for="(comparison, index) in capped(s.row.comparisons, 5)" :key="index">
+          <p class="file-path">保留：{{ comparison.winner_name }}<span v-if="comparison.episode != null">（第 {{ comparison.episode }} 集）</span><br />清理：{{ comparison.loser_name }}</p>
+          <p v-for="rule in comparison.rules" :key="rule.rule" class="comparison-rule">{{ rule.label }}：保留 {{ ruleValue(rule.new) }} / 清理 {{ ruleValue(rule.old) }} · {{ rule.result === 0 ? '平局，按规则顺序保留先出现的' : rule.result > 0 ? '保留项胜出' : '清理项胜出' }}</p>
+         </div>
+         <p v-if="s.row.comparisons.length > 5" class="muted">另有 {{ s.row.comparisons.length - 5 }} 集重复，见下方文件清单。</p>
+        </template>
+        <template v-if="s.row.sample"><p>画质对比依据<span v-if="s.row.sample.episode != null">（代表集 E{{ String(s.row.sample.episode).padStart(2,'0') }}）</span></p><p class="file-path">分享：{{ s.row.sample.share_name }}<br />网盘：{{ s.row.sample.cloud_name }}</p><p v-for="rule in s.row.rules || []" :key="rule.rule" class="comparison-rule">{{ rule.label }}：分享 {{ ruleValue(rule.new) }} / 网盘 {{ ruleValue(rule.old) }} · {{ rule.result === 0 ? '平局' : rule.result > 0 ? '分享胜出' : '网盘胜出' }}</p></template>
+        <template v-if="s.row.actionType === 'dual'"><details v-for="lib in ['cloud','share']" :key="lib"><summary>{{ side(lib) }} · {{ lib === s.row.deleteSide ? '将删除' : '保留' }} · {{ (s.row[lib + '_files'] || []).length }} 个文件</summary><p v-for="file in s.row[lib + '_files'] || []" :key="file.id" class="file-path">{{ file.path }}</p></details></template>
+        <details v-else><summary>查看文件（{{ (s.row.files || []).length }}）</summary><p v-for="(file, index) in s.row.files || []" :key="file.id" class="file-path">{{ file.path }} · {{ fileMark(s.row, file) }}</p></details>
+       </details>
        <p v-if="actionDisabledReason(s.row)" class="muted">{{ actionDisabledReason(s.row) }}</p>
      </div></template></el-table-column>
      <el-table-column label="选择" width="62"><template #default="s"><el-checkbox :model-value="selectedAction(s.row)" :disabled="!!actionDisabledReason(s.row)" :aria-label="'选择 ' + label(s.row)" @change="toggleGovernanceAction(s.row, Boolean($event))" /></template></el-table-column>
@@ -713,10 +729,11 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize); if(orp
        <p v-if="row.decisive">决胜维度：{{ row.decisive }}</p>
        <template v-if="row.actionType === 'single' && row.comparisons?.length">
         <p>判断依据（同片同集多份，保留最优、其余清理）：</p>
-        <div v-for="(comparison, index) in row.comparisons" :key="index">
+        <div v-for="(comparison, index) in capped(row.comparisons, 5)" :key="index">
          <p class="file-path">保留：{{ comparison.winner_name }}<span v-if="comparison.episode != null">（第 {{ comparison.episode }} 集）</span><br />清理：{{ comparison.loser_name }}</p>
          <p v-for="rule in comparison.rules" :key="rule.rule" class="comparison-rule">{{ rule.label }}：保留 {{ ruleValue(rule.new) }} / 清理 {{ ruleValue(rule.old) }} · {{ rule.result === 0 ? '平局，按规则顺序保留先出现的' : rule.result > 0 ? '保留项胜出' : '清理项胜出' }}</p>
         </div>
+        <p v-if="row.comparisons.length > 5" class="muted">另有 {{ row.comparisons.length - 5 }} 集重复，见下方文件清单。</p>
        </template>
        <p v-if="row.present?.length">现有：{{ episodeList(row.present) }}；缺失：{{ episodeList(row.missing) }}</p>
        <p v-if="row.cloud_seasons || row.share_seasons">网盘季：{{ (row.cloud_seasons || []).join('、') || '无' }}；分享季：{{ (row.share_seasons || []).join('、') || '无' }}</p>
@@ -724,7 +741,7 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize); if(orp
        <template v-if="row.sample"><p v-if="row.sample.episode != null">代表集 E{{ String(row.sample.episode).padStart(2,'0') }}</p><p class="file-path">分享：{{ row.sample.share_name }}<br />网盘：{{ row.sample.cloud_name }}</p><p v-for="rule in row.rules || []" :key="rule.rule" class="comparison-rule">{{ rule.label }}：分享 {{ ruleValue(rule.new) }} / 网盘 {{ ruleValue(rule.old) }} · {{ rule.result === 0 ? '平局' : rule.result > 0 ? '分享胜出' : '网盘胜出' }}</p></template>
        <details v-if="row.comparisons?.length"><summary>查看逐集比较（{{ row.comparisons.length }}）</summary><div v-for="comparison in row.comparisons" :key="comparison.episode"><p>第 {{ comparison.episode }} 集：{{ comparison.tie ? '平局，按设置保留' : '胜出' }} {{ side(comparison.winner) }}</p><p v-for="rule in comparison.rules" :key="rule.rule" class="comparison-rule">{{ rule.label }}：分享 {{ ruleValue(rule.new) }} / 网盘 {{ ruleValue(rule.old) }} · {{ rule.result === 0 ? '平局' : rule.result > 0 ? '分享胜出' : '网盘胜出' }}</p></div></details>
        <template v-if="row.actionType === 'dual'"><details v-for="lib in ['cloud','share']" :key="lib"><summary>{{ side(lib) }} · {{ lib === row.deleteSide ? '将删除' : '保留' }} · {{ (row[lib + '_files'] || []).length }} 个文件</summary><p v-for="file in row[lib + '_files'] || []" :key="file.id" class="file-path">{{ file.path }}</p></details></template>
-       <details v-else><summary>查看文件（{{ (row.files || []).length }}）</summary><p v-for="(file, index) in row.files || []" :key="file.id" class="file-path">{{ file.path }} · {{ row.reason === 'quality' && row.winner === index ? '保留' : '将删除' }}</p></details>
+       <details v-else><summary>查看文件（{{ (row.files || []).length }}）</summary><p v-for="(file, index) in row.files || []" :key="file.id" class="file-path">{{ file.path }} · {{ fileMark(row, file) }}</p></details>
       </details>
      </article>
     </div>

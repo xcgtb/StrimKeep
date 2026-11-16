@@ -372,8 +372,11 @@ def _dedupe_candidates(item, sp, lp, covered, policy):
             if (step, _media_key('movie', item['title'], None)) in covered:
                 continue
             verdict = _version_verdict(files, policy)
+            losers = [row for index, row in enumerate(files) if index != verdict['winner']]
             rows.append({'side': side, 'season': None, 'episode': None, 'files': files,
-                         'losers': [row for index, row in enumerate(files) if index != verdict['winner']],
+                         'losers': losers,
+                         'keep_paths': [files[verdict['winner']]['path']],
+                         'delete_paths': [row['path'] for row in losers],
                          'reason_label': '库内多版本-删低版', 'dup_count': len(files),
                          'keeps': [{'episode': None, 'name': files[verdict['winner']]['name']}],
                          'comparisons': _version_evidence(files, verdict['winner'], policy),
@@ -403,9 +406,12 @@ def _dedupe_candidates(item, sp, lp, covered, policy):
                 losers.extend(row for index, row in enumerate(group) if index != verdict['winner'])
                 keeps.append({'episode': episode, 'name': group[verdict['winner']]['name']})
                 comparisons.extend(_version_evidence(group, verdict['winner'], policy, episode))
+            doomed = {row['path'] for row in losers}
             rows.append({'side': side, 'season': season, 'episode': None, 'files': files,
                          'losers': losers, 'keeps': keeps, 'dup_episodes': sorted(dupes),
-                         'reason_label': '库内多版本-删低版', 'dup_count': len(files),
+                         'keep_paths': [row['path'] for row in files if row['path'] not in doomed],
+                         'delete_paths': [row['path'] for row in losers],
+                         'reason_label': '库内多版本-删低版', 'dup_count': len(dupes),
                          'comparisons': comparisons, 'decisive': decisive,
                          'winner': None, 'reason': 'quality', 'tie': tie})
     return rows

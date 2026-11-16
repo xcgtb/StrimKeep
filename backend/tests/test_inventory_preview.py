@@ -401,3 +401,15 @@ def test_dual_rows_expose_decisive_dimension():
                                      [file('s', 0, 0, '2160p', 'M.2160p.strm')],
                                      kind='movie'), policy())
     assert result['dual'][0]['decisive']
+
+
+def test_single_library_dedupe_only_deletes_duplicate_copies():
+    """28 集的季里只有两集重复：只该删多出来的两份，其余 28 集一律保留。"""
+    files = [file('l', 1, episode, '1080p') for episode in range(1, 29)]
+    files.append(file('l', 1, 5, '720p'))
+    files.append(file('l', 1, 9, '720p'))
+    result = governance_preview(snap(files, []), policy())
+    row = result['single'][0]
+    assert len(row['delete_paths']) == 2
+    assert len(row['keep_paths']) == 28
+    assert all('720p' in path for path in row['delete_paths'])
