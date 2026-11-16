@@ -166,7 +166,6 @@ def install_phase5(app,store,admin,job_public):
     @app.post('/api/v1/strm/unidentified/cleanup',dependencies=[Depends(admin)])
     async def cleanup_unidentified(body: UnidentifiedCleanupInput):
         from .share_service import UNIDENT_NAME
-        from .internal_delete import remember
         root = Path(engine().root)
         prefix = UNIDENT_NAME + '/'
         requested = list(dict.fromkeys(body.paths))
@@ -204,7 +203,6 @@ def install_phase5(app,store,admin,job_public):
                         raise ValueError('文件不存在或路径不安全')
                     if store.db.execute('SELECT 1 FROM share_strms WHERE revoked=0 AND strm_path=? UNION SELECT 1 FROM playbacks WHERE revoked=0 AND relative_path=? LIMIT 1', (rel, rel)).fetchone():
                         raise ValueError('文件仍有有效登记')
-                    remember(store, [rel])
                     path.unlink()
                     removed.append(rel)
                     parent = path.parent

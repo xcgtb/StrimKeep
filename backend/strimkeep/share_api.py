@@ -273,10 +273,7 @@ def install_share(app, store, admin):
                 if share_service._verified_share_strm(strm_root, row['strm_path'], sid) is None:
                     raise HTTPException(409, '本地文件归属无法确认，已保留。')
                 try:
-                    from .internal_delete import remember
-                    if not remember(store, [row['strm_path']], 'share'):
-                        raise RuntimeError('未能登记')
-                    purge_strm(local, strm_root, store=store, kind='share')
+                    purge_strm(local, strm_root)
                 except Exception:
                     raise HTTPException(503, '本地文件删除失败，记录未删除。') from None
             with store.db:
@@ -398,10 +395,9 @@ def install_share(app, store, admin):
                 new_total += len(result['created'])
                 with store.db:
                     store.db.execute('UPDATE share_watchlist SET last_checked=? WHERE share_code=?', (time.time(), code))
-                # 已撤销条目不会被监控重新生成：generate 只对登记表中
-                # revoked=0 的 (share_code, file_id) 判重，撤销的条目有独立
-                # 的撤销记录在案，重新出现的同一 file_id 会创建新登记——
-                # 这是监控「分享里新出现的内容」语义，不是复活旧入口。
+                # 已删除条目不会被监控「复活」：generate 只对 share_strms 中
+                # 现存的 (share_code, file_id) 判重；删除即无行，重新出现时
+                # 会按全新内容创建新登记。
             except Exception:
                 continue
         if new_total:

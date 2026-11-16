@@ -30,7 +30,7 @@ def test_missing_output_recovers_only_when_user_explicitly_resubmits(tmp_path):
     asyncio.run(scenario())
 
 
-def test_never_restore_changed_existing_or_revoked_entry(tmp_path):
+def test_never_restore_changed_existing_entry_but_deleted_can_reappear(tmp_path):
     async def scenario():
         store, cloud, http, engine, _ = share_setup(tmp_path)
         entry = share_service.generate(store, engine.root, SECRET, [VIDEO])['created'][0]
@@ -42,9 +42,9 @@ def test_never_restore_changed_existing_or_revoked_entry(tmp_path):
         for changed in ({**VIDEO,'name':'Different.mkv'}, {**VIDEO,'size':5001}):
             assert not share_service.generate(store, engine.root, SECRET, [changed], allow_restore=True)['created']
         with store.db:
-            store.db.execute('INSERT INTO share_revocations(share_code,file_id,reason,created) VALUES(?,?,?,?)', ('code','301','user',0))
-        assert not share_service.generate(store, engine.root, SECRET, [VIDEO], allow_restore=True)['created']
-        assert not source.exists()
+            store.db.execute('DELETE FROM share_strms WHERE id=?', (entry['id'],))
+        readded = share_service.generate(store, engine.root, SECRET, [VIDEO], allow_restore=True)
+        assert len(readded['created']) == 1 and (engine.root / readded['created'][0]['strm_path']).is_file()
         await http.aclose(); store.close()
     asyncio.run(scenario())
 

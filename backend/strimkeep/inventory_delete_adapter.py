@@ -107,7 +107,7 @@ async def delete_one(engine, evidence, source):
             local = _local_share_strm(engine.root, path)
             if local is None:
                 return False
-            result = purge_strm(local, engine.root, store=engine.store, kind='share')
+            result = purge_strm(local, engine.root)
             if result['file'] != 1 or local.exists() or local.is_symlink():
                 return False
             cleanup_empty_work(engine, path)
@@ -116,7 +116,7 @@ async def delete_one(engine, evidence, source):
         local = _verified_share_strm(engine.root, path, record_id)
         if local is None:
             return False
-        result = purge_strm(local, engine.root, store=engine.store, kind='share')
+        result = purge_strm(local, engine.root)
         if result['file'] != 1 or local.exists() or local.is_symlink():
             return False
         with engine.store.db:

@@ -38,7 +38,6 @@ def seed(store):
                 store.db.execute("INSERT INTO emby_deliveries(job_id,state,payload,next_due,deadline) VALUES(?,'pending','{}',1,2)", (jid,))
         store.db.execute("INSERT INTO playbacks VALUES('p','f','pick','movie','movie.strm','hash',0,1)")
         store.db.execute("INSERT INTO share_strms(id,share_code,file_id,name,strm_path,token_hash,revoked,created) VALUES('s','share','sf','movie','share.strm','hash',1,1)")
-        store.db.execute("INSERT INTO share_revocations VALUES('share','sf','governance-plan:1',1)")
         store.db.execute("INSERT INTO output_registry VALUES('123','f','{}','[]','p','cipher','movie.strm','[]',1,1)")
         store.db.execute("INSERT INTO owned_outputs VALUES('movie.strm','123','f','hash')")
         store.db.execute("INSERT INTO organized_files VALUES('f',11,11,'p','movie.strm','{}')")
@@ -47,7 +46,7 @@ def seed(store):
 def test_upgrade_cleanup_is_idempotent_and_preserves_media_state(tmp_path):
     store = Store(tmp_path, 'admin', 'test-password-1234')
     seed(store)
-    keep_tables = ('playbacks', 'share_strms', 'share_revocations', 'output_registry', 'owned_outputs', 'organized_files')
+    keep_tables = ('playbacks', 'share_strms', 'output_registry', 'owned_outputs', 'organized_files')
     snapshots = {t: [tuple(r) for r in store.db.execute(f'SELECT * FROM {t}')] for t in keep_tables}
     strm = tmp_path / 'existing.strm'
     strm.write_text('http://example/play/p?token=preserved')
@@ -55,6 +54,7 @@ def test_upgrade_cleanup_is_idempotent_and_preserves_media_state(tmp_path):
         store.remove_retired_modules()
         names = {r[0] for r in store.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert not set(TABLES) & names
+        assert 'share_revocations' not in names
         assert all(store.get(key) == '' for key in SETTINGS)
         assert store.meta('mapping_revision') == store.meta('governance_last_scan') == ''
         assert store.db.execute('SELECT count(*) FROM organize_jobs').fetchone()[0] == 5

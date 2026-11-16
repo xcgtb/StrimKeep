@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {computed,onMounted,onUnmounted,ref,watch,shallowRef} from 'vue'
 import {useRoute,useRouter} from 'vue-router'
+import {createApi} from './api/client'
 import {Monitor,House,Cloudy,FolderOpened,Refresh,Document,Setting,Menu,Sunny,Moon,SwitchButton,List,Link,Download,Film,Promotion,MagicStick,Search,Share} from '@element-plus/icons-vue'
 const route=useRoute(),router=useRouter()
 const ready=ref(false),logged=ref(false),csrf=ref(''),username=ref(''),busy=ref(false),error=ref(''),mobile=ref(false),version=ref('—')
@@ -60,13 +61,11 @@ try{applyAppearance(JSON.parse(storedAppearance||'{}'))}catch{}
 function systemTheme(){if(appearance.value.theme==='system')applyAppearance(appearance.value)}
 async function saveTheme(theme:string){try{const c=(await api('/console/config')).config;await api('/console/config','PUT',{...c,theme})}catch{}}
 function toggleTheme(){const next=dark.value?'light':'dark';applyAppearance({...appearance.value,theme:next});void saveTheme(next)}
-const pendingReads=new Map<string,Promise<any>>()
-async function api(path:string,method='GET',body?:unknown):Promise<any>{
- if(method==='GET'&&pendingReads.has(path))return pendingReads.get(path)
- const request=(async()=>{const controller=method==='GET'&&/^\/organize\/jobs\/\d+$/.test(path)?new AbortController():null;const timer=controller?window.setTimeout(()=>controller.abort(),15000):null;try{const response=await fetch('/api/v1'+path,{method,credentials:'same-origin',signal:controller?.signal,headers:{'Content-Type':'application/json',...(csrf.value?{'X-CSRF-Token':csrf.value}:{})},body:body===undefined?undefined:JSON.stringify(body)});let data:any;try{data=await response.json()}catch{throw new Error('服务响应暂不可用，请稍后再试。')}if(!response.ok){if(response.status===401)logged.value=false;throw Object.assign(new Error(data.error?.message||'操作未完成'),{status:response.status})}return data}finally{if(timer!==null)window.clearTimeout(timer)}})()
- if(method==='GET')pendingReads.set(path,request)
- try{return await request}finally{if(pendingReads.get(path)===request)pendingReads.delete(path)}
-}
+const api=createApi({
+  getCsrf:()=>csrf.value,
+  onUnauthorized:()=>{logged.value=false},
+})
+
 watch(title,value=>{document.title=value+' · StrimKeep'},{immediate:true})
 const reloadOrder=()=>{try{savedOrder.value=JSON.parse(localStorage.getItem(ORDER_KEY)||'{}')||{}}catch{}}
 window.addEventListener('sk-sidebar-order',reloadOrder)

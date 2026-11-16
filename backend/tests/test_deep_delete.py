@@ -459,8 +459,6 @@ def test_apply_purges_share_record_and_file(tmp_path):
 
 
 def test_episode_with_tmdb_and_path_never_expands_to_siblings(tmp_path):
-    from strimkeep.deep_delete import drop_internal
-    from strimkeep.internal_delete import remember
     store = make_store(tmp_path)
     original = store.db.execute("SELECT relative_path FROM organized_files WHERE file_id='3001'").fetchone()[0]
     sibling = original.replace('S01E01', 'S01E02')
@@ -470,8 +468,6 @@ def test_episode_with_tmdb_and_path_never_expands_to_siblings(tmp_path):
     event = {'type':'Episode', 'path':'/media/'+original, 'tmdb':'10'}
     matched = match_targets(store, event)
     assert [r['file_id'] for r in matched['managed']] == ['3001']
-    remaining, skipped = drop_internal(store, matched)
-    assert skipped == 0 and remaining['managed']
     # Even a valid TMDB id may not rescue an unmatched episode path.
     assert not match_targets(store, {**event, 'path':'/media/no-such-file.strm'})['managed']
     store.close()
@@ -571,17 +567,6 @@ def test_guarded_delete_keeps_cloud_directory_when_cloud_still_has_content(tmp_p
         store.close()
 
     asyncio.run(run())
-
-
-def test_recently_deleted_is_stateless(tmp_path):
-    """不再有内部删除登记：Emby 回声只会落到已清空的台账上，不需要「认得出来」。"""
-    from strimkeep.deep_delete import recently_deleted
-    from strimkeep.internal_delete import remember
-    store = make_store(tmp_path)
-    relative = '分享影视库/剧集/国产剧集/剧名 (2024) {tmdb-10}/Season 1/剧名.2024.S01E01.strm'
-    remember(store, [relative])
-    assert not recently_deleted(store, '/media/' + relative)
-    assert not recently_deleted(store, '')
 
 
 def test_purge_history_removes_revoked_rows_under_work(tmp_path):

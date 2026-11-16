@@ -273,8 +273,6 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         with store.db:
             store.db.execute("DELETE FROM meta WHERE key='internal_deletes'")
             # 旧版「撤销」是软删除：现在只有保留/删除两种状态，历史 revoked 行直接清掉。
-            store.db.execute("DELETE FROM share_revocations WHERE (share_code,file_id) IN ("
-                             "SELECT share_code,file_id FROM share_strms WHERE revoked=1)")
             store.db.execute("DELETE FROM share_strms WHERE revoked=1")
         from .library_name import migrate
         migrate(store,app.state.strms)
@@ -1320,21 +1318,8 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
             purged = deep_delete.purge_history(store, targets.get('candidates') or [], True)
             if purged and not quiet:
                 store.event('deep_delete', '深度删除 · 已清除该作品/季 %d 条历史失效记录（revoked/已停用）。' % purged)
-        # 0.8.32：程序自己删掉的本地 STRM 也会让 Emby 发删除通知；这些不能删云端。
-        targets, internal_skipped = deep_delete.drop_internal(store, targets, app.state.strms)
-        if internal_skipped and not quiet:
-            store.event('deep_delete', '深度删除 · 跳过 %d 条：这些本地 STRM 是程序自己清理的'
-                        '（旧命名副本/退役输出），不代表用户要删云端。' % internal_skipped)
         matched = len(targets['managed']) + len(targets['share'])
         if not matched:
-            # 程序自己清理过的本地文件也会触发 Emby 的删除通知：按内部删除登记认出来，
-            # 不再写成「未命中」（那种提示既吓人又没法据此排查）。
-            if deep_delete.recently_deleted(store, event.get('path')):
-                if not quiet:
-                    store.event('deep_delete', '深度删除 · 跳过：这是本程序刚清理的本地文件（%s），不需要处理。'
-                                % (event.get('path') or '')[:160])
-                return {'accepted': True, 'matched': 0, 'skipped': True,
-                        'reason': '本地文件是本程序清理的，已跳过'}
             if not quiet:
                 store.event('deep_delete', '深度删除 · 未匹配：收到「%s」事件 %s，没有找到这条文件的取链记录（未执行任何删除）'
                             % (event['type'], event.get('path') or ('tmdb:%s' % event.get('tmdb'))))

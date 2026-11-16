@@ -189,7 +189,7 @@ def test_purge_strm_never_removes_the_library_root(tmp_path):
     (season / '剧.S01E01.nfo').write_text('n', encoding='utf-8')
 
     store = make_store(tmp_path)
-    result = purge_strm(strm, root, store=store)
+    result = purge_strm(strm, root)
     store.close()
     assert result['file'] == 1 and not season.exists()
     assert (root / NEW).is_dir()                            # 一级目录（库根）永远保留
@@ -210,7 +210,7 @@ def test_purge_strm_scopes_sidecars_to_a_single_episode(tmp_path):
     (season / 'poster.jpg').write_text('p', encoding='utf-8')
 
     store = make_store(tmp_path)
-    result = purge_strm(e1, root, store=store)
+    result = purge_strm(e1, root)
     store.close()
 
     assert result['file'] == 1 and result['sidecars'] == 2 and result['dirs'] == 0
@@ -235,7 +235,7 @@ def test_purge_strm_clears_directory_sidecars_on_last_episode(tmp_path):
     (season / 'tvshow.nfo').write_text('t', encoding='utf-8')
 
     store = make_store(tmp_path)
-    result = purge_strm(e1, root, store=store)
+    result = purge_strm(e1, root)
     store.close()
 
     assert result['file'] == 1 and result['sidecars'] == 3

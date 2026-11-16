@@ -229,10 +229,6 @@ def apply_rename(store, root, old, new, dry_run=True):
     base = Path(root)
     old_dir, new_dir = base / old, base / new
     moved = 0
-    # 0.8.32：改名同样会让 Emby 把旧路径当成删除；登记后深删不会去删云端。
-    from .internal_delete import remember
-    if not remember(store, [old + '/' + relative for relative in plan['moves']]):
-        return {'status': 'blocked', 'reason': '内部删除登记失败，已保留全部文件。'}
     for relative in plan['moves']:
         source, target = old_dir / relative, new_dir / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -264,10 +260,6 @@ def rollback(store, root):
     base = Path(root)
     old_dir, new_dir = base / old, base / new
     moved = 0
-    # Rollback removes the new paths as well, so protect them before any move.
-    from .internal_delete import remember
-    if not remember(store, [new + '/' + relative for relative in (manifest.get('moves') or [])]):
-        return {'status': 'blocked', 'reason': '内部删除登记失败，已保留全部文件。'}
     for relative in reversed(manifest.get('moves') or []):
         source, target = new_dir / relative, old_dir / relative
         if source.is_file() and not target.exists():
@@ -383,10 +375,8 @@ def prune_legacy(store, root, apply=False, backup_dir=None):
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding='utf-8')
     removed = sidecars = dirs = 0
-    from .internal_delete import remember
-    remember(store, [entry['relative_path'] for entry in report['deletable']])
     for entry in report['deletable']:
-        outcome = purge_strm(base / entry['relative_path'], base, store=store)
+        outcome = purge_strm(base / entry['relative_path'], base)
         removed += outcome['file']
         sidecars += outcome['sidecars']
         dirs += outcome['dirs']

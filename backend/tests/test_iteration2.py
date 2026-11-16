@@ -171,7 +171,7 @@ def test_startup_creates_every_table_modules_used_to_create(tmp_path):
     """
     store = Store(tmp_path / 'data', 'admin', 'test-password-1234')
     names = {row[0] for row in store.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    expected = {'share_strms', 'share_watchlist', 'share_revocations', 'share_wash_intents',
+    expected = {'share_strms', 'share_watchlist', 'share_wash_intents',
                 'channel_state', 'channel_shares', 'channel_posts', 'channel_backfill',
                 'offline_submissions', 'native_media_info_queue',
                 'emby_outbox', 'deep_delete_queue', 'strm_changes',

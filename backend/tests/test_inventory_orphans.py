@@ -152,14 +152,12 @@ def test_orphan_scan_has_no_hidden_recent_state(tmp_path):
     from fastapi import FastAPI, HTTPException
     from fastapi.testclient import TestClient
     from strimkeep.inventory_api import install_inventory
-    from strimkeep.internal_delete import remember
     root, work, season = setup_tree(tmp_path)
     (season/'S01E02.strm').write_text('surviving')
     source=(season/'S01E01.strm').relative_to(root).as_posix()
     db=sqlite3.connect(':memory:',check_same_thread=False);db.row_factory=sqlite3.Row
     db.executescript('create table meta(key text primary key,value text); create table organized_files(file_id text,relative_path text); create table share_strms(id text,strm_path text,revoked integer); create table organize_jobs(state text); create table share_wash_intents(id text);')
     store=SimpleNamespace(root=tmp_path/'data',db=db,get=lambda k,default=None: {'library_dir_name':'cloud'} if k=='organize_config' else default)
-    remember(store,[source])
     app=FastAPI();app.state.strms=root;app.state.organizer=SimpleNamespace(publication_gate=asyncio.Lock())
     def admin(): raise HTTPException(401)
     install_inventory(app,store,admin);app.dependency_overrides[admin]=lambda:None

@@ -5,8 +5,6 @@ output_registry / owned_outputs / 文件身份核验，不依赖任何时间窗�
 """
 import json
 
-from strimkeep import internal_delete
-from strimkeep.deep_delete import drop_internal
 from strimkeep.fsops import purge_strm
 from strimkeep.library_roots import apply_rename, prune_legacy
 from strimkeep.store import Store
@@ -21,28 +19,14 @@ def make_store(tmp_path):
     return Store(tmp_path / 'data', 'admin', PASSWORD)
 
 
-def test_drop_internal_keeps_all_targets(tmp_path):
-    store = make_store(tmp_path)
-    internal_delete.remember(store, ['媒体库/电影/a.strm'])
-    targets = {'managed': [{'file_id': '1', 'relative_path': '媒体库/电影/a.strm'},
-                           {'file_id': '2', 'relative_path': '媒体库/电影/b.strm'}],
-               'share': [{'id': 's1', 'strm_path': '分享影视库/电影/c.strm'}]}
-    filtered, dropped = drop_internal(store, targets)
-    assert dropped == 0
-    assert [t['file_id'] for t in filtered['managed']] == ['1', '2']
-    assert len(filtered['share']) == 1
-    store.close()
-
-
-def test_purge_strm_removes_file_without_marker(tmp_path):
+def test_purge_strm_removes_file(tmp_path):
     store = make_store(tmp_path)
     root = tmp_path / 'strm'
     target = root / NEW / '电影' / 'x' / 'a.strm'
     target.parent.mkdir(parents=True)
     target.write_text('http://play.example/play115/pc/1/' + 'A' * 40 + '/1/a.mkv', encoding='utf-8')
-    purge_strm(target, root, store=store)
+    purge_strm(target, root)
     assert not target.exists()
-    assert internal_delete.recent(store) == set()
     store.close()
 
 
@@ -79,5 +63,4 @@ def test_rename_moves_without_marker(tmp_path):
     (season / 'a.strm').write_text('x', encoding='utf-8')
     result = apply_rename(store, root, old, new, dry_run=False)
     assert result['status'] == 'applied'
-    assert internal_delete.recent(store) == set()
     store.close()

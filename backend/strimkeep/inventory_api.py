@@ -159,33 +159,16 @@ def install_inventory(app, store, admin):
 
     @app.post('/api/v1/inventory/orphans/scan', dependencies=[Depends(admin)])
     async def scan_orphans():
-        from .inventory_orphans import scan as scan_residues, sidecars_for_deleted
-        from .internal_delete import recent
+        from .inventory_orphans import scan as scan_residues
         try:
             async with app.state.organizer.publication_gate:
                 roots = orphan_roots()
                 result = await asyncio.to_thread(scan_residues, app.state.strms, roots)
                 rows = registered_rows(store)
-                registered = {relative for _, _, relative in rows}
                 before = len(result['items'])
                 result['items'] = [item for item in result['items'] if not any(
                     relative.startswith(item['path'].rstrip('/') + '/') for _, _, relative in rows)]
                 result['skipped'] += before - len(result['items'])
-                directories = [item['path'] + '/' for item in result['items']]
-                seen = set()
-                for source in sorted(recent(store)):
-                    if source in registered or any(source.startswith(path) for path in directories):
-                        continue
-                    try:
-                        candidates = await asyncio.to_thread(sidecars_for_deleted, app.state.strms, roots, source)
-                    except (OSError, ValueError):
-                        continue
-                    for item in candidates:
-                        if item['path'] not in seen:
-                            result['items'].append(item)
-                            seen.add(item['path'])
-                            if len(result['items']) > 1000:
-                                raise ValueError('候选超过 1000 项，请缩小扫描范围')
                 return result
         except (OSError, ValueError) as exc:
             raise HTTPException(409, f'残留扫描失败：{exc}') from None
@@ -193,7 +176,6 @@ def install_inventory(app, store, admin):
     @app.post('/api/v1/inventory/orphans/clean', dependencies=[Depends(admin)])
     async def clean_orphans(body: OrphanSelection):
         from .inventory_orphans import clean_one, clean_sidecar
-        from .internal_delete import recent
         paths = [item.path for item in body.items]
         if len(set(paths)) != len(paths):
             raise HTTPException(422, '不能重复选择同一目录')
@@ -210,8 +192,8 @@ def install_inventory(app, store, admin):
             for item in body.items:
                 try:
                     if item.kind == 'file':
-                        if item.source not in recent(store) or any(path == item.source for _, _, path in registered_rows(store)):
-                            raise ValueError('原 STRM 的删除记录或台账状态已变化')
+                        if any(path == item.source for _, _, path in registered_rows(store)):
+                            raise ValueError('原 STRM 的台账状态已变化')
                         row = await asyncio.to_thread(clean_sidecar, app.state.strms, roots, item.source, item.path,
                                                       item.fingerprint, store.root / 'cleanup' / 'orphans')
                     else:

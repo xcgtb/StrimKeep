@@ -203,9 +203,6 @@ class Outputs:
         if not target.exists():
             return []
         try:
-            from .internal_delete import remember
-            if not remember(self.store, [relative]):
-                return ['内部删除登记失败，已保留：' + str(relative)]
             target.unlink()
             sidecar = target.with_name(target.stem + '-media-info.json')
             if sidecar.is_file():

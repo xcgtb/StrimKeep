@@ -26,7 +26,6 @@ from .media import PROBE_UA
 from .cloud115 import CloudError, fatal
 from .fsops import purge_strm
 from .fsutil import atomic_write
-from .internal_delete import forget
 from .media import component, media_from_filename, naming, parse_name, require_single_episode, require_work_identity, work_parts, normal, NeedsReview
 from .quality import compare, facts, public_policy, group_key
 from .organize_options import options, filter_files, title_options
@@ -105,7 +104,6 @@ def align_existing_share_urls(store, root):
             with store.db:
                 store.db.execute("INSERT OR REPLACE INTO meta VALUES('share_url_refresh_pending',?)", (json.dumps(sorted(pending), ensure_ascii=False),))
             atomic_write(path, url.encode(), root)
-            forget(store, [relative], 'share')
             changed += 1
         except (OSError, UnicodeError, ValueError):
             continue
@@ -150,7 +148,6 @@ def migrate_share_play_paths(store, root):
                 store.db.execute("INSERT OR REPLACE INTO meta VALUES('share_url_refresh_pending',?)",
                                  (json.dumps(sorted(pending), ensure_ascii=False),))
             atomic_write(path, url.encode(), root)
-            forget(store, [relative], 'share')
             changed += 1
         except (OSError, UnicodeError, ValueError):
             continue
@@ -224,9 +221,6 @@ def install(store):
         share_code TEXT NOT NULL, receive_code TEXT NOT NULL DEFAULT '',
         last_checked REAL, created REAL NOT NULL,
         PRIMARY KEY(share_code))''')
-    store.db.execute('''CREATE TABLE IF NOT EXISTS share_revocations(
-        share_code TEXT NOT NULL, file_id TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
-        created REAL NOT NULL, PRIMARY KEY(share_code, file_id))''')
     store.db.execute('''CREATE TABLE IF NOT EXISTS share_wash_intents(
         id TEXT PRIMARY KEY, job_id INTEGER NOT NULL, payload TEXT NOT NULL)''')
     columns = {row[1] for row in store.db.execute('PRAGMA table_info(share_strms)')}
@@ -369,10 +363,6 @@ def generate(store, root, secret, videos, origin='web', settings_snapshot=None, 
                 (secret['share_code'], file_id, UNIDENT_NAME + '/%')).fetchone():
             skipped.append({'name': name, 'reason': '已在未识别目录等待处理'})
             continue
-        if store.db.execute('SELECT 1 FROM share_revocations WHERE share_code=? AND file_id=?',
-                            (secret['share_code'], file_id)).fetchone():
-            skipped.append({'name': name, 'reason': '已主动撤销；如需恢复请到治理计划中执行恢复'})
-            continue
         if existing:
             # A user must explicitly resubmit. Monitors and resumed tasks never
             # recreate a missing file the user may have intentionally removed.
@@ -440,9 +430,8 @@ def generate(store, root, secret, videos, origin='web', settings_snapshot=None, 
         except Exception:
             # This path was created with write_new and is ours; a failed registry
             # update must not leave an unregistered active playback file.
-            # 走 purge_strm：先登记再删，保持「删 STRM 必登记」的全局约定。
             try:
-                purge_strm(strm_file, root, store=store, kind='share')
+                purge_strm(strm_file, root)
             except (OSError, RuntimeError):
                 pass
             raise
@@ -912,8 +901,6 @@ async def run_organize(engine, job_id, config):
             layout = layouts.get(row['id'])
             if layout: store.set_meta(_share_layout_success(layout[0]), 1)
             os.replace(pending_file, dest)
-            # 新文件占用了这个路径：旧删除登记必须失效，否则后续深度清理会被跳过。
-            forget(store, [dest_rel], 'share')
             if strm_rules.get('cleanup_empty',True):await cleanup_empty_pending_async(pending_file.parent,pending)
             await copy_share_metadata(engine, job_id, row, dest, strm_rules)
             metadata_files = []
@@ -1325,9 +1312,8 @@ async def check_alive(engine):
                         continue
                     # Remove the STRM and its own sidecars; the directory-level
                     # sidecars are cleared only when no other share STRM remains.
-                    # 分享侧不做内部删除登记：撤销入口可逆，反复清理/重整理不应被旧状态挡住。
                     try:
-                        purge_strm(path, root, store=store, kind='share')
+                        purge_strm(path, root)
                     except (OSError, RuntimeError):
                         skipped += 1
                         detail(row, 'unknown', '清理本地文件失败，请检查日志及权限')

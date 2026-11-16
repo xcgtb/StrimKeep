@@ -90,29 +90,6 @@ def test_unidentified_move_refuses_replaced_or_moved_source(tmp_path):
     asyncio.run(scenario())
 
 
-def test_alive_check_does_not_use_internal_delete_markers(tmp_path, monkeypatch):
-    """分享侧零登记：即使登记函数被禁用/报错，失效分享也必须能清理。"""
-    from strimkeep import internal_delete
-    def forbidden(*args, **kwargs):
-        raise AssertionError('分享侧不应写内部删除登记')
-    monkeypatch.setattr(internal_delete, 'remember', forbidden)
-    async def scenario():
-        store, cloud, http, engine, _ = share_setup(tmp_path)
-        entry = share_service.generate(store, engine.root, {'share_code':'code','receive_code':''}, [
-            {'id':'1','name':'one.mkv','size':5000,'path':'Work/'}])['created'][0]
-        async def expired(*args): raise CloudError('失效', 'SHARE_NOT_FOUND', 404)
-        cloud.share_url_download = expired
-        async def cancelled(*args): return 'cancelled'
-        cloud.share_availability = cancelled
-        await share_service.check_alive(engine)
-        store.db.execute('UPDATE share_check_candidates SET first_at=?', (time.time()-301,))
-        store.db.commit()
-        result = await share_service.check_alive(engine)
-        assert result['dead_count'] == 1 and result['skipped'] == 0
-        assert not (engine.root / entry['strm_path']).exists()
-        assert store.db.execute('SELECT count(*) FROM share_strms WHERE id=?', (entry['id'],)).fetchone()[0] == 0
-        await http.aclose(); store.close()
-    asyncio.run(scenario())
 
 
 def test_share_check_needs_separate_observations_and_resets_after_recovery(tmp_path):

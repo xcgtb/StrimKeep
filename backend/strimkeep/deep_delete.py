@@ -166,44 +166,6 @@ def purge_history(store, candidates, is_dir):
     return removed
 
 
-def recently_deleted(store, path):
-    """事件路径是不是我们刚清理掉的本地文件。
-
-    台账（播放/分享登记）被清空后，Emby 仍会为这些文件发删除通知；
-    这里按「内部删除登记」直接认出来，避免每删一次就刷三条未命中。
-    """
-    if not path:
-        return False
-    from .internal_delete import recent
-    try:
-        seen = recent(store)
-    except Exception:
-        return False
-    normalized = str(path).replace('\\', '/').rstrip('/')
-    if not normalized or not seen:
-        return False
-    for marker in seen:
-        marker = str(marker).replace('\\', '/').lstrip('/')
-        if normalized.endswith('/' + marker) or normalized == marker:
-            return True
-    return False
-
-
-def drop_internal(store, targets, root=None):
-    """剔除「本地文件是程序自己删的」受管目标（0.8.32）。
-
-    只有受管输出会触发云端真删，才需要延迟回声保护；分享侧删除只撤销入口、
-    可逆，因此不做任何登记/豁免——「清理 → 重整理 → 再清理」永远可以直接重来。
-    旧版不分域的登记一律按受管处理，不会再挡住分享侧。
-    """
-    from .internal_delete import recent
-    managed_seen = recent(store, kind='managed')
-    managed = [t for t in targets['managed'] if (t.get('relative_path') or '') not in managed_seen]
-    share = list(targets['share'])
-    dropped = (len(targets['managed']) - len(managed)) + (len(targets['share']) - len(share))
-    return {'managed': managed, 'share': share}, dropped
-
-
 def selftest(store, item_type_movie='Movie', item_type_episode='Episode'):
     """只读自检：用台账里的真实路径跑一遍匹配，用来确认"接线对不对"。
 
@@ -341,7 +303,7 @@ def _finish_cloud_local(engine, info):
         from .fsops import purge_strm
         path = info['path']
         had_local = path.exists()
-        result = purge_strm(path, info['root'], store=store, remember=False) if had_local else {'file': 0, 'dirs': 0}
+        result = purge_strm(path, info['root']) if had_local else {'file': 0, 'dirs': 0}
         if had_local and (result.get('file') != 1 or path.exists() or path.is_symlink()):
             raise OSError('本地 STRM 清理失败')
         removed_dirs = result.get('dirs', 0)
@@ -360,8 +322,6 @@ def _finish_cloud_local(engine, info):
             store.db.execute("DELETE FROM native_media_info_queue WHERE json_extract(target,'$.relative')=?",
                              (info['relative'],))
             store.db.execute('DELETE FROM meta WHERE key=?', (info['intent_key'],))
-        from .internal_delete import forget
-        forget(store, [info['relative']])
         return removed_dirs, had_local
     except Exception as exc:
         raise RuntimeError('网盘已回收，本地 STRM 或登记清理未完成；请核对后处理') from exc
@@ -516,18 +476,16 @@ async def apply(engine, targets, dry_run):
             if local.is_file():
                 if not dry_run:
                     from .fsops import purge_strm
-                    purge_strm(local, root, store=store, kind='share')
+                    purge_strm(local, root)
                 entry = _entry(entry, '已删除本地 STRM')
             if dry_run:
                 entry = _entry(entry, '（预演）分享来源不涉及网盘文件')
                 result['share'].append(entry)
                 continue
             with store.db:
-                # 删干净：不留 revoked 行/替换意图/失效登记，重新加入时按全新内容处理。
+                # 删干净：不留替换意图/失效登记，重新加入时按全新内容处理。
                 store.db.execute('DELETE FROM share_strms WHERE id=?', (row['id'],))
                 store.db.execute('DELETE FROM share_wash_intents WHERE id=?', (row['id'],))
-                store.db.execute('DELETE FROM share_revocations WHERE share_code=? AND file_id=?',
-                                 (row.get('share_code') or '', row.get('file_id') or ''))
                 store.db.execute("DELETE FROM native_media_info_queue WHERE json_extract(target,'$.relative')=?",
                                  (row['strm_path'],))
             entry = _entry(entry, '已确认删除并清除登记（分享来源，不涉及网盘文件）')
@@ -622,14 +580,10 @@ async def run_row(engine, row):
             'SELECT id, share_code, file_id, strm_path FROM share_strms WHERE id=? AND revoked=0',
             (row['share_id'],)).fetchone()
         if not current:
-            return 'skipped', '分享条目已撤销或不存在', []
+            return 'skipped', '分享条目已删除或不存在', []
         if current['strm_path'] != row['relative_path']:
             return 'skipped', '分享路径在排队后变化，已保留。', []
         targets = {'managed': [], 'share': [dict(current)]}
-    # Recheck markers immediately before execution; read errors fail closed.
-    targets, dropped = drop_internal(store, targets, getattr(engine, 'root', None))
-    if dropped:
-        return 'skipped', '本地路径已登记为程序内部删除，已保留源文件。', []
     if row['kind'] == 'managed' and not dry_run:
         return await guarded_managed_delete(engine, dict(current))
     result = await apply(engine, targets, dry_run)

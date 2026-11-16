@@ -99,8 +99,13 @@ class Store:
         -- 索引；生产库实测 25.36ms/次（补索引后 0.01ms，2351×）。分享产线在 per-file 循环里
         -- 查它，直接把事件循环堵成秒级（现场「事件循环被阻塞」中位 1.28 秒）。
         CREATE INDEX IF NOT EXISTS organize_items_file ON organize_items(file_id);
+        CREATE INDEX IF NOT EXISTS organize_items_state ON organize_items(state);
+        CREATE INDEX IF NOT EXISTS organize_items_job_state ON organize_items(job_id,state);
         -- organize_jobs 原来一个索引都没有：`WHERE state=?` 实测 2.23ms → 0.01ms（200×）。
         CREATE INDEX IF NOT EXISTS organize_jobs_state ON organize_jobs(state);
+        -- 深删/同步/媒体信息按路径或源文件回查；1366 行时已出现全表扫描。
+        CREATE INDEX IF NOT EXISTS playbacks_relative ON playbacks(relative_path);
+        CREATE INDEX IF NOT EXISTS playbacks_file ON playbacks(file_id);
         CREATE TABLE IF NOT EXISTS organized_files(
           file_id TEXT PRIMARY KEY,job_id INTEGER NOT NULL,item_id INTEGER NOT NULL,
           playback_id TEXT NOT NULL,relative_path TEXT NOT NULL,metadata TEXT NOT NULL);
@@ -153,12 +158,10 @@ class Store:
           file_id TEXT NOT NULL, pickcode TEXT NOT NULL DEFAULT '', name TEXT NOT NULL,
           strm_path TEXT NOT NULL, token_hash TEXT NOT NULL,
           revoked INTEGER NOT NULL DEFAULT 0, created REAL NOT NULL);
+        CREATE INDEX IF NOT EXISTS share_strms_path ON share_strms(strm_path);
         CREATE TABLE IF NOT EXISTS share_watchlist(
           share_code TEXT NOT NULL, receive_code TEXT NOT NULL DEFAULT '',
           last_checked REAL, created REAL NOT NULL, PRIMARY KEY(share_code));
-        CREATE TABLE IF NOT EXISTS share_revocations(
-          share_code TEXT NOT NULL, file_id TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
-          created REAL NOT NULL, PRIMARY KEY(share_code, file_id));
         CREATE TABLE IF NOT EXISTS share_wash_intents(
           id TEXT PRIMARY KEY, job_id INTEGER NOT NULL, payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS channel_state(
@@ -210,7 +213,13 @@ class Store:
           PRIMARY KEY(account_id,scope));
         CREATE INDEX IF NOT EXISTS events_by_time ON events(at);
         CREATE INDEX IF NOT EXISTS notifications_by_time ON notifications(at);
+        CREATE INDEX IF NOT EXISTS notifications_job_event ON notifications(job_id,event_key);
+        CREATE INDEX IF NOT EXISTS deep_delete_batch ON deep_delete_queue(batch,state);
+        CREATE INDEX IF NOT EXISTS organized_files_relative ON organized_files(relative_path);
         ''')
+        # 旧版「撤销」已彻底下线：撤销记录表不再创建，历史库里的空表也一并移除。
+        self.db.execute('DROP TABLE IF EXISTS share_revocations')
+        self.db.commit()
         migrated = {row[1] for row in self.db.execute('PRAGMA table_info(notifications)')}
         for name, ddl in (('attempts', ' INTEGER NOT NULL DEFAULT 0'),
                           ('next_try', ' REAL NOT NULL DEFAULT 0'),
@@ -288,7 +297,7 @@ class Store:
         """Remove retired module metadata; never touch cloud files or local outputs.
 
         Called under the application instance lock, before workers start. Keep
-        shared playback/revocation records so removed items cannot reappear.
+        current playback/share records; only retired module metadata is removed.
         The transaction is atomic and safe to repeat after an interrupted start.
         """
         # 已下线模块的任务种类。历史版本分别用过短名和带阶段后缀的名字，

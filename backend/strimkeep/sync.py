@@ -596,17 +596,15 @@ class Sync:
                         or old_identity.get('kind') != 'netdisk' or new_identity.get('kind') != 'netdisk'
                         or str(old_identity.get('file_id')) != fid or str(new_identity.get('file_id')) != fid):
                     continue
-                from .internal_delete import remember
-                if remember(self.store, [relative]):
-                    old_path.unlink()
-                    with self.store.db:
-                        self.store.db.execute(
-                            'DELETE FROM owned_outputs WHERE relative_path=? AND account_id=? AND file_id=?',
-                            (relative, str(self.engine.index.account(config)), fid))
-                        self.store.db.execute('INSERT OR IGNORE INTO strm_changes VALUES(?,?,?)',
-                                              (jid, 'removed', relative))
-                    removed += 1
-                    self.mark_changed(jid)
+                old_path.unlink()
+                with self.store.db:
+                    self.store.db.execute(
+                        'DELETE FROM owned_outputs WHERE relative_path=? AND account_id=? AND file_id=?',
+                        (relative, str(self.engine.index.account(config)), fid))
+                    self.store.db.execute('INSERT OR IGNORE INTO strm_changes VALUES(?,?,?)',
+                                          (jid, 'removed', relative))
+                removed += 1
+                self.mark_changed(jid)
             except Exception as exc:
                 self.store.event('sync', '旧位置清理失败（%s）：%s' % (relative, str(exc)[:60]))
         if removed:
@@ -702,9 +700,6 @@ class Sync:
                     rest.append({**item, 'error': '本地文件身份对不上，已保留。'}); continue
                 if await self.cloud.live_file_exists(fid):
                     rest.append({**item, 'error': '网盘源文件仍存在，已保留。'}); continue
-                from .internal_delete import remember
-                if not remember(self.store, [relative]):
-                    raise RuntimeError('内部删除登记失败，已保留本地文件。')
                 local.unlink()
                 with self.store.db:
                     self.store.db.execute(
@@ -747,9 +742,6 @@ class Sync:
                 verified, _ = identity_of_file(local)
                 if local.is_symlink() or not verified or verified.get('kind') != 'netdisk' or str(verified.get('file_id')) != fid:
                     warnings.append('已保留身份变化的本地文件：' + relative); continue
-                from .internal_delete import remember
-                if not remember(self.store, [relative]):
-                    warnings.append('内部删除登记失败，已保留：' + relative); continue
                 local.unlink()
                 with self.store.db:
                     self.store.db.execute(
