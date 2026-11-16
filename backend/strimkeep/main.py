@@ -272,6 +272,10 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         # 深度删除已改为无状态：清掉旧版本遗留的内部删除登记，避免继续挡住清理/入库。
         with store.db:
             store.db.execute("DELETE FROM meta WHERE key='internal_deletes'")
+            # 旧版「撤销」是软删除：现在只有保留/删除两种状态，历史 revoked 行直接清掉。
+            store.db.execute("DELETE FROM share_revocations WHERE (share_code,file_id) IN ("
+                             "SELECT share_code,file_id FROM share_strms WHERE revoked=1)")
+            store.db.execute("DELETE FROM share_strms WHERE revoked=1")
         from .library_name import migrate
         migrate(store,app.state.strms)
         # 0.8.30：库根一致性自检（配置 / 台账 / 磁盘三方对照，只报警不改文件）。

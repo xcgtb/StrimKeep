@@ -94,7 +94,7 @@ def test_share_replacement_recovers_after_file_published_before_registry(tmp_pat
     # Restart between os.replace and the registry update.
     share_service.recover_share_washes(engine)
     assert dest.read_bytes()==new_bytes
-    assert store.db.execute("SELECT revoked FROM share_strms WHERE id='old'").fetchone()[0]==1
+    assert store.db.execute("SELECT count(*) FROM share_strms WHERE id='old'").fetchone()[0]==0
     assert store.db.execute("SELECT strm_path FROM share_strms WHERE id='new'").fetchone()[0]==str(dest.relative_to(root))
     assert not store.db.execute("SELECT 1 FROM share_wash_intents WHERE id='new'").fetchone()
     import asyncio
@@ -122,7 +122,7 @@ def test_changed_old_file_is_preserved_with_recovery_intent(tmp_path):
     old.write_bytes(old_bytes)
     share_service.recover_share_washes(engine)
     assert not old.exists()
-    assert store.db.execute("SELECT revoked FROM share_strms WHERE id='old'").fetchone()[0]==1
+    assert store.db.execute("SELECT count(*) FROM share_strms WHERE id='old'").fetchone()[0]==0
     assert not store.db.execute("SELECT 1 FROM share_wash_intents WHERE id='new'").fetchone()
     import asyncio
     asyncio.run(http.aclose());store.close()
@@ -158,7 +158,7 @@ def test_same_destination_restart_finishes_published_replacement(tmp_path, monke
         assert '/play115/share/'+new['id']+'/' in target.read_text()
         assert store.db.execute('SELECT revoked FROM share_strms WHERE id=?',(old['id'],)).fetchone()[0]==0
         share_service.recover_share_washes(engine)
-        assert store.db.execute('SELECT revoked FROM share_strms WHERE id=?',(old['id'],)).fetchone()[0]==1
+        assert store.db.execute('SELECT count(*) FROM share_strms WHERE id=?',(old['id'],)).fetchone()[0]==0
         assert store.db.execute('SELECT strm_path FROM share_strms WHERE id=?',(new['id'],)).fetchone()[0]==old['strm_path']
         assert '/play115/share/'+new['id']+'/' in target.read_text()
         await http.aclose();store.close()

@@ -281,7 +281,7 @@ def finish_share_wash(engine, intent):
             try:
                 if not old_path.exists() and old.get('unlink_started'):
                     with store.db:
-                        store.db.execute('UPDATE share_strms SET revoked=1 WHERE id=? AND strm_path=?', (old['id'],old['path']))
+                        store.db.execute('DELETE FROM share_strms WHERE id=? AND strm_path=?', (old['id'],old['path']))
                     continue
                 content=old_path.read_bytes()
                 if hashlib.sha256(content).hexdigest() != old['digest'] or not share_play_path_matches(urlsplit(content.decode().strip()).path, old['id']):
@@ -302,8 +302,8 @@ def finish_share_wash(engine, intent):
                 if payload.get('item_id'):
                     store.db.execute('INSERT OR IGNORE INTO strm_change_items VALUES(?,?,?,?)', (intent['job_id'],payload['item_id'],'replaced',payload['dest']))
         with store.db:
-            store.db.execute('UPDATE share_strms SET revoked=1 WHERE id=? AND strm_path=?', (old['id'],old['path']))
-        store.event('share_wash', '分享洗版：已发布新版并撤销旧入口 ' + old['id'])
+            store.db.execute('DELETE FROM share_strms WHERE id=? AND strm_path=?', (old['id'],old['path']))
+        store.event('share_wash', '分享洗版：已发布新版并删除旧入口 ' + old['id'])
     if unresolved:
         return False
     with store.db:
@@ -1177,10 +1177,9 @@ async def _to_unident(engine, job_id, row, item, reason, deterministic=False, se
                 if target_dir == targets[-1]:
                     raise
         with store.db:
-            # STRM 已移进未识别目录：这个入口不再有效，必须撤销登记。
-            # 否则台账会留下「有登记、磁盘没文件」的悬空记录——现场 4 条
-            # （05/06/27/28）就是这么来的：用户在未识别目录删掉 STRM 后台账还挂着。
-            store.db.execute('UPDATE share_strms SET strm_path=?, revoked=1 WHERE id=?',
+            # STRM 已移进未识别目录：入口仍指向真实文件，但不属于分享影视库。
+            # 保留一条 active 行阻止频道重扫反复生成；不再打「已撤销」状态。
+            store.db.execute('UPDATE share_strms SET strm_path=? WHERE id=?',
                              (target_dir.relative_to(root).as_posix(), row['id']))
         pending_file.unlink()
         cleanup_empty_pending(pending_file.parent, root / PENDING_NAME)
@@ -1335,10 +1334,10 @@ async def check_alive(engine):
                         continue
                     with store.db:
                         changed = store.db.execute(
-                            'UPDATE share_strms SET revoked=1 WHERE id=? AND revoked=0 AND strm_path=?',
+                            'DELETE FROM share_strms WHERE id=? AND revoked=0 AND strm_path=?',
                             (row['id'], row['strm_path'])).rowcount
                         if changed == 1:
-                            # 死分享的 STRM 已经撤掉，它的媒体信息重试也没有意义。
+                            # 死分享的 STRM 和登记一起清掉，不留「已撤销」历史。
                             store.db.execute(
                                 "DELETE FROM native_media_info_queue WHERE json_extract(target,'$.relative')=?",
                                 (current['strm_path'],))

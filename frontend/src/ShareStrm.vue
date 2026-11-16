@@ -13,7 +13,7 @@ const settings=ref({auto_organize:true,share_scan_minutes:5,share_check_hours:0,
 const settingsBaseline=ref('')
 const monitorDirty=computed(()=>!!settingsBaseline.value&&JSON.stringify(settings.value)!==settingsBaseline.value)
 // U07：状态由登记表驱动（分页完整返回），不再从路径文字推断；整理进入持久化任务。
-const tab=ref<'pending'|'library'|'revoked'>('pending')
+const tab=ref<'pending'|'library'>('pending')
 const pageSection=ref<'library'|'add'|'settings'>('library')
 const rows=ref<any[]>([]),total=ref(0),offset=ref(0),limit=ref(50),query=ref('')
 let refreshSequence=0
@@ -57,7 +57,7 @@ async function organize(){
   })
 }
 async function pruneOrphans(){
-  try{await ElMessageBox.confirm('把文件已经不在的记录标成撤销，不影响影视库里还能播的条目。','清理孤儿记录',{confirmButtonText:'清理',cancelButtonText:'取消'})}catch{return}
+  try{await ElMessageBox.confirm('删除本地文件已经不存在的分享登记；不会影响仍在分享影视库里的条目。','清理失效登记',{confirmButtonText:'删除',cancelButtonText:'取消'})}catch{return}
   await run(async()=>{const r:any=await props.api('/share/strms/prune','POST');ElMessage.success(r.message||'已清理');await doRefresh(0)})
 }
 
@@ -83,9 +83,9 @@ async function watch(){
   finally{watchInFlight=false}
 }
 function stopWatching(){watchGeneration++;if(watchTimer.value){window.clearInterval(watchTimer.value);watchTimer.value=null}}
-async function revoke(id:string){
-  try{await ElMessageBox.confirm('撤销后 STRM 文件会被删除，播放链接失效。','确认撤销',{confirmButtonText:'撤销',cancelButtonText:'取消'})}catch{return}
-  await run(async()=>{await props.api('/share/strm/'+id,'DELETE');ElMessage.success('已撤销');await doRefresh()})
+async function deleteStrm(id:string){
+  try{await ElMessageBox.confirm('删除后本地 STRM 文件与分享登记会一起清除，原分享链接不受影响。','确认删除',{confirmButtonText:'删除',cancelButtonText:'取消'})}catch{return}
+  await run(async()=>{await props.api('/share/strm/'+id,'DELETE');ElMessage.success('已删除');await doRefresh()})
 }
 async function doRefresh(at?:number){
   const sequence=++refreshSequence,target=at??offset.value
@@ -94,11 +94,11 @@ async function doRefresh(at?:number){
   offset.value=target;rows.value=r.items||[];total.value=r.total||0
 }
 async function refresh(){await run(()=>doRefresh())}
-function switchTab(t:'pending'|'library'|'revoked'){if(busy.value)return;tab.value=t;void run(()=>doRefresh(0))}
+function switchTab(t:'pending'|'library'){if(busy.value)return;tab.value=t;void run(()=>doRefresh(0))}
 function refreshAt(at:number){void run(()=>doRefresh(at))}
 function fmtTime(ts:number){if(!ts)return '';return new Date(ts*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
 
-const tabLabels={pending:'待整理',library:'分享影视库',revoked:'已撤销'} as const
+const tabLabels={pending:'待整理',library:'分享影视库'} as const
 onMounted(async()=>{await refresh();await loadSettings();await loadCheckStatus()})
 useVisiblePolling(async()=>{if(!busy.value&&pageSection.value==='settings')await loadCheckStatus()},5000)
 onUnmounted(stopWatching)
@@ -138,20 +138,19 @@ defineExpose({canLeave})
 </div>
 <div v-show="pageSection==='library'" class="share-page-group">
 <section class="panel" >
-<div class="library-heading"><div><h2>分享列表</h2><p>查看待整理、已入库和已撤销的分享 STRM。</p></div><el-button type="primary" @click="pageSection='add'">添加分享</el-button></div>
+<div class="library-heading"><div><h2>分享列表</h2><p>查看待整理和已入库的分享 STRM；删除即清空登记，没有「已撤销」状态。</p></div><el-button type="primary" @click="pageSection='add'">添加分享</el-button></div>
 <div class="section-title share-actions">
 <button v-for="(label,t) in tabLabels" :key="t" class="library-tab" :class="{active:tab===t}" type="button" @click="switchTab(t)">{{label}}</button>
 <el-input v-model="query" size="small" placeholder="搜索名称/分享码" style="max-width:200px" clearable @change="refreshAt(0)"/>
 <el-button v-if="tab==='pending'" type="primary" size="small" :disabled="busy||!rows.length" @click="organize">整理待整理内容</el-button>
 </div>
-<el-empty v-if="!rows.length" :description="tab==='pending'?'没有待整理的分享 STRM':tab==='library'?'分享影视库暂无条目':'没有已撤销条目'" :image-size="65"/>
+<el-empty v-if="!rows.length" :description="tab==='pending'?'没有待整理的分享 STRM':'分享影视库暂无条目'" :image-size="65"/>
 <div class="share-list library-list">
-<div v-for="s in rows" :key="s.id" class="share-card" :class="{revoked:s.revoked}">
+<div v-for="s in rows" :key="s.id" class="share-card">
 <div class="share-card-main">
 <span class="share-name">{{s.name}}</span>
-<el-tag v-if="s.revoked" size="small" type="info">已撤销</el-tag>
 <span class="share-time">{{fmtTime(s.created)}}</span>
-<el-button v-if="!s.revoked" text type="danger" size="small" @click="revoke(s.id)">撤销</el-button>
+<el-button text type="danger" size="small" @click="deleteStrm(s.id)">删除</el-button>
 </div>
 <p class="share-path" :title="s.strm_path">{{s.strm_path}}</p>
 </div>
@@ -160,7 +159,7 @@ defineExpose({canLeave})
 <el-pagination layout="prev, pager, next" :total="total" :page-size="limit" :current-page="offset/limit+1"
   @current-change="(p:number)=>refreshAt((p-1)*limit)"/>
 </div>
-<details class="share-maintenance"><summary>列表维护</summary><p class="hint">将本地文件已不存在的登记标记为撤销；不会删除仍在播放的条目。</p><el-button size="small" :disabled="busy" @click="pruneOrphans">清理失效登记</el-button></details>
+<details class="share-maintenance"><summary>列表维护</summary><p class="hint">删除本地文件已不存在的分享登记；不会删除仍在分享影视库里的条目。</p><el-button size="small" :disabled="busy" @click="pruneOrphans">清理失效登记</el-button></details>
 </section>
 </div>
 <div v-show="pageSection==='settings'" class="share-page-group">

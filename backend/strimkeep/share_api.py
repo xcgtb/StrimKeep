@@ -150,19 +150,17 @@ def install_share(app, store, admin):
         return await get_settings()
 
     @app.get('/api/v1/share/strms', dependencies=[Depends(admin)])
-    async def list_strms(state: str = Query('all', pattern='^(all|pending|library|revoked)$'),
+    async def list_strms(state: str = Query('all', pattern='^(all|pending|library)$'),
                          q: str = Query('', max_length=200),
                          offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200)):
-        """分页完整返回，不再静默截断（U07）。状态由登记表驱动，不由路径文字推断。"""
+        """分页完整返回；不再有「已撤销」状态：保留就是 active，删除就是没有。"""
         where, params = '1=1', []
         if state == 'pending':
             where = "revoked=0 AND strm_path LIKE ?"
             params = [PENDING_NAME + '/%']
-        elif state == 'revoked':
-            where = 'revoked=1'
         elif state == 'library':
-            where = "revoked=0 AND strm_path NOT LIKE ?"
-            params = [PENDING_NAME + '/%']
+            where = "revoked=0 AND strm_path NOT LIKE ? AND strm_path NOT LIKE ?"
+            params = [PENDING_NAME + '/%', share_service.UNIDENT_NAME + '/%']
         if q:
             where += ' AND (name LIKE ? OR share_code LIKE ?)'
             params += ['%' + q + '%', '%' + q + '%']
@@ -266,7 +264,10 @@ def install_share(app, store, admin):
             if not row:
                 raise HTTPException(404, '分享记录不存在。')
             if row['revoked']:
-                return {'ok': True}
+                # 旧版本遗留的「已撤销」行：直接清掉，不再保留状态。
+                with store.db:
+                    store.db.execute('DELETE FROM share_strms WHERE id=?', (sid,))
+                return {'ok': True, 'deleted': True}
             local = strm_root / row['strm_path']
             if local.exists() or local.is_symlink():
                 if share_service._verified_share_strm(strm_root, row['strm_path'], sid) is None:
@@ -277,10 +278,26 @@ def install_share(app, store, admin):
                         raise RuntimeError('未能登记')
                     purge_strm(local, strm_root, store=store, kind='share')
                 except Exception:
-                    raise HTTPException(503, '内部删除登记或本地文件删除失败，记录未撤销。') from None
+                    raise HTTPException(503, '本地文件删除失败，记录未删除。') from None
             with store.db:
-                store.db.execute('UPDATE share_strms SET revoked=1 WHERE id=? AND revoked=0 AND strm_path=?', (sid, row['strm_path']))
-        return {'ok': True}
+                store.db.execute('DELETE FROM share_strms WHERE id=? AND strm_path=?', (sid, row['strm_path']))
+        return {'ok': True, 'deleted': True}
+
+    @app.post('/api/v1/share/strms/prune', dependencies=[Depends(admin)])
+    async def prune_orphans():
+        """删除本地文件已不存在的登记：不是标记撤销，而是直接删行。"""
+        async with app.state.organizer.publication_gate:
+            rows = store.db.execute('SELECT id,strm_path FROM share_strms WHERE revoked=0').fetchall()
+            removed = 0
+            with store.db:
+                for row in rows:
+                    path = strm_root / row['strm_path']
+                    if path.is_file() or path.is_symlink():
+                        continue
+                    removed += store.db.execute('DELETE FROM share_strms WHERE id=? AND strm_path=?',
+                                                (row['id'], row['strm_path'])).rowcount
+            return {'ok': True, 'removed': removed,
+                    'message': '已删除 %d 条本地文件不存在的登记' % removed}
 
     # 分享 STRM 里写的是 /play115/share/<sid>/<文件名>，路由必须带文件名段，
     # 否则整条分享库都是 404（Emby 也就永远探测不到媒体信息）。

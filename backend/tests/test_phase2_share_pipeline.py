@@ -165,12 +165,12 @@ def test_share_wash_requires_evidence_and_same_episode(tmp_path):
         jid = share_service.enqueue_organize(engine, origin='web')
         await engine.run_job(jid)
         old_row = store.db.execute("SELECT * FROM share_strms WHERE id='old1'").fetchone()
-        assert old_row['revoked'] == 1, dict(old_row)
-        assert not (engine.root / old_row['strm_path']).exists()
+        assert old_row is None
         new_row = store.db.execute("SELECT * FROM share_strms WHERE file_id='302'").fetchone()
         assert new_row and new_row['revoked'] == 0 and new_row['strm_path'].startswith('分享影视库/')
         changes = {(r['action'],r['path']) for r in store.db.execute('SELECT action,path FROM strm_changes WHERE job_id=?', (jid,))}
-        assert ('removed', old_row['strm_path']) in changes and ('updated', new_row['strm_path']) in changes
+        old_path = (lib_dir / (old_stem + '.strm')).relative_to(engine.root).as_posix()
+        assert ('removed', old_path) in changes and ('updated', new_row['strm_path']) in changes
         await engine.notifications.media_report(engine.job(jid))
         notices = [r['message'] for r in store.db.execute("SELECT message FROM notifications WHERE job_id=? AND event_key LIKE ?", (jid, 'strm:%:files:removed:%'))]
         assert any(old_stem in notice for notice in notices)
@@ -193,7 +193,8 @@ def test_share_wash_requires_evidence_and_same_episode(tmp_path):
         jid3 = share_service.enqueue_organize(engine, origin='web')
         await engine.run_job(jid3)
         old2 = store.db.execute("SELECT * FROM share_strms WHERE id='old2'").fetchone()
-        assert old2['revoked'] == 1 and not (engine.root / old2['strm_path']).exists()
+        old2_path = engine.root / '分享影视库/剧集/欧美剧集/测试剧集 (2024) {tmdb-10}/Season 1/测试剧集.2024.S01E04.1080p.WEB-DL.strm'
+        assert old2 is None and not old2_path.exists()
         assert store.db.execute("SELECT revoked FROM share_strms WHERE file_id='304'").fetchone()[0] == 0
         await http.aclose(); store.close()
     asyncio.run(scenario())

@@ -110,7 +110,7 @@ def test_alive_check_does_not_use_internal_delete_markers(tmp_path, monkeypatch)
         result = await share_service.check_alive(engine)
         assert result['dead_count'] == 1 and result['skipped'] == 0
         assert not (engine.root / entry['strm_path']).exists()
-        assert store.db.execute('SELECT revoked FROM share_strms WHERE id=?', (entry['id'],)).fetchone()[0] == 1
+        assert store.db.execute('SELECT count(*) FROM share_strms WHERE id=?', (entry['id'],)).fetchone()[0] == 0
         await http.aclose(); store.close()
     asyncio.run(scenario())
 
