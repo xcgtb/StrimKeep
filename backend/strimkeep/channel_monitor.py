@@ -655,6 +655,12 @@ class ChannelMonitor:
         """转存模式：链接先落进 115 目录，再交给影视整理的定时扫描跟进。"""
         fresh = []
         for secret in found:
+            # 上一轮已经判定跳过（私密链接/提取码失效）的分享不再入队。
+            tried = self.store.db.execute(
+                'SELECT skipped FROM channel_share_attempts WHERE name=? AND share_code=?'
+                ' ORDER BY updated DESC LIMIT 1', (name, secret['share_code'])).fetchone()
+            if tried and tried['skipped']:
+                continue
             with self.store.db:
                 claimed = self.store.db.execute(
                     'INSERT OR IGNORE INTO channel_shares(share_code,name,message_id,created) VALUES(?,?,?,?)',
@@ -676,8 +682,22 @@ class ChannelMonitor:
             ids = await self.engine.transfer.enqueue('\n'.join(links), rule['share_cid'], bool(rule['organize_after']),
                                                      'channel', 'channel:%s:%s' % (name, message['id']))
         except (ValueError, CloudError) as exc:
-            self._remember(name, state='error', error='转存失败：%s' % str(exc)[:120])
-            self.store.event('channel', '频道 %s 转存失败：%s' % (title or name, str(exc)[:120]))
+            detail = str(exc)[:120]
+            # 私密链接、提取码失效、分享已取消：重试多少次都一样，记成跳过就走。
+            if any(key in detail for key in ('访问码', '提取码', '私密', '分享已取消', '不存在')):
+                with self.store.db:
+                    for secret in fresh:
+                        self.store.db.execute(
+                            'DELETE FROM channel_share_attempts WHERE name=? AND share_code=?',
+                            (name, secret['share_code']))
+                        self.store.db.execute(
+                            'INSERT OR REPLACE INTO channel_share_attempts VALUES(?,?,?,?,?,?,?)',
+                            (name, message['id'], secret['share_code'], 1, 1, detail, time.time()))
+                self.store.event('channel', '频道 %s：分享转存已跳过（%s）。若链接已更换，请到频道核对后手动提交。'
+                                 % (title or name, detail))
+                return 0
+            self._remember(name, state='error', error='转存失败：%s' % detail)
+            self.store.event('channel', '频道 %s 转存失败：%s' % (title or name, detail))
             raise
         if len(ids) != len(fresh):
             raise ValueError('分享与转存任务数量不一致，等待重新核对。')
