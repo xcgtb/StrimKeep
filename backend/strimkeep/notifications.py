@@ -177,6 +177,41 @@ def strm_detail_paths(items):
             sorted(set(replaced), key=natural_path_key))
 
 
+def strm_summary_lines(items, removed=(), replaced=(), pending=()):
+    """批次汇总口径：写入 = 新增 + 更新 + 洗版替换，数字必须对得上。
+
+    现场：一次分享整理写入 30 个 STRM，其中 25 个是同路径更新（播放地址/NFO
+    变了），只有 5 个是新路径，汇总却只写「新增 5 个 / 清理 0」——看起来像丢了
+    25 个。更新项按设计不逐条列明细，但数量必须出现在汇总里。
+    """
+    created, replaced_paths = strm_detail_paths(items)
+    created_set, replaced_set = set(created), set(replaced_paths)
+    written = updated = 0
+    for _, plan in items:
+        path = str(plan.get('relative_path') or '')
+        if not path.lower().endswith('.strm') or plan.get('strm_filtered'):
+            continue
+        written += 1
+        if path not in created_set and path not in replaced_set:
+            updated += 1
+    lines = []
+    if written:
+        lines.append(f'写入 STRM：{written} 个')
+    if created:
+        lines.append(f'新增 STRM：{len(created)} 个')
+    if updated:
+        lines.append(f'更新 STRM：{updated} 个（同路径重写，明细只列新增/洗版）')
+    if replaced_paths:
+        lines.append(f'洗版替换：{len(replaced_paths)} 个')
+    if removed:
+        lines.append(f'清理 STRM：{len(removed)} 个文件')
+    if replaced:
+        lines.append(f'同路径覆盖：{len(replaced)} 个 STRM')
+    if pending:
+        lines.append(f'清理结果待核实：{len(pending)} 个 STRM')
+    return lines, created, replaced_paths, written
+
+
 def strm_detail_titles(chunks, total, label='STRM 文件明细', source=''):
     """每条明细的标题：序号 + 本片覆盖的条目区间。
 
@@ -399,19 +434,14 @@ class Notifications:
             return
         marks = ','.join('?' for _ in ids)
         changes = self.store.db.execute(f'SELECT action,path FROM strm_change_items WHERE job_id=? AND item_id IN ({marks})', (job_id,*ids)).fetchall()
-        created, replaced_paths = strm_detail_paths(items)
         removed = sorted({r['path'] for r in changes if r['action']=='removed'},key=natural_path_key)
         replaced = {r['path'] for r in changes if r['action']=='replaced'}
         pending = sorted({r['path'] for r in changes if r['action']=='remove_pending'} - set(removed),key=natural_path_key)
-        if created or replaced_paths or removed or pending:
+        lines, created, replaced_paths, written = strm_summary_lines(items, removed, replaced, pending)
+        if written or removed or pending:
             prefix=f'strm:{job_id}:group:{group_key}'
             source=strm_source(json.loads(self.store.db.execute('SELECT config FROM organize_jobs WHERE id=?',(job_id,)).fetchone()[0]))
-            summary='\n'.join(line for line in (
-                f'新增 STRM：{len(created)} 个' if created else '',
-                f'洗版替换：{len(replaced_paths)} 个' if replaced_paths else '',
-                f'清理 STRM：{len(removed)} 个文件') if line)
-            if replaced:summary+=f'\n同路径覆盖：{len(replaced)} 个 STRM'
-            if pending:summary+=f'\n清理结果待核实：{len(pending)} 个 STRM'
+            summary='\n'.join(lines)
             meta_line=self.metadata_line(job_id,ids)
             if meta_line:summary+='\n'+meta_line
             previous_key = f'show_done:{job_id}:{group_key}'

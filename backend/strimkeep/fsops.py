@@ -13,7 +13,7 @@ SIDECAR_EXT = {'.nfo', '.json', '.xml', '.bif', '.jpg', '.jpeg', '.png', '.webp'
 LIBRARY_NAMES = ('影视媒体库', '分享影视库')
 
 
-def purge_strm(path, root, store=None):
+def purge_strm(path, root, store=None, kind='managed'):
     """删除一个 STRM，并清理它自己的附属文件；目录无视频时再清整目录侧车并删空目录。
 
     范围控制（单集/单季/整剧不误伤）：
@@ -27,7 +27,7 @@ def purge_strm(path, root, store=None):
     if store is None:
         raise RuntimeError('缺少内部删除登记，已保留本地文件。')
     from .internal_delete import remember
-    if not remember(store, [Path(path).relative_to(Path(root)).as_posix()]):
+    if not remember(store, [Path(path).relative_to(Path(root)).as_posix()], kind):
         raise RuntimeError('内部删除登记失败，已保留本地文件。')
     try:
         path.unlink()

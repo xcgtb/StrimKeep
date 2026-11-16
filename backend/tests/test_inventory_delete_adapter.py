@@ -40,7 +40,8 @@ def test_share_deletion_requires_lock_and_ownership(tmp_path, monkeypatch):
     assert asyncio.run(run()) is True
     assert not path.exists()
     assert engine.store.db.execute('SELECT revoked FROM share_strms').fetchone()[0] == 1
-    assert 'share/a.strm' in json.loads(engine.store.db.execute("SELECT value FROM meta WHERE key='internal_deletes'").fetchone()[0])
+    from strimkeep import internal_delete
+    assert 'share/a.strm' in internal_delete.recent(engine.store, kind='share')
 
 
 def test_changed_share_identity_or_file_is_preserved(tmp_path):

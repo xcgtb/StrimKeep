@@ -26,6 +26,7 @@ from .media import PROBE_UA
 from .cloud115 import CloudError, fatal
 from .fsops import purge_strm
 from .fsutil import atomic_write
+from .internal_delete import forget
 from .media import component, media_from_filename, naming, parse_name, require_single_episode, require_work_identity, work_parts, normal, NeedsReview
 from .quality import compare, facts, public_policy, group_key
 from .organize_options import options, filter_files, title_options
@@ -104,6 +105,7 @@ def align_existing_share_urls(store, root):
             with store.db:
                 store.db.execute("INSERT OR REPLACE INTO meta VALUES('share_url_refresh_pending',?)", (json.dumps(sorted(pending), ensure_ascii=False),))
             atomic_write(path, url.encode(), root)
+            forget(store, [relative], 'share')
             changed += 1
         except (OSError, UnicodeError, ValueError):
             continue
@@ -148,6 +150,7 @@ def migrate_share_play_paths(store, root):
                 store.db.execute("INSERT OR REPLACE INTO meta VALUES('share_url_refresh_pending',?)",
                                  (json.dumps(sorted(pending), ensure_ascii=False),))
             atomic_write(path, url.encode(), root)
+            forget(store, [relative], 'share')
             changed += 1
         except (OSError, UnicodeError, ValueError):
             continue
@@ -439,7 +442,7 @@ def generate(store, root, secret, videos, origin='web', settings_snapshot=None, 
             # update must not leave an unregistered active playback file.
             # 走 purge_strm：先登记再删，保持「删 STRM 必登记」的全局约定。
             try:
-                purge_strm(strm_file, root, store=store)
+                purge_strm(strm_file, root, store=store, kind='share')
             except (OSError, RuntimeError):
                 pass
             raise
@@ -909,6 +912,8 @@ async def run_organize(engine, job_id, config):
             layout = layouts.get(row['id'])
             if layout: store.set_meta(_share_layout_success(layout[0]), 1)
             os.replace(pending_file, dest)
+            # 新文件占用了这个路径：旧删除登记必须失效，否则后续深度清理会被跳过。
+            forget(store, [dest_rel], 'share')
             if strm_rules.get('cleanup_empty',True):await cleanup_empty_pending_async(pending_file.parent,pending)
             await copy_share_metadata(engine, job_id, row, dest, strm_rules)
             metadata_files = []
@@ -1322,12 +1327,12 @@ async def check_alive(engine):
                     # Remove the STRM and its own sidecars; the directory-level
                     # sidecars are cleared only when no other share STRM remains.
                     try:
-                        remember(store, [current['strm_path']])
-                        if current['strm_path'] not in recent(store):
+                        remember(store, [current['strm_path']], 'share')
+                        if current['strm_path'] not in recent(store, kind='share'):
                             skipped += 1
                             detail(row, 'unknown', '未能记录清理操作，已保留')
                             continue
-                        purge_strm(path, root, store=store)
+                        purge_strm(path, root, store=store, kind='share')
                     except (OSError, RuntimeError):
                         skipped += 1
                         detail(row, 'unknown', '清理本地文件失败，请检查日志及权限')

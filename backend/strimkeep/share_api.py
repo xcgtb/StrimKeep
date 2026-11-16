@@ -273,9 +273,9 @@ def install_share(app, store, admin):
                     raise HTTPException(409, '本地文件归属无法确认，已保留。')
                 try:
                     from .internal_delete import remember
-                    if not remember(store, [row['strm_path']]):
+                    if not remember(store, [row['strm_path']], 'share'):
                         raise RuntimeError('未能登记')
-                    purge_strm(local, strm_root, store=store)
+                    purge_strm(local, strm_root, store=store, kind='share')
                 except Exception:
                     raise HTTPException(503, '内部删除登记或本地文件删除失败，记录未撤销。') from None
             with store.db:

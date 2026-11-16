@@ -153,15 +153,17 @@ def drop_internal(store, targets):
     """剔除「本地文件是程序自己删的」目标（0.8.32）。
 
     Emby 的「条目被删」通知分不清是谁删的：用户在 Emby 里删条目要删云端，但程序清理
-    旧命名副本/退役输出时 Emby 也会发同一条通知——那不该删云端。这里用删除登记过滤。
-    返回 (过滤后的 targets, 跳过条数)。
+    旧命名副本/退役输出时 Emby 也会发同一条通知——那不该删云端。
+
+    登记必须按来源分域：分享库这里的删除只撤销分享入口，与受管输出的网盘真删风险
+    不同。旧版不分域的登记按受管处理，否则「媒体库清理过同路径」会永久挡住分享侧
+    的清理（现场：重新整理后分享旧数据清不掉）。
     """
     from .internal_delete import recent
-    seen = recent(store)
-    if not seen:
-        return targets, 0
-    managed = [t for t in targets['managed'] if (t.get('relative_path') or '') not in seen]
-    share = [t for t in targets['share'] if (t.get('strm_path') or '') not in seen]
+    managed_seen = recent(store, kind='managed')
+    share_seen = recent(store, kind='share')
+    managed = [t for t in targets['managed'] if (t.get('relative_path') or '') not in managed_seen]
+    share = [t for t in targets['share'] if (t.get('strm_path') or '') not in share_seen]
     dropped = (len(targets['managed']) - len(managed)) + (len(targets['share']) - len(share))
     return {'managed': managed, 'share': share}, dropped
 
@@ -470,7 +472,7 @@ async def apply(engine, targets, dry_run):
             if local.is_file():
                 if not dry_run:
                     from .fsops import purge_strm
-                    purge_strm(local, root, store=store)
+                    purge_strm(local, root, store=store, kind='share')
                 entry = _entry(entry, '已删除本地 STRM')
             if dry_run:
                 entry = _entry(entry, '（预演）分享来源不涉及网盘文件')

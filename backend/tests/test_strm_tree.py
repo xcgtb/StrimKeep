@@ -87,3 +87,42 @@ def test_detail_paths_treat_a_wash_decision_as_a_replacement():
     created, replaced = strm_detail_paths(items)
     assert created == [f'{SEASON}/末日地堡.2023.S01E01.自由日.strm']
     assert replaced == [f'{SEASON}/末日地堡.2023.S01E02.汉娜.strm']
+
+
+def test_batch_summary_accounts_for_updated_strm_not_just_created():
+    """现场 1795：写入 30 个、其中新增 5 个，汇总必须把另外 25 个更新算出来。"""
+    from strimkeep.notifications import strm_summary_lines
+    items = []
+    for n in range(1, 31):
+        plan = {'relative_path': f'{SEASON}/末日地堡.2023.S01E{n:02d}.第{n}集.strm'}
+        if n <= 5:
+            plan['strm_created'] = True
+        items.append((n, plan))
+    lines, created, replaced, written = strm_summary_lines(items)
+    assert written == 30 and len(created) == 5 and replaced == []
+    assert '写入 STRM：30 个' in lines
+    assert '新增 STRM：5 个' in lines
+    assert '更新 STRM：25 个（同路径重写，明细只列新增/洗版）' in lines
+
+
+def test_batch_summary_reports_a_pure_update_batch():
+    """全部是同路径更新时也要发汇总，不能因为「新增 0」就静默。"""
+    from strimkeep.notifications import strm_summary_lines
+    items = [(n, {'relative_path': f'{SEASON}/末日地堡.2023.S01E{n:02d}.第{n}集.strm'})
+             for n in range(1, 31)]
+    lines, created, replaced, written = strm_summary_lines(items)
+    assert written == 30 and created == [] and replaced == []
+    assert lines[0] == '写入 STRM：30 个'
+    assert '更新 STRM：30 个（同路径重写，明细只列新增/洗版）' in lines
+
+
+def test_batch_summary_excludes_filtered_outputs_from_written_count():
+    from strimkeep.notifications import strm_summary_lines
+    items = [(1, {'relative_path': f'{SEASON}/末日地堡.2023.S01E01.自由日.strm',
+                  'strm_filtered': '低于最小体积'}),
+             (2, {'relative_path': f'{SEASON}/末日地堡.2023.S01E02.汉娜.strm',
+                  'strm_created': True})]
+    lines, created, _, written = strm_summary_lines(items)
+    assert written == 1 and len(created) == 1
+    assert '写入 STRM：1 个' in lines
+
