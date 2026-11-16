@@ -929,6 +929,7 @@ async def run_organize(engine, job_id, config):
                     'relative_path': dest_rel, 'playback_id': 'share/' + row['id'], 'target_stem': target_stem, 'hint': hint,
                     'details': details, 'media': media, 'parts': parts, 'metadata_files': metadata_files,
                     'share_wash_replaced': bool(old_records), 'strm_created': created,
+                    'strm_rewritten': bool(not created and not old_records),
                     'source': {'id': row['file_id'], 'name': row['name'], 'size': row['size'] or 0},
                 }, state='done', step='已入库分享影视库')
             moved += 1
@@ -1252,7 +1253,6 @@ def _wash(engine, job_id, row, org_dir, dest, target_stem, hint, new_facts, poli
 
 async def check_alive(engine):
     """按分享核验；仅在确认取消且归属可核实时撤销。"""
-    from .internal_delete import remember, recent
     store, root = engine.store, engine.root
     rows = store.db.execute(
         'SELECT id, name, share_code, receive_code, file_id, strm_path FROM share_strms WHERE revoked=0').fetchall()
@@ -1326,12 +1326,8 @@ async def check_alive(engine):
                         continue
                     # Remove the STRM and its own sidecars; the directory-level
                     # sidecars are cleared only when no other share STRM remains.
+                    # 分享侧不做内部删除登记：撤销入口可逆，反复清理/重整理不应被旧状态挡住。
                     try:
-                        remember(store, [current['strm_path']], 'share')
-                        if current['strm_path'] not in recent(store, kind='share'):
-                            skipped += 1
-                            detail(row, 'unknown', '未能记录清理操作，已保留')
-                            continue
                         purge_strm(path, root, store=store, kind='share')
                     except (OSError, RuntimeError):
                         skipped += 1

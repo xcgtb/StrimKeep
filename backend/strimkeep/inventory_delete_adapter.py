@@ -120,7 +120,7 @@ async def delete_one(engine, evidence, source):
         if result['file'] != 1 or local.exists() or local.is_symlink():
             return False
         with engine.store.db:
-            count = engine.store.db.execute('UPDATE share_strms SET revoked=1 WHERE id=? AND revoked=0 AND strm_path=?',
+            count = engine.store.db.execute('DELETE FROM share_strms WHERE id=? AND revoked=0 AND strm_path=?',
                                             (record_id, path)).rowcount
         if count == 1:
             cleanup_empty_work(engine, path)

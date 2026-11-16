@@ -222,9 +222,9 @@ def test_guarded_delete_confirms_recycle_and_purges_ledger(tmp_path):
         assert state == 'done' and '网盘文件离开活动空间' in message, (state, message)
         assert engine.cloud.recycled == [('3001', '77')]
         assert not strm.exists()
-        assert store.db.execute('SELECT revoked FROM playbacks WHERE id=?', ('p1',)).fetchone()[0] == 1
+        assert store.db.execute('SELECT count(*) FROM playbacks WHERE id=?', ('p1',)).fetchone()[0] == 0
         assert store.db.execute('SELECT count(*) FROM organized_files WHERE file_id=?', ('3001',)).fetchone()[0] == 0
-        assert store.db.execute('SELECT count(*) FROM output_registry WHERE file_id=? AND active=1', ('3001',)).fetchone()[0] == 0
+        assert store.db.execute('SELECT count(*) FROM output_registry WHERE file_id=?', ('3001',)).fetchone()[0] == 0
         store.close()
 
     asyncio.run(run())
@@ -439,8 +439,8 @@ def test_apply_refuses_managed_real_delete(tmp_path):
     asyncio.run(run())
 
 
-def test_apply_still_revokes_share_strm(tmp_path):
-    """分享来源不涉及网盘文件，apply 仍可直接撤销分享 STRM。"""
+def test_apply_purges_share_record_and_file(tmp_path):
+    """分享来源不涉及网盘文件；深度删除清掉本地 STRM 与分享登记，重加按全新处理。"""
     async def run():
         store = make_store(tmp_path)
         engine = FakeEngine(store, tmp_path / 'strm')
@@ -452,7 +452,7 @@ def test_apply_still_revokes_share_strm(tmp_path):
         result = await apply(engine, targets, dry_run=False)
         assert result['errors'] == []
         assert not share_local.exists()
-        assert store.db.execute('SELECT revoked FROM share_strms WHERE id=?', ('s1',)).fetchone()[0] == 1
+        assert store.db.execute('SELECT count(*) FROM share_strms WHERE id=?', ('s1',)).fetchone()[0] == 0
         store.close()
 
     asyncio.run(run())
@@ -470,9 +470,8 @@ def test_episode_with_tmdb_and_path_never_expands_to_siblings(tmp_path):
     event = {'type':'Episode', 'path':'/media/'+original, 'tmdb':'10'}
     matched = match_targets(store, event)
     assert [r['file_id'] for r in matched['managed']] == ['3001']
-    remember(store, [original])
     remaining, skipped = drop_internal(store, matched)
-    assert skipped == 1 and not remaining['managed']
+    assert skipped == 0 and remaining['managed']
     # Even a valid TMDB id may not rescue an unmatched episode path.
     assert not match_targets(store, {**event, 'path':'/media/no-such-file.strm'})['managed']
     store.close()
@@ -574,13 +573,12 @@ def test_guarded_delete_keeps_cloud_directory_when_cloud_still_has_content(tmp_p
     asyncio.run(run())
 
 
-def test_recently_deleted_recognises_our_own_cleanup(tmp_path):
-    """程序自己删掉的本地文件：Emby 发来的删除通知要认得出来，别再报未命中。"""
+def test_recently_deleted_is_stateless(tmp_path):
+    """不再有内部删除登记：Emby 回声只会落到已清空的台账上，不需要「认得出来」。"""
     from strimkeep.deep_delete import recently_deleted
     from strimkeep.internal_delete import remember
     store = make_store(tmp_path)
     relative = '分享影视库/剧集/国产剧集/剧名 (2024) {tmdb-10}/Season 1/剧名.2024.S01E01.strm'
     remember(store, [relative])
-    assert recently_deleted(store, '/media/' + relative)
-    assert not recently_deleted(store, '/media/别的东西.strm')
+    assert not recently_deleted(store, '/media/' + relative)
     assert not recently_deleted(store, '')

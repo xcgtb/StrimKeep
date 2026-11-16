@@ -90,9 +90,12 @@ def test_unidentified_move_refuses_replaced_or_moved_source(tmp_path):
     asyncio.run(scenario())
 
 
-def test_alive_check_refuses_delete_if_internal_delete_record_fails(tmp_path, monkeypatch):
+def test_alive_check_does_not_use_internal_delete_markers(tmp_path, monkeypatch):
+    """分享侧零登记：即使登记函数被禁用/报错，失效分享也必须能清理。"""
     from strimkeep import internal_delete
-    monkeypatch.setattr(internal_delete, 'remember', lambda *args: None)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('分享侧不应写内部删除登记')
+    monkeypatch.setattr(internal_delete, 'remember', forbidden)
     async def scenario():
         store, cloud, http, engine, _ = share_setup(tmp_path)
         entry = share_service.generate(store, engine.root, {'share_code':'code','receive_code':''}, [
@@ -105,9 +108,9 @@ def test_alive_check_refuses_delete_if_internal_delete_record_fails(tmp_path, mo
         store.db.execute('UPDATE share_check_candidates SET first_at=?', (time.time()-301,))
         store.db.commit()
         result = await share_service.check_alive(engine)
-        assert result['dead_count'] == 0 and result['skipped'] == 1
-        assert (engine.root / entry['strm_path']).exists()
-        assert store.db.execute('SELECT revoked FROM share_strms WHERE id=?', (entry['id'],)).fetchone()[0] == 0
+        assert result['dead_count'] == 1 and result['skipped'] == 0
+        assert not (engine.root / entry['strm_path']).exists()
+        assert store.db.execute('SELECT revoked FROM share_strms WHERE id=?', (entry['id'],)).fetchone()[0] == 1
         await http.aclose(); store.close()
     asyncio.run(scenario())
 

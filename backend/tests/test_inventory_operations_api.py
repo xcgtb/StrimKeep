@@ -72,7 +72,7 @@ def test_user_plan_and_isolated_share_deletion(tmp_path, monkeypatch):
         history = client.get('/api/v1/inventory-plans').json()['items']
         assert history[0]['state'] == 'completed' and history[0]['done'] == 1
         assert 'snapshot' not in history[0] and 'claim_hash' not in history[0]
-        assert db.execute('SELECT revoked FROM share_strms').fetchone()[0] == 1
+        assert db.execute('SELECT count(*) FROM share_strms').fetchone()[0] == 0
         assert client.post(f"/api/v1/inventory/delete/{plan['plan_id']}/execute").status_code == 409
     db.close()
 

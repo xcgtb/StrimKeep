@@ -146,7 +146,8 @@ def test_deleted_episode_reappearance_or_overlapping_video_blocks_sidecar(tmp_pa
     assert (season / 'S01E01.zh.srt').exists()
 
 
-def test_http_recent_deleted_episode_sidecars_are_cleaned_independently(tmp_path):
+def test_orphan_scan_has_no_hidden_recent_state(tmp_path):
+    """不再有内部删除登记：扫描不会凭历史状态自动把 sidecar 当候选。"""
     import asyncio, sqlite3
     from fastapi import FastAPI, HTTPException
     from fastapi.testclient import TestClient
@@ -163,11 +164,7 @@ def test_http_recent_deleted_episode_sidecars_are_cleaned_independently(tmp_path
     def admin(): raise HTTPException(401)
     install_inventory(app,store,admin);app.dependency_overrides[admin]=lambda:None
     with TestClient(app) as client:
-        found=client.post('/api/v1/inventory/orphans/scan').json()['items']
-        assert len(found)==1 and found[0]['kind']=='file'
-        row=found[0]
-        result=client.post('/api/v1/inventory/orphans/clean',json={'items':[{k:row[k] for k in ('path','source','kind','fingerprint')}]}).json()['items'][0]
-        assert result['files_removed']==1 and not result['errors'] and (season/'S01E02.strm').exists()
+        assert client.post('/api/v1/inventory/orphans/scan').json()['items'] == []
     db.close()
 
 

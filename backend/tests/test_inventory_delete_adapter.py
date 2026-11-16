@@ -9,6 +9,7 @@ import pytest
 from strimkeep.inventory_delete_adapter import delete_one
 from strimkeep.inventory_snapshot import _fingerprint
 from strimkeep.inventory_sources import source_fingerprints
+from strimkeep import internal_delete
 
 
 def setup_share(root):
@@ -39,9 +40,9 @@ def test_share_deletion_requires_lock_and_ownership(tmp_path, monkeypatch):
             return await delete_one(engine, item, source)
     assert asyncio.run(run()) is True
     assert not path.exists()
-    assert engine.store.db.execute('SELECT revoked FROM share_strms').fetchone()[0] == 1
-    from strimkeep import internal_delete
-    assert 'share/a.strm' in internal_delete.recent(engine.store, kind='share')
+    assert engine.store.db.execute('SELECT count(*) FROM share_strms').fetchone()[0] == 0
+    # 分享侧不做内部删除登记：反复清理/重整理不会被历史状态挡住。
+    assert 'share/a.strm' not in internal_delete.recent(engine.store)
 
 
 def test_changed_share_identity_or_file_is_preserved(tmp_path):

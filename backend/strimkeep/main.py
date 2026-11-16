@@ -269,6 +269,9 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
             instance_file.close()
             raise RuntimeError('FFprobe 未安装。')
         store.remove_retired_modules()
+        # 深度删除已改为无状态：清掉旧版本遗留的内部删除登记，避免继续挡住清理/入库。
+        with store.db:
+            store.db.execute("DELETE FROM meta WHERE key='internal_deletes'")
         from .library_name import migrate
         migrate(store,app.state.strms)
         # 0.8.30：库根一致性自检（配置 / 台账 / 磁盘三方对照，只报警不改文件）。
@@ -1310,7 +1313,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
             return {'accepted': False, 'matched': 0, 'reason': '缺少可核对的文件或作品路径，未执行删除。'}
         targets = deep_delete.match_targets(store, event)
         # 0.8.32：程序自己删掉的本地 STRM 也会让 Emby 发删除通知；这些不能删云端。
-        targets, internal_skipped = deep_delete.drop_internal(store, targets)
+        targets, internal_skipped = deep_delete.drop_internal(store, targets, app.state.strms)
         if internal_skipped and not quiet:
             store.event('deep_delete', '深度删除 · 跳过 %d 条：这些本地 STRM 是程序自己清理的'
                         '（旧命名副本/退役输出），不代表用户要删云端。' % internal_skipped)

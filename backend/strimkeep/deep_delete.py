@@ -120,7 +120,7 @@ def match_targets(store, event):
     for row in store.db.execute('SELECT file_id, playback_id, relative_path FROM organized_files'):
         if _hits(row['relative_path'], path, is_dir, candidates):
             managed.append(dict(row))
-    for row in store.db.execute('SELECT id, strm_path FROM share_strms WHERE revoked=0'):
+    for row in store.db.execute('SELECT id, share_code, file_id, strm_path FROM share_strms WHERE revoked=0'):
         if _hits(row['strm_path'], path, is_dir, candidates):
             share.append(dict(row))
     return {'managed': managed, 'share': share, 'type': event['type'], 'path': path}
@@ -149,21 +149,17 @@ def recently_deleted(store, path):
     return False
 
 
-def drop_internal(store, targets):
-    """剔除「本地文件是程序自己删的」目标（0.8.32）。
+def drop_internal(store, targets, root=None):
+    """剔除「本地文件是程序自己删的」受管目标（0.8.32）。
 
-    Emby 的「条目被删」通知分不清是谁删的：用户在 Emby 里删条目要删云端，但程序清理
-    旧命名副本/退役输出时 Emby 也会发同一条通知——那不该删云端。
-
-    登记必须按来源分域：分享库这里的删除只撤销分享入口，与受管输出的网盘真删风险
-    不同。旧版不分域的登记按受管处理，否则「媒体库清理过同路径」会永久挡住分享侧
-    的清理（现场：重新整理后分享旧数据清不掉）。
+    只有受管输出会触发云端真删，才需要延迟回声保护；分享侧删除只撤销入口、
+    可逆，因此不做任何登记/豁免——「清理 → 重整理 → 再清理」永远可以直接重来。
+    旧版不分域的登记一律按受管处理，不会再挡住分享侧。
     """
     from .internal_delete import recent
     managed_seen = recent(store, kind='managed')
-    share_seen = recent(store, kind='share')
     managed = [t for t in targets['managed'] if (t.get('relative_path') or '') not in managed_seen]
-    share = [t for t in targets['share'] if (t.get('strm_path') or '') not in share_seen]
+    share = list(targets['share'])
     dropped = (len(targets['managed']) - len(managed)) + (len(targets['share']) - len(share))
     return {'managed': managed, 'share': share}, dropped
 
@@ -305,19 +301,27 @@ def _finish_cloud_local(engine, info):
         from .fsops import purge_strm
         path = info['path']
         had_local = path.exists()
-        result = purge_strm(path, info['root'], store=store) if had_local else {'file': 0, 'dirs': 0}
+        result = purge_strm(path, info['root'], store=store, remember=False) if had_local else {'file': 0, 'dirs': 0}
         if had_local and (result.get('file') != 1 or path.exists() or path.is_symlink()):
             raise OSError('本地 STRM 清理失败')
         removed_dirs = result.get('dirs', 0)
         with store.db:
-            store.db.execute('UPDATE playbacks SET revoked=1 WHERE id=? AND file_id=?', (info['playback'], info['fid']))
+            # 深度删除的语义是「删干净」：播放身份、受管登记、输出索引一起清掉，
+            # 之后重新加入同一作品就是全新入库，不会命中任何旧记录。
+            store.db.execute('DELETE FROM playbacks WHERE id=? AND file_id=?', (info['playback'], info['fid']))
             store.db.execute('DELETE FROM organized_files WHERE file_id=? AND playback_id=? AND relative_path=?',
                              (info['fid'], info['playback'], info['relative']))
-            store.db.execute('UPDATE output_registry SET active=0 WHERE account_id=? AND file_id=?',
+            store.db.execute('DELETE FROM output_registry WHERE account_id=? AND file_id=?',
                              (info['account'], info['fid']))
             store.db.execute('DELETE FROM owned_outputs WHERE relative_path=? AND account_id=? AND file_id=?',
                              (info['relative'], info['account'], info['fid']))
+            store.db.execute('DELETE FROM media_cache WHERE account_id=? AND file_id=?',
+                             (info['account'], info['fid']))
+            store.db.execute("DELETE FROM native_media_info_queue WHERE json_extract(target,'$.relative')=?",
+                             (info['relative'],))
             store.db.execute('DELETE FROM meta WHERE key=?', (info['intent_key'],))
+        from .internal_delete import forget
+        forget(store, [info['relative']])
         return removed_dirs, had_local
     except Exception as exc:
         raise RuntimeError('网盘已回收，本地 STRM 或登记清理未完成；请核对后处理') from exc
@@ -479,8 +483,14 @@ async def apply(engine, targets, dry_run):
                 result['share'].append(entry)
                 continue
             with store.db:
-                store.db.execute('UPDATE share_strms SET revoked=1 WHERE id=?', (row['id'],))
-            entry = _entry(entry, '已确认删除（分享来源，不涉及网盘文件）')
+                # 删干净：不留 revoked 行/替换意图/失效登记，重新加入时按全新内容处理。
+                store.db.execute('DELETE FROM share_strms WHERE id=?', (row['id'],))
+                store.db.execute('DELETE FROM share_wash_intents WHERE id=?', (row['id'],))
+                store.db.execute('DELETE FROM share_revocations WHERE share_code=? AND file_id=?',
+                                 (row.get('share_code') or '', row.get('file_id') or ''))
+                store.db.execute("DELETE FROM native_media_info_queue WHERE json_extract(target,'$.relative')=?",
+                                 (row['strm_path'],))
+            entry = _entry(entry, '已确认删除并清除登记（分享来源，不涉及网盘文件）')
             result['share'].append(entry)
         except Exception as exc:
             result['errors'].append({**entry, 'actions': ['失败：%s' % str(exc)[:80]]})
@@ -569,7 +579,7 @@ async def run_row(engine, row):
         targets = {'managed': [dict(current)], 'share': []}
     else:
         current = store.db.execute(
-            'SELECT id, strm_path FROM share_strms WHERE id=? AND revoked=0',
+            'SELECT id, share_code, file_id, strm_path FROM share_strms WHERE id=? AND revoked=0',
             (row['share_id'],)).fetchone()
         if not current:
             return 'skipped', '分享条目已撤销或不存在', []
@@ -577,7 +587,7 @@ async def run_row(engine, row):
             return 'skipped', '分享路径在排队后变化，已保留。', []
         targets = {'managed': [], 'share': [dict(current)]}
     # Recheck markers immediately before execution; read errors fail closed.
-    targets, dropped = drop_internal(store, targets)
+    targets, dropped = drop_internal(store, targets, getattr(engine, 'root', None))
     if dropped:
         return 'skipped', '本地路径已登记为程序内部删除，已保留源文件。', []
     if row['kind'] == 'managed' and not dry_run:

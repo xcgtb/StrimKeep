@@ -186,21 +186,27 @@ def strm_summary_lines(items, removed=(), replaced=(), pending=()):
     """
     created, replaced_paths = strm_detail_paths(items)
     created_set, replaced_set = set(created), set(replaced_paths)
-    written = updated = 0
+    written = updated = rewritten = 0
     for _, plan in items:
         path = str(plan.get('relative_path') or '')
         if not path.lower().endswith('.strm') or plan.get('strm_filtered'):
             continue
         written += 1
-        if path not in created_set and path not in replaced_set:
+        if path in created_set or path in replaced_set:
+            continue
+        if plan.get('strm_rewritten'):
+            rewritten += 1
+        else:
             updated += 1
     lines = []
     if written:
         lines.append(f'写入 STRM：{written} 个')
     if created:
         lines.append(f'新增 STRM：{len(created)} 个')
+    if rewritten:
+        lines.append(f'重写 STRM：{rewritten} 个（同路径覆盖，明细略）')
     if updated:
-        lines.append(f'更新 STRM：{updated} 个（同路径重写，明细只列新增/洗版）')
+        lines.append(f'更新 STRM：{updated} 个（地址/元数据变化，明细略）')
     if replaced_paths:
         lines.append(f'洗版替换：{len(replaced_paths)} 个')
     if removed:

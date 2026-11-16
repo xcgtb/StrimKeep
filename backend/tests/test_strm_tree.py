@@ -102,7 +102,7 @@ def test_batch_summary_accounts_for_updated_strm_not_just_created():
     assert written == 30 and len(created) == 5 and replaced == []
     assert '写入 STRM：30 个' in lines
     assert '新增 STRM：5 个' in lines
-    assert '更新 STRM：25 个（同路径重写，明细只列新增/洗版）' in lines
+    assert '更新 STRM：25 个（地址/元数据变化，明细略）' in lines
 
 
 def test_batch_summary_reports_a_pure_update_batch():
@@ -113,7 +113,19 @@ def test_batch_summary_reports_a_pure_update_batch():
     lines, created, replaced, written = strm_summary_lines(items)
     assert written == 30 and created == [] and replaced == []
     assert lines[0] == '写入 STRM：30 个'
-    assert '更新 STRM：30 个（同路径重写，明细只列新增/洗版）' in lines
+    assert '更新 STRM：30 个（地址/元数据变化，明细略）' in lines
+
+
+def test_batch_summary_counts_explicit_rewrites():
+    """分享重复整理同一路径：计划里标了 strm_rewritten，汇总必须说「重写」而不是「更新」。"""
+    from strimkeep.notifications import strm_summary_lines
+    items = [(n, {'relative_path': f'{SEASON}/末日地堡.2023.S01E{n:02d}.第{n}集.strm',
+                  'strm_rewritten': True})
+             for n in range(1, 31)]
+    lines, created, replaced, written = strm_summary_lines(items)
+    assert written == 30 and created == [] and replaced == []
+    assert '重写 STRM：30 个（同路径覆盖，明细略）' in lines
+    assert not any(line.startswith('更新 STRM') for line in lines)
 
 
 def test_batch_summary_excludes_filtered_outputs_from_written_count():
