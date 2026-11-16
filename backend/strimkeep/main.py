@@ -382,16 +382,29 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
             metrics.record_request(request.method, route or 'unmatched', response.status_code)
         # 慢请求留痕（流式接口与播放重定向天然耗时不参与）。只在超过 1 秒时写一条，
         # 这是「页面为什么慢」的第一手证据；正常请求不产生任何写入。
-        if elapsed >= 1.0 and not is_streaming(request.url.path):
+        if elapsed >= 2.0 and not is_streaming(request.url.path):
             app.state.metrics.record_slow_request()
-            # 带上当时的循环延迟：区分「接口本身慢」和「事件循环被同步调用占住」。
-            lag_ms = 0
-            try:
-                lag_ms = int((store.meta_json('loop_lag', {}) or {}).get('p95_ms') or 0)
-            except Exception:
+            # 降噪：同一路径 60 秒内只写一条，并带上这段时间的次数；
+            # 同时带上当时的循环延迟，区分「接口慢」与「循环被占」。
+            window = getattr(app.state, 'slow_log', None)
+            if window is None:
+                window = app.state.slow_log = {}
+            stamp = time.monotonic()
+            path_key = request.url.path[:80]
+            entry = window.get(path_key)
+            if entry is None or stamp - entry[0] >= 60:
+                count = 1 if entry is None else entry[1] + 1
+                window[path_key] = (stamp, 1)
                 lag_ms = 0
-            store.event('perf', '慢请求：%s %s %.1f 秒（循环延迟 %d ms，rid %s）'
-                        % (request.method, request.url.path[:80], elapsed, lag_ms, request_id))
+                try:
+                    lag_ms = int((store.meta_json('loop_lag', {}) or {}).get('p95_ms') or 0)
+                except Exception:
+                    lag_ms = 0
+                suffix = '' if count <= 1 else '，本分钟 %d 次' % count
+                store.event('perf', '慢请求：%s %s %.1f 秒（循环延迟 %d ms%s，rid %s）'
+                            % (request.method, path_key, elapsed, lag_ms, suffix, request_id))
+            else:
+                window[path_key] = (entry[0], entry[1] + 1)
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'no-referrer'
         response.headers['X-Frame-Options'] = 'DENY'
