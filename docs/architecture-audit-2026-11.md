@@ -14,15 +14,15 @@
 | 项目 | 数值 | 说明 |
 |---|---:|---|
 | 后端模块 | 92 个 `.py` | 单包 `strimkeep/` |
-| 后端代码 | 32,257 行 | `wc -l *.py` |
-| 最大模块 | `organizer.py` 3,403 行 | 识别、整理、洗版、发布、调度、清理都在里面 |
-| 前五模块 | 9,758 行 | 占后端 30%：organizer / cloud115 / main / share_service / sync |
+| 后端代码 | 31,916 行 | `wc -l *.py` |
+| 最大模块 | `organizer.py` 3,354 行 | 识别、整理、洗版、发布、调度、清理都在里面 |
+| 前五模块 | 9,038 行 | 占后端 28%：organizer / cloud115 / main / share_service / sync |
 | HTTP 路由 | 198 条 | 其中 181 条直接挂 `Depends(admin)` |
 | 数据表 | 36 张 | 单 SQLite，`SCHEMA_VERSION='2'` |
 | 直接 DB 调用 | 666 处 | `organizer` 95、`share_service` 84、`main` 51 |
 | 宽泛异常 | 199 处 `except Exception` | `organizer` 37、`sync` 16、`deep_delete` 15 |
 | 异步任务 | 38 处 `asyncio.create_task` | 分散在 organizer / main / emby_proxy 等 |
-| 后端测试 | 196 个文件 / 30,479 行 / 1,672 通过 | 本次删除死代码/死状态后；清理前 1,685 通过 |
+| 后端测试 | 197 个文件 / 30,546 行 / 1,674 通过 | 本次删除死代码/死状态后；清理前 1,685 通过 |
 | 前端页面 | 30 个 Vue，4,301 行 | `Inventory.vue` 940 行 |
 | 前端请求 | 请求已收口到 `src/api/client.ts`，178 处 `props.api(...)` | 之前请求闭包写在 `App.vue`，没有 API 层 |
 | 前端组件测试 | 0 个 | 只有 11 个纯 TS 辅助函数测试，261 行 |
@@ -125,7 +125,7 @@ TgtoDrive 是功能面最接近的竞品，值得借的是「集成广度」和�
 
 **现状**
 
-- `main.py` 1,508 行，`create_app` 单函数约 1,266 行；198 条路由中 181 条直接依赖 `admin`。
+- `main.py` 1,493 行，`create_app` 单函数约 1,266 行；198 条路由中 181 条直接依赖 `admin`。
 - 安全基础不错：scrypt 密码、`HttpOnly/SameSite=Strict` Cookie、CSRF 双提交、Origin 校验、CSP、请求体 64KB 上限、登录失败 15 分钟窗口。
 - `docs_url=None / openapi_url=None`，没有对外 API 文档；没有 API token。
 
@@ -163,7 +163,7 @@ TgtoDrive 是功能面最接近的竞品，值得借的是「集成广度」和�
 
 **现状**
 
-- `organizer.py` 3,403 行；`identify` 129 行、`run_job` 462 行、`process_item` 200 行。
+- `organizer.py` 3,354 行；`identify` 129 行、`run_job` 462 行、`process_item` 200 行。
 - 识别有规范化、短语变体、年份证据、TMDB 404 负缓存；洗版 7 维比较。
 - 直接 DB 95 处，`except Exception` 37 处；`pending.rglob('*.strm')` 在异步路径里（见 4.4 风险）。
 
@@ -205,7 +205,7 @@ TgtoDrive 是功能面最接近的竞品，值得借的是「集成广度」和�
 
 **现状**
 
-- `share_service.py` 1,483 行；生成、整理、洗版、检查、恢复、清理都在里面。
+- `share_service.py` 1,469 行；生成、整理、洗版、检查、恢复、清理都在里面。
 - 直接 DB 84 处，`except Exception` 14 处。
 - 历史「撤销」概念在 UI 已删除，但后端还保留 `share_revocations` 表、生成时的撤销拦截、恢复模块，形成「删除后不能再入库」的隐性状态。
 
@@ -413,4 +413,15 @@ strimkeep/
 - 前端新增 `src/api/client.ts`，`App.vue` 不再内联请求闭包，保留 `api(path, method, body)` 兼容签名；
 - CI 改为「后端全量 + 前端测试/构建 → 才允许发布」；
 - 这篇文档作为后续重构的基线：每次改架构，先更新矩阵和债务表，不再靠记忆。
+
+---
+
+## 9. P1 进度
+
+### 3.6.36：TMDB 请求适配器
+
+- 新增 `tmdb_client.py`，把缓存、404 负缓存、429/5xx/超时重试从 `organizer.py` 移出；
+- `organizer.py` 的 `tmdb()` 只做委托，保留原有 `tmdb_cache_key` / `tmdb_missing_error` 兼容接口；
+- 新增 `test_tmdb_client.py`：429→503→200、400 不重试；
+- 这是「先拆 I/O 适配器，再拆纯函数」的第一步，下一步继续拆 `search_tmdb` / `tmdb_episode` 的缓存编排，最后再拆识别评分。
 

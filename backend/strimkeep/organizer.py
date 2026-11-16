@@ -18,6 +18,8 @@ from pathlib import Path
 import httpx
 
 from .cloud115 import CloudError, fatal
+from .tmdb_client import (TmdbClient, cache_key as _tmdb_cache_key,
+                          missing_error as _tmdb_missing_error)
 from .playaddr import identity_of, play115_url, play_url
 from . import share_service
 from .offline_api import OfflinePostProcess
@@ -117,6 +119,7 @@ class Organizer:
         # TMDB 详情/季集 404 的负缓存：同一个失效 id 在一批文件里会被反复请求，
         # 每集都等一次超时/404 会把整批整理拖慢；记住一段时间内直接判缺失。
         self._tmdb_missing = {}
+        self._tmdb_client = TmdbClient(store, count=_count_tmdb)
         self.notice_tasks = set()
         self.notice_keys = set()
         self.show_notices = {}
@@ -1105,71 +1108,19 @@ class Organizer:
 
     @staticmethod
     def tmdb_cache_key(path, params=None):
-        # language 必须进 key：同一个关键词在不同语言下返回的标题不一样。混用一份缓存
-        # 会让「英文发布名」命中「中文候选」，标题相似度变成 0，误判成无法识别。
-        extra = {k: str(v) for k, v in (params or {}).items() if k not in ('api_key',)}
-        return path + ('?' + '&'.join(f'{k}={extra[k]}' for k in sorted(extra)) if extra else '')
+        return _tmdb_cache_key(path, params)
 
     @staticmethod
     def tmdb_missing_error(exc):
         """TMDB「条目不存在」的两种历史写法：新代码 TMDB_NOT_FOUND，旧代码 404 + UNAVAILABLE。"""
-        return getattr(exc, 'code', '') == 'TMDB_NOT_FOUND' or (
-            getattr(exc, 'code', '') == 'TMDB_UNAVAILABLE' and getattr(exc, 'status', None) == 404)
+        return _tmdb_missing_error(exc)
 
     async def tmdb(self, path, params=None):
-        key = self.store.get('tmdb_key')
-        if not key:
-            raise CloudError('缺少 TMDB API Key。', 'TMDB_UNAVAILABLE', 409)
-        # 详情与季集信息几乎不变：缓存能显著减少长剧集的请求数和限流失败；
-        # 搜索按天缓存，避免同一批文件里重复查询同一部作品。
-        ttl = (self.TMDB_EPISODE_SECONDS if '/episode/' in path else
-               self.TMDB_SEARCH_SECONDS if path.startswith('search/') else self.TMDB_DETAIL_SECONDS)
-        cache_key = self.tmdb_cache_key(path, params)
-        now = time.time()
-        cached = self.store.db.execute('SELECT body,updated FROM tmdb_cache WHERE key=?', (cache_key,)).fetchone()
-        if cached and now - cached['updated'] < ttl:
-            try:
-                result = json.loads(cached['body'])
-                _count_tmdb('缓存命中')
-                return result
-            except ValueError:
-                pass
-        misses = getattr(self, '_tmdb_missing', None)
-        if misses and misses.get(cache_key, 0) > time.monotonic():
-            _count_tmdb('404 负缓存')
-            raise CloudError('TMDB 中找不到该条目（GET %s → HTTP 404，%d 秒内不重试）。'
-                             % (path, self.TMDB_MISSING_SECONDS), 'TMDB_NOT_FOUND', 404)
-        try:
-            _count_tmdb('网络请求')
-            response = await self.http.get('https://api.themoviedb.org/3/' + path,
-                params={'api_key': key, 'language': 'zh-CN', **(params or {})})
-            response.raise_for_status()
-            data = response.json()
-        except httpx.HTTPStatusError as exc:
-            status = exc.response.status_code
-            if status == 404:
-                # 404 = 「TMDB 里没有这个条目」。用专门的 code 让调用方自己决定：
-                # 作品详情缺失 → 转人工；单集缺失 → 按文件名兜底照常归档。
-                # 同时记进负缓存：同一个失效 id 不必在一批文件里被逐集重试。
-                if misses is not None:
-                    if len(misses) > 512:
-                        misses.clear()
-                    misses[cache_key] = time.monotonic() + self.TMDB_MISSING_SECONDS
-                raise CloudError('TMDB 中找不到该条目（GET %s → HTTP 404）。' % path, 'TMDB_NOT_FOUND', 404) from None
-            raise CloudError(f'TMDB 请求失败（HTTP {status}）。', 'TMDB_UNAVAILABLE', 502) from None
-        except httpx.TimeoutException:
-            raise CloudError('TMDB 请求失败（连接或响应超时）。', 'TMDB_UNAVAILABLE') from None
-        except httpx.HTTPError:
-            raise CloudError('TMDB 请求失败（网络连接异常）。', 'TMDB_UNAVAILABLE') from None
-        except ValueError:
-            raise CloudError('TMDB 请求失败（返回数据无效）。', 'TMDB_UNAVAILABLE') from None
-        if misses is not None:
-            misses.pop(cache_key, None)
-        with self.store.db:
-            self.store.db.execute('INSERT OR REPLACE INTO tmdb_cache VALUES(?,?,?)',
-                                  (cache_key, json.dumps(data, ensure_ascii=False), now))
-            self.store.db.execute('DELETE FROM tmdb_cache WHERE updated<?', (now - 90 * 86400,))
-        return data
+        """TMDB 请求走独立客户端：缓存、负缓存、429/5xx 重试都在那里。"""
+        return await self._tmdb_client.get(
+            self.http, path, params, misses=self._tmdb_missing,
+            search_ttl=self.TMDB_SEARCH_SECONDS, detail_ttl=self.TMDB_DETAIL_SECONDS,
+            episode_ttl=self.TMDB_EPISODE_SECONDS, missing_ttl=self.TMDB_MISSING_SECONDS)
 
     async def tmdb_episode(self, tv_id, season, number):
         """优先复用单集缓存，再按季查询；缺失或无法验证时回退单集接口。"""
