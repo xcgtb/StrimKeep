@@ -591,9 +591,11 @@ class ChannelMonitor:
             code = str(secret.get('share_code') or '')
             if self.store.db.execute('SELECT 1 FROM channel_cancelled_shares WHERE share_code=?', (code,)).fetchone():
                 continue
+            # 重试次数按「频道 + 分享码」累计：消息一失败就不会推进游标，
+            # 同一个 message_id 每轮都会被重读；只按 message_id 记的话永远是第 1 次。
             attempt = self.store.db.execute(
-                'SELECT attempts,skipped FROM channel_share_attempts WHERE name=? AND message_id=? AND share_code=?',
-                (name, message['id'], code)).fetchone()
+                'SELECT attempts,skipped FROM channel_share_attempts WHERE name=? AND share_code=?'
+                ' ORDER BY updated DESC LIMIT 1', (name, code)).fetchone()
             if attempt and attempt['skipped']:
                 continue
             try:
@@ -611,6 +613,8 @@ class ChannelMonitor:
                 skipped = tries >= 4  # 首次尝试 + 最多三次重试
                 detail = str(exc)[:120] or type(exc).__name__
                 with self.store.db:
+                    self.store.db.execute('DELETE FROM channel_share_attempts WHERE name=? AND share_code=?',
+                                          (name, code))
                     self.store.db.execute(
                         'INSERT OR REPLACE INTO channel_share_attempts VALUES(?,?,?,?,?,?,?)',
                         (name, message['id'], code, tries, int(skipped), detail, time.time()))
@@ -622,7 +626,8 @@ class ChannelMonitor:
                         pending_error = exc if isinstance(exc, (CloudError, ValueError)) else CloudError('分享读取异常：' + type(exc).__name__)
                 continue
             with self.store.db:
-                self.store.db.execute('DELETE FROM channel_share_attempts WHERE name=? AND message_id=? AND share_code=?', (name, message['id'], code))
+                self.store.db.execute('DELETE FROM channel_share_attempts WHERE name=? AND share_code=?',
+                                      (name, code))
             result = share_service.generate(self.store, self.engine.root, secret, videos, origin='channel')
             created += len(result['created'])
         if created:

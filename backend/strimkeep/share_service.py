@@ -387,6 +387,13 @@ def generate(store, root, secret, videos, origin='web', settings_snapshot=None, 
             continue
         existing = store.db.execute('SELECT * FROM share_strms WHERE share_code=? AND file_id=? AND revoked=0',
                                     (secret['share_code'], file_id)).fetchone()
+        # 因为认不出而被移进「分享STRM未识别」的文件不再重新生成：频道每轮扫描都会
+        # 重读同一条消息，重建只会得到新 STRM → 新整理任务 → 再未识别，每 5 分钟一轮。
+        if not existing and store.db.execute(
+                'SELECT 1 FROM share_strms WHERE share_code=? AND file_id=? AND strm_path LIKE ? LIMIT 1',
+                (secret['share_code'], file_id, UNIDENT_NAME + '/%')).fetchone():
+            skipped.append({'name': name, 'reason': '已在未识别目录等待处理'})
+            continue
         if store.db.execute('SELECT 1 FROM share_revocations WHERE share_code=? AND file_id=?',
                             (secret['share_code'], file_id)).fetchone():
             skipped.append({'name': name, 'reason': '已主动撤销；如需恢复请到治理计划中执行恢复'})
