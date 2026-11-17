@@ -408,16 +408,9 @@ class Store:
             pass
 
     def _prune_logs(self, keep: int = 7):
-        """按天日志只留最近 `keep` 天；卡顿转储单独一组，同样只留最近 `keep` 天。"""
+        """按天日志只留最近 `keep` 天。"""
         try:
             for old in sorted(self.log_dir.glob('strimkeep-*.log'))[:-keep]:
-                old.unlink(missing_ok=True)
-        except OSError:
-            pass
-        # 0.9.55：看门狗的线程栈转储也落在这里（stall-YYYYMMDD.log），
-        # 以前只进 docker logs，容器一重建证据就没了。
-        try:
-            for old in sorted(self.log_dir.glob('stall-*.log'))[:-keep]:
                 old.unlink(missing_ok=True)
         except OSError:
             pass

@@ -56,7 +56,7 @@ class Metrics:
 
     - 进程内（重启清零）：播放取链成功/失败/超时、取链耗时、慢请求次数；
     - 数据库（持久）：任务与条目状态分布、事件条数、未读通知、库文件大小；
-    - meta（持久，由别的模块写）：事件循环延迟 `loop_lag`、115 限流运行时状态。
+    - meta（持久，由别的模块写）：115 限流运行时状态。
     """
 
     def __init__(self, store):
@@ -161,11 +161,6 @@ class Metrics:
                 value = 0
             add('strimkeep_media_info_emby', value,
                 'Managed STRM by Emby-side media info state', labels={'state': state})
-
-        lag = self.store.meta_json('loop_lag', {}) or {}
-        for key, field in (('p50', 'p50_ms'), ('p95', 'p95_ms'), ('max', 'max_ms')):
-            if lag.get(field) is not None:
-                add('strimkeep_loop_lag_ms', lag[field], 'Event loop lag', labels={'quantile': key})
 
         for result, count in sorted(self.play.items()):
             add('strimkeep_play_total', count, 'Playback link requests by result',

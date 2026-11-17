@@ -162,27 +162,7 @@ def test_waf_block_survives_a_restart(tmp_path):
     store.close()
 
 
-# ------------------------------------------------- 6) 看门狗线程不泄漏
-
-def _watchdogs():
-    return sum(1 for thread in threading.enumerate() if thread.name == 'sk-stall-watchdog')
-
-
-def test_stall_watchdog_thread_stops_with_the_app(tmp_path, monkeypatch):
-    """0.8.21 的看门狗线程永不退出：同一进程里反复建 app 会积累线程，并发
-    faulthandler 转储还会让解释器崩掉（门禁曾出现退出码 139）。"""
-    baseline = _watchdogs()
-    for index in range(3):
-        app = make_app(tmp_path / ('run%d' % index), monkeypatch)
-        with TestClient(app):
-            assert _watchdogs() == baseline + 1
-        for _ in range(40):                       # 线程每 250 ms 检查一次停止信号
-            if _watchdogs() == baseline:
-                break
-            time.sleep(0.05)
-        assert _watchdogs() == baseline, '看门狗线程没有随应用退出'
-
-
+# ------------------------------------------------- 6) stall 看门狗已移除
 # ------------------------------------------------- 7) close() 不抽走活线程的连接
 
 def test_close_keeps_connections_owned_by_live_threads(tmp_path):

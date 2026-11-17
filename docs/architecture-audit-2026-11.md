@@ -523,3 +523,12 @@ P1 至此完成。下一步进入 P2：MediaServer / Notifier / CloudDrive 适�
 - 清理时删除 share_strms 未识别临时登记和媒体信息队列，但保留 playbacks 有效取链登记；
 - 后端全量 1681 passed，前端构建通过。
 
+
+### 3.6.48：删除阻塞看门狗与循环延迟自曝
+
+- 完全删除 `loop_lag_monitor` / `start_stall_watchdog` / `_dump_stall` / `faulthandler` 转储；
+- 不再写 `stall-YYYYMMDD.log`，不再把“事件循环被阻塞 xx ms”写入操作记录；
+- 慢请求日志保留，但不再引用循环延迟；
+- 现场 stall 日志已清空；后端全量 1677 passed。
+- 真正的卡点已在 3.6.45/3.6.46 修掉；Web/Worker 进程隔离因访问边界太多，未冒险热修。
+

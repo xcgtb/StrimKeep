@@ -1,5 +1,4 @@
 import asyncio
-import faulthandler
 import hmac
 import json
 import os
@@ -110,136 +109,6 @@ def safe_name(name: str) -> str:
     return name.strip(' .')[:100] or 'video'
 
 
-# 0.8.22：看门狗转储的全局互斥。`faulthandler.dump_traceback()` 不是线程安全的，
-# 同一进程里若有两个看门狗同时命中同一个停顿，并发转储会让解释器崩溃（退出码 139）。
-_DUMP_LOCK = threading.Lock()
-
-
-async def loop_lag_monitor(store, interval: float = 1.0):
-    """事件循环延迟采样（0.8.21）。
-
-    每 `interval` 秒醒来一次，实际间隔减去理论间隔，就是这段时间事件循环被同步
-    工作占用的时长。保留最近 300 个样本（约 5 分钟），每分钟把 p50/p95/max 写进
-    meta（总览页显示）；单次超过 500 ms 写一条**限流**的操作记录（60 秒一次）。
-
-    它只负责度量：用来判断「剩下的同步 SQL 里还有多少真的值得搬出事件循环」，
-    本身不改变任何业务行为。写库走 to_thread，避免度量自己变成阻塞源。
-    """
-    samples = deque(maxlen=300)
-    loop = asyncio.get_running_loop()
-    expected = loop.time()
-    reported = 0.0
-    sample_count = 0
-    while True:
-        await asyncio.sleep(interval)
-        now = loop.time()
-        lag = max(0.0, now - expected - interval)
-        expected = now
-        samples.append(lag)
-        sample_count += 1
-        if lag >= 0.5 and now - reported >= 60:
-            reported = now
-            await asyncio.to_thread(store.event, 'system',
-                                    '事件循环被阻塞 %d 毫秒（同步数据库或文件操作）。' % int(lag * 1000))
-        if sample_count % 60 == 0:
-            ordered = sorted(samples)
-            snapshot = {'p50_ms': round(ordered[len(ordered) // 2] * 1000, 1),
-                        'p95_ms': round(ordered[min(len(ordered) - 1, int(len(ordered) * 0.95))] * 1000, 1),
-                        'max_ms': round(ordered[-1] * 1000, 1),
-                        'samples': len(samples), 'at': time.time()}
-            await asyncio.to_thread(store.set_meta, 'loop_lag', snapshot)
-
-
-def _dump_stall(log_dir, idle):
-    """把当前所有线程栈写进持久日志（同时保留 stderr）。
-
-    0.9.55：以前只写 stderr，也就是只进 `docker logs`；容器每次升级重建就清空。
-    现场 65 次「事件循环被阻塞」（最大 18.2 秒）全都查不到栈，因为证据没落地。
-    现在同时写 `<data>/logs/stall-YYYYMMDD.log`，由 `Store._prune_logs` 一起轮转。
-    返回写入的文件路径；没给 log_dir 或写不进去时返回 None（stderr 那份仍在）。
-    """
-    header = '--- %s 事件循环已 %.1f 秒未推进，转储所有线程栈 ---\n' % (
-        time.strftime('%Y-%m-%d %H:%M:%S'), idle)
-    targets = [sys.stderr]
-    handle = None
-    path = None
-    if log_dir is not None:
-        try:
-            log_dir = Path(log_dir)
-            log_dir.mkdir(parents=True, exist_ok=True)
-            path = log_dir / ('stall-%s.log' % time.strftime('%Y%m%d'))
-            handle = open(path, 'a', encoding='utf-8')
-            targets.append(handle)
-        except OSError:
-            handle, path = None, None
-    try:
-        for target in targets:
-            try:
-                target.write(header)
-                target.flush()
-                faulthandler.dump_traceback(file=target, all_threads=True)
-            except Exception:
-                continue
-    finally:
-        if handle is not None:
-            try:
-                handle.close()
-            except OSError:
-                pass
-    return path
-
-
-def start_stall_watchdog(limit: float = 1.0, every: float = 300.0, log_dir=None):
-    """后台线程看门狗：事件循环连续 `limit` 秒没有推进时，转储所有线程栈。
-
-    为什么必须是线程：只有循环**卡住的那一刻**才能拿到真正的阻塞栈；等它恢复后再
-    采样，看到的只会是「等它恢复」的协程。`faulthandler.dump_traceback()` 是异步
-    信号安全的，可以从任意线程调用。
-
-    输出两份（0.9.55 起）：stderr（= `docker logs`，容器重建即丢）和 `log_dir` 下的
-    `stall-YYYYMMDD.log`（持久，跟按天日志一起轮转）。现场 65 次阻塞因为只有前者，
-    栈全丢了。
-
-    限流：默认 5 分钟最多一次，避免反复刷日志。返回的协程负责心跳（每 100 ms 一次），
-    用 `asyncio.create_task(...)` 跑在事件循环里；该协程被取消时（应用关闭）线程随之
-    退出。
-
-    0.8.22 修两个只在「同一进程里反复建 app」时才暴露的问题：
-
-    1. **线程泄漏**：原来 `while True: sleep(0.25)` 永不退出，每个 app 生命周期都会留下
-       一个线程；测试进程里跑十几个 app 就有十几个看门狗。
-    2. **并发转储**：`faulthandler.dump_traceback()` 不是线程安全的。多个看门狗同时
-       命中同一个停顿，会并发转储并让解释器在退出时 SIGSEGV（0.8.22 门禁实测到的
-       退出码 139）。现在全局一把非阻塞锁，同一时刻只允许一个转储，其余直接跳过。
-    """
-    state = {'beat': time.monotonic(), 'dumped': 0.0}
-    stop = threading.Event()
-
-    async def heartbeat():
-        try:
-            while True:
-                state['beat'] = time.monotonic()
-                await asyncio.sleep(0.1)
-        finally:
-            stop.set()          # 生命周期结束：让看门狗线程退出
-
-    def watch():
-        while not stop.wait(0.25):
-            idle = time.monotonic() - state['beat']
-            if idle < limit or time.monotonic() - state['dumped'] < every:
-                continue
-            state['dumped'] = time.monotonic()
-            if not _DUMP_LOCK.acquire(blocking=False):
-                continue        # 已经有线程在转储：并发转储会崩解释器
-            try:
-                _dump_stall(log_dir, idle)
-            finally:
-                _DUMP_LOCK.release()
-
-    threading.Thread(target=watch, name='sk-stall-watchdog', daemon=True).start()
-    return heartbeat()
-
-
 def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
     root = Path(data_root or os.environ.get('STRIMKEEP_DATA_DIR', '/data'))
     strms = Path(strm_root or os.environ.get('STRIMKEEP_STRM_DIR', '/strm'))
@@ -331,11 +200,6 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         # 媒体库路径自检：延迟 60 秒再发第一次请求，正常启动路径不受影响，
         # 短生命周期的测试进程也走不到一次外网请求（见 EmbyDelivery.coverage_loop）。
         app.state.coverage_task = asyncio.create_task(app.state.organizer.emby.coverage_loop())
-        # 事件循环延迟采样（0.8.21）：1 秒一次，结果写 meta 供总览展示。
-        app.state.lag_task = asyncio.create_task(loop_lag_monitor(store))
-        # 卡顿看门狗（0.8.21）：循环连续 1 秒没推进就 dump 所有线程栈到 stderr，
-        # 5 分钟最多一次。用来定位「16 秒启动阻塞」这类只能现场抓的问题。
-        app.state.stall_task = asyncio.create_task(start_stall_watchdog(log_dir=store.log_dir))
         # 媒体信息：定时把 sidecar 写进 Emby（间隔在设置页配，0 = 关）。
         app.state.media_info_task = asyncio.create_task(inject_loop(app, store))
         app.state.inventory_scan_task = asyncio.create_task(app.state.inventory_scan_loop())
@@ -345,7 +209,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         try:
             yield
         finally:
-            for name in ('coverage_task', 'lag_task', 'stall_task', 'media_info_task',
+            for name in ('coverage_task', 'media_info_task',
                          'housekeep_task', 'inventory_scan_task'):
                 task = getattr(app.state, name, None)
                 if task and not task.done():
@@ -389,8 +253,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         # 这是「页面为什么慢」的第一手证据；正常请求不产生任何写入。
         if elapsed >= 2.0 and not is_streaming(request.url.path):
             app.state.metrics.record_slow_request()
-            # 降噪：同一路径 60 秒内只写一条，并带上这段时间的次数；
-            # 同时带上当时的循环延迟，区分「接口慢」与「循环被占」。
+            # 降噪：同一路径 60 秒内只写一条，并带上这段时间的次数。
             window = getattr(app.state, 'slow_log', None)
             if window is None:
                 window = app.state.slow_log = {}
@@ -400,14 +263,9 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
             if entry is None or stamp - entry[0] >= 60:
                 count = 1 if entry is None else entry[1] + 1
                 window[path_key] = (stamp, 1)
-                lag_ms = 0
-                try:
-                    lag_ms = int((store.meta_json('loop_lag', {}) or {}).get('p95_ms') or 0)
-                except Exception:
-                    lag_ms = 0
                 suffix = '' if count <= 1 else '，本分钟 %d 次' % count
-                store.event('perf', '慢请求：%s %s %.1f 秒（循环延迟 %d ms%s，rid %s）'
-                            % (request.method, path_key, elapsed, lag_ms, suffix, request_id))
+                store.event('perf', '慢请求：%s %s %.1f 秒（rid %s）'
+                            % (request.method, path_key, elapsed, request_id))
             else:
                 window[path_key] = (entry[0], entry[1] + 1)
         response.headers['X-Content-Type-Options'] = 'nosniff'
