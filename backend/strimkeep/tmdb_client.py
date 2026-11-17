@@ -57,14 +57,16 @@ class TmdbClient:
     async def get(self, http, path, params=None, *, misses=None,
                   search_ttl=SEARCH_TTL, detail_ttl=DETAIL_TTL,
                   episode_ttl=EPISODE_TTL, missing_ttl=MISSING_TTL):
-        key = self.store.get('tmdb_key')
+        key = await asyncio.to_thread(self.store.get, 'tmdb_key')
         if not key:
             raise CloudError('缺少 TMDB API Key。', 'TMDB_UNAVAILABLE', 409)
         ttl = (episode_ttl if '/episode/' in path else
                search_ttl if path.startswith('search/') else detail_ttl)
         cache = cache_key(path, params)
         now = time.time()
-        cached = self.store.db.execute('SELECT body,updated FROM tmdb_cache WHERE key=?', (cache,)).fetchone()
+        cached = await asyncio.to_thread(
+            lambda: self.store.db.execute(
+                'SELECT body,updated FROM tmdb_cache WHERE key=?', (cache,)).fetchone())
         if cached and now - cached['updated'] < ttl:
             try:
                 result = json.loads(cached['body'])
@@ -109,11 +111,14 @@ class TmdbClient:
 
         if misses is not None:
             misses.pop(cache, None)
+        await asyncio.to_thread(self._save_cache, cache, data, now)
+        return data
+
+    def _save_cache(self, cache, data, now):
         with self.store.db:
             self.store.db.execute('INSERT OR REPLACE INTO tmdb_cache VALUES(?,?,?)',
                                   (cache, json.dumps(data, ensure_ascii=False), now))
             self.store.db.execute('DELETE FROM tmdb_cache WHERE updated<?', (now - 90 * 86400,))
-        return data
 
     async def episode(self, tmdb, tv_id, season, number, *, season_unavailable,
                       episode_ttl=EPISODE_TTL):

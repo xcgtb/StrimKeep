@@ -504,3 +504,14 @@ P1 至此完成。下一步进入 P2：MediaServer / Notifier / CloudDrive 适�
 - 设置页补齐「API 与备份」入口；新增 `openapi/summary` 与 Emby MediaServer adapter；
 - 后端全量 1680 passed，前端 33 单测 + 构建通过。
 
+
+### 3.6.46：TMDB 缓存 SQL 也移出事件循环
+
+- 3.6.45 部署后现场 13:08 又出现 1.2 秒 stall；新堆栈显示：
+  - `inventory_api.inventory_missing` → `organizer.tmdb` → `tmdb_client.get`
+  - 阻塞点在 `tmdb_cache` 的同步 SQLite 读/写；
+- `TmdbClient.get()` 的 `store.get('tmdb_key')`、缓存读取、缓存写入分别放入 `asyncio.to_thread`；
+- `TmdbClient.episode()` 的单集缓存读取仍留在当前线程（测试伪连接 `check_same_thread=True`，跨线程会炸）；
+- 新增 `test_tmdb_cache_sql_runs_off_event_loop` 回归测试；
+- 后端全量 1681 passed, 4 skipped。
+

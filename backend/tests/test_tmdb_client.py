@@ -65,3 +65,25 @@ def test_does_not_retry_4xx(monkeypatch):
             assert len(calls) == 1
         store.db.close()
     asyncio.run(run())
+
+
+def test_tmdb_cache_sql_runs_off_event_loop(monkeypatch):
+    calls = []
+    real_to_thread = asyncio.to_thread
+
+    async def tracked(func, *args, **kwargs):
+        calls.append(func)
+        return await real_to_thread(func, *args, **kwargs)
+
+    async def handler(request):
+        return httpx.Response(200, json={'id': 42}, request=request)
+
+    async def run():
+        store = Store()
+        monkeypatch.setattr(tmdb_client.asyncio, 'to_thread', tracked)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            client = tmdb_client.TmdbClient(store, retries=0)
+            assert (await client.get(http, 'tv/42'))['id'] == 42
+            assert (await client.get(http, 'tv/42'))['id'] == 42
+        assert len(calls) >= 3, 'TMDB 缓存读写仍留在事件循环'
+    asyncio.run(run())
