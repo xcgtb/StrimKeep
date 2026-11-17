@@ -33,25 +33,10 @@ from .metadata_files import write_sidecars
 from .strm_options import shared_settings, share_effective_settings, skip_reason, write_new
 from .share_urls import (LIB_NAME, PLAYABLE, align_existing_share_urls,
                          migrate_share_play_paths, share_play_path_matches, share_play_url)
+from .share_recognition import episode_range_of, is_share_category as _is_share_category, quality_rank
 
 PENDING_NAME = '分享STRM待整理'
 UNIDENT_NAME = '分享STRM未识别'
-
-
-def quality_rank(stem):
-    """文件名质量证据（分辨率标签缺失=未知 None）。保留给展示与测试；
-    洗版决策已统一走 quality.compare，不再按排名淘汰。"""
-    rank = {'2160p': 4, '1080p': 3, '720p': 2, '480p': 1}
-    dv = {'dv': 3, 'dovi': 3, 'hdr10+': 2, 'hdr10': 2, 'hdr': 2, 'sdr': 1}
-    low = str(stem).lower()
-    rq = max((rank[k] for k in rank if k in low), default=0)
-    rd = max((dv[k] for k in dv if k in low), default=0)
-    return None if rq == 0 else (rq, rd)
-
-
-def _is_share_category(value):
-    text = re.sub(r'[\s._/\-]+', '', str(value or '')).casefold()
-    return bool(re.fullmatch(r'(?:国产|欧美|日韩|海外|外语|华语|大陆|港台|中国|英国|美国|日本|韩国|全部)?(?:电影|影片|剧集|电视剧|连续剧|动漫|动画|综艺|纪录片|影视|资源|分享|合集|网盘)', text))
 
 
 def share_recognition_hint(row):
@@ -79,15 +64,6 @@ def share_recognition_hint(row):
     if folder and not hint.get('tmdb_id'):
         hint['identity_source'] = 'ancestor_directory'
     return hint
-
-
-def episode_range_of(stem):
-    """文件名里的「季 + 集范围」；解析失败或电影返回 None（不可比，永不淘汰）。"""
-    try:
-        hint = parse_name(stem)
-    except NeedsReview:
-        return None
-    return None if hint['media_type'] != 'tv' else (hint['season'], hint['episode'], hint['end_episode'])
 
 
 def install(store):

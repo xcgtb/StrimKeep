@@ -14,9 +14,9 @@
 | 项目 | 数值 | 说明 |
 |---|---:|---|
 | 后端模块 | 92 个 `.py` | 单包 `strimkeep/` |
-| 后端代码 | 31,948 行 | `wc -l *.py` |
+| 后端代码 | 31,958 行 | `wc -l *.py` |
 | 最大模块 | `organizer.py` 3,306 行 | 识别、整理、洗版、发布、调度、清理都在里面 |
-| 前五模块 | 8,872 行 | 占后端 28%：organizer / cloud115 / main / share_service / sync |
+| 前五模块 | 8,848 行 | 占后端 28%：organizer / cloud115 / main / share_service / sync |
 | HTTP 路由 | 198 条 | 其中 181 条直接挂 `Depends(admin)` |
 | 数据表 | 36 张 | 单 SQLite，`SCHEMA_VERSION='2'` |
 | 直接 DB 调用 | 666 处 | `organizer` 95、`share_service` 84、`main` 51 |
@@ -205,7 +205,7 @@ TgtoDrive 是功能面最接近的竞品，值得借的是「集成广度」和�
 
 **现状**
 
-- `share_service.py` 1,351 行；生成、整理、洗版、检查、清理都在里面。
+- `share_service.py` 1,327 行；生成、整理、洗版、检查、清理都在里面。
 - 直接 DB 84 处，`except Exception` 14 处。
 - 历史「撤销」概念在 UI 已删除，但后端还保留 `share_revocations` 表、生成时的撤销拦截、恢复模块，形成「删除后不能再入库」的隐性状态。
 
@@ -441,4 +441,12 @@ strimkeep/
 - `share_service.py` 从 1,469 行降到 1,351 行，只保留业务编排；
 - 原有 `share_service.align_existing_share_urls` / `migrate_share_play_paths` / `share_play_url` 通过导入继续可用，API/测试调用点不变；
 - 定向分享测试 39 passed；全量测试保持通过。
+
+### 3.6.39：分享识别纯函数独立
+
+- 新增 `share_recognition.py`：`quality_rank`、`is_share_category`、`episode_range_of`；
+- `share_service.py`：1,351 → 1,327 行；
+- `share_recognition_hint` 仍留在 share_service（它依赖分享路径/来源目录证据），但不再与纯解析函数混在一起；
+- 原有 `share_service.quality_rank` / `episode_range_of` 通过导入继续可用；
+- 定向测试 38 passed；全量测试保持通过。
 
