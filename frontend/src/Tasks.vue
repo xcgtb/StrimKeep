@@ -6,21 +6,15 @@ import {taskPresentation,taskStatus} from './taskPresentation'
 import {usePageActivity} from './pageActivity'
 import {reconcileRows} from './taskRows'
 import {taskBucket} from './taskBuckets'
+import {taskKindLabel, taskSourceLabel} from './taskView'
 import DeepDeleteHistory from './DeepDeleteHistory.vue'
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>,embedded?:boolean}>()
 const active=shallowRef<any[]>([]),history=shallowRef<any[]>([]),detail=shallowRef<any>(null),busy=ref(false),error=ref(''),live=ref(false),more=ref(false)
 const offlinePending=ref<any[]>([]),offlineStatusError=ref('')
-const kinds:Record<string,string>={transfer:'115 转存',organize:'扫描整理',archive_index:'归档索引',strm_sync:'STRM 同步',classification_migration:'历史分类迁移（已停用）'}
 let stream:EventSource|undefined,timer:ReturnType<typeof setInterval>|undefined,polling=false,visible=false
 const inProgress=(job:any)=>['queued','running','paused','waiting_login'].includes(job.state)
-function taskSource(job:any){
-  const config=job.config||{},origin=String(config.origin||'')
-  if(origin.startsWith('offline:'))return '离线下载'
-  if(config.transfer_parent)return '转存后整理'
-  if(origin==='channel')return '频道监控'
-  if(origin==='telegram')return 'Telegram'
-  return config.scheduled?'定时':'手动'
-}
+const taskSource=taskSourceLabel
+const kinds=new Proxy({} as Record<string,string>,{get(_t,key:string){return taskKindLabel(key)}})
 const tab=ref('all')
 // 分类按「结果」而不是按任务类型：用户关心的是这条到底成没成、卡在哪。
 const bucketOf=taskBucket

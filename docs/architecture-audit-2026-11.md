@@ -467,3 +467,13 @@ strimkeep/
 - `copy_share_metadata`、`finish_share_wash`、`generate`、`run_organize` 仍留在 share_service（它们和 engine/附件/状态机耦合更深，不能为了行数硬搬）
 - 定向测试 50 passed；全量测试保持通过
 
+
+### 3.6.42：顺序 schema 迁移 + TaskView 收口（P1 收尾）
+
+- 新增 `schema_migrations.py`：编号迁移 + 幂等列补丁，`store.py` 启动只调 `apply_migrations(self.db)`；
+- 新增 `test_schema_migrations.py`：一次应用 / 幂等重跑 / 索引建立；
+- 新增 `taskView.ts`：任务 kind 中文映射与来源归类收口，`Tasks.vue` 改用它；
+- 后端全量 1677 passed（+3）；前端 33 单测 + 类型检查 + 构建通过。
+
+P1 至此完成。下一步进入 P2：MediaServer / Notifier / CloudDrive 适配器、只读 OpenAPI、内置备份。
+

@@ -13,6 +13,8 @@ from pathlib import Path
 
 from cryptography.fernet import Fernet
 
+from .schema_migrations import apply as apply_migrations
+
 # 启动 schema 的版本号：加表/改表时 +1。Store 初始化会执行（幂等的）建表脚本，
 # 然后把库抬到这个版本。仍兼容 1：老库只会被补齐缺表并打上新版本号，不动既有数据。
 SCHEMA_VERSION = '2'
@@ -222,52 +224,9 @@ class Store:
         CREATE INDEX IF NOT EXISTS output_registry_relative_nocase ON output_registry(relative_path COLLATE NOCASE);
         CREATE INDEX IF NOT EXISTS archive_entries_relative_nocase ON archive_entries(relative_path COLLATE NOCASE);
         ''')
-        # 旧版「撤销」已彻底下线：撤销记录表不再创建，历史库里的空表也一并移除。
-        self.db.execute('DROP TABLE IF EXISTS share_revocations')
-        self.db.commit()
-        migrated = {row[1] for row in self.db.execute('PRAGMA table_info(notifications)')}
-        for name, ddl in (('attempts', ' INTEGER NOT NULL DEFAULT 0'),
-                          ('next_try', ' REAL NOT NULL DEFAULT 0'),
-                          ('photo', ' TEXT')):
-            if name not in migrated:
-                self.db.execute(f'ALTER TABLE notifications ADD COLUMN {name}{ddl}')
-        # emby_deliveries 的「总数 / 已确认数」摘列（0.8.20）。
-        # 目的：任务列表与 SSE 每 2 秒都要显示「已确认 N/M」，以前每条任务都要
-        # json.loads 整段 payload 再遍历 targets；改成列之后这两条路径不再解析 JSON。
-        delivered = {row[1] for row in self.db.execute('PRAGMA table_info(emby_deliveries)')}
-        upgraded = False
-        for name, ddl in (('total', ' INTEGER NOT NULL DEFAULT 0'),
-                          ('confirmed', ' INTEGER NOT NULL DEFAULT 0')):
-            if name not in delivered:
-                self.db.execute(f'ALTER TABLE emby_deliveries ADD COLUMN {name}{ddl}')
-                upgraded = True
-        # offline_submissions 的重试计数（0.9.18）：核查碰到 115 超时/限流时不能一次
-        # 就判死——现场 99 条「核查未完成：115 请求未完成」全卡在 needs_review 再没人碰。
-        subs = {row[1] for row in self.db.execute('PRAGMA table_info(offline_submissions)')}
-        if 'attempts' not in subs:
-            self.db.execute('ALTER TABLE offline_submissions ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0')
-        if 'stalled_at' not in subs:
-            # 卡住回执只发一次：发过就记时间，避免同一个任务反复提醒。
-            self.db.execute('ALTER TABLE offline_submissions ADD COLUMN stalled_at REAL')
-        if upgraded:
-            # 历史行用 SQLite 的 JSON 函数一次性回填，不做逐行 Python 解析。
-            self.db.execute(
-                "UPDATE emby_deliveries SET total=json_array_length(payload,'$.targets'),"
-                " confirmed=(SELECT count(*) FROM json_each(payload,'$.targets')"
-                " WHERE json_extract(value,'$.confirmed')=1)"
-                " WHERE json_valid(payload) AND json_type(payload,'$.targets')='array'")
-        # 0.9.54：两张纯派生表退场。`output_stats` 只是 STRM 的 size/mtime 摘要缓存
-        # （STRM 只有几百字节，缓存省不下什么，却要求每次搬文件都对账）；
-        # `media_info_outputs` 的归属判定完全能由 sidecar 自带的 version/playback_id 得到。
-        # 旧库在启动时丢掉，只做一次（meta 记标记），失败也不该阻塞启动。
-        if not self.meta('schema_pruned_0954'):
-            for table in ('output_stats', 'media_info_outputs'):
-                try:
-                    self.db.execute('DROP TABLE IF EXISTS ' + table)
-                except sqlite3.OperationalError:
-                    pass
-            self.db.execute("INSERT OR REPLACE INTO meta VALUES('schema_pruned_0954',?)",
-                            (json.dumps(True),))
+        # 顺序 schema 迁移：索引、退场表、缺列补齐都在 migrations 里，
+        # 启动只调一次；新库一步到位，老库按编号补差。
+        apply_migrations(self.db)
         self.db.commit()
         key_path = root / 'config/master.key'
         if not key_path.exists():

@@ -206,7 +206,9 @@ def test_store_retires_derived_tables_at_startup(tmp_path):
     names = {row[0] for row in store.db.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert 'output_stats' not in names and 'media_info_outputs' not in names
-    assert store.meta('schema_pruned_0954'), '退场标记没写进 meta'
+    # 退场由顺序迁移 4 负责：版本号已记录，重复启动不会重跑。
+    from strimkeep.schema_migrations import applied_version
+    assert applied_version(store.db) >= 4
     store.close()
 
 
