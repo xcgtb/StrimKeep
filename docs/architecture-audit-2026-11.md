@@ -450,6 +450,13 @@ strimkeep/
 - 原有 `share_service.quality_rank` / `episode_range_of` 通过导入继续可用；
 - 定向测试 38 passed；全量测试保持通过。
 
+### 3.6.41：Inventory 拆出残留清理组件
+
+- 新增 `InventoryOrphans.vue`：目录残留清理的扫描/选择/执行/进度/历史，独立状态与样式；
+- `Inventory.vue`：940 → 859 行，「目录残留清理」标签页整体换成 `<InventoryOrphans>`；
+- 拆分后端到端验证：`vue-tsc`、`vite build`、33 个前端单测全部通过；
+- 后端未改动，全量 1674 passed 保持不变。
+
 ### 3.6.40：share_service 剩余独立块一次拆完
 
 - 新增 `share_recognition.py`：`quality_rank`、`is_share_category`、`episode_range_of`
