@@ -541,3 +541,11 @@ P1 至此完成。下一步进入 P2：MediaServer / Notifier / CloudDrive 适�
 - 删除慢请求日志与 `strimkeep_slow_requests_total` 指标；
 - 未拆进程，避免 3.6.49 早先失败方案的功能断层；此前 inventory-plans / TMDB cache 的 to_thread 修复保留；
 - 全量 1679 passed，定向 12 passed。
+
+### 3.6.50：Web / Worker 进程拆分（受控版）
+
+- supervisor 监督 web + worker，任一退出容器整体退出；
+- Web 保留 API 对象形态、Emby 反代、inventory 定时扫描，不启动后台 lanes；
+- Worker 启动 organizer lanes / scheduler / deep delete / channels / bot / Emby coverage / media info / housekeeping，写 worker_heartbeat；
+- /health/ready 用 heartbeat 判断后台；
+- 测试用 STRIMKEEP_INLINE_WORKER=1 保留旧链路；全量 1679 passed。

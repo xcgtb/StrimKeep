@@ -24,4 +24,4 @@ RUN ["python", "-c", "from pathlib import Path; import re; root=Path('/app/stati
 EXPOSE 9000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/health/ready', timeout=3)"]
-CMD ["uvicorn", "strimkeep.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "9000", "--workers", "1", "--no-proxy-headers"]
+CMD ["python", "-m", "strimkeep.supervisor"]

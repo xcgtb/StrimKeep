@@ -30,7 +30,8 @@ from .probe import probe
 from .store import Store, digest
 from .quality import (UpgradePolicy, public_policy, KEYS as RULE_KEYS, LABELS as RULE_LABELS,
                       CHOICES as RULE_CHOICES, OPTIONS as RULE_OPTIONS, SUGGESTED_ORDER)
-from .organizer import Organizer, dumps
+from .organizer import dumps
+from .web_organizer import WebOrganizer
 from .media import NeedsReview, PROBE_UA, episode_label, naming
 from .organize_options import OrganizeOptions, library_root
 from .strm_options import effective as effective_strm
@@ -131,14 +132,17 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
     async def lifespan(_):
         await app.state.db_worker.start()
         import fcntl
-        instance_file = (root / 'data/instance.lock').open('a')
-        try:
-            fcntl.flock(instance_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            instance_file.close()
-            raise RuntimeError('只允许运行一个 StrimKeep 实例或 Worker。') from None
+        instance_file = None
+        if os.environ.get('STRIMKEEP_INLINE_WORKER') == '1':
+            instance_file = (root / 'data/instance.lock').open('a')
+            try:
+                fcntl.flock(instance_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                instance_file.close()
+                raise RuntimeError('只允许运行一个 StrimKeep 实例或 Worker。') from None
         if not shutil.which('ffprobe'):
-            instance_file.close()
+            if instance_file is not None:
+                instance_file.close()
             raise RuntimeError('FFprobe 未安装。')
         store.remove_retired_modules()
         # 深度删除已改为无状态：清掉旧版本遗留的内部删除登记，避免继续挡住清理/入库。
@@ -162,7 +166,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         app.state.cloud = cloud_factory(store)
         from .network import ServiceHTTP
         app.state.http = ServiceHTTP(store)
-        app.state.organizer = Organizer(store, app.state.cloud, app.state.http, app.state.strms)
+        app.state.organizer = WebOrganizer(store, app.state.cloud, app.state.http, app.state.strms)
         # Upgrade only verified legacy share URLs while holding the instance
         # lock and before workers can publish or wash the same files.
         from .share_service import align_existing_share_urls
@@ -200,14 +204,13 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         settled = store.reconcile_terminal_items()
         if settled:
             store.event('system', '启动自检：%d 条遗留条目已归一到「跳过」（所属任务已结束）。' % settled)
-        # 媒体库路径自检：延迟 60 秒再发第一次请求，正常启动路径不受影响，
-        # 短生命周期的测试进程也走不到一次外网请求（见 EmbyDelivery.coverage_loop）。
-        app.state.coverage_task = asyncio.create_task(app.state.organizer.emby.coverage_loop())
-        # 媒体信息：定时把 sidecar 写进 Emby（间隔在设置页配，0 = 关）。
-        app.state.media_info_task = asyncio.create_task(inject_loop(app, store))
+        # Inventory scans depend on API installers, so Web keeps them. Other long
+        # loops are owned by strimkeep.worker in production; tests use inline mode.
         app.state.inventory_scan_task = asyncio.create_task(app.state.inventory_scan_loop())
-        # 日常维护：操作记录按时间/行数裁剪（启动先跑一次，之后每 6 小时）。
-        app.state.housekeep_task = asyncio.create_task(housekeeping_loop(app, store))
+        if getattr(app.state.organizer, 'web_only', False) is False:
+            app.state.coverage_task = asyncio.create_task(app.state.organizer.emby.coverage_loop())
+            app.state.media_info_task = asyncio.create_task(inject_loop(app, store))
+            app.state.housekeep_task = asyncio.create_task(housekeeping_loop(app, store))
         store.event('system', f'StrimKeep {__version__} 整理服务启动。')
         try:
             yield
@@ -224,7 +227,8 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
             await app.state.cloud.close()
             await app.state.http.aclose()
             await app.state.db_worker.shutdown()
-            instance_file.close()
+            if instance_file is not None:
+                instance_file.close()
             store.close()
 
     app.router.lifespan_context = lifespan
@@ -339,13 +343,22 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
     @app.get('/health/ready')
     async def ready():
         store.db.execute('SELECT 1').fetchone()
-        worker = app.state.organizer.worker
-        if worker and worker.done() and not app.state.organizer.closing:
-            raise HTTPException(503, '整理 Worker 已停止，请检查操作记录并重启服务。')
-        if not app.state.organizer.closing and (any(task.done() for task in app.state.organizer.extra_workers) or any(app.state.organizer.lane_faults.values())):
-            raise HTTPException(503, '任务车道异常，请检查操作记录。')
-        if app.state.organizer.scheduler_fault or (app.state.organizer.clock and app.state.organizer.clock.done() and not app.state.organizer.closing):
-            raise HTTPException(503, '调度器异常，请检查操作记录。')
+        if getattr(app.state.organizer, 'web_only', False):
+            heartbeat = store.meta('worker_heartbeat')
+            try:
+                fresh = heartbeat and time.time() - float(heartbeat) < 30
+            except (TypeError, ValueError):
+                fresh = False
+            if not fresh:
+                raise HTTPException(503, '后台 Worker 未就绪，请检查容器日志。')
+        else:
+            worker = app.state.organizer.worker
+            if worker and worker.done() and not app.state.organizer.closing:
+                raise HTTPException(503, '整理 Worker 已停止，请检查操作记录并重启服务。')
+            if not app.state.organizer.closing and (any(task.done() for task in app.state.organizer.extra_workers) or any(app.state.organizer.lane_faults.values())):
+                raise HTTPException(503, '任务车道异常，请检查操作记录。')
+            if app.state.organizer.scheduler_fault or (app.state.organizer.clock and app.state.organizer.clock.done() and not app.state.organizer.closing):
+                raise HTTPException(503, '调度器异常，请检查操作记录。')
         return {'status': 'ready', 'version': __version__, 'stage': 5}
 
     @app.post('/api/v1/auth/login')
