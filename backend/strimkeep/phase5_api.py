@@ -579,6 +579,24 @@ def install_phase5(app,store,admin,job_public):
         config = store.get('api_token', {}) or {}
         return {'enabled': bool(config.get('enabled')), 'token_configured': bool(config.get('token'))}
 
+    @app.get('/api/v1/openapi/summary',dependencies=[Depends(api_admin)])
+    async def openapi_summary():
+        """只读运行摘要：给脚本/外部面板用，不返回设置、密钥或配置。"""
+        def build():
+            running = "('queued','running','paused','waiting_login')"
+            active = store.db.execute(
+                "SELECT count(*) FROM organize_jobs WHERE state IN " + running).fetchone()[0]
+            needs_review = store.db.execute(
+                "SELECT count(*) FROM organize_jobs WHERE state='needs_review'").fetchone()[0]
+            notices = store.db.execute(
+                "SELECT count(*) FROM notifications WHERE read_at IS NULL AND level<>'log'").fetchone()[0]
+            return {'version': __version__, 'active_tasks': active,
+                    'needs_review': needs_review, 'unread_notifications': notices,
+                    'pending_share_strms': store.db.execute(
+                        "SELECT count(*) FROM share_strms WHERE revoked=0 AND strm_path LIKE ?",
+                        ('分享STRM待整理/%',)).fetchone()[0]}
+        return await asyncio.to_thread(build)
+
     @app.put('/api/v1/system/api-token',dependencies=[Depends(admin)])
     async def save_api_token(body: ApiTokenInput):
         old = store.get('api_token', {}) or {}

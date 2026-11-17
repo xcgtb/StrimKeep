@@ -496,3 +496,11 @@ P1 至此完成。下一步进入 P2：MediaServer / Notifier / CloudDrive 适�
 - 修复实现过程中 `/api/v1/tasks` 装饰器错位（曾导致返回 ZIP 二进制），相关 20 个定向测试通过；
 - 后端全量 1679 passed（本次为功能/接口接入，无新增测试）。
 
+
+### 3.6.45：事件循环阻塞修复 + P2 接口补齐
+
+- 看门狗堆栈定位到 `/api/v1/inventory-plans`：64 条计划约 43MB，JSON SQL 在事件循环同步执行 100–170ms；
+- 整个历史列表构建移入 `asyncio.to_thread(build)`，新增回归测试；
+- 设置页补齐「API 与备份」入口；新增 `openapi/summary` 与 Emby MediaServer adapter；
+- 后端全量 1680 passed，前端 33 单测 + 构建通过。
+
