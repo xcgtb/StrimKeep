@@ -180,15 +180,21 @@ def install_phase5(app,store,admin,job_public):
     async def list_unidentified():
         files = await asyncio.to_thread(unidentified_files)
         empty = await asyncio.to_thread(unidentified_empty_directories)
-        # 按一级子目录分组：一个未识别的整包通常就是几个目录，勾目录比勾几百个文件省事。
-        tally = {}
+        # 有子目录时优先按真实作品目录分组；没有子目录才把根下文件平铺。
+        # 这样用户界面默认看到「玫瑰战争 / 谷雨」这类文件夹，而不是 51 条散文件。
+        from collections import defaultdict
+        grouped = defaultdict(list)
+        flat = []
         for rel in files:
-            parts = rel.split('/')
-            key = '/'.join(parts[:2]) if len(parts) > 2 else parts[0] + '/'
-            tally[key] = tally.get(key, 0) + 1
-        groups = [{'dir': key, 'count': count}
-                  for key, count in sorted(tally.items(), key=lambda item: (-item[1], item[0]))]
-        return {'total':len(files), 'items':files[:500], 'groups':groups[:200],
+            parent = rel.rsplit('/', 1)[0]
+            if parent == '分享STRM未识别':
+                flat.append(rel)
+            else:
+                grouped[parent].append(rel)
+        groups = [{'dir': directory, 'count': len(paths), 'items': paths}
+                  for directory, paths in sorted(grouped.items(),
+                                                  key=lambda item: (-len(item[1]), item[0]))]
+        return {'total':len(files), 'items':flat[:500], 'groups':groups[:200],
                 'empty_total':len(empty), 'empty_dirs':empty[:500]}
 
     @app.post('/api/v1/strm/unidentified/cleanup',dependencies=[Depends(admin)])
@@ -229,9 +235,14 @@ def install_phase5(app,store,admin,job_public):
                         raise ValueError('符号链接')
                     if not path.is_file() or path.is_symlink() or not path.resolve().is_relative_to((root / UNIDENT_NAME).resolve()):
                         raise ValueError('文件不存在或路径不安全')
-                    if store.db.execute('SELECT 1 FROM share_strms WHERE revoked=0 AND strm_path=? UNION SELECT 1 FROM playbacks WHERE revoked=0 AND relative_path=? LIMIT 1', (rel, rel)).fetchone():
-                        raise ValueError('文件仍有有效登记')
+                    if store.db.execute('SELECT 1 FROM playbacks WHERE revoked=0 AND relative_path=? LIMIT 1', (rel,)).fetchone():
+                        raise ValueError('文件仍有有效播放登记')
+                    # 未识别目录里的 share_strms 登记和本地 STRM 属于同一份临时产物，
+                    # 删除时必须一起清掉；playbacks 仍视为有效取链登记，必须保留文件。
                     path.unlink()
+                    with store.db:
+                        store.db.execute('DELETE FROM share_strms WHERE strm_path=?', (rel,))
+                        store.db.execute("DELETE FROM native_media_info_queue WHERE json_extract(target,'$.relative')=?", (rel,))
                     removed.append(rel)
                     parent = path.parent
                     boundary = root / UNIDENT_NAME

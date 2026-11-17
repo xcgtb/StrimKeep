@@ -515,3 +515,11 @@ P1 至此完成。下一步进入 P2：MediaServer / Notifier / CloudDrive 适�
 - 新增 `test_tmdb_cache_sql_runs_off_event_loop` 回归测试；
 - 后端全量 1681 passed, 4 skipped。
 
+
+### 3.6.47：分享未识别按真实文件夹展示并一起清登记
+
+- `/api/v1/strm/unidentified` 改为按文件父目录分组：子目录返回 groups（含 items），根目录文件才平铺；
+- 前端默认显示真实作品目录，可展开查看文件，全选优先选目录；
+- 清理时删除 share_strms 未识别临时登记和媒体信息队列，但保留 playbacks 有效取链登记；
+- 后端全量 1681 passed，前端构建通过。
+
