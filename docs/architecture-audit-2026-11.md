@@ -477,3 +477,13 @@ strimkeep/
 
 P1 至此完成。下一步进入 P2：MediaServer / Notifier / CloudDrive 适配器、只读 OpenAPI、内置备份。
 
+
+### 3.6.43：P2 端口契约 + Webhook 通知
+
+- 新增 `ports.py`：CloudDrive / MediaServer / Notifier 三个最小 Protocol，只定义业务真正用到的方法；
+- 新增 `webhook_notifier.py` 与设置页 Webhook 通道，5xx/429 可重试，4xx 明确失败；
+- 新增 `test_webhook_notifier.py`；
+- 后端全量 1679 passed（+2），前端 33 单测 + 构建通过。
+
+这是 P2 的第一块：先搭最小边界，不接 123/Jellyfin/插件那些大工程。
+

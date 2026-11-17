@@ -77,6 +77,9 @@ class NotificationConfig(Input):
     telegram_enabled: bool = False
     bot_token: str = Field(default='',max_length=200)
     chat_id: str = Field(default='',max_length=100)
+    webhook_enabled: bool = False
+    webhook_url: str = Field(default='',max_length=1000)
+    webhook_secret: str = Field(default='',max_length=500)
     categories:dict[str,bool]=Field(default_factory=dict,max_length=20)
 
 
@@ -435,19 +438,33 @@ def install_phase5(app,store,admin,job_public):
     async def notification_config():
         config = store.get('notification_config',{})
         from .notifications import CATEGORY_DEFAULTS
-        return {'categories':{**CATEGORY_DEFAULTS,**config.get('categories',{})},'telegram_enabled':config.get('telegram_enabled',False),'bot_token_configured':bool(config.get('bot_token')),'chat_id_configured':bool(config.get('chat_id'))}
+        return {'categories':{**CATEGORY_DEFAULTS,**config.get('categories',{})},'telegram_enabled':config.get('telegram_enabled',False),'bot_token_configured':bool(config.get('bot_token')),'chat_id_configured':bool(config.get('chat_id')),
+                'webhook_enabled':config.get('webhook_enabled',False),'webhook_url_configured':bool(config.get('webhook_url')),'webhook_secret_configured':bool(config.get('webhook_secret'))}
 
     @app.put('/api/v1/notifications/config',dependencies=[Depends(admin)])
     async def save_notifications(body:NotificationConfig):
         old = store.get('notification_config',{})
-        config = {**old,'telegram_enabled':body.telegram_enabled,'categories':{**old.get('categories',{}),**body.categories}}
+        config = {**old,'telegram_enabled':body.telegram_enabled,'categories':{**old.get('categories',{}),**body.categories},
+                  'webhook_enabled':body.webhook_enabled}
         if body.bot_token:
             if not re.fullmatch(r'\d{3,20}:[a-zA-Z0-9_-]{20,160}',body.bot_token): raise HTTPException(422,'Bot Token 格式无效。')
             config['bot_token']=body.bot_token
         if body.chat_id:
             if not re.fullmatch(r'-?\d{1,24}|@[a-zA-Z0-9_]{5,64}',body.chat_id): raise HTTPException(422,'Chat ID 格式无效。')
             config['chat_id']=body.chat_id
+        if body.webhook_url:
+            from urllib.parse import urlsplit
+            parsed = urlsplit(body.webhook_url)
+            if parsed.scheme not in ('http','https') or not parsed.hostname: raise HTTPException(422,'Webhook 地址无效。')
+            config['webhook_url']=body.webhook_url
+        else:
+            config.pop('webhook_url', None)
+        if body.webhook_secret:
+            config['webhook_secret']=body.webhook_secret
+        else:
+            config.pop('webhook_secret', None)
         if config['telegram_enabled'] and (not config.get('bot_token') or not config.get('chat_id')): raise HTTPException(422,'请填写 Bot Token 与 Chat ID。')
+        if config['webhook_enabled'] and not config.get('webhook_url'): raise HTTPException(422,'请填写 Webhook 地址。')
         store.set_many({'notification_config':config})
         return await notification_config()
 
@@ -457,6 +474,17 @@ def install_phase5(app,store,admin,job_public):
         if not config.get('bot_token') or not config.get('chat_id'): raise HTTPException(409,'请先保存 Bot Token 与 Chat ID。')
         state=await engine().notifications.publish('test:'+secrets.token_hex(12),'测试通知','Telegram 通道测试。',test=True)
         return {'state':state,'message':'Telegram 已接受。' if state=='sent' else '发送失败或结果未确认；不会自动重试。'}
+
+    @app.post('/api/v1/notifications/webhook/test',dependencies=[Depends(admin)])
+    async def test_webhook_notifications():
+        from .webhook_notifier import WebhookNotifier
+        config = store.get('notification_config', {})
+        url = config.get('webhook_url') if config.get('webhook_url') else ''
+        if not url:
+            raise HTTPException(409,'请先保存 Webhook 地址。')
+        notifier = WebhookNotifier(app.state.http, url, config.get('webhook_secret',''))
+        state, detail = await notifier.send('测试通知', 'StrimKeep Webhook 通道测试。')
+        return {'state':state,'message': 'Webhook 已接受。' if state=='sent' else f'Webhook 失败：{detail}'}
 
     @app.get('/api/v1/notifications',dependencies=[Depends(admin)])
     async def notifications(before:int=Query(2**62,ge=1)):
