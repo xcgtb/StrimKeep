@@ -487,3 +487,12 @@ P1 至此完成。下一步进入 P2：MediaServer / Notifier / CloudDrive 适�
 
 这是 P2 的第一块：先搭最小边界，不接 123/Jellyfin/插件那些大工程。
 
+
+### 3.6.44：P2 第二批（待发）
+
+- Webhook 实际接入 `Notifications.publish()`，按分类旁路发送，不进入 Telegram 重试状态机；
+- 新增一致性备份 API `GET /api/v1/system/backup`：VACUUM INTO + master.key + manifest(SHA-256)；
+- 新增只读 API Token：Bearer token 仅可访问 `/api/v1/tasks`，不暴露配置与写接口；
+- 修复实现过程中 `/api/v1/tasks` 装饰器错位（曾导致返回 ZIP 二进制），相关 20 个定向测试通过；
+- 后端全量 1679 passed（本次为功能/接口接入，无新增测试）。
+

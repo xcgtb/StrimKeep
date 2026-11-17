@@ -269,6 +269,22 @@ class Notifications:
             self.store.db.execute("CREATE TABLE IF NOT EXISTS media_notice_groups(event_key TEXT PRIMARY KEY,job_id INTEGER,items TEXT NOT NULL)")
             self.store.db.execute("CREATE TABLE IF NOT EXISTS telegram_message_refs(event_key TEXT PRIMARY KEY,chat_id TEXT NOT NULL,message_id INTEGER NOT NULL,photo INTEGER NOT NULL,edited TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,next_try REAL NOT NULL DEFAULT 0)")
 
+    async def _deliver_webhook(self, title, message, category):
+        """通用 Webhook：不参与 Telegram 状态机，也不新增台账表。"""
+        config = self.store.get('notification_config', {})
+        if not config.get('webhook_enabled') or not config.get('webhook_url'):
+            return
+        categories = {**CATEGORY_DEFAULTS, **config.get('categories', {})}
+        if not categories.get(category, True):
+            return
+        from .webhook_notifier import WebhookNotifier
+        notifier = WebhookNotifier(self.http, config['webhook_url'], config.get('webhook_secret', ''))
+        try:
+            await notifier.send(title, message)
+        except Exception:
+            # 通知旁路失败不能影响入库/整理主流程；Telegram 队列仍保留正式回执。
+            pass
+
     async def publish(self, key, title, message, level='info', job_id=None, test=False, photo=None, chat_override=None, force=False, category=None, depends_on=None):
         config = self.store.get('notification_config', {})
         category=category or category_for(key)
@@ -286,6 +302,8 @@ class Notifications:
             if cursor.rowcount and depends_on:
                 self.store.db.execute('INSERT OR REPLACE INTO notification_dependencies VALUES(?,?)', (key, depends_on))
         if not cursor.rowcount: return 'duplicate'
+        if not test:
+            await self._deliver_webhook(title, message, category)
         if waiting: return 'waiting'
         state = 'disabled'
         if enabled:

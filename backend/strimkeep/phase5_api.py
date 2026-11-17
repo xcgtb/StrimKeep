@@ -5,6 +5,9 @@ import os
 import re
 import secrets
 import time
+import hmac
+from io import BytesIO
+import zipfile
 from croniter import croniter
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -83,8 +86,30 @@ class NotificationConfig(Input):
     categories:dict[str,bool]=Field(default_factory=dict,max_length=20)
 
 
+class ApiTokenInput(Input):
+    enabled: bool = False
+    token: str = Field(default='',max_length=200)
+
+
+from . import __version__
+
+def _api_token_dependency(store, admin):
+    async def api_admin(request: Request):
+        header = request.headers.get('authorization', '')
+        if header.lower().startswith('bearer '):
+            configured = store.get('api_token', {}) or {}
+            supplied = header[7:].strip()
+            if configured.get('enabled') and configured.get('token') and hmac.compare_digest(
+                    configured['token'], supplied):
+                return {'api_token': True}
+            raise HTTPException(401, 'API Token 无效。')
+        return await admin(request)
+    return api_admin
+
+
 def install_phase5(app,store,admin,job_public):
     def engine(): return app.state.organizer
+    api_admin = _api_token_dependency(store, admin)
 
     async def validate_roots(roots):
         if not roots or len(set(roots)) != len(roots) or any(not re.fullmatch(r'[1-9]\d{0,23}',cid) for cid in roots):
@@ -496,7 +521,8 @@ def install_phase5(app,store,admin,job_public):
         with store.db: store.db.execute("UPDATE notifications SET read_at=? WHERE read_at IS NULL AND level<>'log'",(time.time(),))
         return {'read':True}
 
-    @app.get('/api/v1/tasks',dependencies=[Depends(admin)])
+
+    @app.get('/api/v1/tasks',dependencies=[Depends(api_admin)])
     async def tasks(before:int=Query(2**62,ge=1)):
         # needs_review 是「已停下等人处理」的终态，不该一直占着进行中列表；
         # 它进历史，带失败原因与「核查并继续」，需要时再点。
@@ -516,6 +542,61 @@ def install_phase5(app,store,admin,job_public):
             return {'active':active,'history':history,'has_more':len(history)==40}
         return await asyncio.to_thread(build_list)
 
+    @app.get('/api/v1/system/backup',dependencies=[Depends(admin)])
+    async def download_backup():
+        """一致性备份：SQLite VACUUM INTO + 加密密钥 + manifest。"""
+        import hashlib
+        from datetime import datetime, timezone
+
+        stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+        tmp_dir = store.root / 'config' / '.backup-tmp'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        db_path = tmp_dir / ('state-' + secrets.token_hex(6) + '.db')
+        try:
+            store.db.execute('VACUUM INTO ?', (str(db_path),))
+            files = [('state.db', db_path)]
+            key_path = store.root / 'config/master.key'
+            if key_path.exists():
+                files.append(('master.key', key_path))
+            buffer = BytesIO()
+            manifest = {'created_at': time.time(), 'version': __version__ if '__version__' in globals() else '',
+                        'files': []}
+            with zipfile.ZipFile(buffer, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+                for name, path in files:
+                    payload = path.read_bytes()
+                    archive.writestr(name, payload)
+                    manifest['files'].append({'name': name, 'size': len(payload),
+                                              'sha256': hashlib.sha256(payload).hexdigest()})
+                archive.writestr('manifest.json', json.dumps(manifest, ensure_ascii=False, indent=2))
+        finally:
+            db_path.unlink(missing_ok=True)
+        return StreamingResponse(
+            iter([buffer.getvalue()]), media_type='application/zip',
+            headers={'Content-Disposition': f'attachment; filename="strimkeep-backup-{stamp}.zip"'})
+
+    @app.get('/api/v1/system/api-token',dependencies=[Depends(admin)])
+    async def get_api_token():
+        config = store.get('api_token', {}) or {}
+        return {'enabled': bool(config.get('enabled')), 'token_configured': bool(config.get('token'))}
+
+    @app.put('/api/v1/system/api-token',dependencies=[Depends(admin)])
+    async def save_api_token(body: ApiTokenInput):
+        old = store.get('api_token', {}) or {}
+        token = body.token.strip() or old.get('token', '')
+        if body.enabled and not token:
+            raise HTTPException(422, '请先生成或填写 API Token。')
+        if body.token and not re.fullmatch(r'[A-Za-z0-9_-]{20,200}', token):
+            raise HTTPException(422, 'API Token 格式无效。')
+        config = {'enabled': bool(body.enabled), 'token': token}
+        store.set_many({'api_token': config})
+        return await get_api_token()
+
+    @app.post('/api/v1/system/api-token/rotate',dependencies=[Depends(admin)])
+    async def rotate_api_token():
+        old = store.get('api_token', {}) or {}
+        token = secrets.token_urlsafe(32)
+        store.set_many({'api_token': {'enabled': bool(old.get('enabled')), 'token': token}})
+        return {'token': token}
     @app.get('/api/v1/tasks/events',dependencies=[Depends(admin)])
     async def task_events(request:Request):
         def stamp():
