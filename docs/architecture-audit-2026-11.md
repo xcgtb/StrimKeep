@@ -532,3 +532,12 @@ P1 至此完成。下一步进入 P2：MediaServer / Notifier / CloudDrive 适�
 - 现场 stall 日志已清空；后端全量 1677 passed。
 - 真正的卡点已在 3.6.45/3.6.46 修掉；Web/Worker 进程隔离因访问边界太多，未冒险热修。
 
+
+### 3.6.49：有界 DB Worker + 删除慢请求
+
+- 借鉴 MoviePilot DatabaseWorker，新增 `db_worker.py`：4 线程、容量 64、copy_context、过载拒绝、取消收口；
+- `/api/v1/tasks/events` 的 `stamp()`/`build()` 改走有界 `db_worker.run()`；
+- lifespan 启动/关闭 db_worker；
+- 删除慢请求日志与 `strimkeep_slow_requests_total` 指标；
+- 未拆进程，避免 3.6.49 早先失败方案的功能断层；此前 inventory-plans / TMDB cache 的 to_thread 修复保留；
+- 全量 1679 passed，定向 12 passed。

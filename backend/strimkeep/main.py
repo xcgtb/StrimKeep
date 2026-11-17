@@ -36,6 +36,7 @@ from .organize_options import OrganizeOptions, library_root
 from .strm_options import effective as effective_strm
 from .phase5_api import install_phase5
 from .metrics import Metrics, install_metrics, is_streaming
+from .db_worker import DbWorker
 from .emby_proxy import EmbyProxyManager
 from .emby_proxy_api import install_emby_proxy
 from .media_info_api import inject_loop, install_media_info
@@ -116,8 +117,9 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
     strms.mkdir(parents=True, exist_ok=True)
     app = FastAPI(title='StrimKeep', version=__version__, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store
-    # 0.8.22：进程内计数（播放取链、慢请求），/metrics 与总览共用。
+    # 进程内计数（播放取链、HTTP 请求），/metrics 与总览共用。
     app.state.metrics = Metrics(store)
+    app.state.db_worker = DbWorker()
     app.state.strms = strms.resolve()
     app.state.cloud = None
     app.state.probe_gate = asyncio.Semaphore(1)
@@ -127,6 +129,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
 
     @asynccontextmanager
     async def lifespan(_):
+        await app.state.db_worker.start()
         import fcntl
         instance_file = (root / 'data/instance.lock').open('a')
         try:
@@ -220,6 +223,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
                 await app.state.emby_proxy.stop_all()
             await app.state.cloud.close()
             await app.state.http.aclose()
+            await app.state.db_worker.shutdown()
             instance_file.close()
             store.close()
 
@@ -227,7 +231,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
 
     @app.middleware('http')
     async def headers_and_origin(request: Request, call_next):
-        # 0.8.22：每个请求一个短 id，慢请求记进操作记录时带上，便于串起一次请求的多条日志。
+        # 每个请求一个短 id，便于串起一次请求的多条日志。
         request_id = request.headers.get('x-request-id') or secrets.token_hex(4)
         started = time.monotonic()
         if request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
@@ -249,25 +253,6 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         if metrics is not None:
             route = getattr(request.scope.get('route'), 'path', '')
             metrics.record_request(request.method, route or 'unmatched', response.status_code)
-        # 慢请求留痕（流式接口与播放重定向天然耗时不参与）。只在超过 1 秒时写一条，
-        # 这是「页面为什么慢」的第一手证据；正常请求不产生任何写入。
-        if elapsed >= 2.0 and not is_streaming(request.url.path):
-            app.state.metrics.record_slow_request()
-            # 降噪：同一路径 60 秒内只写一条，并带上这段时间的次数。
-            window = getattr(app.state, 'slow_log', None)
-            if window is None:
-                window = app.state.slow_log = {}
-            stamp = time.monotonic()
-            path_key = request.url.path[:80]
-            entry = window.get(path_key)
-            if entry is None or stamp - entry[0] >= 60:
-                count = 1 if entry is None else entry[1] + 1
-                window[path_key] = (stamp, 1)
-                suffix = '' if count <= 1 else '，本分钟 %d 次' % count
-                store.event('perf', '慢请求：%s %s %.1f 秒（rid %s）'
-                            % (request.method, path_key, elapsed, request_id))
-            else:
-                window[path_key] = (entry[0], entry[1] + 1)
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'no-referrer'
         response.headers['X-Frame-Options'] = 'DENY'

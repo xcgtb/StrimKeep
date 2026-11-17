@@ -19,7 +19,7 @@ from fastapi import HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
 TOKEN_ENV = 'STRIMKEEP_METRICS_TOKEN'
-# 这些路径是长连接/流式响应，耗时天然很长，不参与「慢请求」判定。
+# 这些路径是长连接/流式响应，耗时天然很长，不参与请求判定。
 STREAMING_PREFIXES = ('/api/v1/tasks/events', '/api/v1/logs/events', '/play')
 # 播放取链延迟直方图的桶（毫秒）。用 histogram 而不是客户端分位：
 # Prometheus 官方建议「需要聚合/跨重启算分位时用 histogram，summary/预计算分位无法合并」。
@@ -54,7 +54,7 @@ def is_streaming(path):
 class Metrics:
     """进程内计数 + 从数据库聚合的指标。
 
-    - 进程内（重启清零）：播放取链成功/失败/超时、取链耗时、慢请求次数；
+    - 进程内（重启清零）：播放取链成功/失败/超时、取链耗时、HTTP 请求计数；
     - 数据库（持久）：任务与条目状态分布、事件条数、未读通知、库文件大小；
     - meta（持久，由别的模块写）：115 限流运行时状态。
     """
@@ -66,7 +66,6 @@ class Metrics:
         self.play_hist = [0] * (len(PLAY_BUCKETS_MS) + 1)   # 末桶 = +Inf
         self.play_sum = 0.0
         self.play_count = 0
-        self.slow_requests = 0
         self.http = {}
 
     # ---------------------------------------------------------------- 写入
@@ -91,9 +90,6 @@ class Metrics:
                 self.play_hist[index] += 1
                 return
         self.play_hist[-1] += 1
-
-    def record_slow_request(self):
-        self.slow_requests += 1
 
     def record_request(self, method, route, status):
         """按「方法 + 路由模板 + 状态码」计数：这是错误率的分母。
@@ -217,8 +213,6 @@ class Metrics:
         if isinstance(share.get('at'), (int, float)):
             add('strimkeep_share_check_timestamp', share['at'],
                 'Unix time of the last share alive check')
-        add('strimkeep_slow_requests_total', self.slow_requests,
-            'Requests slower than one second', 'counter')
 
         for (method, route, status), count in sorted(self.http.items()):
             add('strimkeep_http_requests_total', count,

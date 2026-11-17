@@ -1,9 +1,9 @@
-"""0.8.22 回归：/metrics 口径与鉴权、request id、慢请求、播放计数、退避抖动、限流状态持久化。
+"""0.8.22 回归：/metrics 口径与鉴权、request id、HTTP 计数、播放计数、退避抖动、限流状态持久化。
 
 背景见 docs/releases/RELEASE_0.8.22.md：
 
 1. `/metrics` 默认不存在（未配置令牌时 404），配置后必须带对令牌；
-2. 每个响应都带 `X-Request-Id`，慢请求（≥1 秒）才写一条操作记录；
+2. 每个响应都带 `X-Request-Id`，便于串联一次请求的多条日志；
 3. 播放取链的成功/失败/耗时进入进程内计数，供 `/metrics` 与总览使用；
 4. 通知与 Emby 核对的重试间隔带抖动，避免同一秒一起重发；
 5. 115 的冷却与 WAF 封锁写进 meta，重启后仍然生效（以前只在内存里）。
@@ -71,7 +71,6 @@ def test_metrics_unit_counts_play_and_latency(tmp_path):
         metrics.record_play('ok', value)
     metrics.record_play('error', 5.0)
     metrics.record_play('timeout', 0.0)
-    metrics.record_slow_request()
     body = metrics.render(type('App', (), {'version': '0.8.22', 'state': type('S', (), {})()})())
     assert 'strimkeep_play_total{result="ok"} 4' in body
     assert 'strimkeep_play_total{result="error"} 1' in body
@@ -81,11 +80,10 @@ def test_metrics_unit_counts_play_and_latency(tmp_path):
     assert 'strimkeep_play_latency_ms_bucket{le="+Inf"} 4' in body
     assert 'strimkeep_play_latency_ms_count 4' in body
     assert 'strimkeep_play_latency_ms_sum 100.0' in body
-    assert 'strimkeep_slow_requests_total 1' in body
     store.close()
 
 
-# ------------------------------------------------- 2) request id 与慢请求
+# ------------------------------------------------- 2) request id
 
 def test_every_response_carries_a_request_id(tmp_path, monkeypatch):
     app = make_app(tmp_path, monkeypatch)
