@@ -49,7 +49,7 @@ def _delay(attempt, response=None):
 
 
 class TmdbClient:
-    def __init__(self, store, count=None, retries=MAX_RETRIES):
+    def __init__(self, store=None, count=None, retries=MAX_RETRIES):
         self.store = store
         self.count = count or (lambda _category: None)
         self.retries = max(0, int(retries))
@@ -114,3 +114,70 @@ class TmdbClient:
                                   (cache, json.dumps(data, ensure_ascii=False), now))
             self.store.db.execute('DELETE FROM tmdb_cache WHERE updated<?', (now - 90 * 86400,))
         return data
+
+    async def episode(self, tmdb, tv_id, season, number, *, season_unavailable,
+                      episode_ttl=EPISODE_TTL):
+        """单集缓存 → 季接口 → 单集接口；季接口不可用时短时间熔断。
+
+        ``tmdb`` 由调用方传入（通常是 Organizer.tmdb），保留测试 monkeypatch 能力。
+        """
+        path = f'tv/{tv_id}/season/{season}/episode/{number}'
+        cached = self.store.db.execute('SELECT body,updated FROM tmdb_cache WHERE key=?', (path,)).fetchone()
+        if cached and time.time() - cached['updated'] < episode_ttl:
+            try:
+                data = json.loads(cached['body'])
+                if isinstance(data, dict) and data.get('season_number') == season and data.get('episode_number') == number:
+                    self.count('单集缓存命中')
+                    return data
+            except (TypeError, ValueError):
+                pass
+        season_path = f'tv/{tv_id}/season/{season}'
+        unavailable_until = (season_unavailable or {}).get(season_path, 0)
+        if time.monotonic() >= unavailable_until:
+            try:
+                data = await tmdb(season_path)
+            except CloudError as exc:
+                if exc.code not in ('TMDB_UNAVAILABLE', 'TMDB_NOT_FOUND'):
+                    raise
+                # 季接口不支持或暂时不可达时沿用原单集接口，不在每一集重复撞季接口。
+                if season_unavailable is not None:
+                    season_unavailable[season_path] = time.monotonic() + 60
+            else:
+                if isinstance(data, dict) and data.get('season_number') == season and isinstance(data.get('episodes'), list):
+                    matches = [ep for ep in data['episodes'] if isinstance(ep, dict)
+                               and ep.get('season_number') == season and ep.get('episode_number') == number]
+                    required = ('id', 'name', 'overview', 'air_date', 'season_number', 'episode_number')
+                    if len(matches) == 1 and matches[0].get('id') and all(key in matches[0] for key in required):
+                        return matches[0]
+        try:
+            return await tmdb(path)
+        except CloudError as exc:
+            if exc.code == 'TMDB_NOT_FOUND':
+                # TMDB 还没登记这一集（国产剧/短剧数据常常滞后于播出）：返回 None，
+                # 让 build_plan 按文件名里的集号兜底归档，而不是整条转人工。
+                return None
+            raise
+
+    async def search(self, tmdb, kind, query, year, attempts, variant, language=None):
+        """一次 TMDB 搜索，并把尝试记进证据链。剧集不传年份，年份留到证据校验。"""
+        params = {'query': query, 'include_adult': 'false'}
+        if kind != 'tv' and year:
+            params['year'] = year
+        if language:
+            params['language'] = language
+        record = {'endpoint': 'search/' + kind, 'variant': variant,
+                  'params': {k: v for k, v in params.items() if k != 'include_adult'}}
+        try:
+            data = await tmdb('search/' + kind, params)
+        except Exception as exc:
+            record.update({'candidates': 0, 'reason': (type(exc).__name__ + ':' + str(exc))[:60]})
+            attempts.append(record)
+            raise
+        results = data.get('results') or []
+        record.update({
+            'candidates': len(results),
+            'top': ' | '.join('%s(%s)#%s' % (r.get('name') or r.get('title') or '',
+                                             (r.get('first_air_date') or r.get('release_date') or '')[:4],
+                                             r.get('id')) for r in results[:3])})
+        attempts.append(record)
+        return results

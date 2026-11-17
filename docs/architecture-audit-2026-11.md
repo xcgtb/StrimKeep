@@ -14,9 +14,9 @@
 | 项目 | 数值 | 说明 |
 |---|---:|---|
 | 后端模块 | 92 个 `.py` | 单包 `strimkeep/` |
-| 后端代码 | 31,916 行 | `wc -l *.py` |
-| 最大模块 | `organizer.py` 3,354 行 | 识别、整理、洗版、发布、调度、清理都在里面 |
-| 前五模块 | 9,038 行 | 占后端 28%：organizer / cloud115 / main / share_service / sync |
+| 后端代码 | 31,935 行 | `wc -l *.py` |
+| 最大模块 | `organizer.py` 3,306 行 | 识别、整理、洗版、发布、调度、清理都在里面 |
+| 前五模块 | 8,990 行 | 占后端 28%：organizer / cloud115 / main / share_service / sync |
 | HTTP 路由 | 198 条 | 其中 181 条直接挂 `Depends(admin)` |
 | 数据表 | 36 张 | 单 SQLite，`SCHEMA_VERSION='2'` |
 | 直接 DB 调用 | 666 处 | `organizer` 95、`share_service` 84、`main` 51 |
@@ -163,7 +163,7 @@ TgtoDrive 是功能面最接近的竞品，值得借的是「集成广度」和�
 
 **现状**
 
-- `organizer.py` 3,354 行；`identify` 129 行、`run_job` 462 行、`process_item` 200 行。
+- `organizer.py` 3,306 行；`identify` 129 行、`run_job` 462 行、`process_item` 200 行。
 - 识别有规范化、短语变体、年份证据、TMDB 404 负缓存；洗版 7 维比较。
 - 直接 DB 95 处，`except Exception` 37 处；`pending.rglob('*.strm')` 在异步路径里（见 4.4 风险）。
 
@@ -424,4 +424,14 @@ strimkeep/
 - `organizer.py` 的 `tmdb()` 只做委托，保留原有 `tmdb_cache_key` / `tmdb_missing_error` 兼容接口；
 - 新增 `test_tmdb_client.py`：429→503→200、400 不重试；
 - 这是「先拆 I/O 适配器，再拆纯函数」的第一步，下一步继续拆 `search_tmdb` / `tmdb_episode` 的缓存编排，最后再拆识别评分。
+
+### 3.6.37：单集/搜索缓存编排也移出 organizer
+
+- `TmdbClient` 新增 `episode()` 与 `search()`：
+  - 单集缓存 → 季接口 → 单集接口；
+  - 季接口不可用时 60 秒熔断，避免逐集撞；
+  - 搜索仍把尝试记录进证据链；
+- `Organizer.tmdb_episode` / `search_tmdb` 只做兼容委托，保留 `engine.tmdb` 可替换能力；
+- `organizer.py` 从 3,354 行降到 3,306 行；
+- 定向测试 33 passed；全量测试保持通过。
 

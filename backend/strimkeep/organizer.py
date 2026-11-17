@@ -1122,72 +1122,24 @@ class Organizer:
             search_ttl=self.TMDB_SEARCH_SECONDS, detail_ttl=self.TMDB_DETAIL_SECONDS,
             episode_ttl=self.TMDB_EPISODE_SECONDS, missing_ttl=self.TMDB_MISSING_SECONDS)
 
+    def _tmdb_gateway(self):
+        client = getattr(self, '_tmdb_client', None)
+        if client is None:
+            client = TmdbClient(getattr(self, 'store', None), count=_count_tmdb)
+            self._tmdb_client = client
+        return client
+
     async def tmdb_episode(self, tv_id, season, number):
-        """优先复用单集缓存，再按季查询；缺失或无法验证时回退单集接口。"""
-        path = f'tv/{tv_id}/season/{season}/episode/{number}'
-        cached = self.store.db.execute('SELECT body,updated FROM tmdb_cache WHERE key=?', (path,)).fetchone()
-        if cached and time.time() - cached['updated'] < self.TMDB_EPISODE_SECONDS:
-            try:
-                data = json.loads(cached['body'])
-                if isinstance(data, dict) and data.get('season_number') == season and data.get('episode_number') == number:
-                    _count_tmdb('单集缓存命中')
-                    return data
-            except (TypeError, ValueError):
-                pass
-        season_path = f'tv/{tv_id}/season/{season}'
-        unavailable_until = self._season_lookup_unavailable.get(season_path, 0)
-        if time.monotonic() >= unavailable_until:
-            try:
-                data = await self.tmdb(season_path)
-            except CloudError as exc:
-                if exc.code not in ('TMDB_UNAVAILABLE', 'TMDB_NOT_FOUND'):
-                    raise
-                # 季接口不支持或暂时不可达时沿用原单集接口，不在每一集重复撞季接口。
-                self._season_lookup_unavailable[season_path] = time.monotonic() + 60
-            else:
-                if isinstance(data, dict) and data.get('season_number') == season and isinstance(data.get('episodes'), list):
-                    matches = [ep for ep in data['episodes'] if isinstance(ep, dict)
-                               and ep.get('season_number') == season and ep.get('episode_number') == number]
-                    required = ('id', 'name', 'overview', 'air_date', 'season_number', 'episode_number')
-                    if len(matches) == 1 and matches[0].get('id') and all(key in matches[0] for key in required):
-                        return matches[0]
-        try:
-            return await self.tmdb(path)
-        except CloudError as exc:
-            if exc.code == 'TMDB_NOT_FOUND':
-                # TMDB 还没登记这一集（国产剧/短剧数据常常滞后于播出）：返回 None，
-                # 让 build_plan 按文件名里的集号兜底归档，而不是整条转人工。
-                return None
-            raise
+        """单集缓存/季集回退交给 TmdbClient；这里保留原方法供识别与测试调用。"""
+        return await self._tmdb_gateway().episode(
+            self.tmdb, tv_id, season, number,
+            season_unavailable=getattr(self, '_season_lookup_unavailable', None),
+            episode_ttl=getattr(self, 'TMDB_EPISODE_SECONDS', 30 * 86400))
 
     async def search_tmdb(self, kind, query, year, attempts, variant, language=None):
-        """一次 TMDB 搜索，并把尝试记进证据链。剧集不传年份，年份留到证据校验。
-
-        language 决定返回标题的语言：文件名不是中日韩文字时用 en-US，否则用 zh-CN。
-        TMDB 的 results 只给「当前语言的标题 + 原始语言标题」，语言用错时英文发布名
-        会去和中文候选名比相似度，分数全是 0，被阈值判掉，报成「未找到唯一匹配」。
-        """
-        params = {'query': query, 'include_adult': 'false'}
-        if kind != 'tv' and year:
-            params['year'] = year
-        if language:
-            params['language'] = language
-        record = {'endpoint': 'search/' + kind, 'variant': variant,
-                  'params': {k: v for k, v in params.items() if k != 'include_adult'}}
-        try:
-            data = await self.tmdb('search/' + kind, params)
-        except Exception as exc:
-            record.update({'candidates': 0, 'reason': (type(exc).__name__ + ':' + str(exc))[:60]})
-            attempts.append(record)
-            raise
-        results = data.get('results') or []
-        record.update({
-            'candidates': len(results),
-            'top': ' | '.join('%s(%s)#%s' % (r.get('name') or r.get('title') or '',
-                                             (r.get('first_air_date') or r.get('release_date') or '')[:4],
-                                             r.get('id')) for r in results[:3])})
-        attempts.append(record)
-        return results
+        """一次 TMDB 搜索并记录证据链；请求本身仍走 self.tmdb，保持可替换。"""
+        return await self._tmdb_gateway().search(
+            self.tmdb, kind, query, year, attempts, variant, language)
 
     async def year_ok(self, kind, candidate, hint):
         """年份证据：电影看上映年；剧集允许首播年 / 本季年份 / 该集播出年（对齐 ）。
