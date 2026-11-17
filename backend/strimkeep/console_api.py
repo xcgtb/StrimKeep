@@ -83,7 +83,7 @@ def install_console(app,store,admin):
         def read():
             rows=store.db.execute('SELECT * FROM events WHERE id<? AND (?=\'\' OR kind=?) AND message LIKE ? ORDER BY id DESC LIMIT ?',(before,kind,kind,'%'+q+'%',limit)).fetchall()
             return {'items':[dict(r) for r in rows]}
-        return await asyncio.to_thread(read)
+        return await app.state.db_worker.run(read, priority='interactive')
     @app.get('/api/v1/logs/export',dependencies=[Depends(admin)])
     async def export_logs(kind:str='',q:str='',limit:int=Query(5000,ge=1,le=20000)):
         """按当前筛选导出日志（最新在后），返回纯文本附件，方便留档/贴给客服。"""
@@ -91,7 +91,7 @@ def install_console(app,store,admin):
             rows=store.db.execute('SELECT * FROM events WHERE (?=\'\' OR kind=?) AND message LIKE ? ORDER BY id DESC LIMIT ?',(kind,kind,'%'+q+'%',limit)).fetchall()
             lines=[f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(r['at']))} [{r['kind']}] {r['message']}" for r in reversed(rows)]
             return '\n'.join(lines)+'\n'
-        body=await asyncio.to_thread(read)
+        body=await app.state.db_worker.run(read, priority='interactive')
         name='strimkeep-logs-'+time.strftime('%Y%m%d-%H%M%S')+'.txt'
         return Response(content=body,media_type='text/plain; charset=utf-8',
                         headers={'Content-Disposition': f'attachment; filename="{name}"'})

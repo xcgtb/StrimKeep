@@ -664,7 +664,7 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize) })
     <div class="gov-field"><span class="gov-field-label">新入库多久内不动</span><el-input-number v-model="quietMinutes" :min="0" :max="1440" :step="5" :precision="0" size="small" controls-position="right" /><span class="gov-unit">分钟</span><small class="gov-hint">设为 0 关闭。STRM 文件近期写入的作品暂不治理，避免把「还没入完」当成缺集。</small></div>
     <div class="gov-field"><span class="gov-field-label">定时扫描</span><el-switch v-model="scanScheduleEnabled" size="small" /><el-input-number v-model="scanIntervalHours" :disabled="!scanScheduleEnabled" :min="1" :max="168" :precision="0" size="small" controls-position="right" /><span class="gov-unit">小时</span><small class="gov-hint">只生成清理计划，不自动删除。</small></div>
     <div class="gov-field"><span class="gov-field-label">永不处理的片名</span><el-input v-model="exemptInput" placeholder="关键词用逗号分隔，命中的作品整部跳过" size="small" /><small class="gov-hint">标题或任一文件路径命中即豁免。</small></div>
-    <div class="gov-field"><span class="gov-field-label">单库清理</span><el-switch v-model="singleQuality" active-text="多版本去重" size="small" /><el-switch v-model="singleGaps" active-text="缺集季" size="small" /><small class="gov-hint">多版本=同季同集多份留最优；缺集季=残次品（前序缺失/中间断层），逐侧清理。</small></div>
+    <div class="gov-field"><span class="gov-field-label">单库清理</span><el-switch v-model="singleQuality" active-text="多版本去重" size="small" /><el-switch v-model="singleGaps" active-text="缺集季" size="small" /><small class="gov-hint">多版本=同季同集多份留最优；缺集季=按缺集原因清理：前序缺失（如缺 E01）/中间断层（如缺 E59，疑似被和谐），会写明缺哪些集，逐侧清理。</small></div>
    </section>
    <section class="gov-group">
     <h4>判定规则</h4>

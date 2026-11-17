@@ -551,7 +551,7 @@ def install_phase5(app,store,admin,job_public):
             active=[job_public(r,counts_map,emby_map,stats) for r in active_rows]
             history=[job_public(r,counts_map,emby_map,stats) for r in history_rows]
             return {'active':active,'history':history,'has_more':len(history)==40}
-        return await asyncio.to_thread(build_list)
+        return await app.state.db_worker.run(build_list, priority='interactive')
 
     @app.get('/api/v1/system/backup',dependencies=[Depends(admin)])
     async def download_backup():
@@ -653,11 +653,11 @@ def install_phase5(app,store,admin,job_public):
             while not await request.is_disconnected():
                 if not store.session(request.cookies.get('strimkeep_session','')): break
                 # 0.8.21：stamp() 与 build() 都放工作线程（每 2 秒都会跑）。
-                current=await app.state.db_worker.run(stamp)
+                current=await app.state.db_worker.run(stamp, priority='background')
                 if current!=signature or not previous:
                     # 只有签名变化才重建：build() 是 6 条批量查询 + 一次序列化。
                     signature=current
-                    payload=json.dumps(await app.state.db_worker.run(build),ensure_ascii=False,separators=(',',':'))
+                    payload=json.dumps(await app.state.db_worker.run(build, priority='background'),ensure_ascii=False,separators=(',',':'))
                     if payload!=previous:
                         yield 'event: tasks\ndata: '+payload+'\n\n';previous=payload
                     else:

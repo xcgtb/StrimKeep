@@ -1,9 +1,10 @@
-"""Bounded executor for synchronous SQLite/IO work.
+"""Bounded, prioritized executor for synchronous SQLite/IO work.
 
-Borrowed from MoviePilot's DatabaseWorker: a fixed-size thread pool with a hard
-queue capacity so a burst of requests cannot grow unbounded and stall the
-event loop. StrimKeep's Store already creates one SQLite connection per thread;
-this worker only controls *where* the synchronous work runs.
+Borrowed from MoviePilot's DatabaseWorker and Celery's queue isolation:
+interactive work (page/API requests) and background work (SSE rebuild, scans,
+maintenance) use separate pools and separate capacities. A burst of background
+work cannot starve interactive requests; both queues are bounded so overload
+fails fast instead of growing without limit.
 """
 import asyncio
 import concurrent.futures
@@ -13,62 +14,48 @@ from typing import Callable, TypeVar
 
 T = TypeVar('T')
 
-MAX_WORKERS = 4
-CAPACITY = 64
 
-
-class DbWorker:
-    def __init__(self, max_workers: int = MAX_WORKERS, capacity: int = CAPACITY):
+class Pool:
+    def __init__(self, name, max_workers, capacity):
         if max_workers < 1 or capacity < max_workers:
             raise ValueError('invalid db worker capacity')
+        self.name = name
         self.max_workers = max_workers
         self.capacity = capacity
-        self._lock = threading.Lock()
-        self._loop = None
-        self._executor = None
-        self._queued = 0
-        self._running = 0
-        self._rejected = 0
-
-    async def start(self):
-        loop = asyncio.get_running_loop()
-        with self._lock:
-            if self._executor is not None:
-                if self._loop is not loop:
-                    raise RuntimeError('db worker cannot cross event loops')
-                return
-            self._loop = loop
-            self._executor = concurrent.futures.ThreadPoolExecutor(
-                max_workers=self.max_workers, thread_name_prefix='strimkeep-db')
+        self.lock = threading.Lock()
+        self.loop = None
+        self.executor = None
+        self.queued = 0
+        self.running = 0
+        self.rejected = 0
 
     def stats(self):
-        with self._lock:
+        with self.lock:
             return {'max_workers': self.max_workers, 'capacity': self.capacity,
-                    'queued': self._queued, 'running': self._running,
-                    'rejected': self._rejected}
+                    'queued': self.queued, 'running': self.running,
+                    'rejected': self.rejected}
 
     async def run(self, operation: Callable[[], T]) -> T:
         loop = asyncio.get_running_loop()
-        with self._lock:
-            executor = self._executor
-            if executor is None or self._loop is not loop:
-                # Tests create apps outside lifespan; fall back to asyncio's pool.
+        with self.lock:
+            executor = self.executor
+            if executor is None or self.loop is not loop:
                 return await asyncio.to_thread(operation)
-            if self._queued + self._running >= self.capacity:
-                self._rejected += 1
-                raise RuntimeError('database worker overloaded')
-            self._queued += 1
+            if self.queued + self.running >= self.capacity:
+                self.rejected += 1
+                raise RuntimeError('database worker overloaded: %s' % self.name)
+            self.queued += 1
         context = copy_context()
         future = executor.submit(context.run, operation)
         wrapped = loop.create_future()
 
         def complete(done):
             def publish():
-                with self._lock:
-                    if self._queued > 0:
-                        self._queued -= 1
+                with self.lock:
+                    if self.queued > 0:
+                        self.queued -= 1
                     else:
-                        self._running = max(0, self._running - 1)
+                        self.running = max(0, self.running - 1)
                 if done.cancelled():
                     wrapped.cancel()
                 elif done.exception():
@@ -82,9 +69,38 @@ class DbWorker:
         future.add_done_callback(complete)
         return await asyncio.shield(wrapped)
 
+
+class DbWorker:
+    def __init__(self, interactive_workers=3, interactive_capacity=24,
+                 background_workers=2, background_capacity=32):
+        self.interactive = Pool('interactive', interactive_workers, interactive_capacity)
+        self.background = Pool('background', background_workers, background_capacity)
+
+    async def start(self):
+        loop = asyncio.get_running_loop()
+        for pool in (self.interactive, self.background):
+            with pool.lock:
+                if pool.executor is not None:
+                    if pool.loop is not loop:
+                        raise RuntimeError('db worker cannot cross event loops')
+                    continue
+                pool.loop = loop
+                pool.executor = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=pool.max_workers,
+                    thread_name_prefix='sk-db-%s' % pool.name)
+
+    def stats(self):
+        return {'interactive': self.interactive.stats(),
+                'background': self.background.stats()}
+
+    async def run(self, operation, *, priority='interactive'):
+        pool = self.background if priority == 'background' else self.interactive
+        return await pool.run(operation)
+
     async def shutdown(self):
-        with self._lock:
-            executor = self._executor
-            self._executor = None
-        if executor is not None:
-            executor.shutdown(wait=True, cancel_futures=True)
+        for pool in (self.interactive, self.background):
+            with pool.lock:
+                executor = pool.executor
+                pool.executor = None
+            if executor is not None:
+                executor.shutdown(wait=True, cancel_futures=True)

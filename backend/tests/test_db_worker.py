@@ -1,36 +1,43 @@
 import asyncio
 import threading
 
-import pytest
-
 from strimkeep.db_worker import DbWorker
 
 
-def test_db_worker_runs_sync_work_off_event_loop():
+def test_db_worker_priority_pools_are_isolated():
     async def run():
         worker = DbWorker()
         await worker.start()
-        loop_thread = threading.get_ident()
-        def work():
-            return threading.get_ident()
-        thread_id = await worker.run(work)
-        assert thread_id != loop_thread
+        assert worker.interactive.max_workers == 3
+        assert worker.background.max_workers == 2
+        assert worker.interactive.executor is not worker.background.executor
+        result = await worker.run(lambda: 'i')
+        assert result == 'i'
+        result = await worker.run(lambda: 'b', priority='background')
+        assert result == 'b'
         await worker.shutdown()
     asyncio.run(run())
 
 
-def test_db_worker_rejects_overload():
+def test_db_worker_background_overload_does_not_touch_interactive():
     async def run():
-        worker = DbWorker(max_workers=1, capacity=1)
+        worker = DbWorker(interactive_workers=1, interactive_capacity=2,
+                          background_capacity=1, background_workers=1)
         await worker.start()
         gate = threading.Event()
+
         def block():
             gate.wait(5)
             return 1
-        task = asyncio.create_task(worker.run(block))
+        task = asyncio.create_task(worker.run(block, priority='background'))
         await asyncio.sleep(0.05)
-        with pytest.raises(RuntimeError, match='overloaded'):
-            await worker.run(lambda: 2)
+        try:
+            await worker.run(lambda: 2, priority='background')
+        except RuntimeError as exc:
+            assert 'background' in str(exc)
+        else:
+            raise AssertionError('background pool should reject overload')
+        assert await worker.run(lambda: 3, priority='interactive') == 3
         gate.set()
         assert await task == 1
         await worker.shutdown()

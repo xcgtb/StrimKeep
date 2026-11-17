@@ -88,6 +88,13 @@ def _gap_desc(episodes):
     return '' if text in ('完整', '空剧集') else text
 
 
+def _incomplete_label(side, gap):
+    """把「残次品」说清楚：哪一侧、为什么残次（前序缺失/中间断层/缺哪些集）。"""
+    target = '删本地' if side == 'cloud' else '删分享'
+    detail = (gap or '').strip()
+    return ('缺集残次-%s：%s' % (target, detail)) if detail else ('缺集残次-%s' % target)
+
+
 def _action(side_to_delete, reason, label, season, **extra):
     """一条动作：`side_to_delete` 是被删的那一侧（cloud=本地/CD2，share=分享库）。"""
     return {'delete_side': side_to_delete, 'action_reason': reason, 'reason_label': label,
@@ -135,11 +142,13 @@ def _season_actions(compare, season, threshold):
     """单季裁决（1.2.12 `_emit_season_act`）：残次品优先，完整才比画质。"""
     actions = []
     if compare['cloud'] and not compare['complete']['cloud']:
-        actions.append(_action('cloud', 'incomplete_delete_local', '残次品-删本地', season,
-                               gap=_gap_desc(compare['cloud'])))
+        gap = _gap_desc(compare['cloud'])
+        actions.append(_action('cloud', 'incomplete_delete_local', _incomplete_label('cloud', gap), season,
+                               gap=gap))
     if compare['share'] and not compare['complete']['share']:
-        actions.append(_action('share', 'incomplete_delete_share', '残次品-删分享', season,
-                               gap=_gap_desc(compare['share'])))
+        gap = _gap_desc(compare['share'])
+        actions.append(_action('share', 'incomplete_delete_share', _incomplete_label('share', gap), season,
+                               gap=gap))
     if not (compare['complete']['share'] and compare['complete']['cloud']):
         return actions, 'incomplete'
     if not compare['common']:
@@ -220,8 +229,9 @@ def _multi_actions(mode, sp, lp, policy, tie, threshold):
     for season in common:
         compare = _season_compare(sp[season], lp[season], policy, tie)
         if not compare['complete']['cloud']:
-            actions.append(_action('cloud', 'incomplete_delete_local', '残次品-删本地', season,
-                                   gap=_gap_desc(compare['cloud'])))
+            gap = _gap_desc(compare['cloud'])
+            actions.append(_action('cloud', 'incomplete_delete_local', _incomplete_label('cloud', gap), season,
+                                   gap=gap))
         reasons = []
         if not compare['complete']['cloud']:
             reasons.append('本地' + _gap_desc(compare['cloud']))
@@ -610,7 +620,7 @@ def governance_preview(snapshot, policy, tie='cloud', threshold=0.9,
                         'delete_side': side,
                         'action_reason': ('incomplete_delete_local' if side == 'cloud'
                                           else 'incomplete_delete_share'),
-                        'reason_label': '残次品-删本地' if side == 'cloud' else '残次品-删分享',
+                        'reason_label': _incomplete_label(side, _gap_text(present)),
                         'season': season,
                         'gap': _gap_text(present)})
             return found, hit

@@ -196,6 +196,8 @@ def test_gap_season_becomes_deletable_action():
     assert (row['action_kind'], row['reason'], row['season']) == (
         'loc', 'incomplete_delete_local', 1)
     assert row['gap'] == '缺失前序 (缺 E01) 且 中间断层 (缺 E03，疑似被和谐)'
+    assert row['reason_label'] == (
+        '缺集残次-删本地：缺失前序 (缺 E01) 且 中间断层 (缺 E03，疑似被和谐)')
     assert row['winner'] == 'share'
     assert result['single'] == []
 

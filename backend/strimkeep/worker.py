@@ -13,6 +13,7 @@ from pathlib import Path
 from . import __version__
 from .cloud115 import Cloud115
 from .housekeeping import housekeeping_loop
+from .leases import reap_stale_jobs
 from .media_info_api import inject_loop
 from .network import ServiceHTTP
 from .organizer import Organizer
@@ -63,9 +64,17 @@ async def run_worker():
         asyncio.create_task(housekeeping_loop(app, store)),
     ]
     store.event('system', f'StrimKeep worker {__version__} started.')
+    last_reap = 0.0
     try:
         while not stop.is_set():
             store.set_meta('worker_heartbeat', time.time())
+            now = time.monotonic()
+            if now - last_reap >= 120:
+                last_reap = now
+                try:
+                    await asyncio.to_thread(reap_stale_jobs, store)
+                except Exception:
+                    pass
             await asyncio.sleep(5)
     finally:
         for task in background:
