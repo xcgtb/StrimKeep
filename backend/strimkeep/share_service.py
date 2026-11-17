@@ -33,6 +33,9 @@ from .metadata_files import write_sidecars
 from .strm_options import shared_settings, share_effective_settings, skip_reason, write_new
 from .share_urls import (LIB_NAME, PLAYABLE, align_existing_share_urls,
                          migrate_share_play_paths, share_play_path_matches, share_play_url)
+from .share_check import check_alive, _verified_share_strm
+from .share_cleanup import (pending_count, validate_play_token, refresh_share_address,
+                            prune_empty_pending)
 from .share_recognition import episode_range_of, is_share_category as _is_share_category, quality_rank
 
 PENDING_NAME = '分享STRM待整理'
@@ -976,30 +979,6 @@ def _unidentified_targets(unident, row, target_parts=None):
     return natural, natural.with_name(short_stem + suffix)
 
 
-def _verified_share_strm(root, relative, share_id):
-    """Return an owned regular STRM only if its path and embedded ID agree."""
-    from urllib.parse import urlsplit
-    root = Path(root).resolve()
-    rel = Path(relative)
-    if rel.is_absolute() or not rel.parts or any(part in ('.', '..') for part in rel.parts):
-        return None
-    path = root / rel
-    try:
-        cursor = root
-        for part in rel.parts:
-            cursor = cursor / part
-            if cursor.is_symlink():
-                return None
-        if not path.resolve().is_relative_to(root) or not path.is_file() or path.stat().st_size > 4096:
-            return None
-        content = path.read_text(encoding='utf-8').strip()
-        if not share_play_path_matches(urlsplit(content).path, str(share_id)):
-            return None
-        return path
-    except (OSError, UnicodeError, ValueError):
-        return None
-
-
 async def _to_unident(engine, job_id, row, item, reason, deterministic=False, settings=None, target_parts=None):
     """Move each unmatched STRM while preserving its original work folders."""
     store, root = engine.store, engine.root
@@ -1095,158 +1074,6 @@ def _wash(engine, job_id, row, org_dir, dest, target_stem, hint, new_facts, poli
     return 'publish'
 
 
-async def check_alive(engine):
-    """按分享核验；仅在确认取消且归属可核实时撤销。"""
-    store, root = engine.store, engine.root
-    rows = store.db.execute(
-        'SELECT id, name, share_code, receive_code, file_id, strm_path FROM share_strms WHERE revoked=0').fetchall()
-    scope = 'share'
-    dead, alive, skipped, details = [], 0, 0, []
-    share_checks = 0
-    status_cache = {}
-    settings = store.get('share_settings', {}) or {}
-    try:
-        concurrency = max(1, min(4, int(settings.get('share_check_concurrency', 3))))
-    except (TypeError, ValueError):
-        concurrency = 3
-    groups = {}
-    for row in rows:
-        groups.setdefault((row['share_code'], row['receive_code']), []).append(row)
-    keys = list(groups)
-    started = time.time()
-    engine._share_check_progress = {'started_at': started, 'total': len(rows), 'processed': 0, 'alive': 0, 'dead': 0, 'skipped': 0, 'scope': scope,
-                                    'total_shares': len(keys), 'checked_shares': 0, 'concurrency': concurrency}
-
-    def detail(row, status, reason):
-        if len(details) < 200:
-            details.append({'id': row['id'], 'name': row['name'] or '', 'path': row['strm_path'] or '', 'status': status, 'reason': reason})
-
-    async def process_group(share_key, group_rows):
-        nonlocal alive, skipped
-        for row in group_rows:
-            engine._share_check_progress.update(processed=alive + len(dead) + skipped, alive=alive, dead=len(dead), skipped=skipped)
-            try:
-                share_state, observed_at = status_cache[share_key]
-                if share_state == 'accessible':
-                    alive += 1
-                    with store.db:
-                        store.db.execute('DELETE FROM share_check_candidates WHERE id=?', (row['id'],))
-                    continue
-                if share_state != 'cancelled':
-                    skipped += 1
-                    detail(row, 'unknown', '分享状态未能确认，已保留')
-                    continue
-                # 两次独立检测至少间隔 5 分钟；记录只保存身份摘要，不保存分享码。
-                identity = hashlib.sha256(json.dumps([row['share_code'], row['receive_code'], row['file_id']],
-                                                      ensure_ascii=False).encode()).hexdigest()
-                candidate = store.db.execute('SELECT identity, first_at FROM share_check_candidates WHERE id=?', (row['id'],)).fetchone()
-                if not candidate or candidate['identity'] != identity or observed_at - candidate['first_at'] < 0:
-                    with store.db:
-                        store.db.execute('INSERT OR REPLACE INTO share_check_candidates VALUES (?,?,?,?)',
-                                         (row['id'], identity, observed_at, observed_at))
-                    skipped += 1
-                    detail(row, 'pending', '115 返回分享取消，至少 5 分钟后再次检测确认；本地文件已保留')
-                    continue
-                if observed_at - candidate['first_at'] < 300:
-                    skipped += 1
-                    detail(row, 'pending', '距离首次核验不足 5 分钟，暂不清理')
-                    continue
-                # Check the live row under the publication lock after the network
-                # wait: a concurrent organiser may have changed or moved it.
-                async with engine.publication_gate:
-                    current = store.db.execute(
-                        'SELECT id,share_code,receive_code,file_id,strm_path,revoked FROM share_strms WHERE id=?',
-                        (row['id'],)).fetchone()
-                    fields = ('id', 'share_code', 'receive_code', 'file_id', 'strm_path')
-                    if not current or current['revoked'] or any(current[k] != row[k] for k in fields):
-                        skipped += 1
-                        detail(row, 'unknown', '检查期间条目发生变化，已保留')
-                        continue
-                    path = _verified_share_strm(root, current['strm_path'], current['id'])
-                    if path is None:
-                        skipped += 1
-                        detail(row, 'unknown', '本地 STRM 归属无法确认，已保留')
-                        store.event('share_check', '失效分享的本地文件归属无法确认，已保留并跳过。')
-                        continue
-                    # Remove the STRM and its own sidecars; the directory-level
-                    # sidecars are cleared only when no other share STRM remains.
-                    try:
-                        purge_strm(path, root)
-                    except (OSError, RuntimeError):
-                        skipped += 1
-                        detail(row, 'unknown', '清理本地文件失败，请检查日志及权限')
-                        continue
-                    with store.db:
-                        changed = store.db.execute(
-                            'DELETE FROM share_strms WHERE id=? AND revoked=0 AND strm_path=?',
-                            (row['id'], row['strm_path'])).rowcount
-                        if changed == 1:
-                            # 死分享的 STRM 和登记一起清掉，不留「已撤销」历史。
-                            store.db.execute(
-                                "DELETE FROM native_media_info_queue WHERE json_extract(target,'$.relative')=?",
-                                (current['strm_path'],))
-                    if changed != 1:
-                        skipped += 1
-                        detail(row, 'unknown', '条目状态已变化，请重新检查')
-                        continue
-                    with store.db:
-                        store.db.execute('DELETE FROM share_check_candidates WHERE id=?', (row['id'],))
-                    dead.append({'id': row['id'], 'name': row['name'] or '', 'strm_path': row['strm_path']})
-                    detail(row, 'dead', '两次检测均确认分享已取消，本地文件已清理')
-            except Exception:
-                skipped += 1
-                detail(row, 'unknown', '请求异常，无法确认分享状态')
-                continue
-    async def check_shares(iterator):
-        for key in iterator:
-            try:
-                state = await engine.cloud.share_availability(*key)
-            except Exception:
-                state = 'unknown'
-            status_cache[key] = (state, time.time())
-            engine._share_check_progress['checked_shares'] += 1
-            await process_group(key, groups[key])
-
-    iterator = iter(keys)
-    await asyncio.gather(*(check_shares(iterator) for _ in range(min(concurrency, len(keys)))))
-    share_checks = len(status_cache)
-    finished = time.time()
-    report = {'at': finished, 'started_at': started, 'total': len(rows), 'alive': alive,
-              'dead': len(dead), 'skipped': skipped, 'scope': scope, 'share_checks': share_checks, 'concurrency': concurrency, 'details': details,
-              'details_truncated': max(0, len(dead) + skipped - len(details))}
-    history = store.meta_json('share_check_history', []) or []
-    previous = store.meta_json('share_check_last', {}) or {}
-    if not history and previous.get('at'):
-        history = [{**previous, 'total': sum(previous.get(k, 0) for k in ('alive', 'dead', 'skipped')), 'legacy': True, 'details': []}]
-    store.set_meta('share_check_history', ([report] + history)[:20])
-    store.set_meta('share_check_last', {'at': finished, 'alive': alive, 'dead': len(dead), 'skipped': skipped})
-    engine._share_check_progress.update(processed=len(rows), alive=alive, dead=len(dead), skipped=skipped)
-    store.event('share_check', '分享检测完成：可访问 %d 条，失效已清理 %d 条，无法判定 %d 条。' % (alive, len(dead), skipped))
-    return {'alive': alive, 'dead': dead, 'dead_count': len(dead), 'skipped': skipped, 'scope': scope, 'share_checks': share_checks}
-
-
-def pending_count(store):
-    return store.db.execute(
-        "SELECT count(*) FROM share_strms WHERE revoked=0 AND strm_path LIKE ?", (PENDING_NAME + '/%',)).fetchone()[0]
-
-
-def validate_play_token(store, row, token):
-    import hmac
-    import re
-    expected = str(row['token_hash'])
-    hashed = hashlib.sha256(token.encode()).hexdigest()
-    if hmac.compare_digest(expected, hashed):
-        return True
-    # Earlier packages stored the 24-byte token directly. Migrate only after
-    # an exact authenticated legacy token, never accept a hash as a token.
-    if re.fullmatch(r'[0-9a-f]{48}', expected) and hmac.compare_digest(expected, token):
-        with store.db:
-            store.db.execute('UPDATE share_strms SET token_hash=? WHERE id=? AND token_hash=?',
-                             (hashed, row['id'], expected))
-        return True
-    return False
-
-
 async def copy_share_metadata(engine, jid, row, destination, rules):
     import json
     original_stem = Path(row['name']).stem
@@ -1268,43 +1095,6 @@ async def copy_share_metadata(engine, jid, row, destination, rules):
         except (ValueError,httpx.HTTPError,CloudError) as exc:
             if isinstance(exc,CloudError) and exc.code in ('LOGIN_REQUIRED','LOGIN_INVALID'):raise
             engine.store.event('share','附属文件下载未完成，保留已有文件：'+name)
-
-
-def refresh_share_address(store, row, path, base, display_name=None):
-    from urllib.parse import urlsplit,parse_qs
-    from .core import atomic_write
-    try:
-        content=path.read_text(encoding='utf-8');parsed=urlsplit(content.strip())
-        token=parse_qs(parsed.query).get('token',[''])[0]
-        if not share_play_path_matches(parsed.path,row['id']):return False
-        # Caller has a registered pending output. Keep its valid token and only
-        # change the global address inherited by this task.
-        wanted=share_play_url(base, row['id'], display_name or row['name'])
-        if parsed.query:wanted += '?' + parsed.query
-        if content != wanted:atomic_write(path,wanted.encode(),path.parent)
-        return True
-    except (OSError,UnicodeError,ValueError):return False
-
-
-def prune_empty_pending(root):
-    """删掉「分享STRM待整理」下的空目录（自底向上），返回删除数量。
-
-    整理走的路径不止一条（正常发布、未识别转移、洗版丢弃），只在发布成功那一步
-    清父目录会漏掉其余路径，现场就留下一堆空目录。
-    """
-    boundary = Path(root)
-    removed = 0
-    for parent, dirs, _ in os.walk(boundary, topdown=False, followlinks=False):
-        for name in dirs:
-            path = Path(parent) / name
-            if path.is_symlink():
-                continue
-            try:
-                path.rmdir()
-                removed += 1
-            except OSError:
-                pass
-    return removed
 
 
 def cleanup_empty_pending(directory,root):
