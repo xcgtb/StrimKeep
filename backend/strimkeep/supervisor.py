@@ -84,11 +84,12 @@ def heartbeat_stale():
         if not row:
             return True
         # set_meta JSON-encodes values.
-        raw = row[0]
         try:
-            value = json.loads(raw) if raw[:1] in ('"', "'", '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9') else raw
-        except Exception:
-            value = raw
+            value = json.loads(row[0])
+        except (TypeError, ValueError):
+            value = row[0]
+        if isinstance(value, dict):
+            value = value.get('at')
         return time.time() - float(value) > HEARTBEAT_TIMEOUT
     except Exception:
         return False

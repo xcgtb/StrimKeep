@@ -549,3 +549,12 @@ P1 至此完成。下一步进入 P2：MediaServer / Notifier / CloudDrive 适�
 - Worker 启动 organizer lanes / scheduler / deep delete / channels / bot / Emby coverage / media info / housekeeping，写 worker_heartbeat；
 - /health/ready 用 heartbeat 判断后台；
 - 测试用 STRIMKEEP_INLINE_WORKER=1 保留旧链路；全量 1679 passed。
+
+### 3.6.52：可验证的生产模式
+
+- CI 新增 smoke job：真实镜像启动 supervisor+Web+Worker，验证 ready/heartbeat，禁止启动期 Traceback/锁冲突；publish 依赖 test+smoke；
+- Worker 心跳改为 JSON（at / worker_alive / scheduler_alive / lane_faults / closing），/health/ready 检查 lane 故障；
+- 新增 worker_commands 命令队列（migration 5）：share check、STRM rebuild、rollback 由 Worker 执行，Web 只提交并等待；
+- Worker 重启时中断命令重排一次再失败；完成记录 7 天清理；
+- Worker 不可用时 rebuild/rollback 直接 503，不再等待 10 分钟；
+- 后端全量 1686 passed，命令队列定向 6 passed。

@@ -57,6 +57,7 @@ async def check_alive(engine):
     started = time.time()
     engine._share_check_progress = {'started_at': started, 'total': len(rows), 'processed': 0, 'alive': 0, 'dead': 0, 'skipped': 0, 'scope': scope,
                                     'total_shares': len(keys), 'checked_shares': 0, 'concurrency': concurrency}
+    await asyncio.to_thread(store.set_meta, 'share_check_progress', dict(engine._share_check_progress))
 
     def detail(row, status, reason):
         if len(details) < 200:
@@ -66,6 +67,8 @@ async def check_alive(engine):
         nonlocal alive, skipped
         for row in group_rows:
             engine._share_check_progress.update(processed=alive + len(dead) + skipped, alive=alive, dead=len(dead), skipped=skipped)
+            await asyncio.to_thread(store.set_meta, 'share_check_progress',
+                                    dict(engine._share_check_progress))
             try:
                 share_state, observed_at = status_cache[share_key]
                 if share_state == 'accessible':
@@ -146,6 +149,8 @@ async def check_alive(engine):
                 state = 'unknown'
             status_cache[key] = (state, time.time())
             engine._share_check_progress['checked_shares'] += 1
+            await asyncio.to_thread(store.set_meta, 'share_check_progress',
+                                    dict(engine._share_check_progress))
             await process_group(key, groups[key])
 
     iterator = iter(keys)

@@ -5,23 +5,59 @@ coverage. Inventory scheduled scans stay with the Web API installer because
 they depend on app.state functions registered there.
 """
 import asyncio
+import json
 import os
 import signal
 import time
 from pathlib import Path
 
-from . import __version__
+from . import __version__, commands
 from .cloud115 import Cloud115
 from .housekeeping import housekeeping_loop
 from .leases import reap_stale_jobs
 from .media_info_api import inject_loop
 from .network import ServiceHTTP
 from .organizer import Organizer
+from . import share_service
 from .store import Store
 
 
 class _App:
     pass
+
+
+def heartbeat_payload(engine):
+    """Worker health visible to Web: heartbeat alone cannot detect dead lanes."""
+    return {
+        'at': time.time(),
+        'worker_alive': bool(engine.worker and not engine.worker.done()),
+        'scheduler_alive': bool(engine.clock and not engine.clock.done()),
+        'lane_faults': {name: bool(value) for name, value in engine.lane_faults.items()},
+        'closing': bool(engine.closing),
+    }
+
+
+async def command_loop(store, engine, stop):
+    """Consume Web-submitted commands one at a time."""
+    while not stop.is_set():
+        row = await asyncio.to_thread(commands.claim, store)
+        if row is None:
+            await asyncio.sleep(1)
+            continue
+        try:
+            payload = json.loads(row['payload'] or '{}')
+            if row['kind'] == 'share_check':
+                result = await share_service.check_alive(engine)
+            elif row['kind'] == 'strm_rebuild':
+                result = await engine.rebuild.run(dry_run=bool(payload.get('dry_run')))
+            elif row['kind'] == 'strm_rebuild_rollback':
+                result = await engine.rebuild.rollback(payload.get('backup_id') or None)
+            else:
+                raise RuntimeError('未知的后台命令：%s' % row['kind'])
+            await asyncio.to_thread(commands.finish, store, row['id'], result)
+        except Exception as exc:
+            await asyncio.to_thread(commands.finish, store, row['id'], None,
+                                    str(exc)[:300] or type(exc).__name__)
 
 
 async def run_worker():
@@ -58,21 +94,30 @@ async def run_worker():
     app.state.strms = strm_root.resolve()
     app.state.organizer = engine
     engine.start()
+    await asyncio.to_thread(commands.recover_running, store)
     background = [
         asyncio.create_task(engine.emby.coverage_loop()),
         asyncio.create_task(inject_loop(app, store)),
         asyncio.create_task(housekeeping_loop(app, store)),
+        asyncio.create_task(command_loop(store, engine, stop)),
     ]
     store.event('system', f'StrimKeep worker {__version__} started.')
     last_reap = 0.0
+    last_prune = 0.0
     try:
         while not stop.is_set():
-            store.set_meta('worker_heartbeat', time.time())
+            store.set_meta('worker_heartbeat', heartbeat_payload(engine))
             now = time.monotonic()
             if now - last_reap >= 120:
                 last_reap = now
                 try:
                     await asyncio.to_thread(reap_stale_jobs, store)
+                except Exception:
+                    pass
+            if now - last_prune >= 3600:
+                last_prune = now
+                try:
+                    await asyncio.to_thread(commands.prune, store)
                 except Exception:
                     pass
             await asyncio.sleep(5)

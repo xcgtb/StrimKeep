@@ -22,6 +22,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field, ConfigDict
 
 from . import __version__
+from . import commands
 from .cloud115 import Cloud115, CloudError, playback_request
 from .login_clients import LOGIN_CLIENTS, CLIENT_LABELS
 from .playaddr import play115_candidates, play_url, ua_label
@@ -344,11 +345,24 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
     async def ready():
         store.db.execute('SELECT 1').fetchone()
         if getattr(app.state.organizer, 'web_only', False):
-            heartbeat = store.meta('worker_heartbeat')
+            raw = store.meta('worker_heartbeat')
             try:
-                fresh = heartbeat and time.time() - float(heartbeat) < 30
+                heartbeat = json.loads(raw) if raw else None
             except (TypeError, ValueError):
-                fresh = False
+                heartbeat = None
+            if isinstance(heartbeat, dict):
+                try:
+                    fresh = time.time() - float(heartbeat.get('at') or 0) < 30
+                except (TypeError, ValueError):
+                    fresh = False
+                faults = heartbeat.get('lane_faults') or {}
+                if fresh and (heartbeat.get('closing') or any(faults.values())):
+                    raise HTTPException(503, '后台任务车道异常，请检查 Worker 日志。')
+            else:
+                try:
+                    fresh = heartbeat is not None and time.time() - float(heartbeat) < 30
+                except (TypeError, ValueError):
+                    fresh = False
             if not fresh:
                 raise HTTPException(503, '后台 Worker 未就绪，请检查容器日志。')
         else:
@@ -932,10 +946,20 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         - 文件读写走线程池（见 rebuild.Rebuild.run），不再阻塞事件循环：原来
           892 行的同步循环会把播放取链与页面请求一起卡住。
         """
-        try:
-            result = await app.state.organizer.rebuild.run(dry_run=bool(dry_run))
-        except RuntimeError as exc:
-            raise HTTPException(409, str(exc)) from None
+        if getattr(app.state.organizer, 'web_only', False):
+            if not commands.worker_ready(store):
+                raise HTTPException(503, '后台 Worker 未就绪，请稍后再试。')
+            command_id = commands.submit(store, 'strm_rebuild', {'dry_run': bool(dry_run)})
+            result = await commands.wait(store, command_id, timeout=600.0)
+            if result is None:
+                raise HTTPException(504, '重写仍在后台执行，请稍后查看状态。')
+            if isinstance(result, dict) and result.get('failed') and 'message' in result:
+                raise HTTPException(409, str(result.get('message') or '重写失败。'))
+        else:
+            try:
+                result = await app.state.organizer.rebuild.run(dry_run=bool(dry_run))
+            except RuntimeError as exc:
+                raise HTTPException(409, str(exc)) from None
         store.event('strm', '重新整理本地输出（%s）：重写 %d 条，未变 %d 条，缺失 %d 条，失败 %d 条。'
                     % ('预览' if dry_run else '已执行', result['rewritten'], result['unchanged'],
                        result['missing'], result['failed']))
@@ -949,6 +973,20 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
     @app.post('/api/v1/strm/rebuild/rollback', dependencies=[Depends(admin)])
     async def rebuild_rollback(backup_id: int = Query(0, ge=0)):
         """把最近一次（或指定）重建快照的本地字节写回，并同步台账指纹。"""
+        if getattr(app.state.organizer, 'web_only', False):
+            if not commands.worker_ready(store):
+                raise HTTPException(503, '后台 Worker 未就绪，请稍后再试。')
+            command_id = commands.submit(store, 'strm_rebuild_rollback',
+                                         {'backup_id': int(backup_id or 0)})
+            result = await commands.wait(store, command_id, timeout=300.0)
+            if result is None:
+                raise HTTPException(504, '回滚仍在后台执行，请稍后查看状态。')
+            if isinstance(result, dict) and result.get('failed') and 'message' in result:
+                message = str(result.get('message') or '回滚失败。')
+                if '不存在' in message:
+                    raise HTTPException(404, message)
+                raise HTTPException(409, message)
+            return result
         try:
             return await app.state.organizer.rebuild.rollback(backup_id or None)
         except LookupError as exc:

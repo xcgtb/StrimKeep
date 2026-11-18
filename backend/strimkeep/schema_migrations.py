@@ -33,6 +33,21 @@ MIGRATIONS = [
         "DROP TABLE IF EXISTS output_stats",
         "DROP TABLE IF EXISTS media_info_outputs",
     ]),
+    (5, 'Web 与 Worker 命令队列', [
+        "CREATE TABLE IF NOT EXISTS worker_commands("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "kind TEXT NOT NULL,"
+        "payload TEXT NOT NULL DEFAULT '{}',"
+        "state TEXT NOT NULL DEFAULT 'queued',"
+        "attempts INTEGER NOT NULL DEFAULT 0,"
+        "created REAL NOT NULL,"
+        "updated REAL NOT NULL,"
+        "started REAL,"
+        "finished REAL,"
+        "message TEXT NOT NULL DEFAULT '',"
+        "result TEXT NOT NULL DEFAULT '')",
+        "CREATE INDEX IF NOT EXISTS worker_commands_state ON worker_commands(state,id)",
+    ]),
 ]
 
 # 列补丁：表 → [(列名, DDL)]。幂等：先 PRAGMA table_info 再补。

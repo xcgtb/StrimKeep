@@ -15,6 +15,7 @@ from fastapi.responses import RedirectResponse
 from croniter import croniter
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from . import commands
 from . import share_service
 from .strm_options import shared_settings, share_effective_settings, effective
 from .organize_options import OrganizeOptions
@@ -416,21 +417,34 @@ def install_share(app, store, admin):
     @app.get('/api/v1/share/check', dependencies=[Depends(admin)])
     async def share_check_status():
         engine = app.state.organizer
-        task = getattr(engine, '_share_check_task', None)
-        running = bool(task and not task.done())
+        if getattr(engine, 'web_only', False):
+            command = await asyncio.to_thread(commands.running, store, 'share_check')
+            running = bool(command)
+            progress = store.meta_json('share_check_progress', {}) if running else None
+        else:
+            task = getattr(engine, '_share_check_task', None)
+            running = bool(task and not task.done())
+            progress = getattr(engine, '_share_check_progress', None) if running else None
         history = store.meta_json('share_check_history', []) or []
         last = store.meta_json('share_check_last', {}) or None
         if not history and last:
             history = [{**last, 'total': last.get('alive', 0) + last.get('dead', 0) + last.get('skipped', 0), 'legacy': True, 'details': []}]
-        return {'running': running, 'progress': getattr(engine, '_share_check_progress', None) if running else None,
+        return {'running': running, 'progress': progress,
                 'next_at': store.get('share_check_due') or 0, 'history': history}
 
     @app.post('/api/v1/share/check', dependencies=[Depends(admin)])
     async def check_alive(scope: Literal['file', 'share'] | None = None):
         """分享存活检测：业务在 share_service（B08 契约：只有明确失效证据才撤销）。
 
-        0.9.56：改走后台任务，最多等 8 秒。实测 82 个分享串行取链要 41 秒，以前整段
-        压在 HTTP 请求上（页面假死）。小库仍然同步拿到结果；大库返回 pending，
-        跑完照旧写 `share_check` 事件与 meta.share_check_last。
+        生产模式下 Web 只提交命令，由 Worker 执行；测试 inline 模式仍直接运行。
+        最多等 8 秒，小库同步拿到结果，大库返回 pending。
         """
-        return await app.state.organizer.start_share_check(wait=8.0)
+        engine = app.state.organizer
+        if getattr(engine, 'web_only', False):
+            command_id = commands.submit(store, 'share_check', {'scope': scope} if scope else {})
+            result = await commands.wait(store, command_id, timeout=8.0)
+            if result is None:
+                return {'started': True, 'pending': True,
+                        'message': '存活检测已转到后台执行，结果会写入日志中心。'}
+            return result
+        return await engine.start_share_check(wait=8.0)

@@ -671,7 +671,12 @@ class Organizer:
             return
         self.store.set_many({'share_check_due': self.next_share_check_due(mode, hours, cron, now)})
         try:
-            await self.start_share_check(wait=0)
+            if os.environ.get('STRIMKEEP_INLINE_WORKER') == '1':
+                await self.start_share_check(wait=0)
+            else:
+                from . import commands
+                await asyncio.to_thread(commands.submit, self.store, 'share_check',
+                                        {'scheduled': True})
         except Exception as exc:
             self.store.event('share_check', '定时存活检测未完成：%s' % str(exc)[:120])
 

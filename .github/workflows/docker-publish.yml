@@ -59,9 +59,67 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+  smoke:
+    # 生产模式冒烟：构建真实镜像，启动 supervisor + Web + Worker，
+    # 验证 /health/ready、worker heartbeat，且日志没有启动期锁冲突/Traceback。
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          tags: strimkeep:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start container
+        run: |
+          mkdir -p smoke/data smoke/strm
+          docker run -d --name sk-smoke -p 19000:9000 \
+            -v "$PWD/smoke/data:/data" -v "$PWD/smoke/strm:/strm" \
+            -e ADMIN_USERNAME=admin -e ADMIN_PASSWORD=testpassword123 \
+            strimkeep:smoke
+
+      - name: Verify ready and worker heartbeat
+        run: |
+          ok=0
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:19000/health/ready; then ok=1; break; fi
+            sleep 2
+          done
+          if [ "$ok" != "1" ]; then
+            echo "container did not become ready"
+            docker logs sk-smoke
+            exit 1
+          fi
+          docker exec -i sk-smoke python - <<'PY'
+          import sqlite3
+          connection = sqlite3.connect('file:/data/data/state.db?mode=ro', uri=True)
+          row = connection.execute(
+              "SELECT value FROM meta WHERE key='worker_heartbeat'").fetchone()
+          assert row, 'worker heartbeat missing'
+          print('heartbeat', row[0])
+          PY
+          if docker logs sk-smoke 2>&1 | grep -Ei 'Traceback|database is locked|UNIQUE constraint'; then
+            echo "startup log contains a fatal error"
+            docker logs sk-smoke
+            exit 1
+          fi
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f sk-smoke || true
+
   publish:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: test
+    needs: [test, smoke]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
