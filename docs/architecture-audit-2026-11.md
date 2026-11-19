@@ -578,3 +578,8 @@ P1 至此完成。下一步进入 P2：MediaServer / Notifier / CloudDrive 适�
 - 新增 GET /api/v1/system/backups 列表与 /{name} 下载（白名单 + 目录约束）；
 - 修正 last_started_version 读取为 meta_json，避免 JSON 引号导致每次启动都备份；
 - 定向 18 passed（自动备份、保留、恢复往返、拒绝覆盖、篡改、锁重试）。
+
+### 3.6.56：备份管理 UI
+
+- 设置 → API 与备份：列出自动备份（名称/大小/时间），支持单项下载与刷新，空状态提示，注明保留最近 5 份；
+- 前端 33 passed，vue-tsc + vite build 通过；后端无改动。
