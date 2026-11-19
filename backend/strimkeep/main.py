@@ -99,6 +99,14 @@ class DismissUnrecognized(Input):
     item_ids: list[int] = Field(default_factory=list, max_length=200)
 
 
+class ManualMatch(Input):
+    """手动指定 TMDB 作品；整理仍走同一条归档/STRM 链路。"""
+    tmdb_id: int = Field(ge=1, le=2_000_000_000)
+    media_type: str = Field(pattern=r'^(movie|tv)$')
+    season: int | None = Field(default=None, ge=0, le=1000)
+    episode: int | None = Field(default=None, ge=1, le=100000)
+
+
 def base_url(value: str, allow_path=False) -> str:
     p = urlsplit(value)
     try:
@@ -773,6 +781,80 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
                           'recycle': [{'file_id': fid, 'state': action['state'], 'rid': action.get('rid', '')}
                                       for fid, action in plan.get('wash', {}).get('actions', {}).items()]})
         return {'job': job_public(row), 'items': items, 'has_more': len(items) == 100}
+
+    @app.post('/api/v1/organize/jobs/{job_id}/items/{item_id}/manual-match', dependencies=[Depends(admin)])
+    async def manual_match(job_id: int, item_id: int, body: ManualMatch):
+        row = app.state.organizer.job(job_id)
+        if not row:
+            raise HTTPException(404, '任务不存在。')
+        item = store.db.execute(
+            'SELECT * FROM organize_items WHERE id=? AND job_id=?', (item_id, job_id)).fetchone()
+        if not item:
+            raise HTTPException(404, '任务条目不存在。')
+        if row['state'] in ('queued', 'running', 'paused', 'waiting_login'):
+            raise HTTPException(409, '任务仍在进行，请先等待结束或取消后再手动匹配。')
+        source_config = json.loads(row['config'] or '{}')
+        if source_config.get('job_kind', 'organize') != 'organize':
+            raise HTTPException(409, '只有扫描整理任务的未识别项支持手动匹配。')
+        if not ('未识别' in (item['step'] or '') or '未识别' in (item['message'] or '')):
+            raise HTTPException(409, '只有未识别项可以手动匹配。')
+        if body.media_type == 'tv' and (body.season is None or body.episode is None):
+            raise HTTPException(422, '剧集手动匹配需要填写季号和集号。')
+        original = json.loads(item['original'] or '{}')
+        try:
+            current = await app.state.organizer.cloud.file(original['id'])
+        except CloudError as exc:
+            raise HTTPException(409, f'源文件不可访问：{exc}') from exc
+        # 未识别文件可能已被移入未识别目录；以云端当前名称/父目录为准。
+        current = {**original, **{key: value for key, value in current.items() if value is not None}}
+        if original.get('subtitles'):
+            subtitles = []
+            for sub in original['subtitles']:
+                try:
+                    latest = await app.state.organizer.cloud.file(sub['id'])
+                except CloudError:
+                    continue
+                subtitles.append({**sub, **{key: value for key, value in latest.items() if value is not None}})
+            current['subtitles'] = subtitles
+        try:
+            details = await app.state.organizer.tmdb(f'{body.media_type}/{body.tmdb_id}')
+        except CloudError as exc:
+            raise HTTPException(409, f'TMDB 查询失败：{exc}') from exc
+        if int(details.get('id', 0)) != body.tmdb_id:
+            raise HTTPException(409, 'TMDB 返回的作品 ID 与填写值不一致。')
+        title = details.get('title') or details.get('name') or ''
+        year = (details.get('release_date') or details.get('first_air_date') or '')[:4]
+        if not title or not re.fullmatch(r'\d{4}', year):
+            raise HTTPException(409, 'TMDB 作品缺少名称或首映年份，不能生成规范目录。')
+        hint = {
+            'query': title, 'year': int(year), 'media_type': body.media_type,
+            'season': body.season if body.media_type == 'tv' else None,
+            'episode': body.episode if body.media_type == 'tv' else None,
+            'end_episode': body.episode if body.media_type == 'tv' else None,
+            'tmdb_id': body.tmdb_id, 'identity_source': 'manual',
+        }
+        config = dict(source_config)
+        for key in ('repair_only', 'cleanup_only', 'empty_cleanup'):
+            config.pop(key, None)
+        config.update({
+            'only_file_ids': [str(original['id'])],
+            'manual_hint': hint,
+            'manual_source_job': job_id,
+            'manual_source_item': item_id,
+            'origin': 'manual_import',
+            'scheduled': False,
+            # 手动匹配失败时原位保留，避免再次把文件往未识别目录搬。
+            'pending_cid': '',
+        })
+        new_job_id = app.state.organizer.jobs.create(config)
+        app.state.organizer.jobs.insert_item(new_job_id, original['id'], current, state='discovered')
+        app.state.organizer.jobs.set_manifest(new_job_id, 1)
+        app.state.organizer.update_item(
+            item_id, step='已转手动匹配',
+            message=f'已创建手动匹配任务 #{new_job_id}：TMDB {body.tmdb_id}。原任务记录保留。')
+        store.event('organize', f'任务 {job_id} 条目 {item_id}：已创建手动匹配任务 #{new_job_id}。')
+        return {'job': job_public(app.state.organizer.job(new_job_id)),
+                'source_job': job_id, 'source_item': item_id}
 
     @app.post('/api/v1/organize/jobs/{job_id}/dismiss-unrecognized', dependencies=[Depends(admin)])
     async def dismiss_unrecognized(job_id: int, body: DismissUnrecognized):

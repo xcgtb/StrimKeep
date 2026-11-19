@@ -1,4 +1,5 @@
 import asyncio
+import json
 import pytest
 from strimkeep.cloud115 import CloudError
 from test_organize import CONFIG, setup, new_job
@@ -394,4 +395,55 @@ def test_new_tv_batch_stops_if_final_archive_check_unavailable(tmp_path):
         assert engine.job(jid)['state']=='needs_review' and not operations
         assert all(cloud.nodes[str(1000+i)]['parent_id']=='100' for i in range(1,4))
         await http.aclose();store.close()
+    asyncio.run(scenario())
+
+
+
+def test_manual_import_runs_single_unrecognized_file_with_manual_hint(tmp_path):
+    async def scenario():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        cloud.add_video('1000', '完全未知文件名.mkv')
+        config = {
+            **CONFIG, 'notify_emby': False, 'ffprobe_enabled': False,
+            'only_file_ids': ['1000'], 'pending_cid': '', 'scheduled': False,
+            'manual_hint': {'query': '测试电影', 'year': 2024, 'media_type': 'movie',
+                            'tmdb_id': 20, 'identity_source': 'manual'},
+        }
+        jid = new_job(store, config)
+        await engine.run_job(jid)
+        assert engine.job(jid)['state'] == 'completed', dict(engine.job(jid))
+        item = store.db.execute(
+            'SELECT state,plan FROM organize_items WHERE job_id=?', (jid,)).fetchone()
+        assert item['state'] == 'done'
+        plan = json.loads(item['plan'])
+        assert plan['details']['id'] == 20
+        assert plan['hint']['identity_source'] == 'manual'
+        assert cloud.nodes['1000']['parent_id'] != '100'
+        assert len(list((tmp_path / 'strm').rglob('*.strm'))) == 1
+        await http.aclose(); store.close()
+    asyncio.run(scenario())
+
+
+def test_manual_import_tv_hint_uses_manual_season_and_episode(tmp_path):
+    async def scenario():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        cloud.add_video('1000', '完全未知文件名.mkv')
+        config = {
+            **CONFIG, 'notify_emby': False, 'ffprobe_enabled': False,
+            'only_file_ids': ['1000'], 'pending_cid': '', 'scheduled': False,
+            'manual_hint': {'query': '测试剧集', 'year': 2024, 'media_type': 'tv',
+                            'season': 1, 'episode': 3, 'end_episode': 3,
+                            'tmdb_id': 10, 'identity_source': 'manual'},
+        }
+        jid = new_job(store, config)
+        await engine.run_job(jid)
+        assert engine.job(jid)['state'] == 'completed', dict(engine.job(jid))
+        item = store.db.execute(
+            'SELECT state,plan FROM organize_items WHERE job_id=?', (jid,)).fetchone()
+        assert item['state'] == 'done'
+        plan = json.loads(item['plan'])
+        assert plan['details']['id'] == 10
+        assert 'S01E03' in plan['target_name']
+        assert 'Season 1' in plan['relative_path']
+        await http.aclose(); store.close()
     asyncio.run(scenario())

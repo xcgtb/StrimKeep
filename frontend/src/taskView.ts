@@ -20,6 +20,7 @@ export function taskKindLabel(kind: string): string {
 export function taskSourceLabel(job: any): string {
   const config = job.config || {}
   const origin = String(config.origin || '')
+  if (origin === 'manual_import') return '手动匹配'
   if (origin.startsWith('offline:')) return '离线下载'
   if (config.transfer_parent) return '转存后整理'
   if (origin === 'channel') return '频道监控'

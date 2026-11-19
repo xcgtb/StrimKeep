@@ -1365,13 +1365,34 @@ class Organizer:
             raise NeedsReview('TMDB 详情身份不匹配。')
         return details
 
-    async def build_plan(self, job_id, original, diagnostics=None):
+    async def build_plan(self, job_id, original, diagnostics=None, manual=None):
         if original.get('split_reason'):
             raise NeedsReview(original['split_reason'] + '，不按完整视频自动整理。')
-        hint = require_single_episode(parse_name(original['name'], original.get('folder')), original['name'])
-        kind = hint['media_type']
-        with _prepare_measure(diagnostics, '作品识别', self.cloud):
-            details = await self.identify(hint)
+        if manual:
+            # 手动匹配只跳过「文件名 -> TMDB 检索」这一步，后续季集核对、
+            # 洗版、归档、STRM 输出仍走同一条整理链路。
+            hint = dict(manual)
+            hint['identity_source'] = 'manual'
+            require_single_episode(hint, original['name'])
+            kind = hint['media_type']
+            if kind == 'tv' and (hint.get('season') is None or hint.get('episode') is None):
+                raise NeedsReview('手动匹配缺少季号或集号。')
+            if kind == 'tv':
+                hint['end_episode'] = hint.get('end_episode') or hint['episode']
+            with _prepare_measure(diagnostics, '作品识别', self.cloud):
+                details = await self.tmdb(f'{kind}/{hint["tmdb_id"]}')
+            if int(details.get('id', 0)) != int(hint['tmdb_id']):
+                raise NeedsReview('TMDB 返回的作品 ID 与手动匹配不一致。')
+            hint['query'] = hint.get('query') or details.get('title') or details.get('name') or ''
+            if not hint.get('year'):
+                year = (details.get('release_date') or details.get('first_air_date') or '')[:4]
+                if re.fullmatch(r'\d{4}', year):
+                    hint['year'] = int(year)
+        else:
+            hint = require_single_episode(parse_name(original['name'], original.get('folder')), original['name'])
+            kind = hint['media_type']
+            with _prepare_measure(diagnostics, '作品识别', self.cloud):
+                details = await self.identify(hint)
         tmdb_id = details['id']
         episodes = []
         tmdb_missing = []
@@ -2120,7 +2141,12 @@ class Organizer:
                         try:
                             token = _prepare_diagnostics.set(diagnostics)
                             try:
-                                plan = await self.build_plan(job_id, original, diagnostics)
+                                if config.get('manual_hint'):
+                                    plan = await self.build_plan(
+                                        job_id, original, diagnostics,
+                                        manual=config['manual_hint'])
+                                else:
+                                    plan = await self.build_plan(job_id, original, diagnostics)
                             finally:
                                 _prepare_diagnostics.reset(token)
                             break

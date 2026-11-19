@@ -8,6 +8,7 @@ import {reconcileRows} from './taskRows'
 import {taskBucket} from './taskBuckets'
 import {taskKindLabel, taskSourceLabel} from './taskView'
 import DeepDeleteHistory from './DeepDeleteHistory.vue'
+import ManualMatch from './ManualMatch.vue'
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>,embedded?:boolean}>()
 const active=shallowRef<any[]>([]),history=shallowRef<any[]>([]),detail=shallowRef<any>(null),busy=ref(false),error=ref(''),live=ref(false),more=ref(false)
 const offlinePending=ref<any[]>([]),offlineStatusError=ref('')
@@ -24,6 +25,7 @@ const shownActive=computed(()=>active.value.filter(matchTab))
 const shownHistory=computed(()=>history.value.filter(matchTab))
 const bucketCount=(bucket:string)=>allJobs.value.filter(job=>bucketOf(job)===bucket).length
 const itemFilter=ref('all')
+const manualItem=ref<any>(null)
 const itemText=(item:any)=>`${item.step||''} ${item.message||''}`
 const isUnidentified=(item:any)=>/未识别/.test(itemText(item))
 const isFailedItem=(item:any)=>item.state==='review'||/失败|异常|未完成/.test(itemText(item))
@@ -40,6 +42,7 @@ async function control(job:any,action:string){if(action==='cancel'){try{await El
 async function show(id:number,after=0){if(!after)itemFilter.value='all';await run(async()=>{const data=await props.api(`/organize/jobs/${id}?after=${after}`);if(after&&detail.value?.job.id===id)data.items=[...detail.value.items,...data.items];detail.value=data})}
 async function copyName(name:string){if(!navigator.clipboard){ElMessage.warning('浏览器未允许复制，请手动选择文件名。');return}try{await navigator.clipboard.writeText(name);ElMessage.success('文件名已复制，可粘贴到「识别测试」核对。')}catch{ElMessage.warning('复制失败，请手动选择文件名。')}}
 async function dismissUnrecognized(itemIds:number[]=[]){const current=detail.value;if(!current)return;const jobId=current.job.id;try{await ElMessageBox.confirm('只把未识别项标记为已跳过，不删除文件；文件仍在原目录或未识别目录。其他失败项不会被忽略。','人工处理未识别项',{confirmButtonText:'确认忽略',cancelButtonText:'取消'})}catch{return}await run(async()=>{const result=await props.api(`/organize/jobs/${jobId}/dismiss-unrecognized`,'POST',{item_ids:itemIds});ElMessage.success(`已忽略 ${result.dismissed} 项${result.closed?'，任务已结项':''}`);detail.value=await props.api(`/organize/jobs/${jobId}`);await load()})}
+async function manualCreated(){manualItem.value=null;await run(async()=>{if(detail.value)detail.value=await props.api(`/organize/jobs/${detail.value.job.id}`);await load()})}
 function connect(){stream?.close();stream=new EventSource('/api/v1/tasks/events');stream.onopen=()=>live.value=true;stream.addEventListener('tasks',event=>{if(!visible)return;try{const items=JSON.parse((event as MessageEvent).data).items;active.value=reconcileRows(active.value,items.filter(inProgress).sort((a:any,b:any)=>a.id-b.id));const incoming=items.filter((j:any)=>!inProgress(j));const ids=new Set(items.map((j:any)=>j.id));history.value=reconcileRows(history.value,[...incoming,...history.value.filter(j=>!ids.has(j.id))].sort((a,b)=>b.id-a.id));live.value=true}catch{live.value=false}});stream.onerror=()=>live.value=false}
 async function poll(){
   if(!visible||polling||busy.value)return
@@ -148,6 +151,7 @@ usePageActivity(()=>{visible=true;connect();void run(()=>load());timer=setInterv
       <p class="hint wrap">{{item.relative_path}}</p>
       <p v-if="item.message" class="wrap">{{item.message}}</p>
       <div v-if="isUnidentified(item)" class="button-row">
+        <el-button size="small" type="primary" plain :disabled="busy" @click="manualItem=item">手动匹配</el-button>
         <el-button size="small" @click="copyName(item.original_name)">复制文件名</el-button>
         <el-button size="small" type="warning" plain :disabled="busy" @click="dismissUnrecognized([item.id])">忽略此项</el-button>
       </div>
@@ -163,6 +167,7 @@ usePageActivity(()=>{visible=true;connect();void run(()=>load());timer=setInterv
     <el-button v-if="detail.has_more" :disabled="busy" @click="show(detail.job.id,detail.items.at(-1).id)">后续文件</el-button>
   </template>
 </el-drawer>
+<ManualMatch v-if="manualItem&&detail" :api="api" :job-id="detail.job.id" :item="manualItem" @close="manualItem=null" @created="manualCreated"/>
 </template>
 
 <style scoped>

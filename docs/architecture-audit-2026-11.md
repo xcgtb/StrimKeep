@@ -597,3 +597,11 @@ P1 至此完成。下一步进入 P2：MediaServer / Notifier / CloudDrive 适�
 - 新增复制文件名与「忽略此项」操作，复制后可直接到「识别测试」核对；
 - 新增 POST /api/v1/organize/jobs/{job_id}/dismiss-unrecognized：只处理带「未识别」标记的条目，标记为 skipped，不删除/移动云端文件；partial/needs_review 且无其他未完成项时自动结项；
 - 进行中的任务拒绝该操作，避免与 Worker 抢写；test_app 18 passed，前端测试 + build 通过。
+
+### 3.6.59：手动指定 TMDB 重跑（Sonarr Manual Import 完整切片）
+
+- 任务详情未识别项新增「手动匹配」弹窗：TMDB 搜索、电影/剧集选择、剧集季号/集号；
+- 新增 POST /api/v1/organize/jobs/{job_id}/items/{item_id}/manual-match：校验未识别标记与任务终态，读取云端当前文件名/父目录并刷新字幕身份，创建只含该文件的整理任务；
+- 新任务配置 only_file_ids + manifest=1 + manual_hint，复用原归档、洗版、STRM、Emby 通知链路；manual_hint 只跳过文件名检索，仍执行源文件核对、目标冲突与发布核查；
+- 原任务条目只写「已转手动匹配」说明，不删除/移动文件；手动匹配失败时原位保留（pending_cid 清空）；
+- test_app 20 passed；test_batch_organize 新增电影/剧集两条完整链路测试；全量 1704 passed，4 skipped。

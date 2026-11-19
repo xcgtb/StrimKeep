@@ -380,3 +380,83 @@ def test_dismiss_unrecognized_items_closes_job(app, client):
         'SELECT state,step FROM organize_items WHERE job_id=?', (job_id,)).fetchone()
     assert item['state'] == 'skipped'
     assert item['step'] == '人工忽略未识别'
+
+
+def test_manual_match_creates_single_file_job(app, client, monkeypatch):
+    jobs = app.state.store.jobs
+    job_id = jobs.create({
+        'job_kind': 'organize', 'source_cids': ['1'], 'archive_cid': '2',
+        'pending_cid': '3', 'retries': 0, 'retry_interval': 0,
+        'upgrade_policy': {'mode': 'archive'}, 'strm_options': {},
+        'classify_enabled': False,
+    }, state='queued')
+    jobs.insert_item(job_id, 'file-1', {
+        'id': 'file-1', 'name': 'unknown.mkv', 'parent_id': '1', 'size': 123},
+        state='discovered')
+    item = app.state.store.db.execute(
+        'SELECT * FROM organize_items WHERE job_id=?', (job_id,)).fetchone()
+    jobs.update_item(item['id'], state='review', step='未识别：无法识别',
+                     message='缺少可确认的标题或年份。')
+    jobs.update(job_id, state='partial')
+
+    async def fake_tmdb(path, params=None):
+        assert path == 'movie/603'
+        return {'id': 603, 'title': '黑客帝国', 'release_date': '1999-03-31'}
+
+    monkeypatch.setattr(app.state.organizer, 'tmdb', fake_tmdb)
+    response = client.post(
+        f'/api/v1/organize/jobs/{job_id}/items/{item["id"]}/manual-match',
+        json={'tmdb_id': 603, 'media_type': 'movie'})
+    assert response.status_code == 200, response.text
+    data = response.json()
+    new_id = data['job']['id']
+    assert new_id != job_id
+    new_job = app.state.store.db.execute(
+        'SELECT * FROM organize_jobs WHERE id=?', (new_id,)).fetchone()
+    config = json.loads(new_job['config'])
+    assert config['only_file_ids'] == ['file-1']
+    assert config['manual_hint']['tmdb_id'] == 603
+    assert config['manual_hint']['identity_source'] == 'manual'
+    assert config['pending_cid'] == ''
+    assert new_job['manifest'] == 1
+    rows = app.state.store.db.execute(
+        'SELECT * FROM organize_items WHERE job_id=?', (new_id,)).fetchall()
+    assert len(rows) == 1
+    assert rows[0]['state'] == 'discovered'
+    source = app.state.store.db.execute(
+        'SELECT step FROM organize_items WHERE id=?', (item['id'],)).fetchone()
+    assert source['step'] == '已转手动匹配'
+
+
+def test_build_plan_uses_manual_hint_without_identify(app, client, monkeypatch):
+    organizer = app.state.organizer
+    job_id = organizer.jobs.create({
+        'job_kind': 'organize', 'source_cids': ['1'], 'archive_cid': '2',
+        'pending_cid': '', 'retries': 0, 'retry_interval': 0,
+        'upgrade_policy': {'mode': 'archive'}, 'strm_options': {},
+        'ffprobe_enabled': False, 'classify_enabled': False,
+        'rename_enabled': True, 'folder_language': 'zh', 'filename_language': 'zh',
+    }, state='running')
+
+    async def fake_tmdb(path, params=None):
+        assert path == 'movie/603'
+        return {'id': 603, 'title': '黑客帝国', 'release_date': '1999-03-31'}
+
+    async def fake_file(file_id):
+        return {'id': file_id, 'name': '测试视频.mkv', 'parent_id': '1', 'size': 123}
+
+    async def fail_identify(hint):
+        raise AssertionError('手动匹配不应再走文件名 TMDB 检索')
+
+    monkeypatch.setattr(organizer, 'tmdb', fake_tmdb)
+    monkeypatch.setattr(organizer, 'identify', fail_identify)
+    monkeypatch.setattr(organizer.cloud, 'file', fake_file)
+    original = {'id': 'file-1', 'name': '测试视频.mkv', 'parent_id': '1', 'size': 123}
+    plan = asyncio.run(organizer.build_plan(
+        job_id, original,
+        manual={'query': '黑客帝国', 'year': 1999, 'media_type': 'movie',
+                'tmdb_id': 603, 'identity_source': 'manual'}))
+    assert plan['details']['id'] == 603
+    assert plan['hint']['identity_source'] == 'manual'
+    assert '黑客帝国' in plan['target_name']
+    assert plan['media_origin'] == 'filename'
