@@ -590,3 +590,10 @@ P1 至此完成。下一步进入 P2：MediaServer / Notifier / CloudDrive 适�
 - 每项 ok/warn/error + 明细 + 去处理页面；10 秒缓存，不做外网实时请求；
 - 前端新增系统健康页，侧边栏运行与系统入口，30 秒自动刷新；
 - test_app 17 passed，前端 38 passed + build。
+
+### 3.6.58：未识别项人工处理（Sonarr Manual Import 模式，安全切片）
+
+- 任务详情新增结果筛选：全部 / 未识别 / 失败 / 已处理；未识别项单独显示原因和原始文件名；
+- 新增复制文件名与「忽略此项」操作，复制后可直接到「识别测试」核对；
+- 新增 POST /api/v1/organize/jobs/{job_id}/dismiss-unrecognized：只处理带「未识别」标记的条目，标记为 skipped，不删除/移动云端文件；partial/needs_review 且无其他未完成项时自动结项；
+- 进行中的任务拒绝该操作，避免与 Worker 抢写；test_app 18 passed，前端测试 + build 通过。

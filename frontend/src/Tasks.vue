@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {computed,ref,shallowRef} from 'vue'
-import {ElMessageBox} from 'element-plus'
+import {ElMessage,ElMessageBox} from 'element-plus'
 import {mergeTaskDetail} from './taskDetails'
 import {taskPresentation,taskStatus} from './taskPresentation'
 import {usePageActivity} from './pageActivity'
@@ -23,12 +23,23 @@ const matchTab=(job:any)=>tab.value==='all'||bucketOf(job)===tab.value
 const shownActive=computed(()=>active.value.filter(matchTab))
 const shownHistory=computed(()=>history.value.filter(matchTab))
 const bucketCount=(bucket:string)=>allJobs.value.filter(job=>bucketOf(job)===bucket).length
+const itemFilter=ref('all')
+const itemText=(item:any)=>`${item.step||''} ${item.message||''}`
+const isUnidentified=(item:any)=>/未识别/.test(itemText(item))
+const isFailedItem=(item:any)=>item.state==='review'||/失败|异常|未完成/.test(itemText(item))
+const isDoneItem=(item:any)=>['done','skipped','archived','recycled'].includes(item.state)
+const unidentifiedItems=computed(()=>detail.value?.items.filter(isUnidentified)||[])
+const failedItems=computed(()=>detail.value?.items.filter(isFailedItem)||[])
+const doneItems=computed(()=>detail.value?.items.filter(isDoneItem)||[])
+const detailItems=computed(()=>{const items=detail.value?.items||[];if(itemFilter.value==='unidentified')return items.filter(isUnidentified);if(itemFilter.value==='failed')return items.filter(isFailedItem);if(itemFilter.value==='done')return items.filter(isDoneItem);return items})
 async function loadOffline(){try{const o=await props.api('/offline/submissions?limit=50');offlinePending.value=(o.items||[]).filter((x:any)=>['submitting','submitted'].includes(x.state));offlineStatusError.value=''}catch{offlineStatusError.value='离线下载状态暂时无法读取'}}
 async function load(older=false){const before=older&&history.value.length?'?before='+history.value.at(-1).id:'';const data=await props.api('/tasks'+before);active.value=reconcileRows(active.value,data.active);history.value=reconcileRows(history.value,older?[...history.value,...data.history]:data.history);more.value=data.has_more;await loadOffline()}
 async function run(fn:()=>Promise<void>){if(busy.value)return;busy.value=true;error.value='';try{await fn()}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
 function fmtAgo(ts:number){if(!ts)return '';const diff=Date.now()/1000-ts;if(diff<60)return '刚刚';if(diff<3600)return Math.floor(diff/60)+' 分钟前';if(diff<86400)return Math.floor(diff/3600)+' 小时前';const d=new Date(ts*1000);return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`}
 async function control(job:any,action:string){if(action==='cancel'){try{await ElMessageBox.confirm('取消后保留已完成步骤，在途操作会先核查结果。','取消任务')}catch{return}}await run(async()=>{await props.api(`/organize/jobs/${job.id}/${action}`,'POST');await load()})}
-async function show(id:number,after=0){await run(async()=>{const data=await props.api(`/organize/jobs/${id}?after=${after}`);if(after&&detail.value?.job.id===id)data.items=[...detail.value.items,...data.items];detail.value=data})}
+async function show(id:number,after=0){if(!after)itemFilter.value='all';await run(async()=>{const data=await props.api(`/organize/jobs/${id}?after=${after}`);if(after&&detail.value?.job.id===id)data.items=[...detail.value.items,...data.items];detail.value=data})}
+async function copyName(name:string){if(!navigator.clipboard){ElMessage.warning('浏览器未允许复制，请手动选择文件名。');return}try{await navigator.clipboard.writeText(name);ElMessage.success('文件名已复制，可粘贴到「识别测试」核对。')}catch{ElMessage.warning('复制失败，请手动选择文件名。')}}
+async function dismissUnrecognized(itemIds:number[]=[]){const current=detail.value;if(!current)return;const jobId=current.job.id;try{await ElMessageBox.confirm('只把未识别项标记为已跳过，不删除文件；文件仍在原目录或未识别目录。其他失败项不会被忽略。','人工处理未识别项',{confirmButtonText:'确认忽略',cancelButtonText:'取消'})}catch{return}await run(async()=>{const result=await props.api(`/organize/jobs/${jobId}/dismiss-unrecognized`,'POST',{item_ids:itemIds});ElMessage.success(`已忽略 ${result.dismissed} 项${result.closed?'，任务已结项':''}`);detail.value=await props.api(`/organize/jobs/${jobId}`);await load()})}
 function connect(){stream?.close();stream=new EventSource('/api/v1/tasks/events');stream.onopen=()=>live.value=true;stream.addEventListener('tasks',event=>{if(!visible)return;try{const items=JSON.parse((event as MessageEvent).data).items;active.value=reconcileRows(active.value,items.filter(inProgress).sort((a:any,b:any)=>a.id-b.id));const incoming=items.filter((j:any)=>!inProgress(j));const ids=new Set(items.map((j:any)=>j.id));history.value=reconcileRows(history.value,[...incoming,...history.value.filter(j=>!ids.has(j.id))].sort((a,b)=>b.id-a.id));live.value=true}catch{live.value=false}});stream.onerror=()=>live.value=false}
 async function poll(){
   if(!visible||polling||busy.value)return
@@ -120,11 +131,26 @@ usePageActivity(()=>{visible=true;connect();void run(()=>load());timer=setInterv
     <p v-if="taskPresentation(detail.job).summary" class="wrap">{{taskPresentation(detail.job).summary}}</p>
     <p v-for="note in taskPresentation(detail.job).notes" :key="note" class="wrap">{{note}}</p>
     <details v-if="detail.job.message" class="task-extra"><summary>技术详情</summary><p class="wrap">{{detail.job.message}}</p></details>
-    <div v-for="item in detail.items" :key="item.id" class="job-card">
+    <div class="button-row">
+      <el-radio-group v-model="itemFilter" size="small" aria-label="处理结果筛选">
+        <el-radio-button value="all">全部 {{detail.items.length}}</el-radio-button>
+        <el-radio-button value="unidentified">未识别 {{unidentifiedItems.length}}</el-radio-button>
+        <el-radio-button value="failed">失败 {{failedItems.length}}</el-radio-button>
+        <el-radio-button value="done">已处理 {{doneItems.length}}</el-radio-button>
+      </el-radio-group>
+      <el-button v-if="unidentifiedItems.length" type="warning" plain :disabled="busy" @click="dismissUnrecognized()">忽略未识别并结项</el-button>
+    </div>
+    <p v-if="unidentifiedItems.length" class="hint">忽略只把未识别项标记为已跳过，不删除文件；文件仍在原目录或未识别目录。需要重新识别时先复制文件名到「识别测试」核对。</p>
+    <el-empty v-if="!detailItems.length" description="这个筛选下没有条目" :image-size="56"/>
+    <div v-for="item in detailItems" :key="item.id" class="job-card">
       <h3 class="wrap">{{item.original_name}}</h3><el-tag>{{item.step}}</el-tag>
       <p v-if="item.target_name" class="wrap">{{item.target_name}}</p>
       <p class="hint wrap">{{item.relative_path}}</p>
       <p v-if="item.message" class="wrap">{{item.message}}</p>
+      <div v-if="isUnidentified(item)" class="button-row">
+        <el-button size="small" @click="copyName(item.original_name)">复制文件名</el-button>
+        <el-button size="small" type="warning" plain :disabled="busy" @click="dismissUnrecognized([item.id])">忽略此项</el-button>
+      </div>
       <details class="task-extra"><summary>文件与洗版详情</summary>
         <p>文件 ID {{item.file_id}}</p>
         <p v-if="item.cloud_parts?.length">115 归档：{{item.cloud_parts.join(' / ')}}</p>

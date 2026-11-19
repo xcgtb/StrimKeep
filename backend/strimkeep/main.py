@@ -94,6 +94,11 @@ class OrganizeConfig(OrganizeOptions, Input):
     wash_enabled: bool = True
 
 
+class DismissUnrecognized(Input):
+    """人工确认未识别项：只改任务记录，不碰云端文件。"""
+    item_ids: list[int] = Field(default_factory=list, max_length=200)
+
+
 def base_url(value: str, allow_path=False) -> str:
     p = urlsplit(value)
     try:
@@ -768,6 +773,41 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
                           'recycle': [{'file_id': fid, 'state': action['state'], 'rid': action.get('rid', '')}
                                       for fid, action in plan.get('wash', {}).get('actions', {}).items()]})
         return {'job': job_public(row), 'items': items, 'has_more': len(items) == 100}
+
+    @app.post('/api/v1/organize/jobs/{job_id}/dismiss-unrecognized', dependencies=[Depends(admin)])
+    async def dismiss_unrecognized(job_id: int, body: DismissUnrecognized):
+        row = app.state.organizer.job(job_id)
+        if not row:
+            raise HTTPException(404, '任务不存在。')
+        if row['state'] in ('queued', 'running', 'paused', 'waiting_login'):
+            raise HTTPException(409, '任务仍在进行，请先等待结束或取消后再人工处理未识别项。')
+        # 只允许处理明确带「未识别」标记的条目，避免把其他失败项一并吞掉。
+        sql = ("SELECT * FROM organize_items WHERE job_id=? "
+               "AND (step LIKE '%未识别%' OR message LIKE '%未识别%')")
+        params: list = [job_id]
+        if body.item_ids:
+            marks = ','.join('?' for _ in body.item_ids)
+            sql += f' AND id IN ({marks})'
+            params.extend(body.item_ids)
+        items = store.db.execute(sql + ' ORDER BY id', tuple(params)).fetchall()
+        if not items:
+            raise HTTPException(409, '没有可忽略的未识别项。')
+        for item in items:
+            app.state.organizer.update_item(
+                item['id'], state='skipped', step='人工忽略未识别',
+                message='人工确认：未识别项不再处理，原文件保留。')
+        closed = False
+        if row['state'] in ('partial', 'needs_review'):
+            remaining = store.db.execute(
+                "SELECT count(*) FROM organize_items WHERE job_id=? "
+                "AND state IN ('review','pending','planned','discovered')", (job_id,)).fetchone()[0]
+            if not remaining:
+                app.state.organizer.jobs.close(job_id, '人工忽略未识别项后结项')
+                closed = True
+        store.event('organize', f'任务 {job_id}：人工忽略 {len(items)} 个未识别项'
+                    + ('并结项。' if closed else '。'))
+        return {'dismissed': len(items), 'closed': closed,
+                'job': job_public(app.state.organizer.job(job_id))}
 
     @app.post('/api/v1/organize/jobs/{job_id}/{action}', dependencies=[Depends(admin)])
     async def organize_control(job_id: int, action: str):
