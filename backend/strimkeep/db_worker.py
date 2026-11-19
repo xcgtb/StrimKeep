@@ -46,16 +46,30 @@ class Pool:
                 raise RuntimeError('database worker overloaded: %s' % self.name)
             self.queued += 1
         context = copy_context()
-        future = executor.submit(context.run, operation)
+        started = {'value': False}
+
+        def execute():
+            with self.lock:
+                if not started['value']:
+                    started['value'] = True
+                    self.queued = max(0, self.queued - 1)
+                    self.running += 1
+            try:
+                return context.run(operation)
+            finally:
+                with self.lock:
+                    self.running = max(0, self.running - 1)
+
+        future = executor.submit(execute)
         wrapped = loop.create_future()
 
         def complete(done):
             def publish():
                 with self.lock:
-                    if self.queued > 0:
-                        self.queued -= 1
-                    else:
-                        self.running = max(0, self.running - 1)
+                    if not started['value']:
+                        # Cancelled before a worker thread picked it up.
+                        started['value'] = True
+                        self.queued = max(0, self.queued - 1)
                 if done.cancelled():
                     wrapped.cancel()
                 elif done.exception():

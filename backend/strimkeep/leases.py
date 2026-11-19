@@ -6,7 +6,7 @@ writes may have happened); it is moved to needs_review for explicit recovery.
 """
 import time
 
-STALE_SECONDS = 30 * 60
+STALE_SECONDS = 2 * 60 * 60
 
 
 def reap_stale_jobs(store, now=None, timeout=STALE_SECONDS):

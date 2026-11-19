@@ -239,6 +239,12 @@ class Jobs:
             self.store.db.execute(
                 'UPDATE organize_items SET ' + ','.join(key + '=?' for key in values) + ' WHERE id=?',
                 (*values.values(), item_id))
+            # Keep the job lease fresh while items progress; otherwise a long
+            # batch looks "stale" to the lease reaper even though it is working.
+            self.store.db.execute(
+                'UPDATE organize_jobs SET updated=? WHERE state=? AND id=('
+                'SELECT job_id FROM organize_items WHERE id=?)',
+                (time.time(), 'running', item_id))
         return True
 
     def set_item_plan(self, item_id, plan):

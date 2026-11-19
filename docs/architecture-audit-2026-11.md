@@ -558,3 +558,10 @@ P1 至此完成。下一步进入 P2：MediaServer / Notifier / CloudDrive 适�
 - Worker 重启时中断命令重排一次再失败；完成记录 7 天清理；
 - Worker 不可用时 rebuild/rollback 直接 503，不再等待 10 分钟；
 - 后端全量 1686 passed，命令队列定向 6 passed。
+
+### 3.6.53：Web 零后台循环
+
+- inventory 定时扫描迁 Worker：私有 FastAPI app 复用 install_inventory / install_inventory_operations 闭包，不复制业务；生产 Web 不再启动任何后台循环；
+- Jobs.update_item 每次条目进展刷新任务 updated，租约超时 30 分钟→2 小时，长批次不再误伤；
+- DbWorker running 计数修正，/metrics 暴露 queued/running/capacity/rejected（interactive/background 分池）；
+- 定向 77 passed；临时容器 Web→Worker 启动顺序正常、ready 503→200、无 Traceback。

@@ -205,10 +205,10 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         settled = store.reconcile_terminal_items()
         if settled:
             store.event('system', '启动自检：%d 条遗留条目已归一到「跳过」（所属任务已结束）。' % settled)
-        # Inventory scans depend on API installers, so Web keeps them. Other long
-        # loops are owned by strimkeep.worker in production; tests use inline mode.
-        app.state.inventory_scan_task = asyncio.create_task(app.state.inventory_scan_loop())
+        # Production Web runs no background loops; Worker owns inventory scans,
+        # coverage, media info and housekeeping. Tests inline everything.
         if getattr(app.state.organizer, 'web_only', False) is False:
+            app.state.inventory_scan_task = asyncio.create_task(app.state.inventory_scan_loop())
             app.state.coverage_task = asyncio.create_task(app.state.organizer.emby.coverage_loop())
             app.state.media_info_task = asyncio.create_task(inject_loop(app, store))
             app.state.housekeep_task = asyncio.create_task(housekeeping_loop(app, store))

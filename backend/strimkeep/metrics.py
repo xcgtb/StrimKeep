@@ -214,6 +214,21 @@ class Metrics:
             add('strimkeep_share_check_timestamp', share['at'],
                 'Unix time of the last share alive check')
 
+        worker = getattr(app.state, 'db_worker', None)
+        if worker is not None:
+            stats = worker.stats()
+            for pool_name in ('interactive', 'background'):
+                pool = stats.get(pool_name) or {}
+                add('strimkeep_db_worker_queued', pool.get('queued', 0),
+                    'Synchronous DB tasks waiting in a pool', labels={'pool': pool_name})
+                add('strimkeep_db_worker_running', pool.get('running', 0),
+                    'Synchronous DB tasks running in a pool', labels={'pool': pool_name})
+                add('strimkeep_db_worker_capacity', pool.get('capacity', 0),
+                    'Maximum in-flight tasks for a pool', labels={'pool': pool_name})
+                add('strimkeep_db_worker_rejected_total', pool.get('rejected', 0),
+                    'DB tasks rejected because a pool was full', 'counter',
+                    labels={'pool': pool_name})
+
         for (method, route, status), count in sorted(self.http.items()):
             add('strimkeep_http_requests_total', count,
                 'HTTP requests by method, route template and status',

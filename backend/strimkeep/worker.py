@@ -11,6 +11,8 @@ import signal
 import time
 from pathlib import Path
 
+from fastapi import FastAPI
+
 from . import __version__, commands
 from .cloud115 import Cloud115
 from .housekeeping import housekeeping_loop
@@ -35,6 +37,30 @@ def heartbeat_payload(engine):
         'lane_faults': {name: bool(value) for name, value in engine.lane_faults.items()},
         'closing': bool(engine.closing),
     }
+
+
+def inventory_app(store, engine, strm_root, http):
+    """Build the inventory installers without serving HTTP.
+
+    Scheduled governance scans live in install_inventory(), so the Worker needs
+    the same closures. A private FastAPI app gives them app.state without
+    duplicating the scan/plan logic.
+    """
+    private = FastAPI()
+    private.state.store = store
+    private.state.strms = strm_root
+    private.state.organizer = engine
+    private.state.http = http
+    private.state.cloud = engine.cloud
+
+    async def admin():
+        return True
+
+    from .inventory_api import install_inventory
+    from .inventory_operations_api import install_inventory_operations
+    install_inventory(private, store, admin)
+    install_inventory_operations(private, store, admin)
+    return private
 
 
 async def command_loop(store, engine, stop):
@@ -95,11 +121,13 @@ async def run_worker():
     app.state.organizer = engine
     engine.start()
     await asyncio.to_thread(commands.recover_running, store)
+    scan_app = inventory_app(store, engine, strm_root.resolve(), http)
     background = [
         asyncio.create_task(engine.emby.coverage_loop()),
         asyncio.create_task(inject_loop(app, store)),
         asyncio.create_task(housekeeping_loop(app, store)),
         asyncio.create_task(command_loop(store, engine, stop)),
+        asyncio.create_task(scan_app.state.inventory_scan_loop()),
     ]
     store.event('system', f'StrimKeep worker {__version__} started.')
     last_reap = 0.0
