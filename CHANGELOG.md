@@ -2,6 +2,11 @@
 
 每个版本的完整说明在 [`docs/releases/`](docs/releases/)。GitHub Release 使用同一份内容。
 
+## 未发布
+
+- 前端 API 客户端测试：GET 去重、CSRF、401、超时、非 JSON 响应；
+- 后端 Worker 命令分发测试：share_check、STRM rebuild、rollback、失败记录。
+
 ## 3.6.56
 
 - 设置页新增自动备份列表、单项下载与刷新；注明保留最近 5 份。
