@@ -13,7 +13,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 from datetime import datetime
 from fastapi import Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -563,6 +563,30 @@ def install_phase5(app,store,admin,job_public):
         return StreamingResponse(
             iter([payload]), media_type='application/zip',
             headers={'Content-Disposition': f'attachment; filename="strimkeep-backup-{stamp}.zip"'})
+
+    @app.get('/api/v1/system/backups',dependencies=[Depends(admin)])
+    async def list_auto_backups():
+        """升级前自动备份列表（最近 5 份）。"""
+        directory = store.root / 'config/backups'
+        if not directory.exists():
+            return {'items': []}
+        items = []
+        for path in sorted(directory.glob('pre-upgrade-*.zip'),
+                           key=lambda item: item.stat().st_mtime, reverse=True):
+            stat = path.stat()
+            items.append({'name': path.name, 'size': stat.st_size, 'at': stat.st_mtime})
+        return {'items': items[:50]}
+
+    @app.get('/api/v1/system/backups/{name}',dependencies=[Depends(admin)])
+    async def download_auto_backup(name: str):
+        """下载指定的升级前自动备份。"""
+        if not re.fullmatch(r'[A-Za-z0-9._-]{1,200}', name) or not name.endswith('.zip'):
+            raise HTTPException(404, '备份不存在。')
+        directory = (store.root / 'config/backups').resolve()
+        path = (directory / name).resolve()
+        if path.parent != directory or not path.is_file():
+            raise HTTPException(404, '备份不存在。')
+        return FileResponse(path, media_type='application/zip', filename=name)
 
     @app.get('/api/v1/system/api-token',dependencies=[Depends(admin)])
     async def get_api_token():

@@ -88,3 +88,33 @@ def test_set_meta_retries_database_locked(tmp_path):
     store.db = None
     assert store.meta_json('retry_probe') == 1
     store.close()
+
+
+def test_store_creates_pre_upgrade_backup(tmp_path):
+    from strimkeep import __version__
+
+    root = tmp_path / 'data'
+    store = Store(root, 'admin', PASSWORD)
+    store.set_meta('last_started_version', '0.0.1')
+    store.close()
+    reopened = Store(root, 'admin', PASSWORD)
+    backups = list((root / 'config' / 'backups').glob('pre-upgrade-*.zip'))
+    assert backups
+    assert reopened.meta_json('last_started_version') == __version__
+    reopened.close()
+
+
+def test_prune_backups_keeps_newest(tmp_path):
+    import os
+
+    directory = tmp_path / 'backups'
+    directory.mkdir()
+    for index in range(7):
+        path = directory / ('pre-upgrade-x-%d.zip' % index)
+        path.write_bytes(b'x')
+        os.utime(path, (1000 + index, 1000 + index))
+    Store._prune_backups(directory, keep=5)
+    remaining = sorted(directory.glob('pre-upgrade-*.zip'))
+    assert len(remaining) == 5
+    assert not (directory / 'pre-upgrade-x-0.zip').exists()
+

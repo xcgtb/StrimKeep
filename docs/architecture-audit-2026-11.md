@@ -571,3 +571,10 @@ P1 至此完成。下一步进入 P2：MediaServer / Notifier / CloudDrive 适�
 - 新增 backup.py：create_backup / restore_backup（SHA-256 校验、拒绝覆盖、integrity_check、核心表检查），HTTP 备份接口复用同一代码；提供 python -m strimkeep.backup CLI；
 - SQLite busy_timeout 5s→15s；set_meta/set_many/event 遇 locked/busy 指数退避重试 5 次；
 - 备份测试覆盖往返恢复、拒绝覆盖、manifest 篡改、锁重试；定向 67 passed。
+
+### 3.6.55：升级前自动备份
+
+- Store 在 schema 迁移前检测 last_started_version，版本变化时生成 config/backups/pre-upgrade-*.zip（文件锁防重复，失败不阻塞启动），保留最近 5 份；
+- 新增 GET /api/v1/system/backups 列表与 /{name} 下载（白名单 + 目录约束）；
+- 修正 last_started_version 读取为 meta_json，避免 JSON 引号导致每次启动都备份；
+- 定向 18 passed（自动备份、保留、恢复往返、拒绝覆盖、篡改、锁重试）。

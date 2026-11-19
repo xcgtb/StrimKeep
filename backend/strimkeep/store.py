@@ -13,6 +13,7 @@ from pathlib import Path
 
 from cryptography.fernet import Fernet
 
+from . import __version__
 from .schema_migrations import apply as apply_migrations
 
 # 启动 schema 的版本号：加表/改表时 +1。Store 初始化会执行（幂等的）建表脚本，
@@ -224,6 +225,8 @@ class Store:
         CREATE INDEX IF NOT EXISTS output_registry_relative_nocase ON output_registry(relative_path COLLATE NOCASE);
         CREATE INDEX IF NOT EXISTS archive_entries_relative_nocase ON archive_entries(relative_path COLLATE NOCASE);
         ''')
+        # 版本变化时先留一份可恢复的快照，再跑迁移；保留最近 5 份。
+        self._auto_backup_before_upgrade()
         # 顺序 schema 迁移：索引、退场表、缺列补齐都在 migrations 里，
         # 启动只调一次；新库一步到位，老库按编号补差。
         apply_migrations(self.db)
@@ -238,6 +241,7 @@ class Store:
         self.crypto = Fernet(key_path.read_bytes().strip())
         os.chmod(key_path, 0o600)
         os.chmod(self.path, 0o600)
+        self.set_meta('last_started_version', __version__)
         version = self.meta('schema_version')
         if version not in ('', '1', SCHEMA_VERSION):
             raise RuntimeError('数据库版本不兼容，已停止写入。')
@@ -578,6 +582,54 @@ class Store:
                 'notifications': max(0, notices), 'sessions': max(0, sessions),
                 'items': max(0, items), 'queue': max(0, queue), 'media_queue': max(0, media_queue),
                 'transfer_secrets': max(0, secrets), 'stale_updates': max(0, stale_updates)}
+
+    @staticmethod
+    def _prune_backups(directory, keep=5):
+        files = sorted(Path(directory).glob('pre-upgrade-*.zip'),
+                       key=lambda item: item.stat().st_mtime, reverse=True)
+        for old in files[keep:]:
+            old.unlink(missing_ok=True)
+
+    def _auto_backup_before_upgrade(self):
+        """Create one pre-upgrade snapshot when the running version changes.
+
+        Runs before schema migrations. A file lock keeps Web and Worker from
+        producing duplicates; failures are logged but never block startup.
+        """
+        try:
+            from . import __version__
+            previous = self.meta_json('last_started_version', '') or ''
+            if not previous or previous == __version__:
+                return
+            directory = self.root / 'config/backups'
+            directory.mkdir(parents=True, exist_ok=True)
+            import fcntl
+            lock_file = (directory / '.lock').open('a')
+            try:
+                fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                lock_file.close()
+                return
+            try:
+                previous = self.meta_json('last_started_version', '') or ''
+                if not previous or previous == __version__:
+                    return
+                from .backup import create_backup
+                payload = create_backup(self)
+                name = 'pre-upgrade-%s-to-%s-%s.zip' % (
+                    previous, __version__, time.strftime('%Y%m%d-%H%M%S'))
+                (directory / name).write_bytes(payload)
+                self.set_meta('last_started_version', __version__)
+                self.event('system', '升级前自动备份已生成：%s' % name)
+                self._prune_backups(directory, keep=5)
+            finally:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+                lock_file.close()
+        except Exception as exc:
+            try:
+                self.event('system', '升级前自动备份失败：%s' % type(exc).__name__)
+            except Exception:
+                pass
 
     def _connect(self):
         """新建一条连接：WAL + 5 秒忙等 + NORMAL 同步，并登记以便统一关闭。
