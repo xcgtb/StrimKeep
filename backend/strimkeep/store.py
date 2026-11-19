@@ -312,11 +312,28 @@ class Store:
         row = self.db.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
         return row['value'] if row else ''
 
+    def _write(self, operation):
+        """Run one short write with retries for cross-process lock contention.
+
+        Web and Worker share the same WAL database. busy_timeout covers most
+        waits; this retry also covers the small window where SQLite returns
+        "database is locked" immediately after a busy timeout.
+        """
+        for attempt in range(5):
+            try:
+                with self.db:
+                    return operation()
+            except sqlite3.OperationalError as exc:
+                message = str(exc).lower()
+                if ('locked' not in message and 'busy' not in message) or attempt == 4:
+                    raise
+                time.sleep(0.05 * (2 ** attempt))
+
     def set_meta(self, key: str, value) -> None:
         """写一条 meta（JSON 序列化）：跨模块共享的小状态都走这里。"""
-        with self.db:
-            self.db.execute('INSERT OR REPLACE INTO meta VALUES(?,?)',
-                            (key, json.dumps(value, ensure_ascii=False)))
+        payload = json.dumps(value, ensure_ascii=False)
+        self._write(lambda: self.db.execute(
+            'INSERT OR REPLACE INTO meta VALUES(?,?)', (key, payload)))
 
     def meta_json(self, key: str, default=None):
         raw = self.meta(key)
@@ -352,10 +369,11 @@ class Store:
         return json.loads(self.crypto.decrypt(row['value'].encode())) if row else default
 
     def set_many(self, values: dict):
-        with self.db:
+        def write():
             for key, value in values.items():
                 encrypted = self.crypto.encrypt(json.dumps(value, ensure_ascii=False).encode()).decode()
                 self.db.execute('INSERT OR REPLACE INTO settings VALUES(?,?)', (key, encrypted))
+        self._write(write)
 
     def forget(self, keys):
         """删掉设置项并返回真正删掉的键（用于"迁移完就清理"的场景）。
@@ -383,8 +401,9 @@ class Store:
 
     def event(self, kind: str, message: str):
         # Callers pass fixed messages, never raw upstream responses or credential values.
-        with self.db:
-            self.db.execute('INSERT INTO events(at,kind,message) VALUES(?,?,?)', (time.time(), kind, message))
+        now = time.time()
+        self._write(lambda: self.db.execute(
+            'INSERT INTO events(at,kind,message) VALUES(?,?,?)', (now, kind, message)))
         self._append_log(kind, message)
 
     def _append_log(self, kind: str, message: str):
@@ -569,7 +588,7 @@ class Store:
         conn = sqlite3.connect(self.path, check_same_thread=False, timeout=10)
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA journal_mode=WAL')
-        conn.execute('PRAGMA busy_timeout=5000')
+        conn.execute('PRAGMA busy_timeout=15000')
         conn.execute('PRAGMA synchronous=NORMAL')
         with self._connections_lock:
             self._connections.append((threading.get_ident(), conn))

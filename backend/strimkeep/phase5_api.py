@@ -556,33 +556,12 @@ def install_phase5(app,store,admin,job_public):
     @app.get('/api/v1/system/backup',dependencies=[Depends(admin)])
     async def download_backup():
         """一致性备份：SQLite VACUUM INTO + 加密密钥 + manifest。"""
-        import hashlib
         from datetime import datetime, timezone
-
+        from .backup import create_backup
         stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-        tmp_dir = store.root / 'config' / '.backup-tmp'
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        db_path = tmp_dir / ('state-' + secrets.token_hex(6) + '.db')
-        try:
-            store.db.execute('VACUUM INTO ?', (str(db_path),))
-            files = [('state.db', db_path)]
-            key_path = store.root / 'config/master.key'
-            if key_path.exists():
-                files.append(('master.key', key_path))
-            buffer = BytesIO()
-            manifest = {'created_at': time.time(), 'version': __version__ if '__version__' in globals() else '',
-                        'files': []}
-            with zipfile.ZipFile(buffer, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
-                for name, path in files:
-                    payload = path.read_bytes()
-                    archive.writestr(name, payload)
-                    manifest['files'].append({'name': name, 'size': len(payload),
-                                              'sha256': hashlib.sha256(payload).hexdigest()})
-                archive.writestr('manifest.json', json.dumps(manifest, ensure_ascii=False, indent=2))
-        finally:
-            db_path.unlink(missing_ok=True)
+        payload = await asyncio.to_thread(create_backup, store)
         return StreamingResponse(
-            iter([buffer.getvalue()]), media_type='application/zip',
+            iter([payload]), media_type='application/zip',
             headers={'Content-Disposition': f'attachment; filename="strimkeep-backup-{stamp}.zip"'})
 
     @app.get('/api/v1/system/api-token',dependencies=[Depends(admin)])

@@ -565,3 +565,9 @@ P1 至此完成。下一步进入 P2：MediaServer / Notifier / CloudDrive 适�
 - Jobs.update_item 每次条目进展刷新任务 updated，租约超时 30 分钟→2 小时，长批次不再误伤；
 - DbWorker running 计数修正，/metrics 暴露 queued/running/capacity/rejected（interactive/background 分池）；
 - 定向 77 passed；临时容器 Web→Worker 启动顺序正常、ready 503→200、无 Traceback。
+
+### 3.6.54：备份恢复与跨进程写重试
+
+- 新增 backup.py：create_backup / restore_backup（SHA-256 校验、拒绝覆盖、integrity_check、核心表检查），HTTP 备份接口复用同一代码；提供 python -m strimkeep.backup CLI；
+- SQLite busy_timeout 5s→15s；set_meta/set_many/event 遇 locked/busy 指数退避重试 5 次；
+- 备份测试覆盖往返恢复、拒绝覆盖、manifest 篡改、锁重试；定向 67 passed。

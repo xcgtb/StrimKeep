@@ -218,7 +218,7 @@ def test_job_public_prefers_summary_columns_and_falls_back_to_payload(tmp_path, 
 def test_store_sets_wal_pragmas(tmp_path):
     store = Store(tmp_path / 'data', 'admin', PASSWORD)
     assert store.db.execute('PRAGMA journal_mode').fetchone()[0].lower() == 'wal'
-    assert store.db.execute('PRAGMA busy_timeout').fetchone()[0] == 5000
+    assert store.db.execute('PRAGMA busy_timeout').fetchone()[0] == 15000
     assert store.db.execute('PRAGMA synchronous').fetchone()[0] == 1     # 1 = NORMAL
 
 
@@ -238,7 +238,7 @@ def test_prune_in_thread_uses_its_own_connection(tmp_path):
     assert result['events'] == 1
     messages = [row[0] for row in store.db.execute('SELECT message FROM events ORDER BY id')]
     assert messages == ['fresh']
-    assert store.db.execute('PRAGMA busy_timeout').fetchone()[0] == 5000
+    assert store.db.execute('PRAGMA busy_timeout').fetchone()[0] == 15000
 
 
 
