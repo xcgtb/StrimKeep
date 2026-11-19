@@ -11,7 +11,7 @@ const SIDEBAR_MENU=[
   {id:'channels',title:'频道监控'},{id:'organize',title:'影视整理'},{id:'recognize',title:'识别测试'},
   {id:'sync',title:'STRM 管理'}]},
  {key:'system',label:'运行与系统',items:[
-  {id:'embyproxy',title:'Emby 反代'},{id:'tasks',title:'任务中心'},{id:'logs',title:'实时日志'},
+  {id:'embyproxy',title:'Emby 反代'},{id:'tasks',title:'任务中心'},{id:'health',title:'系统健康'},{id:'logs',title:'实时日志'},
   {id:'settings',title:'系统设置'}]}]
 const sidebarOrder=ref<Record<string,string[]>>({})
 function loadSidebarOrder(){try{sidebarOrder.value=JSON.parse(localStorage.getItem('sk.sidebar.order')||'{}')||{}}catch{sidebarOrder.value={}}}

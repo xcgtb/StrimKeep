@@ -662,6 +662,8 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
     install_metrics(app, store)
     from .console_api import install_console
     install_console(app, store, admin)
+    from .health_api import install_health
+    install_health(app, store, admin)
     from .transfer_api import install_transfer
     install_transfer(app, store, admin, job_public)
     from .offline_api import install_offline

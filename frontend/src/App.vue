@@ -2,7 +2,7 @@
 import {computed,onMounted,onUnmounted,ref,watch,shallowRef} from 'vue'
 import {useRoute,useRouter} from 'vue-router'
 import {createApi} from './api/client'
-import {Monitor,House,Cloudy,FolderOpened,Refresh,Document,Setting,Menu,Sunny,Moon,SwitchButton,List,Link,Download,Film,Promotion,MagicStick,Search,Share} from '@element-plus/icons-vue'
+import {Monitor,FirstAidKit,House,Cloudy,FolderOpened,Refresh,Document,Setting,Menu,Sunny,Moon,SwitchButton,List,Link,Download,Film,Promotion,MagicStick,Search,Share} from '@element-plus/icons-vue'
 const route=useRoute(),router=useRouter()
 const ready=ref(false),logged=ref(false),csrf=ref(''),username=ref(''),busy=ref(false),error=ref(''),mobile=ref(false),version=ref('—')
 const draft=ref({username:'',password:''})
@@ -20,6 +20,7 @@ const menu=[
  {id:'sync',title:'STRM 管理',icon:Refresh,group:'media'},
  {id:'embyproxy',title:'Emby 反代',icon:Monitor,group:'system'},
  {id:'tasks',title:'任务中心',icon:List,group:'system'},
+ {id:'health',title:'系统健康',icon:FirstAidKit,group:'system'},
  {id:'logs',title:'实时日志',icon:Document,group:'system'},
  {id:'settings',title:'系统设置',icon:Setting,group:'system'},
 ] as const

@@ -583,3 +583,10 @@ P1 至此完成。下一步进入 P2：MediaServer / Notifier / CloudDrive 适�
 
 - 设置 → API 与备份：列出自动备份（名称/大小/时间），支持单项下载与刷新，空状态提示，注明保留最近 5 份；
 - 前端 33 passed，vue-tsc + vite build 通过；后端无改动。
+
+### 3.6.57：系统健康页（Sonarr Health Checks 模式）
+
+- 新增 health_api.py 与 GET /api/v1/system/health：数据库、Worker 心跳/lane、命令队列、数据/STRM 磁盘、自动备份、TMDB/Emby/115 配置、待核查/失败/未读异常；
+- 每项 ok/warn/error + 明细 + 去处理页面；10 秒缓存，不做外网实时请求；
+- 前端新增系统健康页，侧边栏运行与系统入口，30 秒自动刷新；
+- test_app 17 passed，前端 38 passed + build。

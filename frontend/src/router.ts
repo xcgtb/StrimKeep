@@ -16,6 +16,7 @@ const routes: RouteRecordRaw[] = [
   {path: '/emby-proxy', name: 'embyproxy', component: () => import('./EmbyProxy.vue'), meta: {title: 'Emby 反代'}},
   {path: '/tasks', name: 'tasks', component: () => import('./Tasks.vue'), meta: {title: '任务中心'}},
   {path: '/logs', name: 'logs', component: () => import('./Logs.vue'), meta: {title: '实时日志'}},
+  {path: '/health', name: 'health', component: () => import('./SystemHealth.vue'), meta: {title: '系统健康'}},
   {path: '/notifications', name: 'notifications', redirect: {name:'settings',query:{section:'telegram'}}},
   {path: '/settings', name: 'settings', component: () => import('./Settings.vue'),
    meta: {title: '系统设置', tab: 'services'}},

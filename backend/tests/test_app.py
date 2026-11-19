@@ -330,6 +330,8 @@ def test_readiness_detects_stopped_or_recovering_secondary_lane(app, client):
         def done(self): return True
     old=engine.extra_workers
     try:
+
+
         engine.extra_workers=[DeadWorker()]
         assert client.get('/health/ready').status_code==503
         engine.extra_workers=old
@@ -340,3 +342,18 @@ def test_readiness_detects_stopped_or_recovering_secondary_lane(app, client):
     finally:
         engine.extra_workers=old
         engine.lane_faults.clear()
+
+
+def test_system_health_reports_checks(client, app):
+    import time
+    app.state.store.set_meta('worker_heartbeat', {
+        'at': time.time(), 'worker_alive': True, 'scheduler_alive': True,
+        'lane_faults': {}, 'closing': False})
+    response = client.get('/api/v1/system/health')
+    assert response.status_code == 200
+    data = response.json()
+    assert data['overall'] in ('ok', 'warn', 'error')
+    keys = {item['key'] for item in data['checks']}
+    assert {'database', 'worker', 'commands', 'disk_data', 'disk_strm',
+            'backup', 'tmdb', 'emby', 'cloud115', 'failures'} <= keys
+    assert all(item['status'] in ('ok', 'warn', 'error') for item in data['checks'])
