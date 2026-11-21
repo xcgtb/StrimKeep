@@ -23,8 +23,6 @@ const jobState=(state:string)=>({queued:'排队中',running:'进行中',paused:'
 async function load(){if(busy.value)return;busy.value=true;try{data.value=await props.api('/dashboard');error.value=''}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
 function historyName(name:string){return (name||'').replace(/\bis playing\b/i,'开始播放')}
 function fmt(ts?:number){if(!ts)return '—';const d=new Date(ts*1000);const p=(n:number)=>String(n).padStart(2,'0');return `${d.getMonth()+1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`}
-const gb=(n?:number)=>n==null?'—':(n/1024**3).toFixed(0)
-const diskUsed=computed(()=>{const t=data.value?.system?.total_bytes;if(!t)return '—';return Math.round(data.value.system.used_bytes/t*100)+'%'})
 const trendBars=computed(()=>{
   const rows:any[]=data.value?.emby?.trend||[]
   const max=Math.max(1,...rows.map((r:any)=>Number(r.count)||0))
@@ -36,14 +34,6 @@ const hero=computed(()=>[
   {icon:Collection,label:'剧集',value:data.value?.emby?.counts?.SeriesCount,sub:'Emby 媒体库'},
   {icon:Cloudy,label:'115 网盘',value:bytes(cloud.value?.space_used),sub:cloud.value?.space_total?`总容量 ${bytes(cloud.value.space_total)}`:'容量暂不可用'},
   {icon:List,label:'后台任务',value:data.value?.system?.active_tasks,sub:'正在执行或排队'},
-])
-const strip=computed(()=>[
-  {k:'后台任务',v:String(data.value?.system?.active_tasks??0)},
-  {k:'最近任务',v:fmt(data.value?.stats?.last_at)},
-  {k:'调度器',v:data.value?.system?.scheduler_ok?'正常':'异常',warn:!data.value?.system?.scheduler_ok},
-  {k:'115',v:data.value?.system?.['115_configured']?'已配置':'未配置'},
-  {k:'TMDB',v:data.value?.system?.tmdb_configured?'已配置':'未配置'},
-  {k:'Emby',v:data.value?.emby?.connected?'已连接':data.value?.emby?.configured?'连接暂不可用':'未配置',warn:!data.value?.emby?.connected},
 ])
 onMounted(()=>{void load();void loadAux();void loadCloud()});useVisiblePolling(load,20000);useVisiblePolling(loadAux,60000);useVisiblePolling(loadCloud,600000)
 </script>
@@ -77,10 +67,6 @@ onMounted(()=>{void load();void loadAux();void loadCloud()});useVisiblePolling(l
 <div class="overview-duo">
 <section class="panel overview-cloud"><div class="section-title"><div class="section-heading"><el-icon class="section-icon"><Cloudy/></el-icon><h2>115 网盘连接</h2></div><el-button text @click="$emit('navigate','account')">查看网盘 →</el-button></div><template v-if="cloud&&!cloud.error&&cloud.space_total"><p class="cloud-number">{{bytes(cloud.space_used)}} <small>/ {{bytes(cloud.space_total)}}</small></p><div class="usage-track"><span :style="{width:cloudPercent+'%'}"/></div><div class="cloud-details"><div><span>账号</span><b>{{cloud.nickname||'115 网盘'}}</b></div><div><span>总空间</span><b>{{bytes(cloud.space_total)}}</b></div><div><span>已使用</span><b>{{bytes(cloud.space_used)}} · {{cloudPercent}}%</b></div><div><span>剩余空间</span><b>{{bytes(Math.max(0,cloud.space_total-cloud.space_used))}}</b></div></div></template><p v-else class="muted">{{data.system['115_configured']?'网盘容量暂不可用，请到网盘页面查看':'尚未配置 115 网盘'}}</p></section>
 <section class="panel overview-tasks"><div class="section-title"><div class="section-heading"><el-icon class="section-icon"><Finished/></el-icon><h2>最近任务</h2></div><el-button text @click="$emit('navigate','tasks')">查看全部 →</el-button></div><div v-if="recentTasks.length" class="overview-task-list"><div v-for="job in recentTasks" :key="job.id" class="overview-task"><div class="task-icon"><el-icon><Finished/></el-icon></div><div class="task-info"><strong>{{jobName(job.kind)}} <small>#{{job.id}}</small></strong><p class="muted">{{job.stage||jobState(job.state)}} · {{fmt(job.updated)}}</p></div><div v-if="job.total>0" class="task-progress"><div class="usage-track"><span :style="{width:Math.min(100,Math.max(0,job.progress))+'%'}"/></div><small>{{job.progress}}%</small></div><span class="task-status">{{jobState(job.state)}}</span></div></div><p v-else class="muted">{{tasks?'暂无任务':'任务信息暂不可用'}}</p></section>
-</div>
-<div class="status-strip">
-  <span v-for="s in strip" :key="s.k" :class="['strip-item',{warn:s.warn}]"><em>{{s.k}}</em>{{s.v}}</span>
-  <span class="strip-item"><em>磁盘</em>{{gb(data.system.used_bytes)}}/{{gb(data.system.total_bytes)}} GB · {{diskUsed}}</span>
 </div>
 <div class="overview-duo">
 <section class="panel"><div class="section-title"><h2>自动化状态</h2><el-button text @click="$emit('navigate','sync')">管理同步任务 →</el-button></div><div class="automation-lines"><div><span>调度器</span><b>{{data.system.scheduler_ok?'运行正常':'状态异常'}}</b></div><div><span>自动整理</span><b>{{schedules?(schedules.config.scan_enabled?'已启用':'已停用'):'状态不可用'}}</b></div><div><span>STRM 同步</span><b>{{syncScheduleStatus}}</b></div><div><span>频道监控</span><b>{{channels?(channels.config?.enabled?'已启用':'已停用'):'状态不可用'}}</b></div></div></section>
@@ -144,10 +130,6 @@ onMounted(()=>{void load();void loadAux();void loadCloud()});useVisiblePolling(l
 .hero-copy span{font-size:12px;color:var(--el-text-color-secondary)}
 .hero-copy strong{font-size:28px;font-weight:700;letter-spacing:-.5px;line-height:1.1;color:var(--el-text-color-primary)}
 .hero-copy small{font-size:11px;color:var(--el-text-color-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.status-strip{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}
-.strip-item{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--el-text-color-regular);background:var(--surface,var(--el-bg-color));border:1px solid var(--el-border-color-lighter,#e4e7ed);border-radius:20px;padding:4px 12px}
-.strip-item em{font-style:normal;color:var(--el-text-color-secondary)}
-.strip-item.warn{border-color:var(--el-color-warning);color:var(--el-color-warning)}
 .duo{display:grid;grid-template-columns:5fr 7fr;gap:16px;align-items:stretch;margin-bottom:16px}
 .duo .half{margin-bottom:0}
 .big-three{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
@@ -182,7 +164,7 @@ onMounted(()=>{void load();void loadAux();void loadCloud()});useVisiblePolling(l
 .hero-value{display:block;font-size:26px;line-height:1.15;color:var(--text);letter-spacing:-.5px}.hero-value small{font-size:12px;font-weight:400;color:var(--muted);letter-spacing:0}.hero-sub{display:block;margin-top:8px;color:var(--muted);font-size:12px}.metric-track{margin-top:9px}
 .recent-panel{padding:20px!important}.recent-heading-main,.section-heading{display:flex;align-items:center;gap:10px}.section-icon{font-size:21px;color:var(--accent)}.recent-heading h2,.section-heading h2{font-size:17px}.recent-tabs{display:flex;gap:4px;margin-left:12px}.recent-tabs button{border:0;border-radius:20px;padding:6px 14px;background:var(--surface-soft);color:var(--muted);font-size:12px;cursor:pointer}.recent-tabs button.selected{background:var(--accent);color:white}.text-link{background:none;border:0;color:var(--muted);cursor:pointer;font-size:12px;white-space:nowrap}
 .poster-grid{gap:14px}.poster-image{position:relative}.poster-type{position:absolute;top:7px;left:7px;background:rgba(20,31,49,.76);color:white;padding:3px 7px;border-radius:5px;font-size:10px}.poster-placeholder{height:100%;width:100%;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:8px;background:linear-gradient(150deg,var(--surface-soft),color-mix(in srgb,var(--accent) 9%,var(--surface)));color:var(--muted);font-size:12px}.poster-placeholder .el-icon{font-size:32px;opacity:.65}.poster-card h3{margin:9px 0 3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.poster-description{margin:0 0 7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}.library-badge{display:inline-block;border-radius:15px;background:color-mix(in srgb,var(--accent) 11%,var(--surface));color:var(--accent);padding:3px 9px;font-size:10px}
-.cloud-details{margin-top:14px;border-top:1px solid var(--line)}.cloud-details>div{display:flex;justify-content:space-between;gap:10px;padding-top:10px;font-size:12px}.cloud-details span{color:var(--muted)}.cloud-details b{color:var(--text);font-weight:600}.overview-task{gap:12px}.task-icon{width:35px;height:35px;flex:none;display:grid;place-items:center;border-radius:10px;background:var(--el-color-primary-light-9);color:var(--accent);font-size:18px}.task-info{min-width:0;flex:1}.task-info p{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.task-progress{width:28%;display:flex;gap:7px;align-items:center}.task-progress .usage-track{flex:1}.task-progress small{color:var(--muted);font-size:11px}.overview-task .task-status{font-size:11px}.status-strip{margin-top:2px}
+.cloud-details{margin-top:14px;border-top:1px solid var(--line)}.cloud-details>div{display:flex;justify-content:space-between;gap:10px;padding-top:10px;font-size:12px}.cloud-details span{color:var(--muted)}.cloud-details b{color:var(--text);font-weight:600}.overview-task{gap:12px}.task-icon{width:35px;height:35px;flex:none;display:grid;place-items:center;border-radius:10px;background:var(--el-color-primary-light-9);color:var(--accent);font-size:18px}.task-info{min-width:0;flex:1}.task-info p{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.task-progress{width:28%;display:flex;gap:7px;align-items:center}.task-progress .usage-track{flex:1}.task-progress small{color:var(--muted);font-size:11px}.overview-task .task-status{font-size:11px}
 @media(max-width:760px){.hero-card{padding:15px 14px;border-radius:11px}.hero-heading{margin-bottom:10px;font-size:12px}.hero-heading>.el-icon{font-size:18px}.hero-value{font-size:21px}.hero-sub{font-size:11px}.recent-panel{padding:14px!important}.recent-heading{gap:5px}.recent-heading-main{gap:6px}.recent-heading h2,.section-heading h2{font-size:15px}.recent-tabs{margin-left:4px;gap:2px}.recent-tabs button{padding:5px 8px;font-size:11px}.poster-grid{gap:12px}.task-progress{width:25%}}
 /* A compact shelf on phones; “查看全部” returns to a full grid. */
 @media(max-width:760px){.poster-grid:not(.expanded){grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:minmax(105px,31%);overflow-x:auto;overscroll-behavior-inline:contain;scroll-snap-type:x proximity;padding-bottom:8px}.poster-grid:not(.expanded) .poster-card{scroll-snap-align:start}.overview-task{flex-wrap:wrap}.task-info{flex:1 1 48%}.task-progress{width:25%}.hero-card{min-width:0}.hero-sub{line-height:1.4}}
