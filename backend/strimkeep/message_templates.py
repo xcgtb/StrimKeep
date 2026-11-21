@@ -36,6 +36,25 @@ def channel_post_text(text):
     return compact(lines[0], 100), compact(' · '.join(lines[1:]), 230)
 
 
+def channel_card_text(text, units):
+    """Keep the original paragraph order and leave space for the processing result."""
+    lines = []
+    for raw in str(text or '').splitlines():
+        line = re.sub(r'(?i)(?:https?://|ftp://|tg://|magnet:\?|ed2k://)\S+', '', raw)
+        line = re.sub(r'(?i)(?:提取码|访问码|密码|\bpassword|\bpwd)\s*[:：=]?\s*[A-Za-z0-9]+', '', line).strip()
+        if re.fullmatch(r'(?:🔗\s*)?(?:链接|下载链接)\s*[:：]?\s*(?:点击跳转)?', line):
+            continue
+        if line and not re.fullmatch(r'[/|｜\s]+', line):
+            lines.append(line)
+        elif lines and lines[-1]:
+            lines.append('')
+    body = '\n'.join(lines).strip()
+    encoded = body.encode('utf-16-le')
+    if len(encoded) <= units * 2:
+        return body
+    return encoded[:2 * max(0, units - 1)].decode('utf-16-le', errors='ignore').rstrip() + '…'
+
+
 def channel_subject(text):
     return channel_post_text(text)[0]
 
@@ -63,13 +82,13 @@ def transfer_received(ids, target, auto):
 
 
 def channel_notice(channel, text, queued, mode, target='', count=None, resource_kind='', omitted=0,
-                   *, context=None, submission_id=None):
+                   *, context=None, submission_id=None, original=False):
     heading = {'transfer':'📡 频道分享转存 · 已排队', 'offline':'📡 频道离线下载 · 已提交',
                'strm':'📡 频道分享 STRM · 已生成', 'offline_unknown':'⚠️ 频道离线下载 · 待核查'}.get(mode, '📡 频道资源')
     if context is None:
         subject, note = channel_post_text(text)
         context = {'channel': channel, 'subject': subject, 'note': note}
-    lines = channel_post_lines(context)
+    lines = ['📡 来源  ' + compact(channel, 90)] if original else channel_post_lines(context)
     if mode == 'strm':
         lines.extend(['🔗 模式  分享 STRM · 免转存', '📂 位置  分享 STRM 待整理',
                       f'📄 已生成  {count if count is not None else 0} 个 STRM'])
@@ -91,7 +110,13 @@ def channel_notice(channel, text, queued, mode, target='', count=None, resource_
         lines.append(f'🔗 分享数  {len(queued)} 个')
         ids = task_numbers([item[0] for item in queued])
         if ids: lines.append('📋 转存任务  ' + ids)
-    return heading, '\n'.join(lines)
+    result = '\n'.join(lines)
+    if original:
+        available = 995 - len((heading + '\n\n\n' + result).encode('utf-16-le')) // 2
+        caption = channel_card_text(text, available)
+        if caption:
+            result = caption + '\n\n' + result
+    return heading, result
 
 
 def offline_completed(target, produced, job_id=None, *, context=None, submission_id=None,
@@ -117,7 +142,7 @@ def offline_completed(target, produced, job_id=None, *, context=None, submission
 
 
 def offline_context_lines(context, submission_id):
-    lines = channel_post_lines(context)
+    lines = channel_post_lines({**context, 'note': ''})
     if context.get('resource_kind'): lines.append('🧲 类型  ' + context['resource_kind'])
     if submission_id is not None: lines.append(f'📋 离线记录  #{submission_id}')
     return lines

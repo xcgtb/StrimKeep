@@ -35,7 +35,8 @@ def make_db(stage, notify_state='pending'):
         CREATE TABLE organize_items(id INTEGER PRIMARY KEY, job_id INTEGER, state TEXT, plan TEXT);
         CREATE TABLE notifications(id INTEGER PRIMARY KEY, at REAL, level TEXT, job_id INTEGER,
                                    event_key TEXT, title TEXT, message TEXT, read_at REAL,
-                                   telegram_state TEXT, attempts INTEGER, next_try REAL, photo TEXT);
+                                   telegram_state TEXT, attempts INTEGER, next_try REAL, photo TEXT,
+                                   telegram_options TEXT NOT NULL DEFAULT '{}');
         CREATE TABLE media_notice_groups(event_key TEXT PRIMARY KEY, job_id INTEGER, items TEXT);
         CREATE TABLE media_notice_outbox(job_id INTEGER PRIMARY KEY);
         CREATE TABLE strm_group_outbox(job_id INTEGER, group_key TEXT, items TEXT);

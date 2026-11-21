@@ -25,6 +25,7 @@ class ChannelRule(BaseModel):
     # 分享与磁力/电驴分开配置，一条频道可以同时处理两者。
     share_mode: Literal['', 'strm', 'transfer'] = ''
     organize_after: bool = False      # 落盘后立即整理；False = 交给手动/定时扫描
+    media_spoiler: bool = False
     source: Literal['preview', 'session'] = 'preview'   # 公开预览页 / 用户会话（私密频道）
     history_pages: int = Field(default=1, ge=1, le=20)   # 首次接入回溯页数（每页约 20 条）
     share_cid: str = Field(default='', max_length=24)

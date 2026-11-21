@@ -56,6 +56,7 @@ COLUMN_PATCHES = {
         ('attempts', ' INTEGER NOT NULL DEFAULT 0'),
         ('next_try', ' REAL NOT NULL DEFAULT 0'),
         ('photo', ' TEXT'),
+        ('telegram_options', " TEXT NOT NULL DEFAULT '{}'"),
     ],
     'emby_deliveries': [
         ('total', ' INTEGER NOT NULL DEFAULT 0'),

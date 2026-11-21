@@ -188,22 +188,41 @@ class TelegramSession:
         out.sort(key=lambda item: (order.get(item['kind'], 9), item['private'], item['title']))
         return out
 
+    @staticmethod
+    async def _entity(client, name):
+        raw = str(name).strip()
+        target = int(raw) if raw.lstrip('-').isdigit() else raw
+        try:
+            return await client.get_entity(target)
+        except ValueError:
+            async for _ in client.iter_dialogs():
+                pass
+            return await client.get_entity(target)
+
+    async def notification_photo(self, name, message_id):
+        client = await self.client()
+        if client is None:
+            return None
+        peer = await self._entity(client, name)
+        if getattr(peer, 'noforwards', False):
+            return None
+        message = await client.get_messages(peer, ids=message_id)
+        if not getattr(message, 'photo', None) or getattr(message, 'noforwards', False):
+            return None
+        size = getattr(getattr(message, 'file', None), 'size', 0) or 0
+        limit = 8 * 1024 * 1024
+        if not 0 < size <= limit:
+            return None
+        contents = await client.download_media(message, file=bytes)
+        return contents if isinstance(contents, bytes) and 0 < len(contents) <= limit else None
+
     async def fetch(self, name, before=None):
         """读一个频道的最新消息，产出与预览页相同的结构。"""
         client = await self.client()
         if client is None:
             raise SessionError('未登录 Telegram 用户会话')
         try:
-            raw_name = str(name).strip()
-            # -100… 带负号，isdigit() 会判 False，这里去掉符号再判断
-            target = int(raw_name) if raw_name.lstrip('-').isdigit() else raw_name
-            try:
-                entity = await client.get_entity(target)
-            except ValueError:
-                # 重启后实体缓存是空的：先列一遍会话把 access_hash 补上，再取一次。
-                async for _ in client.iter_dialogs():
-                    pass
-                entity = await client.get_entity(target)
+            entity = await self._entity(client, name)
             messages = await client.get_messages(entity, limit=FETCH_LIMIT + 1,
                                                  max_id=int(before) if before else 0)
         except SessionError:
@@ -217,11 +236,14 @@ class TelegramSession:
             text = message.message or ''
             # 超链接（显示文字 + 隐藏 URL）不在 text 里，要从 entities 取
             links = []
-            for entity in (message.entities or []):
-                if isinstance(entity, MessageEntityTextUrl) and entity.url:
-                    links.append(entity.url)
-                elif isinstance(entity, MessageEntityUrl):
-                    links.append(text[entity.offset:entity.offset + entity.length])
+            for link_entity in (message.entities or []):
+                if isinstance(link_entity, MessageEntityTextUrl) and link_entity.url:
+                    links.append(link_entity.url)
+                elif isinstance(link_entity, MessageEntityUrl):
+                    raw_text = text.encode('utf-16-le')
+                    start = link_entity.offset * 2
+                    end = start + link_entity.length * 2
+                    links.append(raw_text[start:end].decode('utf-16-le', errors='ignore'))
             # 机器人基本把链接放在内联按钮里，正文是空的 —— 只取 entities 会一条都抓不到。
             markup = getattr(message, 'reply_markup', None)
             for markup_row in (getattr(markup, 'rows', None) or []):
@@ -232,7 +254,13 @@ class TelegramSession:
             links = list(dict.fromkeys(links))      # 正文和按钮可能指向同一个链接
             if not text and not links:
                 continue
-            rows.append({'id': message.id, 'text': text, 'links': links})
+            row = {'id': message.id, 'text': text, 'links': links}
+            if getattr(entity, 'noforwards', False) or getattr(message, 'noforwards', False):
+                row['protected'] = True
+            elif getattr(message, 'photo', None):
+                row['session_photo'] = True
+                row['media_spoiler'] = bool(getattr(getattr(message, 'media', None), 'spoiler', False))
+            rows.append(row)
         # 拿不到真实名字时回空，不要回退成 -100 开头的 ID：
         # 那个 ID 会被当成频道名存起来，后面再也换不回真名。
         title = (getattr(entity, 'title', '') or
@@ -242,7 +270,7 @@ class TelegramSession:
             # 有些目标 get_entity 拿回来的对象不带名字，扫一遍会话按 ID 找。
             try:
                 async for dialog in client.iter_dialogs():
-                    if str(dialog.id) == str(target):
+                    if str(dialog.id) == str(name).strip():
                         title = dialog.name or dialog.title or ''
                         break
             except Exception:

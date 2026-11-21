@@ -141,6 +141,7 @@ class Organizer:
         self.offline = OfflinePostProcess(self)
         from .telegram_session import TelegramSession
         self.telegram = TelegramSession(self.store)
+        self.notifications.channel_photo = self.telegram.notification_photo
         self.channels = ChannelMonitor(self)
 
     def start(self):

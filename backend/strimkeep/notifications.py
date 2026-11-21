@@ -254,6 +254,7 @@ class Notifications:
         self.send_gate = asyncio.Lock()
         self.next_send = 0.0
         self.media_gate = asyncio.Lock()
+        self.channel_photo = None
         self._verified_cards_requeued = False
         with self.store.db:
             self.store.db.execute('CREATE TABLE IF NOT EXISTS notification_dependencies(event_key TEXT PRIMARY KEY, depends_on TEXT NOT NULL)')
@@ -281,7 +282,7 @@ class Notifications:
         async with self.delivery_gate:
             return await self._publish(*args, **kwargs)
 
-    async def _publish(self, key, title, message, level='info', job_id=None, test=False, photo=None, chat_override=None, force=False, category=None, depends_on=None):
+    async def _publish(self, key, title, message, level='info', job_id=None, test=False, photo=None, chat_override=None, force=False, category=None, depends_on=None, telegram_options=None):
         config = self.store.get('notification_config', {})
         category=category or category_for(key)
         categories={**CATEGORY_DEFAULTS,**config.get('categories',{})}
@@ -293,8 +294,8 @@ class Notifications:
                        (previous['telegram_state'] == 'unknown' and previous['attempts'] < RETRY_LIMIT)))
         initial = 'waiting' if waiting else ('inflight' if enabled else 'disabled')
         with self.store.db:
-            cursor = self.store.db.execute('INSERT OR IGNORE INTO notifications(at,level,job_id,event_key,title,message,telegram_state,photo) VALUES(?,?,?,?,?,?,?,?)',
-                (time.time(), level, job_id, key, title, message, initial, photo))
+            cursor = self.store.db.execute('INSERT OR IGNORE INTO notifications(at,level,job_id,event_key,title,message,telegram_state,photo,telegram_options) VALUES(?,?,?,?,?,?,?,?,?)',
+                (time.time(), level, job_id, key, title, message, initial, photo, json.dumps(telegram_options or {})))
             if cursor.rowcount and depends_on:
                 self.store.db.execute('INSERT OR REPLACE INTO notification_dependencies VALUES(?,?)', (key, depends_on))
         if not cursor.rowcount: return 'duplicate'
@@ -304,7 +305,7 @@ class Notifications:
         state = 'disabled'
         if enabled:
             token, chat = config.get('bot_token'), chat_override or config.get('chat_id')
-            state, detail = await self._deliver_notice(key, title, message, photo, chat, token)
+            state, detail = await self._deliver_notice(key, title, message, photo, chat, token, telegram_options)
             with self.store.db:
                 self.store.db.execute(
                     'UPDATE notifications SET telegram_state=?,attempts=attempts+1,next_try=?,photo=? WHERE id=?',
@@ -323,7 +324,8 @@ class Notifications:
         base = min(RETRY_BASE_SECONDS * 2 ** max(0, attempts - 1), RETRY_CAP_SECONDS)
         return min(RETRY_CAP_SECONDS, base * random.uniform(0.85, 1.15))
 
-    async def _deliver_notice(self, key, title, message, photo, chat, token):
+    async def _deliver_notice(self, key, title, message, photo, chat, token, telegram_options=None):
+        values = {'telegram_options': telegram_options} if telegram_options else {}
         if key.startswith('strm:') and ':group:' in key:
             prefix, _, group = key.partition(':group:')
             group = group.removesuffix(':summary') if group.endswith(':summary') else group.rsplit(':files:', 1)[0]
@@ -331,21 +333,48 @@ class Notifications:
                 'SELECT message_id FROM telegram_message_refs WHERE event_key=? AND chat_id=?',
                 (f'show_done:{prefix[5:]}:{group}', str(chat))).fetchone()
             if ref:
-                return await self._deliver(title, message, photo, chat, token, reply_to=ref['message_id'])
-        return await self._deliver(title, message, photo, chat, token)
+                values['reply_to'] = ref['message_id']
+        return await self._deliver(title, message, photo, chat, token, **values)
 
-    async def _deliver(self, title, message, photo, chat, token, *, reply_to=None):
+    async def _deliver(self, title, message, photo, chat, token, *, reply_to=None, telegram_options=None):
         """一次发送。unknown 表示可重试（网络/5xx/429），failed 表示对方明确拒收（4xx）。"""
         if not token or not chat:
             return 'failed', 'missing token or chat'
         try:
+            options = telegram_options or {}
             payload = {'chat_id': chat}
             if reply_to is not None:
                 payload['reply_parameters'] = {'message_id': reply_to, 'allow_sending_without_reply': True}
+            if options.get('post_url'):
+                payload['reply_markup'] = {'inline_keyboard': [[{'text': '查看原帖', 'url': options['post_url']}]]}
             text = title + '\n' + message
-            if photo: payload.update(photo=photo, caption=clipped(text, 1000))
-            else: payload.update(text=clipped(text, 4000), link_preview_options={'is_disabled': True})
-            response = await self.send(token, 'sendPhoto' if photo else 'sendMessage', payload)
+            file = None
+            source = options.get('photo_source')
+            response = None
+            copy_source = options.get('copy_source')
+            if copy_source and not options.get('spoiler'):
+                response = await self.send(token, 'copyMessage', {**payload, **copy_source, 'caption': clipped(text, 1000)})
+                if response.status_code in (400, 403):
+                    if any(mark in response.text.lower() for mark in ('protected content', 'forwards_restricted', "can't be forwarded")):
+                        source = photo = None
+                    response = None
+            if response is None and source and self.channel_photo:
+                try:
+                    file = await asyncio.wait_for(self.channel_photo(source['channel'], source['id']), timeout=9)
+                except Exception:
+                    pass
+            if response is None and (file or photo):
+                photo_payload = {**payload, 'caption': clipped(text, 1000)}
+                if options.get('spoiler'):
+                    photo_payload['has_spoiler'] = True
+                if file:
+                    response = await self.send(token, 'sendPhoto', photo_payload, file=file)
+                else:
+                    response = await self.send(token, 'sendPhoto', {**photo_payload, 'photo': photo})
+            # If the source photo has expired, still deliver the caption and post link.
+            if response is None or (response.status_code == 400 and options.get('post_url')):
+                payload.update(text=clipped(text, 4000), link_preview_options={'is_disabled': True})
+                response = await self.send(token, 'sendMessage', payload)
             response.raise_for_status()
             data = response.json()
             if isinstance(data,dict) and data.get('ok') is True:
@@ -386,7 +415,8 @@ class Notifications:
             with self.store.db:
                 self.store.db.execute("UPDATE notifications SET telegram_state='inflight' WHERE id=?", (row['id'],))
             state, detail = await self._deliver_notice(
-                row['event_key'], row['title'], row['message'], row['photo'], chat, token)
+                row['event_key'], row['title'], row['message'], row['photo'], chat, token,
+                json.loads(row['telegram_options']))
             attempts = row['attempts'] + 1
             with self.store.db:
                 self.store.db.execute(
@@ -397,10 +427,16 @@ class Notifications:
             sent += 1 if state == 'sent' else 0
         return sent
 
-    async def send(self,token,method,payload):
+    async def send(self,token,method,payload,*,file=None):
         async with self.send_gate:
             await asyncio.sleep(max(0,self.next_send-time.monotonic()))
-            try:return await self.http.post('https://api.telegram.org/bot'+token+'/'+method,json=payload,timeout=15)
+            try:
+                url = 'https://api.telegram.org/bot'+token+'/'+method
+                if file:
+                    form = {key: value if isinstance(value, str) else json.dumps(value)
+                            for key, value in payload.items()}
+                    return await self.http.post(url, data=form, files={'photo': ('poster.jpg', file, 'image/jpeg')}, timeout=15)
+                return await self.http.post(url, json=payload, timeout=15)
             finally:self.next_send=time.monotonic()+1.1
 
     async def job(self, row):

@@ -5,7 +5,7 @@ import pytest
 
 import strimkeep.channel_monitor as channel_monitor
 from strimkeep.channel_monitor import ChannelMonitor, normalize_channel, parse_channel
-from strimkeep.channels_api import ChannelOptions
+from strimkeep.channels_api import ChannelOptions, ChannelRule
 from strimkeep.cloud115 import CloudError
 from strimkeep.store import Store
 
@@ -348,7 +348,7 @@ def test_legacy_string_channels_get_rule_defaults(tmp_path, monkeypatch):
                         'share_cid': '', 'share_label': '', 'offline_cid': '', 'offline_label': '',
                         'magnet_cid': '', 'magnet_label': '', 'ed2k_cid': '', 'ed2k_label': '',
                         'include': '', 'exclude': '', 'organize_after': False, 'source': 'preview',
-                        'history_pages': 1}
+                        'history_pages': 1, 'media_spoiler': False}
         store.close()
     asyncio.run(run())
 
@@ -646,9 +646,35 @@ def test_channel_offline_receipt_records_note_and_post_link(tmp_path):
         ctx = monitor.engine.offline.context
         assert ctx == {'channel': '示例频道', 'subject': '示例影片', 'note': '#LTX #DEMO-001 · 备注：修复字幕',
                        'post_url': 'https://t.me/c/1234567890/88', 'resource_kind': 'ED2K'}
-        args, _ = monitor.engine.notifications.sent[0]
-        assert all(value in args[2] for value in (ctx['note'], ctx['post_url'], '离线记录  #1', 'ED2K'))
+        args, kwargs = monitor.engine.notifications.sent[0]
+        assert all(value in args[2] for value in ('#LTX #DEMO-001\n备注：修复字幕', '离线记录  #1', 'ED2K'))
+        assert kwargs['telegram_options']['post_url'] == ctx['post_url']
         assert 'abcd' not in args[2] and 'secret' not in args[2]
+        store.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('source,name', [('preview','testchan'), ('session','-1001234567890')])
+@pytest.mark.parametrize('mode', ['strm','transfer'])
+def test_spoiler_setting_is_independent_of_channel_source_and_mode(source, name, mode):
+    rule = ChannelRule(name=name, source=source, share_mode=mode, share_cid='123', media_spoiler=True)
+    assert channel_monitor.normalize_rule(rule.model_dump())['media_spoiler'] is True
+
+
+def test_original_preview_card_extracts_telegram_photo_and_preserves_paragraphs(tmp_path):
+    async def run():
+        store, monitor, _, _ = make(tmp_path, {}, CONFIG)
+        html = """<div class="tgme_widget_message" data-post="testchan/99">
+        <a class="tgme_widget_message_photo_wrap" style="background-image:url('https://cdn1.telesco.pe/example.jpg')"></a>
+        <div class="tgme_widget_message_text">影片<br><br>评分 8.0<br>原帖简介</div><div class="tgme_widget_message_footer"></div>"""
+        post = parse_channel(html)['messages'][0]
+        assert post['photo_url'] == 'https://cdn1.telesco.pe/example.jpg'
+        monitor._notify('testchan', '频道', post, [], 'strm', count=1, spoiler=True)
+        await asyncio.gather(*list(monitor.engine.notice_tasks))
+        args, kwargs = monitor.engine.notifications.sent[0]
+        assert '影片\n\n评分 8.0\n原帖简介' in args[2]
+        assert kwargs['telegram_options']['spoiler'] is True
+        assert kwargs['photo'] == post['photo_url']
         store.close()
     asyncio.run(run())
 

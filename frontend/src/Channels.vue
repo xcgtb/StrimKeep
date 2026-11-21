@@ -24,6 +24,7 @@ function absorb(data:any){config.value=data.config;sources.value=data.sources;or
   return {...c,
    share_mode:(c.share_mode==='strm'||(!c.share_mode&&mode==='strm'))?'strm':'transfer',
    history_pages:c.history_pages??1,
+   media_spoiler:!!c.media_spoiler,
    share_cid:c.share_cid??(mode==='transfer'?(c.target_cid||''):''),
    share_label:c.share_label??(mode==='transfer'?(c.target_label||''):''),
    offline_cid:c.offline_cid??(mode==='offline'?(c.target_cid||''):''),
@@ -33,7 +34,7 @@ async function load(){await run(async()=>absorb(await props.api('/channels')))}
 function normalize(value:string){return value.trim().replace(/^https?:\/\/(www\.)?t(elegram)?\.me\//i,'').replace(/^s\//i,'').replace(/^@/,'').split('?')[0].replace(/\/+$/,'')}
 function addChannel(){const name=normalize(draft.value);if(!name){ElMessage.warning('填一个公开频道用户名，例如 @channel');return}
  if(config.value.channels.some((c:any)=>c.name===name)){ElMessage.warning('这个频道已经在列表里了');return}
- config.value.channels.push({name,enabled:true,source:'preview',share_mode:'strm',organize_after:false,share_cid:'',share_label:'',offline_cid:'',offline_label:'',include:'',exclude:'',routes:[]});draft.value=''}
+ config.value.channels.push({name,enabled:true,source:'preview',share_mode:'strm',organize_after:false,media_spoiler:false,share_cid:'',share_label:'',offline_cid:'',offline_label:'',include:'',exclude:'',routes:[]});draft.value=''}
 function removeChannel(name:string){config.value.channels=config.value.channels.filter((c:any)=>c.name!==name)}
 const renameOpen=ref(false),renameFrom=ref(''),renameTo=ref('')
 function startRename(c:any){
@@ -108,7 +109,7 @@ const tgFiltered=computed(()=>{const q=tgQuery.value.trim().toLowerCase()
 function addFromTelegram(ch:any){
   const name=ch.username||ch.id
   if(config.value.channels.some((c:any)=>c.name===name)){ElMessage.warning('这个频道已经在列表里了');return}
-  config.value.channels.push({name,enabled:true,source:'session',share_mode:'strm',organize_after:false,
+  config.value.channels.push({name,enabled:true,source:'session',share_mode:'strm',organize_after:false,media_spoiler:false,
     share_cid:'',share_label:'',offline_cid:'',offline_label:'',include:'',exclude:'',routes:[]})
   ElMessage.success('已添加，记得点「保存修改」')
 }
@@ -204,8 +205,11 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
      <el-option label="分享 STRM 落盘（免转存）" value="strm"/>
     </el-select>
    </div>
+   <div class="organize-option">
+    <div><strong>防剧透</strong><p class="hint">频道通知的海报先遮住，点开才显示。</p></div>
+    <el-switch v-model="c.media_spoiler" :disabled="busy" aria-label="频道通知防剧透" />
+   </div>
   </div>
-
   <div class="channel-section" v-if="c.share_mode==='transfer'">
    <div class="directory-block">
     <div class="directory-block-heading"><div><strong>转存目录</strong><p>分享链接默认保存到这里</p></div></div>

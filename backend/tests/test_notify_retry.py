@@ -113,6 +113,37 @@ def test_photo_survives_retry(tmp_path):
     asyncio.run(run())
 
 
+def test_channel_original_photo_uses_copy_or_spoiler_upload_and_keeps_link_on_retry(tmp_path):
+    async def run():
+        store = Store(tmp_path / 'data', 'admin', 'test-password-1234')
+        enable(store)
+        http = FakeHTTP(['ok', 'down', 'ok'])
+        notes = Notifications(store, http)
+        methods = []
+        async def send(token, method, payload, *, file=None):
+            methods.append((method, payload, file))
+            return await http.post('https://example.invalid/' + method, json=payload)
+        async def photo(channel, message):
+            assert (channel, message) == ('-1001234567890', 17)
+            return b'mock-original-photo'
+        notes.channel_photo = photo
+        notes.send = send
+        url = 'https://t.me/c/1234567890/17'
+        copy = {'from_chat_id': '-1001234567890', 'message_id': 17}
+        assert await notes.publish('channel:copy', '标题', '原帖', photo='https://cdn1.telesco.pe/x',
+                                   telegram_options={'copy_source': copy, 'post_url': url}) == 'sent'
+        assert methods[0][0] == 'copyMessage' and 'has_spoiler' not in methods[0][1]
+        options = {'copy_source': copy, 'photo_source': {'channel': '-1001234567890', 'id': 17},
+                   'spoiler': True, 'post_url': url}
+        assert await notes.publish('channel:spoiler', '标题', '原帖', telegram_options=options) == 'unknown'
+        assert await notes.retry(now=row_of(store, 'channel:spoiler')['next_try'] + 1) == 1
+        assert methods[-1][0] == 'sendPhoto' and methods[-1][2] == b'mock-original-photo'
+        assert methods[-1][1]['has_spoiler'] is True
+        assert methods[-1][1]['reply_markup']['inline_keyboard'][0][0]['url'] == url
+        store.close()
+    asyncio.run(run())
+
+
 def test_grouped_media_retry_keeps_poster_and_details_in_order_for_both_libraries(tmp_path):
     from test_organize import new_job
     async def run(kind):

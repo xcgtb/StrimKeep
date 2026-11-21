@@ -42,7 +42,7 @@ MAX_TEXT = 4000
 RULE_DEFAULTS = {'enabled': True, 'share_mode': '', 'share_cid': '', 'share_label': '',
                  'offline_cid': '', 'offline_label': '', 'magnet_cid': None, 'magnet_label': None,
                  'ed2k_cid': None, 'ed2k_label': None, 'include': '', 'exclude': '', 'routes': [],
-                 'organize_after': False, 'source': 'preview', 'history_pages': 1}
+                 'organize_after': False, 'media_spoiler': False, 'source': 'preview', 'history_pages': 1}
 OFFLINE_PREFIX = ('magnet:', 'ed2k://')
 
 
@@ -102,6 +102,7 @@ def normalize_rule(raw):
             rule[kind+'_cid'] = str(rule[kind+'_cid'] or '')
             rule[kind+'_label'] = str(rule.get(kind+'_label') or '')
     rule['organize_after'] = bool(rule.get('organize_after'))
+    rule['media_spoiler'] = bool(rule.get('media_spoiler'))
     # 来源：preview=公开预览页（游客可看）；session=用户会话（可读私密频道）
     rule['source'] = 'session' if str(rule.get('source') or '') == 'session' else 'preview'
     try:
@@ -135,8 +136,27 @@ def route_target(rule, text):
 
 
 def _plain(fragment):
-    text = fragment.replace('<br/>', '\n').replace('<br>', '\n')
+    text = re.sub(r'<br\s*/?>', '\n', fragment, flags=re.I)
     return html_lib.unescape(TAG.sub('', text)).strip()
+
+
+def _preview_photo(chunk):
+    from urllib.parse import urlsplit
+    for tag in re.findall(r'<a\b[^>]*\btgme_widget_message_photo_wrap\b[^>]*>', chunk, re.I):
+        # The preview uses a CSS background URL instead of an image element.
+        match = re.search(r'''url\(\s*['"]?(https://[^'"\s)]+)''', html_lib.unescape(tag))
+        if not match:
+            continue
+        url = match.group(1)
+        try:
+            target = urlsplit(url)
+            host = target.hostname or ''
+            if not target.username and target.port in (None, 443) and (
+                    host.endswith(('.telesco.pe', '.telegram-cdn.org', '.telegram.org'))):
+                return url
+        except ValueError:
+            continue
+    return ''
 
 
 def parse_channel(page):
@@ -153,13 +173,22 @@ def parse_channel(page):
         if start >= 0:
             start = chunk.find('>', start) + 1
             end = chunk.find('tgme_widget_message_footer', start)
+            if end >= 0:
+                end = chunk.rfind('<', start, end)
             body = chunk[start:end if end > 0 else len(chunk)]
         else:
             body = ''
         links = [html_lib.unescape(url) for url in HREF.findall(chunk)]
         time_match = TIME.search(chunk)
-        messages.append({'id': message_id, 'text': _plain(body)[:MAX_TEXT],
-                         'links': links, 'at': time_match.group(1) if time_match else ''})
+        message = {'id': message_id, 'text': _plain(body)[:MAX_TEXT],
+                   'links': links, 'at': time_match.group(1) if time_match else ''}
+        if 'tgme_widget_message_noforwards' in chunk:
+            message['protected'] = True
+        else:
+            photo = _preview_photo(chunk)
+            if photo:
+                message['photo_url'] = photo
+        messages.append(message)
     messages.sort(key=lambda item: item['id'])
     return {'title': title, 'messages': messages, 'has_more': HAS_MORE in page}
 
@@ -570,7 +599,7 @@ class ChannelMonitor:
             if self.config()['notify']:
                 self._notify(name, title, message, [], 'offline_unknown',
                              self.store.directory_label(rule['offline_cid'], rule['offline_label']),
-                             resource_kind=kind, context=context)
+                             resource_kind=kind, context=context, spoiler=rule.get('media_spoiler', False))
             return 0
         self.store.event('channel', '频道 %s：提交 %d 个链接到离线下载 #%s（%s）。'
                          % (title or name, len(submitted), sid, rule['offline_label'] or rule['offline_cid']))
@@ -578,7 +607,7 @@ class ChannelMonitor:
             self._notify(name, title, message, [], 'offline',
                          self.store.directory_label(rule['offline_cid'], rule['offline_label']),
                          count=len(submitted), resource_kind=kind, omitted=len(urls)-len(submitted),
-                         context=context, submission_id=sid)
+                         context=context, submission_id=sid, spoiler=rule.get('media_spoiler', False))
         return len(submitted)
 
     async def _strm(self, name, title, message, rule, found):
@@ -648,7 +677,8 @@ class ChannelMonitor:
             else:
                 self.store.event('channel', '频道 %s：生成 %d 条待整理 STRM，自动整理已关闭，等待手动整理。' % (title or name, created))
             if self.config()['notify']:
-                self._notify(name, title, message, queued, 'strm', count=created)
+                self._notify(name, title, message, queued, 'strm', count=created,
+                             spoiler=rule.get('media_spoiler', False))
         if pending_error is not None:
             raise pending_error
         return created
@@ -711,12 +741,13 @@ class ChannelMonitor:
                          % (title or name, len(fresh), rule['share_cid'] or rule['share_label'], ids))
         if self.config()['notify']:
             self._notify(name, title, message, [(jid, '转存') for jid in ids], 'transfer',
-                         self.store.directory_label(rule['share_cid'], rule['share_label']))
+                         self.store.directory_label(rule['share_cid'], rule['share_label']),
+                         spoiler=rule.get('media_spoiler', False))
         return len(fresh)
 
     @staticmethod
     def _post_context(name, title, message, resource_kind=''):
-        subject, note = channel_post_text(message.get('text'))
+        subject, note = channel_post_text('' if message.get('protected') else message.get('text'))
         post_id = message['id']
         post_url = ''
         if CHANNEL_NAME.fullmatch(name):
@@ -727,13 +758,26 @@ class ChannelMonitor:
                 'resource_kind': resource_kind}
 
     def _notify(self, name, title, message, queued, mode, target='', count=None, resource_kind='', omitted=0,
-                *, context=None, submission_id=None):
-        heading,body=channel_notice(title or name, message.get('text',''), queued, mode, target, count,
-                                    resource_kind, omitted, context=context or self._post_context(name, title, message),
-                                    submission_id=submission_id)
+                *, context=None, submission_id=None, spoiler=False):
+        context = context or self._post_context(name, title, message)
+        options = {'post_url': context.get('post_url', ''),
+                   'spoiler': bool(spoiler or message.get('media_spoiler'))}
+        protected = message.get('protected')
+        photo = None if protected else message.get('photo_url')
+        session_photo = not protected and message.get('session_photo')
+        if session_photo:
+            options['photo_source'] = {'channel': name, 'id': message['id']}
+        if (session_photo or photo) and not options['spoiler']:
+            options['copy_source'] = {'from_chat_id': '@' + name if CHANNEL_NAME.fullmatch(name) else name,
+                                      'message_id': message['id']}
+        text = '' if protected else message.get('text', '')
+        heading,body=channel_notice(title or name, text, queued, mode, target, count,
+                                    resource_kind, omitted, context=context,
+                                    submission_id=submission_id, original=True)
         job_id = queued[0][0] if queued and isinstance(queued[0][0], int) else None
         task = asyncio.create_task(self.engine.notifications.publish(
-            'channel:%s:%s:%s:%s' % (name, message['id'], mode, resource_kind), heading, body, job_id=job_id))
+            'channel:%s:%s:%s:%s' % (name, message['id'], mode, resource_kind), heading, body, job_id=job_id,
+            photo=photo, telegram_options=options))
         self.engine.notice_tasks.add(task)
         task.add_done_callback(self.engine.notice_tasks.discard)
 

@@ -46,3 +46,29 @@ def test_shareorganize_reports_empty_and_enqueues(tmp_path):
         store.close()
 
     asyncio.run(run())
+
+
+def test_forwarded_original_photo_caption_and_button_submit_share_without_running_embedded_command(tmp_path):
+    async def run():
+        from strimkeep.transfer import shares
+        store = Store(tmp_path / 'data', 'admin', 'test-password-1234')
+        notices = Notices()
+        submitted = []
+        async def enqueue(text, dest, auto, origin, update_id):
+            submitted.append((shares(text), dest, origin))
+            return [7]
+        engine = SimpleNamespace(store=store, http=None, notifications=notices,
+                                 transfer=SimpleNamespace(enqueue=enqueue))
+        bot = TelegramBot(engine)
+        payload = update(9)
+        message = payload['message']
+        del message['text']
+        message.update(caption='/organize\n原帖', photo=[{'file_id': 'original'}],
+                       forward_origin={'type': 'channel'},
+                       reply_markup={'inline_keyboard': [[{'text': '获取资源', 'url': 'https://115.com/s/example'}]]})
+        await bot.handle(payload, {'allowed_user_id': '42', 'bot_target_cid': '123'}, 'bot1')
+        assert len(submitted) == 1 and submitted[0][0][0]['share_code'] == 'example'
+        assert submitted[0][1:] == ('123', 'telegram')
+        assert '已接收' in notices.items[0][0][1]
+        store.close()
+    asyncio.run(run())

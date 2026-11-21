@@ -135,28 +135,36 @@ class TelegramBot:
             await self.sync_callback(update,config,identity)
             return
         message=update.get('message',{})
-        text=message.get('text') or message.get('caption') or ''
-        for entity in message.get('entities',[])+message.get('caption_entities',[]):
-            if entity.get('type')=='text_link':text+='\n'+str(entity.get('url',''))
-        if not isinstance(text,str):return
+        forwarded = bool(message.get('forward_origin') or message.get('forward_from_chat') or message.get('forward_date'))
+        text = message.get('text') or message.get('caption') or ''
+        if not isinstance(text, str):
+            return
         sender=message.get('from',{});chat=message.get('chat',{})
         # Only an explicitly authorized private user can invoke cloud mutations.
         if (sender.get('is_bot') or chat.get('type')!='private' or
                 str(sender.get('id'))!=config.get('allowed_user_id') or str(chat.get('id'))!=str(sender.get('id'))):return
+        entities = [*message.get('entities', []), *message.get('caption_entities', [])]
+        urls = [str(entity.get('url', '')) for entity in entities if entity.get('type') == 'text_link']
+        if forwarded:
+            markup = message.get('reply_markup') or {}
+            urls.extend(str(button.get('url', '')) for row in markup.get('inline_keyboard', []) for button in row)
+            # Only bring transferable resources into the pipeline; channel navigation and ads aren't downloads.
+            urls = [url for url in urls if LINK.match(url) or OFFLINE_AUTO.match(url)]
+        text = '\n'.join([text, *dict.fromkeys(urls)])
         key=f'bot:{identity}:{update["update_id"]}'
-        if text.strip().split(' ',1)[0].split('@')[0] in ('/start','/help'):
+        command = '' if forwarded else (text.strip().split(maxsplit=1) or [''])[0].split('@')[0]
+        if command in ('/start','/help'):
             enabled=bot_commands(self.store)
             descriptions={
                 'status':'查看当前任务状态', 'tasks':'查看最近任务',
                 'organize':'立即整理网盘影视', 'sync':'选择网页中保存的 STRM 同步任务并立即执行',
                 'shareorganize':'整理待处理的分享 STRM', 'share':'加 115 分享链接，免转存生成 STRM',
                 'offline':'加磁力、ED2K 或直链，提交 115 离线下载', 'sign':'115 签到'}
-            lines=['直接发送 115 分享链接可转存；磁力和 ED2K 可直接发送。',
+            lines=['直接发送链接或转发含链接的频道原帖；115 分享转存，磁力和 ED2K 提交离线。',
                    '目录及落盘后是否整理在网页「资源入库」设置；直链请用 /offline。', '', '可用指令：']
             lines.extend('/'+name+'  '+descriptions[name] for name in ordered_bot_commands(self.store) if enabled[name])
             await self.engine.notifications.publish(key,'🤖 使用帮助','\n'.join(lines),chat_override=str(chat['id']),force=True)
             return
-        command=(text.strip().split(maxsplit=1) or [''])[0].split('@')[0]
         name=command.lstrip('/')
         if name in BOT_COMMANDS and not bot_commands(self.store).get(name, True):
             await self.engine.notifications.publish(key,'⚙️ 指令已关闭',
@@ -244,11 +252,18 @@ class TelegramBot:
             offline=parts[1] if len(parts)>1 else ''
         elif OFFLINE_AUTO.search(text):
             offline=text
+        if forwarded and offline is not None:
+            offline = '\n'.join(url for url in links_in(text) if OFFLINE_AUTO.match(url) or LINK.match(url))
         if offline is not None:
             has_share=await self._handle_offline(offline,key+':offline' if LINK.search(text) else key,chat)
             if not has_share:return
             key += ':transfer'
-        if not LINK.search(text):return
+        if not LINK.search(text):
+            if forwarded:
+                await self.engine.notifications.publish(key, '原帖未识别到资源链接',
+                    '请直接发送原帖里的 115 分享、磁力或 ED2K 链接。',
+                    chat_override=str(chat['id']), force=True)
+            return
         dest=config.get('bot_target_cid')
         if dest is None:dest=config.get('target_cid','')
         try:

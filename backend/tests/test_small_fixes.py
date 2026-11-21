@@ -69,7 +69,8 @@ def test_offline_completion_displays_verified_result_and_channel_context(tmp_pat
             assert receipt['key'] == f'offline_done:{sid}'
             assert '频道离线下载 · 已完成' in receipt['title']
             assert all(value in receipt['message'] for value in (
-                '示例频道', '#DEMO-001', context['post_url'], 'landed.mkv', f'离线记录  #{sid}', '已核实落盘  1 项'))
+                '示例频道', context['post_url'], 'landed.mkv', f'离线记录  #{sid}', '已核实落盘  1 项'))
+            assert '#DEMO-001' not in receipt['message']
             assert 'submitted.mkv' not in receipt['message']
             assert ('已入队' if organize else '仅落盘') in receipt['message']
         assert store.db.execute('SELECT count(*) FROM organize_jobs').fetchone()[0] == 1
