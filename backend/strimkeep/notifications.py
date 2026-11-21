@@ -5,12 +5,32 @@ import json
 import os
 import time
 import re
+import sqlite3
 from functools import lru_cache
 from pathlib import Path
 
 import httpx
 from .cards import media_card
 from .message_templates import compact, transfer_completed, sync_task_context
+from .telegram_security import is_public_poster_url, safe_telegram_error
+
+
+MAX_PUBLIC_POSTER_BYTES = 8 * 1024 * 1024
+PNG_MAGIC = b'\x89PNG\r\n\x1a\n'
+
+
+async def download_public_poster(http, url):
+    async with http.stream('GET', url, follow_redirects=False, timeout=5,
+                           headers={'Accept-Encoding': 'identity'}) as response:
+        response.raise_for_status()
+        data = bytearray()
+        async for chunk in response.aiter_bytes(64 * 1024):
+            if len(data) + len(chunk) > MAX_PUBLIC_POSTER_BYTES:
+                raise ValueError('原帖海报过大')
+            data.extend(chunk)
+    if not data.startswith((b'\xff\xd8', PNG_MAGIC)):
+        raise ValueError('原帖海报格式无法上传')
+    return bytes(data)
 
 
 CATEGORY_DEFAULTS={'media':True,'metadata':True,'transfer':True,'strm_summary':True,'strm_files':True,'errors':True,'emby':False,'task':False,'general':True,'cloud':True,'silent':False}
@@ -352,17 +372,27 @@ class Notifications:
             source = options.get('photo_source')
             response = None
             copy_source = options.get('copy_source')
+            poster_issue = ''
             if copy_source and not options.get('spoiler'):
                 response = await self.send(token, 'copyMessage', {**payload, **copy_source, 'caption': clipped(text, 1000)})
                 if response.status_code in (400, 403):
                     if any(mark in response.text.lower() for mark in ('protected content', 'forwards_restricted', "can't be forwarded")):
                         source = photo = None
+                        poster_issue = 'Telegram 拒绝复制原帖'
                     response = None
             if response is None and source and self.channel_photo:
                 try:
                     file = await asyncio.wait_for(self.channel_photo(source['channel'], source['id']), timeout=9)
                 except Exception:
                     pass
+                if not file:
+                    poster_issue = '用户会话未取得海报'
+            if response is None and not file and options.get('post_url') and is_public_poster_url(photo):
+                # Telegram may reject fetching the CDN URL even when StrimKeep can read it.
+                try:
+                    file = await asyncio.wait_for(download_public_poster(self.http, photo), timeout=6)
+                except (httpx.HTTPError, TimeoutError, ValueError) as exc:
+                    poster_issue = '下载海报失败（%s）' % safe_telegram_error(exc)
             if response is None and (file or photo):
                 photo_payload = {**payload, 'caption': clipped(text, 1000)}
                 if options.get('spoiler'):
@@ -371,13 +401,22 @@ class Notifications:
                     response = await self.send(token, 'sendPhoto', photo_payload, file=file)
                 else:
                     response = await self.send(token, 'sendPhoto', {**photo_payload, 'photo': photo})
+                if response.status_code == 400 and options.get('post_url'):
+                    rejection = 'Telegram 拒收%s海报（HTTP 400）' % ('上传的' if file else '链接中的')
+                    poster_issue = ' · '.join(filter(None, (poster_issue, rejection)))
             # If the source photo has expired, still deliver the caption and post link.
-            if response is None or (response.status_code == 400 and options.get('post_url')):
+            text_only = response is None or (response.status_code == 400 and options.get('post_url'))
+            if text_only:
                 payload.update(text=clipped(text, 4000), link_preview_options={'is_disabled': True})
                 response = await self.send(token, 'sendMessage', payload)
             response.raise_for_status()
             data = response.json()
             if isinstance(data,dict) and data.get('ok') is True:
+                if text_only and poster_issue:
+                    try:
+                        self.store.event('channel', f'频道通知改发文字 · {poster_issue}')
+                    except sqlite3.Error:
+                        pass
                 result=data.get('result')
                 return 'sent', result.get('message_id') if isinstance(result,dict) else None
             return 'unknown', ''
@@ -385,7 +424,6 @@ class Notifications:
             code = exc.response.status_code
             return ('unknown' if code >= 500 or code == 429 else 'failed'), f'HTTP {code}'
         except (httpx.HTTPError, ValueError) as exc:
-            from .telegram_security import safe_telegram_error
             return 'unknown', safe_telegram_error(exc, token)[:80]
 
     async def retry(self, now=None, limit=20):
@@ -435,7 +473,8 @@ class Notifications:
                 if file:
                     form = {key: value if isinstance(value, str) else json.dumps(value)
                             for key, value in payload.items()}
-                    return await self.http.post(url, data=form, files={'photo': ('poster.jpg', file, 'image/jpeg')}, timeout=15)
+                    filename, mime = ('poster.png', 'image/png') if file.startswith(PNG_MAGIC) else ('poster.jpg', 'image/jpeg')
+                    return await self.http.post(url, data=form, files={'photo': (filename, file, mime)}, timeout=15)
                 return await self.http.post(url, json=payload, timeout=15)
             finally:self.next_send=time.monotonic()+1.1
 

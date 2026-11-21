@@ -27,6 +27,7 @@ from . import share_service
 from .share_service import enqueue_organize
 from .transfer import shares as parse_shares
 from .message_templates import channel_notice, channel_post_text
+from .telegram_security import is_public_poster_url
 
 PREVIEW = 'https://t.me/s/{name}'
 USER_AGENT = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -141,21 +142,11 @@ def _plain(fragment):
 
 
 def _preview_photo(chunk):
-    from urllib.parse import urlsplit
     for tag in re.findall(r'<a\b[^>]*\btgme_widget_message_photo_wrap\b[^>]*>', chunk, re.I):
         # The preview uses a CSS background URL instead of an image element.
         match = re.search(r'''url\(\s*['"]?(https://[^'"\s)]+)''', html_lib.unescape(tag))
-        if not match:
-            continue
-        url = match.group(1)
-        try:
-            target = urlsplit(url)
-            host = target.hostname or ''
-            if not target.username and target.port in (None, 443) and (
-                    host.endswith(('.telesco.pe', '.telegram-cdn.org', '.telegram.org'))):
-                return url
-        except ValueError:
-            continue
+        if match and is_public_poster_url(match.group(1)):
+            return match.group(1)
     return ''
 
 

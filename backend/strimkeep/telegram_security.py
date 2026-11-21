@@ -1,10 +1,22 @@
 """Redact Telegram credentials from error messages before they leave the process."""
 import re
+from urllib.parse import urlsplit
 
 import httpx
 
 _API_URL = re.compile(r"(?i)https?://api\.telegram\.org/bot[^\s\"\'<>]+")
 _TOKEN = re.compile(r"(?<![0-9A-Za-z_])\d{5,}:[A-Za-z0-9_-]{15,}(?![A-Za-z0-9_-])")
+
+
+def is_public_poster_url(value):
+    if not isinstance(value, str):
+        return False
+    try:
+        url = urlsplit(value)
+        return (url.scheme == 'https' and url.username is None and url.port in (None, 443)
+                and (url.hostname or '').endswith(('.telesco.pe', '.telegram-cdn.org', '.telegram.org')))
+    except ValueError:
+        return False
 
 
 def safe_telegram_error(exc, token=None):

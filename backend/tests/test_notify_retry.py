@@ -144,6 +144,72 @@ def test_channel_original_photo_uses_copy_or_spoiler_upload_and_keeps_link_on_re
     asyncio.run(run())
 
 
+def test_public_channel_uploads_the_poster_after_copy_rejection(tmp_path):
+    async def run():
+        store = Store(tmp_path / 'data', 'admin', 'test-password-1234')
+        enable(store)
+        photo = 'https://cdn1.telesco.pe/card.jpg'
+        link = 'https://t.me/example_public/7'
+        jpeg = b'\xff\xd8mock-photo'
+        sequence = []
+
+        async def request(req):
+            sequence.append(req.url.path.rsplit('/', 1)[-1])
+            if req.method == 'GET':
+                assert str(req.url) == photo
+                return httpx.Response(200, content=jpeg)
+            if req.url.path.endswith('/copyMessage'):
+                return httpx.Response(400, json={'description': 'message to copy not found'})
+            assert req.url.path.endswith('/sendPhoto')
+            assert 'multipart/form-data' in req.headers['content-type']
+            body = await req.aread()
+            assert jpeg in body and link.encode() in body
+            assert b'Original caption' in body
+            assert (b'has_spoiler' in body) == ('copyMessage' not in sequence)
+            return httpx.Response(200, json={'ok': True, 'result': {'message_id': 7}})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(request)) as http:
+            notes = Notifications(store, http)
+            options = {'copy_source': {'from_chat_id': '@example_public', 'message_id': 7}, 'post_url': link}
+            assert await notes.publish('channel:public', 'Result', 'Original caption', photo=photo,
+                                       telegram_options=options) == 'sent'
+            assert sequence == ['copyMessage', 'card.jpg', 'sendPhoto']
+            sequence.clear()
+            assert await notes.publish('channel:public-spoiler', 'Result', 'Original caption', photo=photo,
+                                       telegram_options={**options, 'spoiler': True}) == 'sent'
+            assert sequence == ['card.jpg', 'sendPhoto']
+        store.close()
+    asyncio.run(run())
+
+
+def test_protected_channel_keeps_link_without_downloading_photo(tmp_path):
+    async def run():
+        store = Store(tmp_path / 'data', 'admin', 'test-password-1234')
+        enable(store)
+        sequence = []
+
+        async def request(req):
+            method = req.url.path.rsplit('/', 1)[-1]
+            sequence.append(method)
+            assert req.method == 'POST'
+            if method == 'copyMessage':
+                return httpx.Response(400, json={'description': "message can't be forwarded"})
+            assert method == 'sendMessage'
+            return httpx.Response(200, json={'ok': True, 'result': {'message_id': 7}})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(request)) as http:
+            notes = Notifications(store, http)
+            options = {'copy_source': {'from_chat_id': '@protected_example', 'message_id': 7},
+                       'post_url': 'https://t.me/protected_example/7'}
+            assert await notes.publish('channel:protected', 'Result', 'Text',
+                                       photo='https://cdn1.telesco.pe/card.jpg', telegram_options=options) == 'sent'
+            assert sequence == ['copyMessage', 'sendMessage']
+            assert 'Telegram 拒绝复制原帖' in store.db.execute(
+                "SELECT message FROM events WHERE kind='channel' ORDER BY id DESC LIMIT 1").fetchone()[0]
+        store.close()
+    asyncio.run(run())
+
+
 def test_grouped_media_retry_keeps_poster_and_details_in_order_for_both_libraries(tmp_path):
     from test_organize import new_job
     async def run(kind):
