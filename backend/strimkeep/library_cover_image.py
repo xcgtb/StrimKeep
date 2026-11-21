@@ -1,14 +1,16 @@
 """Render the 16:9 primary image that Emby displays for a library."""
+from colorsys import hls_to_rgb, rgb_to_hls
 from io import BytesIO
 from pathlib import Path
 from typing import Literal
 
-from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont, ImageOps, ImageStat
+from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 
 SIZE = (1280, 720)
 MAX_IMAGE_BYTES = 2 * 1024 * 1024
-RENDER_VERSION = 3
+RENDER_VERSION = 4
+CoverColorMode = Literal['auto', 'manual']
 CoverLayout = Literal['collage', 'grid', 'hero', 'filmstrip', 'stack', 'magazine', 'panorama', 'minimal',
                       'gallery', 'arc', 'split', 'soft', 'cinema-card', 'cinema-cut', 'cinema-wall']
 CINEMA_LAYOUTS = ('cinema-card', 'cinema-cut', 'cinema-wall')
@@ -56,6 +58,30 @@ def jpeg(image):
 
 def fit_image(image, size):
     return ImageOps.fit(image, size, Image.Resampling.LANCZOS)
+
+
+def cover_poster_limit(layout, posters, color_mode):
+    return max(int(color_mode == 'auto'), min(posters, COVER_LAYOUTS[layout][1]))
+
+
+def _image_color(photo):
+    sample = fit_image(photo, (64, 64)).quantize(colors=12)
+    palette = sample.getpalette()
+    swatches = []
+    for count, index in sample.getcolors():
+        rgb = palette[index * 3:index * 3 + 3]
+        hue, light, saturation = rgb_to_hls(*(value / 255 for value in rgb))
+        if light < .10 or light > .90:
+            continue
+        # A broad area of color should beat tiny, saturated lettering.
+        chroma = max(rgb) - min(rgb)
+        weight = count * (1 + chroma / 127)
+        swatches.append((weight, hue, light, saturation))
+    if not swatches:
+        neutral = round(photo.resize((1, 1)).convert('L').getpixel((0, 0)) * .24 + 65)
+        return neutral, neutral, neutral
+    _, hue, light, saturation = max(swatches)
+    return tuple(round(value * 255) for value in hls_to_rgb(hue, min(.56, max(.32, light)), min(.72, saturation)))
 
 
 def _font(size):
@@ -167,14 +193,22 @@ def _title(canvas, title, subtitle, accent, x, y, width, *, centered=False,
         draw.text((x, y + step * len(lines) + 7), text, font=small, fill='#dbe3ee', anchor=anchor)
 
 
-def _cover_background(accent, posters):
+def _blurred_art(photo, accent, color_mode, radius):
+    small = fit_image(photo, (160, 90)).filter(ImageFilter.GaussianBlur(radius))
+    if color_mode == 'manual':
+        highlight = tuple(round(value * .84 + 24) for value in accent)
+        small = ImageOps.colorize(small.convert('L'), '#0b1019', highlight)
+    return small.resize(SIZE, Image.Resampling.BICUBIC)
+
+
+def _cover_background(accent, photo=None, color_mode='auto', *, empty=True):
     tint = tuple(round(v * .58) for v in accent)
     shade = Image.linear_gradient('L').rotate(90).resize(SIZE)
     ground = Image.composite(Image.new('RGB', SIZE, tint), Image.new('RGB', SIZE, '#0c0f17'), shade)
-    if posters:
-        base = fit_image(posters[0], (160, 90)).filter(ImageFilter.GaussianBlur(13)).resize(SIZE, Image.Resampling.BICUBIC)
+    if photo:
+        base = _blurred_art(photo, accent, color_mode, 13)
         ground = Image.blend(ground, base, .40)
-    else:
+    elif empty:
         motif = Image.new('RGB', (320, 180))
         draw = ImageDraw.Draw(motif)
         for i, strength in enumerate((.20, .42, .69)):
@@ -208,11 +242,10 @@ def _display_row(canvas, posters, *, curved=False):
               radius=12, angle=angle)
 
 
-def _cinema_background(photo, accent):
-    sample = ImageOps.fit(photo, (160, 90)).filter(ImageFilter.GaussianBlur(17))
-    ambient = tuple(round(value * .69 + tint * .17) for value, tint in zip(ImageStat.Stat(sample).mean, accent))
-    mist = sample.resize(SIZE, Image.Resampling.BICUBIC)
-    return Image.blend(Image.new('RGB', SIZE, ambient), mist, .33).convert('RGBA')
+def _cinema_background(photo, accent, color_mode):
+    ambient = tuple(round(value * .65) for value in accent)
+    mist = _blurred_art(photo, accent, color_mode, 17)
+    return Image.blend(Image.new('RGB', SIZE, ambient), mist, .32).convert('RGBA')
 
 
 def _cinema_cards(canvas, poster, accent):
@@ -232,14 +265,17 @@ def _cinema_cut(canvas, image):
     canvas.alpha_composite(still)
 
 
-def _cinema_cover(title, subtitle, accent, layout, posters, scene):
+def _cinema_cover(title, subtitle, accent, layout, posters, scene, color_mode, blur_background):
     if not posters:
-        canvas = _cover_background(accent, [])
+        canvas = _cover_background(accent)
         _title(canvas, title, subtitle, accent, 640, 354, 1080, centered=True, middle=True, maximum=124)
         return canvas
 
     main = posters[0]
-    canvas = _cinema_background(scene or main, accent)
+    if layout == 'cinema-wall' and not blur_background:
+        canvas = _cover_background(accent, empty=False)
+    else:
+        canvas = _cinema_background(scene or main, accent, color_mode)
     if layout == 'cinema-card':
         _cinema_cards(canvas, main, accent)
     elif layout == 'cinema-cut':
@@ -252,15 +288,21 @@ def _cinema_cover(title, subtitle, accent, layout, posters, scene):
     return canvas
 
 
-def render_cover(title, subtitle, color, layout, posters, *, size=SIZE, scene=None):
-    accent = ImageColor.getrgb(color)
-    posters = [open_image(blob) for blob in posters[:COVER_LAYOUTS[layout][1]]]
+def render_cover(title, subtitle, color, layout, posters, *, size=SIZE, scene=None,
+                 color_mode='auto', blur_background=True):
+    limit = COVER_LAYOUTS[layout][1]
+    art = [open_image(blob) for blob in posters[:cover_poster_limit(layout, len(posters), color_mode)]]
+    posters = art[:limit]
+    scene = open_image(scene) if scene and layout == 'cinema-cut' else None
+    photo = scene or next(iter(art), None)
+    accent = _image_color(photo) if photo and color_mode == 'auto' else ImageColor.getrgb(color)
     if layout in CINEMA_LAYOUTS:
-        canvas = _cinema_cover(title, subtitle, accent, layout, posters, open_image(scene) if scene else None)
+        canvas = _cinema_cover(title, subtitle, accent, layout, posters, scene, color_mode, blur_background)
         image = canvas.convert('RGB')
         return jpeg(image if size == SIZE else image.resize(size, Image.Resampling.LANCZOS))
 
-    canvas = _cover_background(accent, posters)
+    background_photo = photo if posters and (blur_background or limit == 1) else None
+    canvas = _cover_background(accent, background_photo, color_mode, empty=not posters)
     if layout in ('collage', 'grid'):
         if len(posters) >= 4:
             _poster_wall(canvas, posters, angled=layout == 'collage')

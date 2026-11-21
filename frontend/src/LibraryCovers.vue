@@ -5,6 +5,9 @@ import { useVisiblePolling } from './pageActivity'
 interface Studio {
   layout: string
   color: string
+  color_mode: 'auto' | 'manual'
+  prefer_poster: boolean
+  blur_background: boolean
   posters: number
   library_ids: string[]
   enabled: boolean
@@ -49,7 +52,10 @@ const sampleName = computed(() => libraries.value.find(library => library.id ===
 const source = (data: string) => 'data:image/jpeg;base64,' + data
 
 function style(settings: Studio) {
-  return { layout: settings.layout, color: settings.color, posters: settings.posters }
+  return {
+    layout: settings.layout, color: settings.color, color_mode: settings.color_mode,
+    prefer_poster: settings.prefer_poster, blur_background: settings.blur_background, posters: settings.posters,
+  }
 }
 
 async function run(action: string, perform: () => Promise<void>) {
@@ -179,9 +185,21 @@ useVisiblePolling(pollBatch, 3000)
           <span class="featured-caption"><strong>{{ selected?.name }}</strong><span>浏览样式 ›</span></span>
         </button>
         <div class="studio-parameters">
-          <label class="studio-field">
-            <span>主色</span><input v-model="studio.color" type="color" @change="refreshPreview">
+          <label class="studio-field studio-background">
+            <span>背景颜色来源</span>
+            <el-select v-model="studio.color_mode" aria-label="背景颜色来源" @change="refreshPreview">
+              <el-option label="自动从图片提取" value="auto" />
+              <el-option label="手动指定" value="manual" />
+            </el-select>
           </label>
+          <label v-if="studio.color_mode === 'manual'" class="studio-field">
+            <span>背景色</span><input v-model="studio.color" type="color" @change="refreshPreview">
+          </label>
+          <div class="studio-field">
+            <el-checkbox v-model="studio.prefer_poster" @change="refreshPreview">优先使用海报图</el-checkbox>
+            <el-checkbox v-if="(selected?.max_posters || 0) > 1" v-model="studio.blur_background"
+              @change="refreshPreview">多图使用模糊背景</el-checkbox>
+          </div>
           <label v-if="(selected?.max_posters || 0) > 3" class="studio-field">
             <span>海报张数</span>
             <el-input-number :model-value="Math.min(studio.posters, selected?.max_posters || 9)"

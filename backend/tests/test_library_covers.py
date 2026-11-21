@@ -27,6 +27,7 @@ class Emby:
         self.tag = 'current-tag'
         self.poster_reads = 0
         self.poster = image_bytes((180, 270))
+        self.list_primary = True
         self.scene_reads = 0
         self.scene_tag = 'scene-tag'
         self.scene = image_bytes((640, 360), color='#438443')
@@ -47,7 +48,8 @@ class Emby:
             assert parents['SortBy'] == 'DateCreated' and parents['SortOrder'] == 'Descending'
             assert parents['IncludeItemTypes'] == 'Movie,Series'
             return httpx.Response(200, json={'Items': [
-                {'Id': '800', 'ImageTags': {'Primary': self.tag}, 'BackdropImageTags': [self.scene_tag]},
+                {'Id': '800', 'ImageTags': {'Primary': self.tag} if self.list_primary else {},
+                 'BackdropImageTags': [self.scene_tag]},
             ] if parents['ParentId'] == '21' else []})
         if path == '/Items/800/Images/Primary' and request.method == 'GET':
             assert request.url.params['Tag'] == self.tag
@@ -100,6 +102,7 @@ def test_gallery_reuses_real_posters_and_single_library_write_routes_are_removed
             assert [item['id'] for item in listing['items']] == ['21', '76']
             assert listing['settings']['library_ids'] == ['21', '76']
             assert not listing['settings']['enabled']
+            assert listing['settings']['color_mode'] == 'auto'
 
             options = {'scope': scope, 'library_id': '21', 'layouts': list(COVER_LAYOUTS)}
             generated = (await client.post(ROOT + '/gallery', json=options)).json()
@@ -112,6 +115,14 @@ def test_gallery_reuses_real_posters_and_single_library_write_routes_are_removed
                     if item['id'] == 'cinema-cut':
                         red, green, blue = image.getpixel((532, 160))
                         assert green > red + 35 and green > blue + 35
+            prefer_scene = await client.post(ROOT + '/gallery', json={
+                **options, 'layouts': ['cinema-card'], 'prefer_poster': False})
+            assert prefer_scene.json()['poster_count'] == 1
+            assert emby.poster_reads == 1 and emby.scene_reads == 2
+            emby.list_primary = False
+            fallback = await client.post(ROOT + '/gallery', json={**options, 'layouts': ['cinema-card']})
+            assert fallback.json()['poster_count'] == 1
+            assert emby.poster_reads == 1 and emby.scene_reads == 3
             for route in ('/21/apply', '/21/upload-preview'):
                 assert (await client.post(ROOT + route, json={})).status_code == 404
             assert (await client.put(ROOT + '/21/settings', json={})).status_code == 404
@@ -173,8 +184,32 @@ def test_templates_produce_distinct_valid_covers():
     for image in images:
         with Image.open(BytesIO(image)) as photo:
             assert photo.size == SIZE and photo.format == 'JPEG'
-    assert images[list(COVER_LAYOUTS).index('minimal')] == render_cover(
-        'A Media Library', 'Recently added', '#426bad', 'minimal', [])
+    assert render_cover('A Media Library', 'Recently added', '#426bad', 'minimal', posters, color_mode='manual') == (
+        render_cover('A Media Library', 'Recently added', '#426bad', 'minimal', [], color_mode='manual'))
+
+
+def test_cover_background_follows_its_artwork_and_honors_manual_color():
+    warm = image_bytes((300, 450), color='#c16938')
+    cool = image_bytes((300, 450), color='#356fbf')
+    landscape = image_bytes((640, 360), color='#52995a')
+
+    def background(layout, posters, **options):
+        image = render_cover('Library', 'MOVIES', '#8751aa', layout, posters,
+                             size=(264, 148), **options)
+        with Image.open(BytesIO(image)) as cover:
+            return cover.getpixel((45, 28))
+
+    red, _, blue = background('cinema-card', [warm])
+    assert red > blue + 35
+    red, _, blue = background('cinema-card', [cool])
+    assert blue > red + 35
+    red, green, blue = background('cinema-cut', [warm], scene=landscape)
+    assert green > red + 22 and green > blue + 12
+    red, green, blue = background('collage', [cool], color_mode='manual')
+    assert red > green and blue > green + 14
+    assert background('minimal', [warm]) != background('minimal', [cool])
+    assert background('collage', []) == background('collage', [], color_mode='manual')
+    assert background('collage', [warm]) != background('collage', [warm], blur_background=False)
 
 
 def test_collage_stays_readable_on_mobile_and_sizes_single_poster_to_fill_artwork_area():
@@ -213,7 +248,7 @@ def test_batch_uses_one_style_for_selected_libraries_and_saves_it_for_the_schedu
             scope = listing['scope']
             covers = LibraryCovers(store, upstream)
             data = {'scope': scope, 'library_ids': ['21', '76', '21'], 'layout': 'cinema-cut',
-                    'color': '#446699', 'enabled': True, 'daily_at': '06:30'}
+                    'color': '#446699', 'color_mode': 'manual', 'enabled': True, 'daily_at': '06:30'}
             invalid = await client.post(ROOT + '/batch', json={**data, 'library_ids': ['21', '800']})
             assert invalid.status_code == 409 and commands.running(store) is None
             submitted = (await client.post(ROOT + '/batch', json=data)).json()['items']
@@ -223,7 +258,8 @@ def test_batch_uses_one_style_for_selected_libraries_and_saves_it_for_the_schedu
             assert all(item['state'] == 'skipped' for item in second_batch)
             ids = [item['command_id'] for item in submitted]
             assert all(json.loads(commands.get(store, command_id)['payload'])['style'] ==
-                       {'layout': 'cinema-cut', 'color': '#446699', 'posters': 6} for command_id in ids)
+                       {'layout': 'cinema-cut', 'color': '#446699', 'color_mode': 'manual', 'posters': 6}
+                       | {'prefer_poster': True, 'blur_background': True} for command_id in ids)
             params = {'scope': scope, 'command_ids': ','.join(map(str, ids))}
             waiting = (await client.get(ROOT + '/batch-status', params=params)).json()['items']
             assert all(item['state'] == 'queued' for item in waiting)
@@ -244,8 +280,8 @@ def test_batch_uses_one_style_for_selected_libraries_and_saves_it_for_the_schedu
             assert emby.searches == ['21', '76'] and emby.scene_reads == 1
             assert len({image for _, image in emby.uploads}) == 2
             saved = (await client.get(ROOT)).json()['settings']
-            assert (saved['layout'], saved['daily_at'], saved['library_ids']) == (
-                'cinema-cut', '06:30', ['21', '76'])
+            assert (saved['layout'], saved['daily_at'], saved['library_ids'], saved['color_mode']) == (
+                'cinema-cut', '06:30', ['21', '76'], 'manual')
         store.close()
 
     asyncio.run(run())
