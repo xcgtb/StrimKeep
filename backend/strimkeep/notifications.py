@@ -10,7 +10,7 @@ from pathlib import Path
 
 import httpx
 from .cards import media_card
-from .message_templates import transfer_completed, sync_task_context
+from .message_templates import compact, transfer_completed, sync_task_context
 
 
 CATEGORY_DEFAULTS={'media':True,'metadata':True,'transfer':True,'strm_summary':True,'strm_files':True,'errors':True,'emby':False,'task':False,'general':True,'cloud':True,'silent':False}
@@ -115,34 +115,27 @@ def strm_tree(paths, max_lines=20, max_units=3400):
         chain = [part for part in head.split('/') if part]
         label = ' / '.join(chain[1:]) if len(chain) > 1 else (chain[0] if chain else '')
         names = groups[head]
-        marks = ['└── ' if i == len(names) - 1 else '├── ' for i in range(len(names))]
-        if current and position:
-            current.append('')               # 目录之间空一行，眼睛能分段
+        lines = [('└── ' if i == len(names) - 1 else '├── ') + name for i, name in enumerate(names)]
         index = 0
         while index < len(names):
-            if index == 0 or not current:
-                if label: current.append(label)
-            room = max_lines - len(current)
-            if room <= 0:
-                flush(); continue
-            take = min(room, len(names) - index)
-            while take > 1 and sum(_units(marks[index + i] + names[index + i]) + 1
-                                   for i in range(take)) > max_units:
-                take -= 1
-            for i in range(index, index + take):
-                line = marks[i] + names[i]
-                if _units(line) <= max_units:
-                    current.append(line)
-                    continue
-                # 极端长文件名：按码元硬切，预算里先扣掉本片已经写下的内容。
-                remaining = max_units - sum(_units(item) + 1 for item in current)
-                if remaining < 200:
-                    flush(); remaining = max_units
-                for piece in _split_units(line, remaining):
-                    current.append(piece); flush()
-            index += take
-            if index < len(names):
-                flush()                      # 本片写满，下一片重复表头
+            block = [lines[index]]
+            name = names[index]
+            if (name.lower().endswith('.strm') and index + 1 < len(names)
+                    and names[index + 1] == name[:-5] + '.nfo'):
+                block.append(lines[index + 1])
+            prefix = ([''] if current and position and index == 0 else [])
+            if label and (index == 0 or not current):
+                prefix.append(label)
+            page = [*current, *prefix, *block]
+            if len(page) > max_lines or _units('\n'.join(page)) > max_units:
+                flush()
+                page = ([label] if label else []) + block
+            if _units('\n'.join(page)) > max_units:
+                # Extremely long legacy paths can exceed an entire Telegram page.
+                chunks.extend(_split_units('\n'.join(page), max_units))
+            else:
+                current[:] = page
+            index += len(block)
     flush()
     return chunks
 
@@ -257,15 +250,13 @@ class Notifications:
     def __init__(self, store, http):
         self.store, self.http = store, http
         self.report_gate = asyncio.Lock()
-        self.group_gate = asyncio.Lock()
+        self.delivery_gate = asyncio.Lock()
         self.send_gate = asyncio.Lock()
-        self.retry_gate = asyncio.Lock()
         self.next_send = 0.0
         self.media_gate = asyncio.Lock()
         self._verified_cards_requeued = False
         with self.store.db:
             self.store.db.execute('CREATE TABLE IF NOT EXISTS notification_dependencies(event_key TEXT PRIMARY KEY, depends_on TEXT NOT NULL)')
-            self.store.db.execute("UPDATE notifications SET telegram_state='unknown',next_try=0 WHERE telegram_state='inflight'")
             self.store.db.execute('CREATE TABLE IF NOT EXISTS media_notice_outbox(job_id INTEGER PRIMARY KEY)')
             self.store.db.execute("CREATE TABLE IF NOT EXISTS media_notice_groups(event_key TEXT PRIMARY KEY,job_id INTEGER,items TEXT NOT NULL)")
             self.store.db.execute("CREATE TABLE IF NOT EXISTS telegram_message_refs(event_key TEXT PRIMARY KEY,chat_id TEXT NOT NULL,message_id INTEGER NOT NULL,photo INTEGER NOT NULL,edited TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,next_try REAL NOT NULL DEFAULT 0)")
@@ -286,7 +277,11 @@ class Notifications:
             # 通知旁路失败不能影响入库/整理主流程；Telegram 队列仍保留正式回执。
             pass
 
-    async def publish(self, key, title, message, level='info', job_id=None, test=False, photo=None, chat_override=None, force=False, category=None, depends_on=None):
+    async def publish(self, *args, **kwargs):
+        async with self.delivery_gate:
+            return await self._publish(*args, **kwargs)
+
+    async def _publish(self, key, title, message, level='info', job_id=None, test=False, photo=None, chat_override=None, force=False, category=None, depends_on=None):
         config = self.store.get('notification_config', {})
         category=category or category_for(key)
         categories={**CATEGORY_DEFAULTS,**config.get('categories',{})}
@@ -309,7 +304,7 @@ class Notifications:
         state = 'disabled'
         if enabled:
             token, chat = config.get('bot_token'), chat_override or config.get('chat_id')
-            state, detail = await self._deliver(title, message, photo, chat, token)
+            state, detail = await self._deliver_notice(key, title, message, photo, chat, token)
             with self.store.db:
                 self.store.db.execute(
                     'UPDATE notifications SET telegram_state=?,attempts=attempts+1,next_try=?,photo=? WHERE id=?',
@@ -328,12 +323,25 @@ class Notifications:
         base = min(RETRY_BASE_SECONDS * 2 ** max(0, attempts - 1), RETRY_CAP_SECONDS)
         return min(RETRY_CAP_SECONDS, base * random.uniform(0.85, 1.15))
 
-    async def _deliver(self, title, message, photo, chat, token):
+    async def _deliver_notice(self, key, title, message, photo, chat, token):
+        if key.startswith('strm:') and ':group:' in key:
+            prefix, _, group = key.partition(':group:')
+            group = group.removesuffix(':summary') if group.endswith(':summary') else group.rsplit(':files:', 1)[0]
+            ref = self.store.db.execute(
+                'SELECT message_id FROM telegram_message_refs WHERE event_key=? AND chat_id=?',
+                (f'show_done:{prefix[5:]}:{group}', str(chat))).fetchone()
+            if ref:
+                return await self._deliver(title, message, photo, chat, token, reply_to=ref['message_id'])
+        return await self._deliver(title, message, photo, chat, token)
+
+    async def _deliver(self, title, message, photo, chat, token, *, reply_to=None):
         """一次发送。unknown 表示可重试（网络/5xx/429），failed 表示对方明确拒收（4xx）。"""
         if not token or not chat:
             return 'failed', 'missing token or chat'
         try:
             payload = {'chat_id': chat}
+            if reply_to is not None:
+                payload['reply_parameters'] = {'message_id': reply_to, 'allow_sending_without_reply': True}
             text = title + '\n' + message
             if photo: payload.update(photo=photo, caption=clipped(text, 1000))
             else: payload.update(text=clipped(text, 4000), link_preview_options={'is_disabled': True})
@@ -352,7 +360,7 @@ class Notifications:
             return 'unknown', safe_telegram_error(exc, token)[:80]
 
     async def retry(self, now=None, limit=20):
-        async with self.retry_gate:
+        async with self.delivery_gate:
             return await self._retry(now, limit)
 
     async def _retry(self, now=None, limit=20):
@@ -377,7 +385,8 @@ class Notifications:
                 break
             with self.store.db:
                 self.store.db.execute("UPDATE notifications SET telegram_state='inflight' WHERE id=?", (row['id'],))
-            state, detail = await self._deliver(row['title'], row['message'], row['photo'], chat, token)
+            state, detail = await self._deliver_notice(
+                row['event_key'], row['title'], row['message'], row['photo'], chat, token)
             attempts = row['attempts'] + 1
             with self.store.db:
                 self.store.db.execute(
@@ -398,9 +407,13 @@ class Notifications:
         async with self.report_gate:
             await self._job(row)
 
-    async def group_strm(self, job_id, group_key, items):
-        async with self.group_gate:
-            await self._group_strm(job_id,group_key,items)
+    async def group_strm(self, job_id, group_key, items, *, card=None):
+        async with self.delivery_gate:
+            if card:
+                title, message, photo = card
+                await self._publish(f'show_done:{job_id}:{group_key}', title, message, job_id=job_id,
+                                    photo=photo, category='media')
+            await self._group_strm(job_id, group_key, items)
 
     def metadata_counts(self, job_id, ids):
         """本批真正写出的 .strm / .nfo / .json 数量。"""
@@ -466,12 +479,20 @@ class Notifications:
         if written or removed or pending:
             prefix=f'strm:{job_id}:group:{group_key}'
             source=strm_source(json.loads(self.store.db.execute('SELECT config FROM organize_jobs WHERE id=?',(job_id,)).fetchone()[0]))
-            summary='\n'.join(lines)
+            plan = items[0][1]
+            details = plan.get('details') or {}
+            subject = compact(details.get('name') or details.get('title'), 85)
+            season = (plan.get('hint') or {}).get('season')
+            if subject and isinstance(season, int):
+                subject += f' · S{season:02d}'
+            scope = f'{subject} · 任务 #{job_id}' if subject else f'任务 #{job_id}'
+            summary = '\n'.join([scope, *lines])
             meta_line=self.metadata_line(job_id,ids)
             if meta_line:summary+='\n'+meta_line
             previous_key = f'show_done:{job_id}:{group_key}'
             summary_key = prefix+':summary'
-            await self.publish(summary_key,f'📦 {source} · STRM 批量结果',summary,job_id=job_id,category='strm_summary',depends_on=previous_key)
+            await self._publish(summary_key,f'📦 {source} · STRM 批量结果',summary,
+                                job_id=job_id,category='strm_summary',depends_on=previous_key)
             previous_key = summary_key
             for kind,heading,values in [('created','🆕 新增 STRM',created),('replaced','🔄 洗版替换',replaced_paths),
                                         ('removed','🧹 已清理旧 STRM',removed),('pending','⚠️ 清理结果待核实',pending)]:
@@ -483,7 +504,8 @@ class Notifications:
                 chunks=strm_tree(listed)
                 for i,(chunk,title) in enumerate(zip(chunks,strm_detail_titles(chunks,count,title_label,source)),1):
                     file_key = prefix+':files:'+kind+':'+str(i)
-                    await self.publish(file_key,title,heading+'\n'+chunk,job_id=job_id,category='strm_files',depends_on=previous_key)
+                    await self._publish(file_key,title,scope+'\n'+heading+'\n'+chunk,
+                                        job_id=job_id,category='strm_files',depends_on=previous_key)
                     previous_key = file_key
         with self.store.db:
             self.store.db.executemany('INSERT OR IGNORE INTO strm_reported_items VALUES(?,?)', [(job_id,i) for i in ids])
@@ -508,9 +530,19 @@ class Notifications:
                 ids=json.loads(entry['items'])
                 if not ids:continue
                 marks=','.join('?' for _ in ids)
-                items=self.store.db.execute(f'SELECT id,plan FROM organize_items WHERE job_id=? AND id IN ({marks}) AND state=?', (row['id'],*ids,'done')).fetchall()
+                items=self.store.db.execute(f'SELECT id,original,plan FROM organize_items WHERE job_id=? AND id IN ({marks}) AND state=? ORDER BY id', (row['id'],*ids,'done')).fetchall()
                 if len(items)==len(ids):
-                    await self.group_strm(row['id'],entry['group_key'],[(i['id'],json.loads(i['plan'])) for i in items])
+                    plans = [(item['id'], json.loads(item['plan'])) for item in items]
+                    card_key = f'show_done:{row["id"]}:{entry["group_key"]}'
+                    card = None
+                    if not self.store.db.execute('SELECT 1 FROM notifications WHERE event_key=?', (card_key,)).fetchone():
+                        config = json.loads(row['config'])
+                        card = media_card(
+                            [(json.loads(item['original']), plan) for item, (_, plan) in zip(items, plans)],
+                            shared=config.get('job_kind') == 'share_organize',
+                            transferred=bool(config.get('transfer_parent')),
+                            emby_status='pending' if config.get('notify_emby') else '')
+                    await self.group_strm(row['id'], entry['group_key'], plans, card=card)
             await self.media_report(row)
         kind=json.loads(row['config']).get('job_kind','organize')
         empty=kind=='organize' and state=='completed' and not self.store.db.execute('SELECT 1 FROM organize_items WHERE job_id=?',(row['id'],)).fetchone()
@@ -721,13 +753,17 @@ class Notifications:
                     with self.store.db:self.store.db.execute('DELETE FROM media_notice_outbox WHERE job_id=?',(job['id'],))
 
     async def media_report(self, job):
+        async with self.delivery_gate:
+            await self._media_report(job)
+
+    async def _media_report(self, job):
         groups={};paths=[]
         reported={r['item_id'] for r in self.store.db.execute('SELECT item_id FROM strm_reported_items WHERE job_id=?',(job['id'],))}
         grouped_ids = set()
-        prefix = f'show_done:{job["id"]}:group:'
-        for event in self.store.db.execute('SELECT event_key,telegram_state FROM notifications WHERE job_id=? AND event_key LIKE ?', (job['id'], prefix + '%')):
-            if event['telegram_state'] != 'failed':
-                grouped_ids.update(int(i) for i in event['event_key'][len(prefix):].split(',') if i.isdigit())
+        for event in self.store.db.execute("""SELECT g.items FROM media_notice_groups g
+            JOIN notifications n ON n.event_key=g.event_key
+            WHERE g.job_id=? AND g.event_key LIKE 'show_done:%' AND n.telegram_state!='failed'""", (job['id'],)):
+            grouped_ids.update(json.loads(event['items']))
         for row in self.store.db.execute("SELECT id,original,plan FROM organize_items WHERE job_id=? AND state='done' ORDER BY id",(job['id'],)):
             source,plan=json.loads(row['original']),json.loads(row['plan'])
             if plan.get('strm_filtered'):continue
@@ -747,6 +783,7 @@ class Notifications:
             key=(hint.get('media_type'),details.get('id'),hint.get('season'))
             groups.setdefault(key,[]).append((source,plan))
         config=json.loads(job['config'])
+        previous_key = None
         for key,items in groups.items():
             shared=config.get('job_kind')=='share_organize'
             latest=self.store.db.execute('SELECT notify_state FROM organize_jobs WHERE id=?',(job['id'],)).fetchone()
@@ -764,10 +801,12 @@ class Notifications:
             with self.store.db:
                 self.store.db.execute('INSERT OR IGNORE INTO media_notice_outbox(job_id) VALUES(?)',(job['id'],))
                 self.store.db.execute('INSERT OR IGNORE INTO media_notice_groups(event_key,job_id,items) VALUES(?,?,?)',(event,job['id'],json.dumps(ids)))
-            state=await self.publish(event,heading,body,'success',job['id'],photo=photo)
+            state=await self._publish(event,heading,body,'success',job['id'],photo=photo,depends_on=previous_key)
+            previous_key = event
             if photo and state=='failed':
                 with self.store.db:self.store.db.execute('UPDATE media_notice_groups SET event_key=? WHERE event_key=?',(event+':text',event))
-                await self.publish(event+':text',heading,body,'success',job['id'])
+                previous_key = event + ':text'
+                await self._publish(previous_key,heading,body,'success',job['id'])
         changes = self.store.db.execute('''SELECT c.action,c.path FROM strm_changes c WHERE c.job_id=?
             AND NOT EXISTS (SELECT 1 FROM strm_change_items i JOIN strm_reported_items r
               ON r.job_id=i.job_id AND r.item_id=i.item_id WHERE i.job_id=c.job_id AND i.action=c.action AND i.path=c.path)
@@ -783,8 +822,12 @@ class Notifications:
         summary=f'同步视频：{len(paths)} 个\nSTRM 更新：{changed if config.get("job_kind")=="strm_sync" else len(paths)} 个\n清理 STRM：{len(removed)} 个文件'
         if replaced: summary += f'\n同路径覆盖：{len(replaced)} 个 STRM'
         if pending: summary += f'\n清理结果待核实：{len(pending)} 个 STRM'
+        scope = f'任务 #{job["id"]}'
         if config.get('job_kind') != 'strm_sync':
-            await self.publish(f'strm:{job["id"]}:summary',f'📦 {strm_source(config)} · STRM 批次结果',summary,job_id=job['id'])
+            event = f'strm:{job["id"]}:summary'
+            await self._publish(event,f'📦 {strm_source(config)} · STRM 批次结果',scope+'\n'+summary,
+                                job_id=job['id'],depends_on=previous_key)
+            previous_key = event
         # 同步任务使用统一结果；整理任务继续保留批次汇总和明细。
         # 明细只留给整理触发的增量（见 _group_strm）。
         if config.get('job_kind') != 'strm_sync':
@@ -793,10 +836,17 @@ class Notifications:
             title_label = 'STRM 与 NFO 文件明细' if count != len(expanded) else 'STRM 文件明细'
             chunks=strm_tree(expanded)
             for i,(chunk,title) in enumerate(zip(chunks,strm_detail_titles(chunks,count,title_label,strm_source(config))),1):
-                await self.publish(f'strm:{job["id"]}:files:{i}',title,'🔗 新增或更新\n'+chunk,job_id=job['id'])
+                event = f'strm:{job["id"]}:files:{i}'
+                await self._publish(event,title,scope+'\n🔗 新增或更新\n'+chunk,job_id=job['id'],depends_on=previous_key)
+                previous_key = event
         chunks=strm_tree(removed)
         for i,(chunk,title) in enumerate(zip(chunks,strm_detail_titles(chunks,len(removed),source=strm_source(config))),1):
-            await self.publish(f'strm:{job["id"]}:files:removed:{i}',title,'🧹 已清理旧 STRM\n'+chunk,job_id=job['id'])
+            event = f'strm:{job["id"]}:files:removed:{i}'
+            await self._publish(event,title,scope+'\n🧹 已清理旧 STRM\n'+chunk,job_id=job['id'],depends_on=previous_key)
+            previous_key = event
         chunks=strm_tree(pending)
         for i,(chunk,title) in enumerate(zip(chunks,strm_detail_titles(chunks,len(pending),source=strm_source(config))),1):
-            await self.publish(f'strm:{job["id"]}:files:pending:{i}',title,'⚠️ 清理结果待核实\n'+chunk,level='warning',job_id=job['id'])
+            event = f'strm:{job["id"]}:files:pending:{i}'
+            await self._publish(event,title,scope+'\n⚠️ 清理结果待核实\n'+chunk,level='warning',
+                                job_id=job['id'],depends_on=previous_key)
+            previous_key = event

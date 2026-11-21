@@ -54,10 +54,11 @@ def make_db(state='submitted', attempts=0, age=0):
                                          target_label TEXT, before_ids TEXT, submitted_at REAL,
                                          last_checked REAL, state TEXT, message TEXT,
                                          organize_job_id INTEGER, organize INTEGER,
-                                         attempts INTEGER NOT NULL DEFAULT 0, stalled_at REAL);
+                                         attempts INTEGER NOT NULL DEFAULT 0, stalled_at REAL,
+                                         notice_context TEXT NOT NULL DEFAULT '{}');
     ''')
     urls = '["ed2k://|file|Movie.S01E01.mkv|123|ABC|/"]'
-    conn.execute("INSERT INTO offline_submissions VALUES (1,?,'100','','[]',?,0,?,'',NULL,1,?,NULL)",
+    conn.execute("INSERT INTO offline_submissions VALUES (1,?,'100','','[]',?,0,?,'',NULL,1,?,NULL,'{}')",
                  (urls, time.time() - age, state, attempts))
     return conn
 

@@ -1,4 +1,4 @@
-from strimkeep.message_templates import channel_notice, channel_subject, transfer_completed, transfer_received
+from strimkeep.message_templates import channel_notice, channel_subject, offline_completed, transfer_completed, transfer_received
 
 
 def test_channel_receipt_reports_resource_destination_and_real_queue_state_without_secrets():
@@ -44,3 +44,11 @@ def test_offline_submission_is_not_reported_as_completed():
     title, body = channel_notice('影视频道', '', [], 'offline', '磁力目录', count=3, resource_kind='磁力')
     assert '已提交' in title and '3 个链接' in body and '结果待确认' in body
     assert '保存至  磁力目录' in body
+
+
+def test_offline_completion_distinguishes_115_task_name_from_verified_files():
+    title, body = offline_completed('离线目录', [], task_names=['来源文件.mkv'], submission_id=4)
+    assert '已完成' in title
+    assert '115 已完成，暂未核实落盘文件' in body
+    assert '115 任务  来源文件.mkv' in body and '已核实落盘  1 项' not in body
+    assert '离线记录  #4' in body

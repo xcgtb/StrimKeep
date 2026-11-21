@@ -7,6 +7,7 @@
 import json
 import re
 import time
+from urllib.parse import unquote, unquote_plus
 
 from fastapi import Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -198,7 +199,7 @@ class OfflinePostProcess:
             self.store.db.execute('ALTER TABLE offline_submissions ADD COLUMN finished_seen_at REAL NOT NULL DEFAULT 0')
         self.store.db.commit()
 
-    async def submit(self, urls, target_cid, target_label, organize=True, origin='web'):
+    async def submit(self, urls, target_cid, target_label, organize=True, origin='web', *, notice_context=None):
         """先登记意图与目录快照，再提交 115；失败不重复提交，转 needs_review。
 
         `organize=False` 表示只落盘：下载完成后不自动入队整理，等定时/手动扫描接手。
@@ -221,10 +222,11 @@ class OfflinePostProcess:
         before = [e['id'] for e in await self.engine.cloud.children(target_cid)]
         with self.store.db:
             sid = self.store.db.execute(
-                'INSERT INTO offline_submissions(urls,target_cid,target_label,before_ids,submitted_at,state,message,organize) '
-                "VALUES(?,?,?,?,?, 'submitting','',?)",
+                'INSERT INTO offline_submissions(urls,target_cid,target_label,before_ids,submitted_at,state,message,organize,notice_context) '
+                "VALUES(?,?,?,?,?, 'submitting','',?,?)",
                 (json.dumps(urls, ensure_ascii=False), target_cid, target_label,
-                 json.dumps(before), time.time(), 1 if organize else 0)).lastrowid
+                 json.dumps(before), time.time(), 1 if organize else 0,
+                 json.dumps(notice_context or {}, ensure_ascii=False))).lastrowid
         try:
             await self.engine.cloud.offline_add(urls, target_cid)
         except Exception as exc:
@@ -292,11 +294,11 @@ class OfflinePostProcess:
             text = str(url)
             m = re.search(r'\|file\|([^|]+)\|', text)
             if m:
-                return m.group(1)
-            if text.startswith('magnet:'):
+                return unquote(m.group(1))
+            if text.lower().startswith('magnet:'):
                 m = re.search(r'[?&]dn=([^&]+)', text)
                 if m:
-                    return m.group(1).replace('+', ' ')
+                    return unquote_plus(m.group(1))
         return ''
 
     async def report_stalled(self, now=None, ids=None):
@@ -311,7 +313,7 @@ class OfflinePostProcess:
         # 少任何一条都不能判超时——刚提交还没轮到核查、或者任务已被删，都不是超时。
         scope = " AND id IN (%s)" % ','.join('?' * len(ids)) if ids else ''
         rows = self.store.db.execute(
-            "SELECT id,urls,target_cid,target_label,submitted_at FROM offline_submissions"
+            "SELECT id,urls,target_cid,target_label,submitted_at,notice_context FROM offline_submissions"
             " WHERE state='submitted' AND submitted_at<? AND stalled_at IS NULL"
             " AND message LIKE '%下载进行中%'" + scope +
             " ORDER BY submitted_at LIMIT 5",
@@ -326,7 +328,8 @@ class OfflinePostProcess:
                 urls = []
             name = self._url_names(row['urls'])
             heading, body = offline_stalled(self._label(row['target_cid'], row['target_label']),
-                                            len(urls or []), name)
+                                            len(urls or []), name, context=json.loads(row['notice_context']),
+                                            submission_id=row['id'])
             await self.engine.notifications.publish(
                 key='offline_stalled:%d' % row['id'], title=heading, message=body,
                 level='info', category='offline')
@@ -517,7 +520,7 @@ class OfflinePostProcess:
                     raise
                 produced = []
                 break
-            produced.append(entry)
+            produced.append({'is_dir': False, **entry})
         if not produced:
             age = time.time() - row['submitted_at']
             if age > self.EXPIRE_SECONDS:
@@ -527,11 +530,8 @@ class OfflinePostProcess:
                 # 现场 115 的任务列表里有 20 个 done，目标目录却一个都没多——这种情况很常见。
                 self._set(row['id'], 'completed',
                           '115 显示下载完成，但产物不在目标目录（可能已被移动或删除）。')
-                heading, body = offline_completed(
-                    self._label(row['target_cid'], row['target_label']), None)
-                await self.engine.notifications.publish(
-                    key='offline_done:%d' % row['id'], title=heading, message=body,
-                    level='info', category='offline')
+                names = [str(task['name']) for task in matched if task.get('name')]
+                await self._notify_completed(row, [], task_names=names)
                 self.store.event('offline', '离线提交 #%d：115 显示完成（产物不在目录），已发回执。'
                                  % row['id'])
             else:
@@ -541,18 +541,26 @@ class OfflinePostProcess:
             organize = row['organize']
         except (IndexError, KeyError):
             organize = 1
+        job_id = None
         if not organize or not await self.engine.scan_scope_allows([row['target_cid']]):
             # 只落盘；目标目录不在待整理范围时同样只落盘，不建整理任务。
             self._set(row['id'], 'completed', '下载完成，本批 %d 项已落盘。' % len(produced))
-            heading, body = offline_completed(self._label(row['target_cid'], row['target_label']),
-                                              len(produced))
-            await self.engine.notifications.publish(
-                key='offline_done:%d' % row['id'], title=heading, message=body,
-                level='info', category='offline')
-            return
-        job_id = await self._enqueue_organize(row, produced)
-        heading, body = offline_completed(self._label(row['target_cid'], row['target_label']),
-                                          len(produced), job_id)
+        else:
+            job_id = await self._enqueue_organize(row, produced)
+        await self._notify_completed(row, produced, job_id)
+
+    async def _notify_completed(self, row, produced, job_id=None, *, task_names=()):
+        target = row['target_cid']
+        label = self._label(target, row['target_label'])
+        parents = {str(entry['parent_id']) for entry in produced if entry.get('parent_id') is not None}
+        actual = parents == {target}
+        if len(parents) == 1 and not actual:
+            actual_label = self._label(next(iter(parents)))
+            if actual_label:
+                label, actual = actual_label, True
+        heading, body = offline_completed(
+            label, produced, job_id, context=json.loads(row['notice_context']),
+            submission_id=row['id'], task_names=task_names, actual_location=actual)
         await self.engine.notifications.publish(
             key='offline_done:%d' % row['id'], title=heading, message=body,
             level='info', category='offline')

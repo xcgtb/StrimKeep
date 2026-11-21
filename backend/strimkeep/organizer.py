@@ -148,7 +148,7 @@ class Organizer:
         # 0.9.60：running → queued 与 notify inflight → unknown 都交给仓储层。
         self.jobs.recover_running()
         with self.store.db:
-            self.store.db.execute("UPDATE notifications SET telegram_state='unknown' WHERE telegram_state='inflight'")
+            self.store.db.execute("UPDATE notifications SET telegram_state='unknown',next_try=0 WHERE telegram_state='inflight'")
         if not self.store.meta('phase5_notice_since'):
             with self.store.db:
                 self.store.db.execute('INSERT INTO meta VALUES(?,?)',('phase5_notice_since',str(time.time())))
@@ -802,10 +802,7 @@ class Organizer:
         if not acc or not acc.get('episodes'):
             return
         details = acc.get('details') or {}
-        title = details.get('name') or details.get('title') or show_dir.rsplit('/', 1)[-1]
-        year = (details.get('first_air_date') or details.get('release_date') or '')[:4]
         episodes = acc.get('episodes', [])
-        count = len(episodes)
         poster = None
         backdrop = details.get('backdrop_path') or details.get('poster_path')
         if isinstance(backdrop, str) and backdrop.startswith('/'):
@@ -819,14 +816,8 @@ class Organizer:
             transferred=bool(notice_config.get('transfer_parent')),
             emby_status='pending' if notice_config.get('notify_emby') else '',
             other_items=acc.get('other_items',()), unassigned=acc.get('unassigned',0))
-        poster = card_photo or poster
-        await self.notifications.publish(
-            key=f'show_done:{job_id}:{show_dir}',
-            title=title_text,
-            message=msg,
-            level='info', job_id=job_id, photo=poster,
-            category='media')
-        await self.notifications.group_strm(job_id, show_dir, acc.get('items', []))
+        await self.notifications.group_strm(job_id, show_dir, acc.get('items', []),
+                                            card=(title_text, msg, card_photo or poster))
 
     def queue_show_notice(self, job_id, event_suffix, acc):
         with self.store.db:

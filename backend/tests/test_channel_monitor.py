@@ -53,8 +53,9 @@ class FakeOffline:
     def __init__(self):
         self.calls, self.error = [], None
 
-    async def submit(self, urls, cid, label='', organize=True):
+    async def submit(self, urls, cid, label='', organize=True, *, origin='web', notice_context=None):
         self.calls.append({'urls': list(urls), 'cid': cid, 'label': label, 'organize': organize})
+        self.context = notice_context
         if self.error:
             raise self.error
         return 1
@@ -630,6 +631,24 @@ def test_notices_for_different_resource_types_do_not_share_event_keys(tmp_path):
         assert any('4 个 STRM' in args[2] and '分享 STRM 待整理' in args[2] for args, _ in notices)
         assert any('2 个链接' in args[2] and '磁力' in args[2] for args, _ in notices)
         assert any('1 个链接' in args[2] and 'ED2K' in args[2] for args, _ in notices)
+        store.close()
+    asyncio.run(run())
+
+
+def test_channel_offline_receipt_records_note_and_post_link(tmp_path):
+    async def run():
+        store, monitor, _, _ = make(tmp_path, {}, {**CONFIG, 'notify': True})
+        text = '示例影片\n#LTX #DEMO-001\n备注：修复字幕\nhttps://115.com/s/secret\n提取码:abcd'
+        post = {'id': 88, 'text': text}
+        rule = {'offline_cid': '12345', 'offline_label': '离线目录', 'organize_after': False}
+        await monitor._offline('-1001234567890', '示例频道', post, rule, ['ed2k://|file|demo.mkv|10|abc|/'])
+        await asyncio.gather(*list(monitor.engine.notice_tasks))
+        ctx = monitor.engine.offline.context
+        assert ctx == {'channel': '示例频道', 'subject': '示例影片', 'note': '#LTX #DEMO-001 · 备注：修复字幕',
+                       'post_url': 'https://t.me/c/1234567890/88', 'resource_kind': 'ED2K'}
+        args, _ = monitor.engine.notifications.sent[0]
+        assert all(value in args[2] for value in (ctx['note'], ctx['post_url'], '离线记录  #1', 'ED2K'))
+        assert 'abcd' not in args[2] and 'secret' not in args[2]
         store.close()
     asyncio.run(run())
 

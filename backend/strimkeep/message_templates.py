@@ -19,15 +19,34 @@ def sync_task_context(config):
     return '\n'.join(lines)+'\n' if lines else ''
 
 
-def channel_subject(text):
-    """Extract a short post heading without forwarding share URLs or access codes."""
+def channel_post_text(text):
+    """Keep the post heading and readable notes out of the resource links."""
+    lines = []
     for raw in str(text or '').splitlines():
-        line = re.sub(r'(?i)https?://\S+|(?:magnet:\?|ed2k://)\S+', '', raw)
-        line = re.sub(r'(?:提取码|访问码|密码)\s*[:：]?\s*[A-Za-z0-9]+', '', line)
+        line = re.sub(r'(?i)(?:https?://|ftp://|tg://|magnet:\?|ed2k://)\S+', '', raw)
+        line = re.sub(r'(?:提取码|访问码|密码)\s*[:：=]?\s*[A-Za-z0-9]+', '', line)
+        line = re.sub(r'(?i)\b(?:password|pwd)\s*[:：=]\s*[A-Za-z0-9]+', '', line)
         line = line.strip(' \t-–—:：|｜•·')
         if line and re.search(r'[\w\u4e00-\u9fff]', line):
-            return compact(line, 90)
-    return ''
+            lines.append(line)
+    if not lines:
+        return '', ''
+    if lines[0].startswith('#'):
+        return '', compact(' · '.join(lines), 230)
+    return compact(lines[0], 100), compact(' · '.join(lines[1:]), 230)
+
+
+def channel_subject(text):
+    return channel_post_text(text)[0]
+
+
+def channel_post_lines(context):
+    lines = []
+    if context.get('subject'): lines.append('🎬 ' + context['subject'].removeprefix('🎬').strip())
+    if context.get('channel'): lines.append('📡 来源  ' + compact(context['channel'], 90))
+    if context.get('note'): lines.append('📝 帖子备注  ' + context['note'])
+    if context.get('post_url'): lines.append('↗ 频道原帖  ' + context['post_url'])
+    return lines
 
 
 def task_numbers(ids):
@@ -43,11 +62,14 @@ def transfer_received(ids, target, auto):
     return '\n'.join(lines)
 
 
-def channel_notice(channel, text, queued, mode, target='', count=None, resource_kind='', omitted=0):
+def channel_notice(channel, text, queued, mode, target='', count=None, resource_kind='', omitted=0,
+                   *, context=None, submission_id=None):
     heading = {'transfer':'📡 频道分享转存 · 已排队', 'offline':'📡 频道离线下载 · 已提交',
                'strm':'📡 频道分享 STRM · 已生成', 'offline_unknown':'⚠️ 频道离线下载 · 待核查'}.get(mode, '📡 频道资源')
-    subject = channel_subject(text)
-    lines = ([subject, ''] if subject else []) + ['📡 来源  ' + compact(channel, 90)]
+    if context is None:
+        subject, note = channel_post_text(text)
+        context = {'channel': channel, 'subject': subject, 'note': note}
+    lines = channel_post_lines(context)
     if mode == 'strm':
         lines.extend(['🔗 模式  分享 STRM · 免转存', '📂 位置  分享 STRM 待整理',
                       f'📄 已生成  {count if count is not None else 0} 个 STRM'])
@@ -60,6 +82,7 @@ def channel_notice(channel, text, queued, mode, target='', count=None, resource_
     elif mode == 'offline':
         if resource_kind: lines.append('🧲 类型  ' + resource_kind)
         if target: lines.append('📂 保存至  ' + compact(target))
+        if submission_id is not None: lines.append(f'📋 离线记录  #{submission_id}')
         if count is not None: lines.append(f'📨 已提交  {count} 个链接')
         if omitted: lines.append(f'⚠️ 超过单次上限，{omitted} 个链接未提交')
         lines.append('⏳ 状态  已提交 115，下载结果待确认')
@@ -71,25 +94,41 @@ def channel_notice(channel, text, queued, mode, target='', count=None, resource_
     return heading, '\n'.join(lines)
 
 
-def offline_completed(target, count, job_id=None):
-    """离线下载完成回执：和 channel_notice 一样的两列短标签，不加解释。
-
-    count=None 表示 115 说完成了、但目标目录里找不到产物（被移走或删除）。
-    """
-    heading = '✅ 离线下载 · 已完成'
-    lines = [f'📂 落盘  {compact(target) or "已配置目录"}']
-    if count is None:
-        lines.append('📄 产物  不在目标目录')
+def offline_completed(target, produced, job_id=None, *, context=None, submission_id=None,
+                      task_names=(), actual_location=True):
+    context = context or {}
+    heading = ('✅ 频道离线下载' if context.get('channel') else '✅ 离线下载') + ' · 已完成'
+    lines = offline_context_lines(context, submission_id)
+    location = '落盘' if produced and actual_location else '提交目录'
+    lines.append(f'📂 {location}  {compact(target) or "已配置目录"}')
+    if not produced:
+        lines.append('⚠️ 115 已完成，暂未核实落盘文件')
+        if task_names:
+            lines.append('📄 115 任务  ' + compact('、'.join(task_names), 180))
         return heading, '\n'.join(lines)
-    lines.append(f'📄 产物  {count} 个')
-    lines.append(f'🎬 整理  任务 #{job_id} 已入队' if job_id else '📄 状态  只落盘，不自动整理')
+    lines.append(f'📄 已核实落盘  {len(produced)} 项')
+    for entry in produced[:8]:
+        name = compact(entry.get('name'), 135) or '文件名未返回'
+        lines.append(('📁 ' if entry.get('is_dir') else '· ') + name)
+    if len(produced) > 8:
+        lines.append(f'另有 {len(produced) - 8} 项已落盘')
+    lines.append(f'🎬 整理  任务 #{job_id} 已入队' if job_id else '📥 处理  仅落盘')
     return heading, '\n'.join(lines)
 
 
-def offline_stalled(target, count, name=''):
+def offline_context_lines(context, submission_id):
+    lines = channel_post_lines(context)
+    if context.get('resource_kind'): lines.append('🧲 类型  ' + context['resource_kind'])
+    if submission_id is not None: lines.append(f'📋 离线记录  #{submission_id}')
+    return lines
+
+
+def offline_stalled(target, count, name='', *, context=None, submission_id=None):
     """离线下载超时回执：一条提交一条，用户拿着文件名就能去 115 换源。"""
-    heading = '⏳ 离线下载 · 超时'
-    lines = [f'📂 目标  {compact(target) or "已配置目录"}']
+    context = context or {}
+    heading = ('⏳ 频道离线下载' if context.get('channel') else '⏳ 离线下载') + ' · 超时'
+    lines = offline_context_lines(context, submission_id)
+    lines.append(f'📂 目标  {compact(target) or "已配置目录"}')
     lines.append(f'📄 文件  {compact(name, 70)}' if name else f'🔗 链接  {count} 个')
     lines.append('👉 到 115 离线列表删掉换源')
     return heading, '\n'.join(lines)

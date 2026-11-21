@@ -53,3 +53,7 @@ def test_detail_title_total_is_entries_even_when_split():
     assert titles[0].startswith('📄 STRM 与 NFO 文件明细 1/')
     assert titles[0].endswith('/14)')
     assert titles[-1].endswith('/14)')
+    for chunk in chunks:
+        for line in chunk.splitlines():
+            if line.endswith('.strm'):
+                assert line[4:-5] + '.nfo' in chunk

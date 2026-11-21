@@ -39,7 +39,8 @@ def make_db():
                                          target_label TEXT, before_ids TEXT, submitted_at REAL,
                                          last_checked REAL, state TEXT, message TEXT,
                                          organize_job_id INTEGER, organize INTEGER,
-                                         attempts INTEGER NOT NULL DEFAULT 0, stalled_at REAL);
+                                         attempts INTEGER NOT NULL DEFAULT 0, stalled_at REAL,
+                                         notice_context TEXT NOT NULL DEFAULT '{}');
     ''')
     return conn
 
@@ -53,7 +54,7 @@ def engine_on(conn):
 
 def test_duplicate_link_is_rejected_before_submitting():
     conn = make_db()
-    conn.execute("INSERT INTO offline_submissions VALUES (1,?,'100','','[]',?,0,'submitted','',NULL,1,0,NULL)",
+    conn.execute("INSERT INTO offline_submissions VALUES (1,?,'100','','[]',?,0,'submitted','',NULL,1,0,NULL,'{}')",
                  ('["ed2k://|file|A.mkv|1|ABC|/"]', time.time()))
     engine = engine_on(conn)
     try:
@@ -69,7 +70,7 @@ def test_duplicate_link_is_rejected_before_submitting():
 def test_finished_link_can_be_submitted_again():
     """已结束的提交不挡路，允许重新提交（比如上次失败想再试一次）。"""
     conn = make_db()
-    conn.execute("INSERT INTO offline_submissions VALUES (1,?,'100','','[]',?,0,'expired','',NULL,1,0,NULL)",
+    conn.execute("INSERT INTO offline_submissions VALUES (1,?,'100','','[]',?,0,'expired','',NULL,1,0,NULL,'{}')",
                  ('["ed2k://|file|A.mkv|1|ABC|/"]', time.time()))
     engine = engine_on(conn)
     engine.engine = type('E', (), {'cloud': type('C', (), {

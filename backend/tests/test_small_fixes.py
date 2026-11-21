@@ -19,8 +19,7 @@ def test_offline_done_accepts_percent_forms_and_rejects_midway_states():
     assert done({'status': '下载中 80%'}) is False
 
 
-def test_offline_completion_without_organize_does_not_enqueue(tmp_path):
-    """只落盘的离线提交：产物出现后只标记完成，不建整理任务。"""
+def test_offline_completion_displays_verified_result_and_channel_context(tmp_path):
     import asyncio
     from types import SimpleNamespace
     from strimkeep.offline_api import OfflinePostProcess
@@ -30,37 +29,50 @@ def test_offline_completion_without_organize_does_not_enqueue(tmp_path):
         async def offline_tasks(self, page=1, size=20):
             # 115 的 file_id 是「保存到哪个目录」，产物文件 ID 在 delete_file_id 里。
             return {'data': [{'info_hash': 'abc123', 'delete_file_id': '1001',
-                              'name': 'a.mkv', 'percentDone': 100}]}, None
+                              'name': 'submitted.mkv', 'percentDone': 100}]}, None
 
         async def file(self, file_id):
-            return {'id': file_id, 'name': 'a.mkv', 'is_dir': False, 'parent_id': '123'}
+            return {'id': file_id, 'name': 'landed.mkv', 'parent_id': '123'}
+
+        async def children(self, cid):
+            return []
+
+        async def offline_add(self, urls, cid):
+            pass
 
     async def run():
         store = Store(tmp_path / 'data', 'admin', 'test-password-1234')
         notified = []
 
         async def publish(**kwargs):
-            notified.append(kwargs.get('key'))
+            notified.append(kwargs)
 
         async def scan_scope_allows(cids):
             return True
 
         # OfflinePostProcess 的第一个参数就是 engine，store / 通知都从它身上取。
-        engine = SimpleNamespace(store=store, cloud=Cloud(), tasks=SimpleNamespace(),
+        engine = SimpleNamespace(store=store, cloud=Cloud(), tasks=SimpleNamespace(config=lambda _: {}),
                                  notifications=SimpleNamespace(publish=publish),
                                  scan_scope_allows=scan_scope_allows)
-        post = OfflinePostProcess(engine)
-        with store.db:
-            sid = store.db.execute(
-                "INSERT INTO offline_submissions(urls,target_cid,target_label,before_ids,submitted_at,"
-                "state,message,organize) VALUES('[\"magnet:?xt=urn:btih:abc123\"]','123','x','[]',0,'submitted','',0)").lastrowid
-        row = store.db.execute('SELECT * FROM offline_submissions WHERE id=?', (sid,)).fetchone()
-        await post.check(row)
-        row = store.db.execute('SELECT * FROM offline_submissions WHERE id=?', (sid,)).fetchone()
-        assert row['state'] == 'completed', dict(row)
-        assert row['organize_job_id'] is None
-        assert store.db.execute('SELECT count(*) FROM organize_jobs').fetchone()[0] == 0
-        assert notified == ['offline_done:%d' % sid]
+        context = {'channel': '示例频道', 'subject': '影片', 'note': '#DEMO-001', 'resource_kind': '磁力',
+                   'post_url': 'https://t.me/example/44'}
+        for organize in (False, True):
+            post = OfflinePostProcess(engine)
+            sid = await post.submit(['magnet:?xt=urn:btih:abc123'], '123', '115 网盘 / 下载',
+                                    organize=organize, origin='channel', notice_context=context)
+            row = store.db.execute('SELECT * FROM offline_submissions WHERE id=?', (sid,)).fetchone()
+            await OfflinePostProcess(engine).check(row)
+            row = store.db.execute('SELECT * FROM offline_submissions WHERE id=?', (sid,)).fetchone()
+            assert row['state'] == 'completed', dict(row)
+            assert bool(row['organize_job_id']) == organize
+            receipt = notified[-1]
+            assert receipt['key'] == f'offline_done:{sid}'
+            assert '频道离线下载 · 已完成' in receipt['title']
+            assert all(value in receipt['message'] for value in (
+                '示例频道', '#DEMO-001', context['post_url'], 'landed.mkv', f'离线记录  #{sid}', '已核实落盘  1 项'))
+            assert 'submitted.mkv' not in receipt['message']
+            assert ('已入队' if organize else '仅落盘') in receipt['message']
+        assert store.db.execute('SELECT count(*) FROM organize_jobs').fetchone()[0] == 1
         store.close()
 
     asyncio.run(run())

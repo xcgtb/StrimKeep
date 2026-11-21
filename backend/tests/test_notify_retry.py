@@ -20,7 +20,8 @@ class FakeHTTP:
         outcome = self.outcomes.pop(0) if self.outcomes else 'ok'
         request = httpx.Request('POST', url)
         if outcome == 'ok':
-            return httpx.Response(200, json={'ok': True}, request=request)
+            return httpx.Response(200, json={'ok': True, 'result': {'message_id': len(self.calls)}},
+                                  request=request)
         if outcome == 'reject':
             return httpx.Response(400, json={'ok': False, 'description': 'bad chat'}, request=request)
         if outcome == 'busy':
@@ -136,10 +137,60 @@ def test_grouped_media_retry_keeps_poster_and_details_in_order_for_both_librarie
         sent=[x.get('caption') or x.get('text') for x in http.calls[1:]]
         assert sent[0].startswith('海报') and 'STRM 批量结果' in sent[1]
         assert '文件明细 1/' in sent[2] and '文件明细 2/' in sent[3]
+        assert all(call['reply_parameters']['message_id'] == 2 for call in http.calls[2:])
         assert all(row['telegram_state']=='sent' for row in store.db.execute('SELECT telegram_state FROM notifications WHERE job_id=?',(jid,)))
         store.close()
     for kind in ('organize','share_organize'):
         asyncio.run(run(kind))
+
+
+def test_concurrent_media_batches_keep_each_poster_summary_and_pages_together(tmp_path):
+    from test_organize import new_job
+
+    async def run():
+        store = Store(tmp_path / 'data', 'admin', 'test-password-1234')
+        enable(store)
+        http = FakeHTTP([])
+        notes = Notifications(store, http)
+        first_started, release, second_queued = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        async def send(token, method, payload):
+            if payload.get('caption', '').startswith('作品甲'):
+                first_started.set()
+                await release.wait()
+            return await http.post('https://example.invalid/' + method, json=payload)
+        notes.send = send
+
+        async def group(kind, title):
+            jid = new_job(store, {'job_kind': kind})
+            items = [(i, {'relative_path': f'library/{title}/S01E{i:02d}.strm',
+                          'strm_created': True, 'details': {'name': title}, 'hint': {'season': 1}})
+                     for i in range(1, 24)]
+            if kind == 'organize':
+                second_queued.set()
+            await notes.group_strm(jid, 'group:1,2', items,
+                                   card=(title, '正文', 'https://img/x.jpg'))
+
+        first = asyncio.create_task(group('share_organize', '作品甲'))
+        await first_started.wait()
+        Notifications(store, http)
+        assert store.db.execute('SELECT telegram_state FROM notifications').fetchone()[0] == 'inflight'
+        second = asyncio.create_task(group('organize', '作品乙'))
+        await second_queued.wait()
+        assert not http.calls
+        release.set()
+        await asyncio.gather(first, second)
+
+        messages = [data.get('caption') or data['text'] for data in http.calls]
+        assert len(messages) == 8
+        for offset, name, source in [(0, '作品甲', '分享 STRM'), (4, '作品乙', '网盘整理')]:
+            assert messages[offset].startswith(name)
+            assert source in messages[offset + 1]
+            assert '文件明细 1/2' in messages[offset + 2] and '文件明细 2/2' in messages[offset + 3]
+            for idx in range(offset + 1, offset + 4):
+                assert f'{name} · S01 · 任务 #' in messages[idx]
+                assert http.calls[idx]['reply_parameters']['message_id'] == offset + 1
+        store.close()
+    asyncio.run(run())
 
 
 def test_waiting_chain_survives_restart_and_a_second_failure(tmp_path):

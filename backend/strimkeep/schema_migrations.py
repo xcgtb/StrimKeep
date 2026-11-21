@@ -64,6 +64,7 @@ COLUMN_PATCHES = {
     'offline_submissions': [
         ('attempts', ' INTEGER NOT NULL DEFAULT 0'),
         ('stalled_at', ' REAL'),
+        ('notice_context', " TEXT NOT NULL DEFAULT '{}'"),
     ],
 }
 

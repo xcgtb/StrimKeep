@@ -453,14 +453,22 @@ def test_group_strm_outbox_recovers_once_after_restart(tmp_path):
         if engine.notice_tasks:await asyncio.gather(*engine.notice_tasks)
         item=store.db.execute('SELECT id FROM organize_items WHERE job_id=?',(jid,)).fetchone()['id']
         with store.db:
-            store.db.execute("DELETE FROM notifications WHERE job_id=? AND event_key LIKE 'strm:%'",(jid,))
+            store.db.execute("DELETE FROM notifications WHERE job_id=? AND (event_key LIKE 'strm:%' OR event_key LIKE 'show_done:%')",(jid,))
+            store.db.execute('DELETE FROM media_notice_groups WHERE job_id=?',(jid,))
             store.db.execute('DELETE FROM strm_reported_items WHERE job_id=?',(jid,))
             store.db.execute('INSERT INTO strm_group_outbox VALUES(?,?,?)',(jid,'recovery',json.dumps([item])))
+            store.db.execute('INSERT INTO media_notice_groups VALUES(?,?,?)',
+                             (f'show_done:{jid}:recovery',jid,json.dumps([item])))
         await engine.notifications.job(engine.job(jid))
         await engine.notifications.job(engine.job(jid))
         assert not store.db.execute('SELECT 1 FROM strm_group_outbox WHERE job_id=?',(jid,)).fetchone()
         result=store.db.execute("SELECT event_key FROM notifications WHERE job_id=? AND event_key LIKE 'strm:%:files:%'",(jid,)).fetchall()
         assert len(result)==1 and ':group:recovery:' in result[0]['event_key']
+        result = store.db.execute(
+            "SELECT event_key FROM notifications WHERE job_id=? AND (event_key LIKE 'show_done:%' OR event_key LIKE 'strm:%') ORDER BY id",
+            (jid,)).fetchall()
+        assert [r['event_key'] for r in result] == [
+            f'show_done:{jid}:recovery', f'strm:{jid}:group:recovery:summary', f'strm:{jid}:group:recovery:files:created:1']
         await http.aclose();store.close()
     asyncio.run(scenario())
 

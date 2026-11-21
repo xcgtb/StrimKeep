@@ -26,7 +26,7 @@ from .cloud115 import CloudError
 from . import share_service
 from .share_service import enqueue_organize
 from .transfer import shares as parse_shares
-from .message_templates import channel_notice
+from .message_templates import channel_notice, channel_post_text
 
 PREVIEW = 'https://t.me/s/{name}'
 USER_AGENT = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -553,30 +553,32 @@ class ChannelMonitor:
         return handled + await self._strm(name, title, message, rule, found)
 
     async def _offline(self, name, title, message, rule, urls):
-        """磁力 / 电驴：只落盘到频道指定目录，不自动整理（整理交给目录扫描）。"""
+        """提交磁力或 ED2K，并将当时的原帖信息和离线记录一起保存。"""
         if not urls:
             return 0
         submitted = urls[:20]
+        kind = '磁力' if submitted[0].lower().startswith('magnet:') else 'ED2K'
+        context = self._post_context(name, title, message, kind)
         try:
-            await self.engine.offline.submit(submitted, rule['offline_cid'],
-                                             rule['offline_label'] or rule['offline_cid'],
-                                             organize=bool(rule['organize_after']))
+            sid = await self.engine.offline.submit(submitted, rule['offline_cid'],
+                                                   rule['offline_label'] or rule['offline_cid'],
+                                                   organize=bool(rule['organize_after']),
+                                                   origin='channel', notice_context=context)
         except CloudError as exc:
             self._remember(name, state='error', error='离线提交失败：%s' % str(exc)[:120])
             self.store.event('channel', '频道 %s 离线提交结果未确认，需人工核查，避免重复提交：%s' % (title or name, str(exc)[:120]))
             if self.config()['notify']:
-                kind = '磁力' if submitted[0].lower().startswith('magnet:') else 'ED2K'
                 self._notify(name, title, message, [], 'offline_unknown',
                              self.store.directory_label(rule['offline_cid'], rule['offline_label']),
-                             resource_kind=kind)
+                             resource_kind=kind, context=context)
             return 0
-        self.store.event('channel', '频道 %s：提交 %d 个磁力/电驴到离线下载（%s），只落盘。'
-                         % (title or name, len(submitted), rule['offline_label'] or rule['offline_cid']))
+        self.store.event('channel', '频道 %s：提交 %d 个链接到离线下载 #%s（%s）。'
+                         % (title or name, len(submitted), sid, rule['offline_label'] or rule['offline_cid']))
         if self.config()['notify']:
-            kind = '磁力' if submitted[0].lower().startswith('magnet:') else 'ED2K'
             self._notify(name, title, message, [], 'offline',
                          self.store.directory_label(rule['offline_cid'], rule['offline_label']),
-                         count=len(submitted), resource_kind=kind, omitted=len(urls)-len(submitted))
+                         count=len(submitted), resource_kind=kind, omitted=len(urls)-len(submitted),
+                         context=context, submission_id=sid)
         return len(submitted)
 
     async def _strm(self, name, title, message, rule, found):
@@ -712,8 +714,23 @@ class ChannelMonitor:
                          self.store.directory_label(rule['share_cid'], rule['share_label']))
         return len(fresh)
 
-    def _notify(self, name, title, message, queued, mode, target='', count=None, resource_kind='', omitted=0):
-        heading,body=channel_notice(title or name, message.get('text',''), queued, mode, target, count, resource_kind, omitted)
+    @staticmethod
+    def _post_context(name, title, message, resource_kind=''):
+        subject, note = channel_post_text(message.get('text'))
+        post_id = message['id']
+        post_url = ''
+        if CHANNEL_NAME.fullmatch(name):
+            post_url = f'https://t.me/{name}/{post_id}'
+        elif re.fullmatch(r'-100[1-9]\d+', name):
+            post_url = f'https://t.me/c/{name[4:]}/{post_id}'
+        return {'channel': title or name, 'subject': subject, 'note': note, 'post_url': post_url,
+                'resource_kind': resource_kind}
+
+    def _notify(self, name, title, message, queued, mode, target='', count=None, resource_kind='', omitted=0,
+                *, context=None, submission_id=None):
+        heading,body=channel_notice(title or name, message.get('text',''), queued, mode, target, count,
+                                    resource_kind, omitted, context=context or self._post_context(name, title, message),
+                                    submission_id=submission_id)
         job_id = queued[0][0] if queued and isinstance(queued[0][0], int) else None
         task = asyncio.create_task(self.engine.notifications.publish(
             'channel:%s:%s:%s:%s' % (name, message['id'], mode, resource_kind), heading, body, job_id=job_id))
