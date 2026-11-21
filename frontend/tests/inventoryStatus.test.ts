@@ -28,3 +28,14 @@ test('identity conflicts take priority over manual completion or movie status', 
   assert.equal(inventoryCardStatus({...tv,manual_complete:true,identity_conflict:true}, null).text, '身份冲突')
   assert.equal(inventoryCardStatus({kind:'movie',identity_conflict:true}, null).category, 'unknown')
 })
+
+
+test('numbering anomaly is visible even when TMDB counts match', () => {
+  const data = {...complete, seasons: [{expected: [1, 2, 24, 25], unknown_air_date: [],
+                                         numbering_anomaly: true,
+                                         numbering_note: 'TMDB 官方集号不连续：缺 E23。'}]}
+  const result = inventoryCardStatus(tv, {data})
+  assert.equal(result.text, '✓ 完整 · 集号异常')
+  assert.equal(result.tone, 'unknown')
+  assert.match(result.hint, /E23/)
+})

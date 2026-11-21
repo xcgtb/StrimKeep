@@ -619,3 +619,11 @@ P1 至此完成。下一步进入 P2：MediaServer / Notifier / CloudDrive 适�
 - 深度删除 webhook 命中 0 条但已清理历史台账时，改为「已由库存清理完成」，不再记为未匹配；无历史清理时仍保留未匹配提示；
 - `levelOf` 不再把「已清除…历史失效记录」判为异常，未匹配降为注意；
 - 定向：inventory operations + deep delete 38 passed，前端测试 + build 通过。
+
+### 3.6.68：片库映射集号异常提示
+
+- `missing_season` 新增 `sequence_gap`、`official_gap`、`extra_union`、`numbering_anomaly`、`numbering_note`；
+- TMDB 官方集号或资源集号不连续时，即使总数对得上，也标记「集号异常」，不静默显示普通完整；
+- 片库映射详情显示缺失/官方不连续/官方没有的资源集号；卡片显示「完整 · 集号异常」；
+- 《实习医生格蕾》S03（TMDB 1–22、24、25）验证为 `sequence_gap=[23]`、`official_gap=[23]`、`missing=[]`、`numbering_anomaly=True`；
+- inventory 相关 175 passed，前端 42 passed + build。

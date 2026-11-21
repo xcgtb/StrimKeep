@@ -51,6 +51,35 @@ def test_missing_counts_undated_gap_before_present_later_episode():
     assert result['unknown_air_date'] == [23, 24, 25]
 
 
+def test_missing_season_flags_non_contiguous_official_numbering():
+    numbers = list(range(1, 23)) + [24, 25]
+    item = {'cloud': [{'season': 3, 'episodes': numbers}],
+            'share': [{'season': 3, 'episodes': numbers}]}
+    episodes = [{'episode_number': number, 'air_date': '2020-01-01'} for number in numbers]
+    result = missing_season(episodes, item, 3, date(2025, 1, 1))
+    assert result['cloud']['missing'] == []
+    assert result['share']['missing'] == []
+    assert result['sequence_gap'] == [23]
+    assert result['official_gap'] == [23]
+    assert result['numbering_anomaly'] is True
+    assert 'E23' in result['numbering_note']
+
+
+def test_missing_season_flags_shifted_numbering_when_official_is_contiguous():
+    official = list(range(1, 25))
+    present = list(range(1, 23)) + [24, 25]
+    item = {'cloud': [{'season': 3, 'episodes': present}],
+            'share': [{'season': 3, 'episodes': present}]}
+    episodes = [{'episode_number': number, 'air_date': '2020-01-01'} for number in official]
+    result = missing_season(episodes, item, 3, date(2025, 1, 1))
+    assert result['cloud']['missing'] == [23]
+    assert result['share']['missing'] == [23]
+    assert result['sequence_gap'] == [23]
+    assert result['official_gap'] == []
+    assert result['extra_union'] == [25]
+    assert result['numbering_anomaly'] is True
+
+
 def test_unreliable_records_are_reported_instead_of_counted(tmp_path):
     unknown = 'X {tmdb-1}/Season 01/no-episode.strm'
     two_ids = 'Y {tmdb-3} {tmdb-4}/Y 2020.strm'

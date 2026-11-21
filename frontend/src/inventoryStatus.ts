@@ -22,21 +22,25 @@ export function inventoryCardStatus(item: any, entry: any): {text: string, tone:
   }
   const ongoing = ONGOING.includes(data.series_status)
   const suffix = data.inventory_complete ? '' : ' · 库存待核实'
-  if (item.manual_complete && data.combined_missing > 0) return {text: '✓ 完整', tone: 'ok', category: 'complete', hint: '已手动标记完结，实际缺集仍可在详情查看'}
+  const anomaly = data.seasons.some((s: any) => s.numbering_anomaly)
+  const anomalySuffix = anomaly ? ' · 集号异常' : ''
+  const anomalyNote = data.seasons.find((s: any) => s.numbering_anomaly)?.numbering_note || '集号不连续，可能是资源集号偏移，请核对'
+  if (item.manual_complete && data.combined_missing > 0) return {text: '✓ 完整' + anomalySuffix, tone: anomaly ? 'unknown' : 'ok', category: 'complete', hint: '已手动标记完结，实际缺集仍可在详情查看'}
   // 库存扫描有未核实记录时，缺集数字本身不可信：归类为 unknown，由界面提示「库存待核实」。
   const trusted = data.inventory_complete !== false
   if (data.combined_missing > 0)
-    return {text: (ongoing ? '在更 · ' : '') + '缺 ' + data.combined_missing + ' 集' + suffix,
+    return {text: (ongoing ? '在更 · ' : '') + '缺 ' + data.combined_missing + ' 集' + suffix + anomalySuffix,
             tone: trusted ? (ongoing ? 'ongoing' : 'missing') : 'unknown',
             category: trusted ? (ongoing ? 'ongoing' : 'missing') : 'unknown',
-            hint: ongoing ? '连载中：只统计已播集，未播集不算缺' : 'TMDB 已播集里有没入库的'}
-  if (ongoing && data.seasons.some((s: any) => s.expected?.length)) return {text: '✓ 完整' + suffix, tone: 'ok', category: 'complete', hint: '连载中，已播集齐全'}
+            hint: ongoing ? '连载中：只统计已播集，未播集不算缺' : 'TMDB 已播集里有没入库的' + (anomaly ? '；' + anomalyNote : '')}
+  if (ongoing && data.seasons.some((s: any) => s.expected?.length)) return {text: '✓ 完整' + suffix + anomalySuffix, tone: anomaly ? 'unknown' : 'ok', category: 'complete', hint: anomaly ? anomalyNote : '连载中，已播集齐全'}
   if (data.combined_extra > 0)
-    return {text: '超 ' + data.combined_extra + ' 集' + suffix,
+    return {text: '超 ' + data.combined_extra + ' 集' + suffix + anomalySuffix,
             tone: trusted ? 'extra' : 'unknown', category: trusted ? 'extra' : 'unknown',
-            hint: '比 TMDB 已播集多，可能是未播集已入库或集号错位'}
+            hint: '比 TMDB 已播集多，可能是未播集已入库或集号错位' + (anomaly ? '；' + anomalyNote : '')}
   if (!data.seasons.some((s: any) => s.expected?.length))
     return {text: '待对照', tone: 'pending', category: 'pending', hint: '该剧还没有已播集信息'}
+  if (anomaly) return {text: '✓ 完整' + suffix + anomalySuffix, tone: 'unknown', category: 'complete', hint: anomalyNote}
   return {text: '✓ 完整' + suffix, tone: 'ok', category: 'complete', hint: 'TMDB 已播集全部入库'}
 }
 
@@ -47,4 +51,5 @@ export const STATUS_LEGEND = [
   {text: '超 N 集', hint: '比 TMDB 已播集多，可能是未播集或集号错位'},
   {text: '在更', hint: '连载中，只统计已播集'},
   {text: '待对照', hint: '还没拿到 TMDB 季/集信息'},
+  {text: '集号异常', hint: 'TMDB 或资源集号不连续，可能是资源集号偏移'},
 ]

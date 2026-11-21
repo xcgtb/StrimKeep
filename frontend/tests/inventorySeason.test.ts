@@ -32,3 +32,16 @@ test('undated gap before a present later episode is reported missing', () => {
   assert.equal(status.percent, 96)
   assert.equal(status.airedPresent, 24)
 })
+
+
+test('non-contiguous official numbering is not silently complete', () => {
+  const expected = Array.from({length: 22}, (_, index) => index + 1).concat([24, 25])
+  const season = {official_known: true, expected, unknown_air_date: [], numbering_anomaly: true,
+                  numbering_note: 'TMDB 官方集号不连续：缺 E23。疑似集号偏移，请核对资源。',
+                  cloud: {present: expected, missing: [], extra: []}}
+  const status = librarySeasonStatus(season, 'cloud', true)
+  assert.equal(status.label, '完整 · 集号异常')
+  assert.equal(status.tone, 'unknown')
+  assert.equal(status.percent, 100)
+  assert.equal(status.airedPresent, 24)
+})

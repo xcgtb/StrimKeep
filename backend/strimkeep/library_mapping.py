@@ -119,6 +119,9 @@ def remember_status(store, tmdb_id, data, item=None):
                    {'category': category, 'diff': missing - extra, 'missing': missing,
                     'extra': extra, 'partial': not data.get('inventory_complete'),
                     'unknown_air_date': sum(len(s.get('unknown_air_date') or []) for s in seasons),
+                    'numbering_anomaly': any(s.get('numbering_anomaly') for s in seasons),
+                    'numbering_note': next((s.get('numbering_note') for s in seasons
+                                            if s.get('numbering_anomaly')), ''),
                     'reason': reason, 'ts': int(time.time()),
                     'revision': work_revision(item) if item is not None else None})
 
@@ -170,7 +173,9 @@ def card(item, store, library_map=None):
             'status': status['category'],
             'missing': int(status.get('missing') or 0),
             'extra': int(status.get('extra') or 0),
-            'diff': int(status.get('diff') or 0)}
+            'diff': int(status.get('diff') or 0),
+            'numbering_anomaly': bool(status.get('numbering_anomaly')),
+            'numbering_note': status.get('numbering_note') or ''}
 
 
 def _sort_key(row):

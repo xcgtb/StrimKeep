@@ -217,7 +217,32 @@ def missing_season(official_episodes, item, season, today):
     horizon = max(aired | present_union, default=0)
     expected = {number for number in official
                 if number <= horizon and (number in aired or number in unknown)}
-    result = {'expected': sorted(expected), 'unknown_air_date': sorted(unknown)}
+    # Episode numbers are not always contiguous (Grey's Anatomy S03 is numbered
+    # 1-22,24,25 by TMDB itself). Keep the official missing/extra calculation,
+    # but surface the numbering anomaly so a matching count is not silently
+    # presented as a clean complete season.
+    official_numbers = sorted(number for number in official if number > 0)
+    present_numbers = sorted(number for number in present_union if number > 0)
+    sequence_gap = sorted(set(range(1, max(present_numbers) + 1)) - set(present_numbers)) if present_numbers else []
+    official_gap = sorted(set(range(1, max(official_numbers) + 1)) - set(official_numbers)) if official_numbers else []
+    extra_union = sorted(set(present_numbers) - official)
+    numbering_anomaly = bool(official_numbers and (sequence_gap or official_gap or extra_union))
+
+    def labels(numbers):
+        return '、'.join('E%02d' % number for number in numbers)
+
+    note_parts = []
+    if sequence_gap:
+        note_parts.append('资源集号不连续：缺 ' + labels(sequence_gap))
+    if official_gap:
+        note_parts.append('TMDB 官方集号不连续：缺 ' + labels(official_gap))
+    if extra_union:
+        note_parts.append('资源含官方没有的 ' + labels(extra_union))
+    numbering_note = ('；'.join(note_parts) + '。疑似集号偏移，请核对资源。') if numbering_anomaly else ''
+    result = {'expected': sorted(expected), 'unknown_air_date': sorted(unknown),
+              'sequence_gap': sequence_gap, 'official_gap': official_gap,
+              'extra_union': extra_union, 'numbering_anomaly': numbering_anomaly,
+              'numbering_note': numbering_note}
     for side, present in present_by_side.items():
         result[side] = {'present': sorted(present), 'missing': sorted(expected - present)}
     return result

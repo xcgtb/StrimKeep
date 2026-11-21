@@ -13,9 +13,13 @@ export function librarySeasonStatus(entry:any, side:string, inventoryComplete:bo
   // 缺集统计，页面上另有「播出日期未知：…」的说明。把它当「待核实」会让一部已播集
   // 全齐的剧（如 走马上任 27/27）也显示待核实，用户无从判断。
   const uncertain = !inventoryComplete || !officialKnown || !expected.length
+  const anomaly = entry?.numbering_anomaly === true
   const parts = [missing.length ? `缺 ${missing.length} 集` : '', extra.length ? `超 ${extra.length} 集` : ''].filter(Boolean)
+  if (anomaly && !parts.length) parts.push('完整')
+  if (anomaly) parts.push('集号异常')
   if (uncertain) parts.push('待核实')
-  return {label: parts.join(' · ') || '完整', tone:uncertain ? 'unknown' : missing.length ? 'missing' : extra.length ? 'extra' : 'complete',
+  return {label: parts.join(' · ') || '完整',
+          tone: uncertain ? 'unknown' : missing.length ? 'missing' : extra.length ? 'extra' : anomaly ? 'unknown' : 'complete',
           percent:officialKnown && expected.length ? Math.round(airedPresent * 100 / expected.length) : null, airedPresent}
 }
 
