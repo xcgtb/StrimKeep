@@ -132,6 +132,17 @@ def test_remux_takes_precedence_only_for_actual_remux():
     assert version({'name': 'Movie.2160p.BluRay.Remuxed.mkv'}, media) == 'BLURAY.HDR10 2160p'
 
 
+def test_batch_quality_combines_unidentified_dynamic_range_without_hiding_distinct_versions():
+    from strimkeep.cards import batch_quality
+
+    source = {'name': 'Example.2160p.WEBRip.mkv'}
+    media = {'width': 3840, 'height': 2160}
+    items = [(source, {'media': {**media, 'dynamic_range': label}}) for label in ('未知', 'SDR')]
+    assert batch_quality(items) == 'WEBRIP.SDR 2160p（部分动态范围未识别）'
+    items.append((source, {'media': {**media, 'dynamic_range': 'HDR PQ'}}))
+    assert batch_quality(items) == 'WEBRIP.SDR 2160p / WEBRIP.HDR 2160p（部分动态范围未识别）'
+
+
 def test_outcome_lines_compress_kept_episodes_into_one_range():
     """保留已有按区间显示：逐集列出会被 100 字截断，后面的集数根本看不到。"""
     from strimkeep.cards import outcome_lines

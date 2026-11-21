@@ -119,6 +119,8 @@ def test_real_expiry_and_network_failure_are_not_hidden(tmp_path, failure):
             await cloud.status()
         assert exc.value.code == ('LOGIN_INVALID' if failure == 'invalid' else 'CLOUD_UNAVAILABLE')
         assert 'sensitive' not in str(exc.value)
+        if failure == 'network':
+            assert '网络连接异常' in str(exc.value) and 'ConnectError' in str(exc.value)
         assert store.get('cookie') == COOKIE
         await cloud.close(); store.close()
     asyncio.run(scenario())

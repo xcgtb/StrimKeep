@@ -214,6 +214,9 @@ class Outputs:
                 with self.store.db:
                     self.store.db.execute('INSERT OR IGNORE INTO strm_changes VALUES(?,?,?)',
                                           (job_id, 'removed', relative))
+                    if item_id is not None:
+                        self.store.db.execute('INSERT OR IGNORE INTO strm_change_items VALUES(?,?,?,?)',
+                                              (job_id, item_id, 'removed', relative))
         except Exception as exc:                     # pragma: no cover - 保守失败
             return ['删除失败：' + str(exc)[:60]]
         return []

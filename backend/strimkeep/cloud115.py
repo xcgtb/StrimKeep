@@ -508,7 +508,19 @@ class Cloud115:
                     self.penalize()
                     raise CloudError('115 请求被限流（HTTP %d），已进入冷却；稍后重试。'
                                      % exc.response.status_code, 'RATE_LIMITED', 503) from None
-                raise CloudError('115 请求未完成，请检查登录、网络或接口限制后重试。') from None
+                if isinstance(exc, httpx.ConnectTimeout):
+                    reason = '连接超时'
+                elif isinstance(exc, (TimeoutError, httpx.TimeoutException)):
+                    reason = '等待响应超时'
+                elif isinstance(exc, httpx.HTTPStatusError):
+                    reason = f'HTTP {exc.response.status_code}'
+                elif isinstance(exc, httpx.TransportError):
+                    reason = f'网络连接异常，{type(exc).__name__}'
+                else:
+                    reason = f'响应处理异常，{type(exc).__name__}'
+                endpoint = getattr(method, '__name__', '')
+                context = f'，{endpoint}' if endpoint else ''
+                raise CloudError(f'115 请求未完成（{reason}{context}）。') from None
             finally:
                 if not playing and not _share_check:
                     if _batch:

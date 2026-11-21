@@ -69,7 +69,7 @@ def outcome_lines(items, season, unresolved=0):
     return lines
 
 
-def version(source,media):
+def version_parts(source, media):
     name=source.get('name','')
     match=re.search(r'(?i)(?<![a-z])(?:WEB[ ._-]?DL|WEBRIP|BLU[ ._-]?RAY|BDREMUX|REMUX|HDTV)(?![a-z])',name)
     remux=re.search(r'(?i)(?<![a-z])(?:BD[ ._-]?)?REMUX(?![a-z])',name)
@@ -78,7 +78,32 @@ def version(source,media):
     width,height=media.get('width') or 0,media.get('height') or 0
     width,height=max(width,height),min(width,height)
     resolution='4320p' if width>=7000 or height>=4000 else '2160p' if width>=3500 or height>=2000 else '1440p' if width>=2500 or height>=1400 else '1080p' if width>=1800 or height>=1000 else '720p' if width>=1200 or height>=700 else f'{height}p' if height else ''
-    return '.'.join(x for x in (source_type,dynamic) if x)+(' ' if resolution and (source_type or dynamic) else '')+resolution
+    return source_type, dynamic, resolution
+
+
+def version_label(source_type, dynamic, resolution):
+    return ' '.join(filter(None, ('.'.join(filter(None, (source_type, dynamic))), resolution)))
+
+
+def version(source, media):
+    return version_label(*version_parts(source, media))
+
+
+def batch_quality(items):
+    parts = list(dict.fromkeys(version_parts(source, plan.get('media', {})) for source, plan in items))
+    known = {(source, resolution) for source, dynamic, resolution in parts if dynamic}
+    labels = []
+    has_unspecified = False
+    for source, dynamic, resolution in parts:
+        if not dynamic and (source, resolution) in known:
+            has_unspecified = True
+            continue
+        if label := version_label(source, dynamic, resolution):
+            labels.append(label)
+    suffix = ' 等版本' if len(labels) > 3 else ''
+    if has_unspecified:
+        suffix += '（部分动态范围未识别）'
+    return line(' / '.join(labels[:3]) + suffix, 130)
 
 
 def media_card(items,shared=False,transferred=False,emby_status='',other_items=(),unassigned=0):
@@ -94,9 +119,7 @@ def media_card(items,shared=False,transferred=False,emby_status='',other_items=(
             washed=episode_range(replaced)
             if washed:lines.append('🔄 洗版：'+line(washed,100)+'（替换旧版）')
         lines.extend(outcome_lines(other_items,season,unassigned))
-    versions=list(dict.fromkeys(version(s,p.get('media',{})) for s,p in items))
-    versions=[v for v in versions if v]
-    specification=line(' / '.join(versions[:3])+(' 等版本' if len(versions)>3 else ''),130)
+    specification = batch_quality(items)
     category=' / '.join(plan.get('parts',[])[:2])
     if specification:lines.append('🎞️ 画质：'+specification)
     if category:lines.append('🗂️ 分类：'+line(category))

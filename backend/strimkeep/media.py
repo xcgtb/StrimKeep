@@ -637,7 +637,7 @@ def title_candidates(hint, results):
     return ordered
 
 
-def classify(details, media_type):
+def classify(details, media_type, *, children_enabled=True):
     countries = [x['iso_3166_1'] for x in details.get('production_countries', []) if x.get('iso_3166_1')]
     origins = list(dict.fromkeys(details.get('origin_country', []) or countries))
     # A known work may have multiple regions or none. Preserve its identity
@@ -645,6 +645,9 @@ def classify(details, media_type):
     regions = {'国产' if c in ('CN', 'HK', 'MO', 'TW') else '日韩' if c in ('JP', 'KR') else '欧美' if c in WESTERN else '其他' for c in origins}
     region = next(iter(regions)) if len(regions) == 1 else '其他'
     genres = {g['id'] for g in details.get('genres', [])}
+    # TMDB 有些儿童动画（如海绵宝宝）只标为动画和家庭。
+    if media_type == 'tv' and children_enabled and (10762 in genres or {16, 10751} <= genres):
+        return '儿童节目', region
     if 16 in genres:
         return (ANIMATED_MOVIE if media_type == 'movie' else '动漫'), region
     category = ('儿童节目' if 10762 in genres else
@@ -655,6 +658,8 @@ def classify(details, media_type):
         title = ' '.join(str(details.get(k) or '') for k in ('title','name','original_title','original_name'))
         if re.search(r'(?i)演唱会|演唱會|\bconcert\b|\blive\s+tour\b', title):category = '演唱会'
         else:raise NeedsReview('音乐类电影不能可靠自动判断是否演唱会，转待处理。')
+    if category == '儿童节目' and not children_enabled:
+        category = '剧集' if media_type == 'tv' else '电影'
     return category, region
 
 
@@ -704,9 +709,8 @@ def work_parts(hint, details, options=None):
         classified_details = details
         if not options.get('concert_enabled', True):
             classified_details = {**details, 'genres': [v for v in details.get('genres', []) if v.get('id') != 10402]}
-        category, region = classify(classified_details, hint['media_type'])
-        if category == '儿童节目' and not options.get('children_enabled', True):
-            category = '剧集' if hint['media_type'] == 'tv' else '电影'
+        category, region = classify(classified_details, hint['media_type'],
+                                    children_enabled=options.get('children_enabled', True))
         if category == '演唱会' and not options.get('concert_enabled', True):category = '电影'
     else:
         category, region = ('剧集' if hint['media_type']=='tv' else '电影'), ''

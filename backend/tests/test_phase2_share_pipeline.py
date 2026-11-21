@@ -135,21 +135,25 @@ def test_share_season_report_is_emitted_before_next_movie(tmp_path):
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize(('kind', 'countries', 'category_parts'), [
-    pytest.param('movie', ['CN', 'HK', 'MO', 'TW'], ['电影', '动画电影'], id='chinese-movie'),
-    pytest.param('movie', ['JP'], ['电影', '动画电影'], id='japanese-movie'),
-    pytest.param('movie', ['US'], ['电影', '动画电影'], id='us-movie'),
-    pytest.param('movie', ['US', 'JP'], ['电影', '动画电影'], id='cross-region-movie'),
-    pytest.param('movie', [], ['电影', '动画电影'], id='movie-without-country'),
-    pytest.param('tv', ['CN', 'HK', 'MO', 'TW'], ['动漫', '国产动漫'], id='chinese-series'),
-    pytest.param('tv', ['JP'], ['动漫', '日韩动漫'], id='japanese-series'),
+@pytest.mark.parametrize(('kind', 'countries', 'genre_ids', 'category_parts'), [
+    pytest.param('movie', ['CN', 'HK', 'MO', 'TW'], [16, 10762], ['电影', '动画电影'], id='chinese-movie'),
+    pytest.param('movie', ['JP'], [16], ['电影', '动画电影'], id='japanese-movie'),
+    pytest.param('movie', ['US'], [16, 10751], ['电影', '动画电影'], id='us-family-movie'),
+    pytest.param('movie', ['US', 'JP'], [16], ['电影', '动画电影'], id='cross-region-movie'),
+    pytest.param('movie', [], [16], ['电影', '动画电影'], id='movie-without-country'),
+    pytest.param('tv', ['CN', 'HK', 'MO', 'TW'], [16], ['动漫', '国产动漫'], id='chinese-series'),
+    pytest.param('tv', ['JP'], [16, 18], ['动漫', '日韩动漫'], id='japanese-series'),
+    pytest.param('tv', ['US'], [16, 10762], ['儿童节目', '欧美儿童节目'], id='kids-series'),
+    pytest.param('tv', ['KR'], [16, 10762], ['儿童节目', '日韩儿童节目'], id='kids-co-production'),
+    pytest.param('tv', ['US'], [16, 35, 10751], ['儿童节目', '欧美儿童节目'], id='family-animated-series'),
+    pytest.param('tv', ['US'], [16, 35], ['动漫', '欧美动漫'], id='animated-comedy-series'),
 ])
-def test_animation_classification_in_both_libraries(tmp_path, kind, countries, category_parts):
+def test_animation_classification_in_both_libraries(tmp_path, kind, countries, genre_ids, category_parts):
     async def scenario():
         store, cloud, _, engine, _ = share_setup(tmp_path)
         is_series = kind == 'tv'
         fixture = TV if is_series else MOVIE
-        details = {**fixture, 'origin_country': countries, 'genres': [{'id': 16}, {'id': 10762}]}
+        details = {**fixture, 'origin_country': countries, 'genres': [{'id': genre} for genre in genre_ids]}
 
         def tmdb(request):
             if request.url.path == f'/3/{kind}/{details["id"]}':

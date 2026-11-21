@@ -98,11 +98,17 @@ class TmdbClient:
                     raise CloudError('TMDB 中找不到该条目（GET %s → HTTP 404）。' % path,
                                      'TMDB_NOT_FOUND', 404) from None
                 if status not in RETRY_STATUS or attempt >= self.retries:
-                    raise CloudError(f'TMDB 请求失败（HTTP {status}）。', 'TMDB_UNAVAILABLE', 502) from None
+                    raise CloudError(f'TMDB 请求失败（HTTP {status}，GET {path}）。', 'TMDB_UNAVAILABLE', 502) from None
                 await asyncio.sleep(_delay(attempt, exc.response))
-            except (httpx.TimeoutException, httpx.HTTPError):
+            except httpx.HTTPError as exc:
                 if attempt >= self.retries:
-                    raise CloudError('TMDB 请求失败（连接或响应超时）。', 'TMDB_UNAVAILABLE') from None
+                    if isinstance(exc, httpx.ConnectTimeout):
+                        reason = '连接超时'
+                    elif isinstance(exc, httpx.TimeoutException):
+                        reason = '等待响应超时'
+                    else:
+                        reason = f'连接异常，{type(exc).__name__}'
+                    raise CloudError(f'TMDB 请求失败（{reason}，GET {path}）。', 'TMDB_UNAVAILABLE') from None
                 await asyncio.sleep(_delay(attempt))
             except ValueError:
                 raise CloudError('TMDB 请求失败（返回数据无效）。', 'TMDB_UNAVAILABLE') from None

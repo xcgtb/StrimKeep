@@ -211,6 +211,8 @@ def test_protected_channel_keeps_link_without_downloading_photo(tmp_path):
 
 
 def test_grouped_media_retry_keeps_poster_and_details_in_order_for_both_libraries(tmp_path):
+    from types import SimpleNamespace
+    from strimkeep.outputs import Outputs
     from test_organize import new_job
     async def run(kind):
         store=Store(tmp_path / kind, 'admin', 'test-password-1234')
@@ -224,6 +226,9 @@ def test_grouped_media_retry_keeps_poster_and_details_in_order_for_both_librarie
         card='show_done:%s:%s'%(jid,group)
         assert await notes.publish(card,'海报','正文',photo='https://img/x.jpg',job_id=jid,category='media')=='unknown'
         items=[(i,{'relative_path':'library/series/S01E%02d.strm'%i,'strm_created':True}) for i in range(1,26)]
+        old_path = tmp_path / (kind + '.strm')
+        old_path.write_text('old playback', encoding='utf-8')
+        assert Outputs(SimpleNamespace(store=store)).unlink_recorded(jid, 'library/series/old.strm', old_path, 1) == []
         await notes.group_strm(jid,group,items)
         rows=store.db.execute('SELECT event_key,telegram_state FROM notifications WHERE job_id=? ORDER BY id',(jid,)).fetchall()
         assert len(rows)>=4 and rows[0]['telegram_state']=='unknown'
@@ -234,6 +239,7 @@ def test_grouped_media_retry_keeps_poster_and_details_in_order_for_both_librarie
         sent=[x.get('caption') or x.get('text') for x in http.calls[1:]]
         assert sent[0].startswith('海报') and 'STRM 批量结果' in sent[1]
         assert '文件明细 1/' in sent[2] and '文件明细 2/' in sent[3]
+        assert '已清理旧 STRM' in sent[-1] and 'old.strm' in sent[-1]
         assert all(call['reply_parameters']['message_id'] == 2 for call in http.calls[2:])
         assert all(row['telegram_state']=='sent' for row in store.db.execute('SELECT telegram_state FROM notifications WHERE job_id=?',(jid,)))
         store.close()

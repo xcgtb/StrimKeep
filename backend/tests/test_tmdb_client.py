@@ -62,8 +62,32 @@ def test_does_not_retry_4xx(monkeypatch):
             with pytest.raises(CloudError) as error:
                 await client.get(http, 'tv/42')
             assert error.value.code == 'TMDB_UNAVAILABLE'
+            assert 'HTTP 400，GET tv/42' in str(error.value) and 'test-key' not in str(error.value)
             assert len(calls) == 1
         store.db.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(('exception_type', 'reason'), [
+    (httpx.ConnectTimeout, '连接超时'),
+    (httpx.ReadTimeout, '等待响应超时'),
+    (httpx.ConnectError, '连接异常'),
+])
+def test_tmdb_transport_error_identifies_failure_without_raw_url(exception_type, reason):
+    async def run():
+        def handler(request):
+            raise exception_type(str(request.url), request=request)
+
+        store = Store()
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            client = tmdb_client.TmdbClient(store, retries=0)
+            with pytest.raises(CloudError) as error:
+                await client.get(http, 'tv/42/season/1')
+            assert error.value.code == 'TMDB_UNAVAILABLE'
+            assert reason in str(error.value) and 'GET tv/42/season/1' in str(error.value)
+            assert 'test-key' not in str(error.value)
+        store.db.close()
+
     asyncio.run(run())
 
 

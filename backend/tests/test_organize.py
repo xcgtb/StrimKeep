@@ -425,7 +425,9 @@ def test_identity_and_naming_do_not_guess_unknown_values():
     with pytest.raises(NeedsReview):
         choose_match(hint, [{**TV, 'first_air_date': '2023-01-01'}])
     assert classify({**TV, 'origin_country': ['US','CN']}, 'tv') == ('剧集', '其他')
-    assert classify({**TV, 'genres': [{'id':16},{'id':10762}]}, 'tv')[0] == '动漫'
+    kids_animation = {**TV, 'genres': [{'id': 16}, {'id': 10762}]}
+    assert classify(kids_animation, 'tv')[0] == '儿童节目'
+    assert classify(kids_animation, 'tv', children_enabled=False)[0] == '动漫'
     assert classify({**TV, 'genres': [{'id':10762}]}, 'tv')[0] == '儿童节目'
     media = {**MEDIA, 'dynamic_range': '未知', 'bit_depth': None, 'fps': None}
     _, filename, _, _ = naming(hint, TV, [{'name': '第3集'}], media, '测试剧集 (2024).S01E03.mkv')
