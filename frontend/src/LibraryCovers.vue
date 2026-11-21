@@ -10,7 +10,7 @@ interface Studio {
   enabled: boolean
   daily_at: string
 }
-interface Library { id: string; name: string }
+interface Library { id: string; name: string; type?: string }
 interface Layout { id: string; name: string; max_posters: number }
 interface Progress {
   command_id: number
@@ -71,7 +71,9 @@ async function load() {
     libraries.value = data.items
     layouts.value = data.layouts
     studio.value = data.settings
-    if (!libraries.value.some(library => library.id === sample.value)) sample.value = data.items[0]?.id || ''
+    if (!libraries.value.some(library => library.id === sample.value)) {
+      sample.value = (libraries.value.find(library => library.type === 'movies') || libraries.value[0])?.id || ''
+    }
     refreshPreview()
   })
 }

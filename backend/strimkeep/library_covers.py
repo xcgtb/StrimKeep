@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import commands
 from .emby_connection import saved_base
 from .library_cover_image import (
-    COVER_LAYOUTS, MAX_IMAGE_BYTES, CoverLayout, open_image, render_cover,
+    COVER_LAYOUTS, MAX_IMAGE_BYTES, RENDER_VERSION, CoverLayout, open_image, render_cover,
 )
 from .network import emby_request
 
@@ -228,10 +228,10 @@ class LibraryCovers:
             title, subtitle = settings.title or title, settings.subtitle or subtitle
         choices = await self.poster_choices(pair, library, min(settings.posters, COVER_LAYOUTS[settings.layout][1]))
         signature = hashlib.sha256(json.dumps(
-            ['2', title, subtitle, settings.color, settings.layout, choices], ensure_ascii=False).encode()).hexdigest()
+            [RENDER_VERSION, title, subtitle, settings.color, settings.layout, choices], ensure_ascii=False).encode()).hexdigest()
         if previous == signature:
             return None, signature, len(choices)
-        width = {'hero': 600, 'panorama': 1280, 'split': 920}.get(settings.layout, 360)
+        width = 1280 if settings.layout == 'panorama' else 640 if len(choices) <= 3 else 360
         posters = await self.fetch_posters(pair, choices, width)
         image = await asyncio.to_thread(render_cover, title, subtitle, settings.color, settings.layout, posters)
         return image, signature if len(choices) == len(posters) else '', len(posters)

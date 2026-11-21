@@ -167,6 +167,23 @@ def test_templates_produce_distinct_valid_covers():
         'A Media Library', 'Recently added', '#426bad', 'minimal', [])
 
 
+def test_collage_stays_readable_on_mobile_and_sizes_single_poster_to_fill_artwork_area():
+    sample_size = (264, 148)
+    buffer = BytesIO()
+    Image.new('RGB', (340, 510), '#e63432').save(buffer, 'JPEG')
+    for layout in ('collage', 'grid'):
+        image = render_cover('Animation', 'TV SHOWS', '#287e9c', layout,
+                             [buffer.getvalue()], size=sample_size)
+        with Image.open(BytesIO(image)) as cover:
+            art = cover.crop((116, 0, sample_size[0], sample_size[1])).get_flattened_data()
+            vivid = sum(r > 175 and g < 90 and b < 90 for r, g, b in art)
+            assert vivid > sample_size[0] * sample_size[1] * .22
+            text = cover.crop((12, 48, 116, 90))
+            white_rows = sum(any(min(text.getpixel((x, y))) >= 225 for x in range(text.width))
+                             for y in range(text.height))
+            assert white_rows >= 15
+
+
 def test_batch_uses_one_style_for_selected_libraries_and_saves_it_for_the_schedule(tmp_path):
     async def run():
         store = make_store(tmp_path)
