@@ -19,3 +19,16 @@ test('missing inventory or official dates cannot claim complete', () => {
   assert.equal(librarySeasonStatus({...season, official_known:false}, 'cloud', true).percent, null)
   assert.equal(librarySeasonStatus({...season, expected:[]}, 'cloud', true).label, '待核实')
 })
+
+
+test('undated gap before a present later episode is reported missing', () => {
+  const present = Array.from({length: 22}, (_, index) => index + 1).concat([24, 25])
+  const expected = Array.from({length: 25}, (_, index) => index + 1)
+  const season = {official_known: true, expected, unknown_air_date: [23, 24, 25],
+                  cloud: {present, missing: [23], extra: []}}
+  const status = librarySeasonStatus(season, 'cloud', true)
+  assert.equal(status.label, '缺 1 集')
+  assert.equal(status.tone, 'missing')
+  assert.equal(status.percent, 96)
+  assert.equal(status.airedPresent, 24)
+})

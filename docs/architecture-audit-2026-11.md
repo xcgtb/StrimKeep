@@ -605,3 +605,10 @@ P1 至此完成。下一步进入 P2：MediaServer / Notifier / CloudDrive 适�
 - 新任务配置 only_file_ids + manifest=1 + manual_hint，复用原归档、洗版、STRM、Emby 通知链路；manual_hint 只跳过文件名检索，仍执行源文件核对、目标冲突与发布核查；
 - 原任务条目只写「已转手动匹配」说明，不删除/移动文件；手动匹配失败时原位保留（pending_cid 清空）；
 - test_app 20 passed；test_batch_organize 新增电影/剧集两条完整链路测试；全量 1704 passed，4 skipped。
+
+### 3.6.66：修复片库映射中间缺集漏报
+
+- `missing_season` 不再只把“有播出日期”的 TMDB 集计入预期：当后续集已存在于任一库时，把该集号之前的未定档官方集也计入预期；
+- 修复第 23 集无播出日期、库内有 24/25 集时仍显示完整的问题，现在正确显示“缺 1 集 / 24/25”；
+- 保留未来集不计缺集、单库/双库分别计算、未知播出日期提示等原有口径；
+- test_inventory 12 passed，inventory 相关 173 passed，前端 39 passed + build。

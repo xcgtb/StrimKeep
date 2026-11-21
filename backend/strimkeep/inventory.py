@@ -187,22 +187,37 @@ def work_complete(snapshot, tmdb_id):
 
 
 def missing_season(official_episodes, item, season, today):
-    """Only aired episodes with valid TMDB dates are counted as missing."""
-    expected, unknown = set(), []
+    """Count aired episodes, plus undated gaps before a later present episode.
+
+    TMDB sometimes has an episode with no air date (or a null date for a batch
+    of episodes) while later episodes are already in the library. Excluding
+    those numbers from ``expected`` made E23 look complete when E24/E25 were
+    present. A later present episode is evidence that the season reached that
+    point, so undated official episodes up to that horizon are expected too.
+    """
+    official, aired, unknown = set(), set(), set()
     for entry in official_episodes:
         number, air = entry.get('episode_number'), entry.get('air_date')
         if type(number) is not int or number <= 0:
             continue
+        official.add(number)
         try:
             from datetime import date
             airdate = date.fromisoformat(air)
         except (TypeError, ValueError):
-            unknown.append(number)
+            unknown.add(number)
             continue
         if airdate <= today:
-            expected.add(number)
-    result = {'expected': sorted(expected), 'unknown_air_date': sorted(set(unknown))}
-    for side in ('cloud', 'share'):
-        present = {ep for row in item[side] if row.get('season') == season for ep in row['episodes']}
+            aired.add(number)
+    present_by_side = {
+        side: {ep for row in item[side] if row.get('season') == season for ep in row['episodes']}
+        for side in ('cloud', 'share')
+    }
+    present_union = set().union(*present_by_side.values()) if present_by_side else set()
+    horizon = max(aired | present_union, default=0)
+    expected = {number for number in official
+                if number <= horizon and (number in aired or number in unknown)}
+    result = {'expected': sorted(expected), 'unknown_air_date': sorted(unknown)}
+    for side, present in present_by_side.items():
         result[side] = {'present': sorted(present), 'missing': sorted(expected - present)}
     return result

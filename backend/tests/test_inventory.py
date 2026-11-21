@@ -36,6 +36,21 @@ def test_missing_uses_only_aired_official_episodes():
     assert result['unknown_air_date'] == [4]
 
 
+def test_missing_counts_undated_gap_before_present_later_episode():
+    present = list(range(1, 23)) + [24, 25]
+    item = {'cloud': [{'season': 1, 'episodes': present}],
+            'share': [{'season': 1, 'episodes': present}]}
+    episodes = [{'episode_number': number, 'air_date': '2020-01-01'}
+                for number in range(1, 23)]
+    episodes += [{'episode_number': number, 'air_date': None}
+                 for number in (23, 24, 25)]
+    result = missing_season(episodes, item, 1, date(2025, 1, 1))
+    assert result['expected'] == list(range(1, 26))
+    assert result['cloud']['missing'] == [23]
+    assert result['share']['missing'] == [23]
+    assert result['unknown_air_date'] == [23, 24, 25]
+
+
 def test_unreliable_records_are_reported_instead_of_counted(tmp_path):
     unknown = 'X {tmdb-1}/Season 01/no-episode.strm'
     two_ids = 'Y {tmdb-3} {tmdb-4}/Y 2020.strm'
