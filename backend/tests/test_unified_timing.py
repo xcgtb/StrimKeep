@@ -121,7 +121,7 @@ def test_offline_grace_starts_when_finished_first_seen():
         digest='a'*40
         conn.execute('UPDATE offline_submissions SET urls=? WHERE id=1',(json.dumps(['magnet:?xt=urn:btih:'+digest]),))
         class Cloud:
-            async def offline_tasks(self,*args): return ({'tasks':[{'info_hash':digest,'percentDone':100}]},None)
+            async def offline_task_page(self,*args): return {'tasks':[{'info_hash':digest,'percentDone':100}]}
         post.cloud=Cloud(); post.notifications=FakeNotifications()
         await post.check(conn.execute('SELECT * FROM offline_submissions WHERE id=1').fetchone())
         row=conn.execute('SELECT * FROM offline_submissions WHERE id=1').fetchone()

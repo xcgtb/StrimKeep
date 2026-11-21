@@ -26,10 +26,10 @@ def test_offline_completion_displays_verified_result_and_channel_context(tmp_pat
     from strimkeep.store import Store
 
     class Cloud:
-        async def offline_tasks(self, page=1, size=20):
+        async def offline_task_page(self, page=1, size=20):
             # 115 的 file_id 是「保存到哪个目录」，产物文件 ID 在 delete_file_id 里。
             return {'data': [{'info_hash': 'abc123', 'delete_file_id': '1001',
-                              'name': 'submitted.mkv', 'percentDone': 100}]}, None
+                              'name': 'submitted.mkv', 'percentDone': 100}]}
 
         async def file(self, file_id):
             return {'id': file_id, 'name': 'landed.mkv', 'parent_id': '123'}

@@ -39,7 +39,7 @@ async function submit(){await run(async()=>{const r=await props.api('/offline/jo
 async function canLeave(){if(!dirty.value&&!text.value.trim())return true;try{await ElMessageBox.confirm('当前有未保存设置或未提交链接，刷新网页后会丢失。确定切换？','离开离线下载',{confirmButtonText:'暂存并切换',cancelButtonText:'继续编辑'});return true}catch{return false}}
 function percentText(v:any){const n=Number(v)||0;return n<=1?`${Math.round(n*100)}%`:`${Math.round(n)}%`}
 function statusText(s:any){const map:Record<string,string>={0:'等待中',1:'下载中',2:'已完成',3:'失败',success:'已完成',failed:'失败',running:'下载中',waiting:'等待中'};return map[String(s)]||String(s||'—')}
-function subState(s:string){const map:Record<string,string>={submitting:'提交中',submitted:'等待下载',completed:'已完成',needs_review:'需核查',expired:'已放弃'};return map[s]||s}
+function subState(s:string){const map:Record<string,string>={submitting:'提交中',submitted:'核查中',completed:'已完成',needs_review:'需核查',expired:'已放弃'};return map[s]||s}
 async function expireOld(){await run(async()=>{const r=await props.api('/offline/submissions/expire?days=7','POST');ElMessage.success('已放弃 '+r.expired+' 条超过 7 天的待核查');await refresh()})}
 function fmtSub(ts:number){if(!ts)return '';return new Date(ts*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
 const runningLabel=computed(()=>{

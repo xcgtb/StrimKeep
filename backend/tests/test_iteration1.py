@@ -142,8 +142,8 @@ def offline_engine(tmp_path, tasks):
     store = Store(tmp_path / 'data', 'admin', 'test-password-1234')
 
     class Cloud:
-        async def offline_tasks(self, page, size):
-            return {'data': tasks}, None
+        async def offline_task_page(self, page, size):
+            return {'data': tasks, 'page': page, 'page_count': 1, 'count': len(tasks)}
 
         async def children(self, cid):
             return []
@@ -305,6 +305,48 @@ def test_offline_unmatched_old_submission_never_claims_later_directory_items(tmp
     row = store.db.execute('SELECT * FROM offline_submissions WHERE id=?', (sid,)).fetchone()
     assert row['state'] == 'needs_review' and row['organize_job_id'] is None
     assert store.db.execute('SELECT count(*) FROM organize_jobs').fetchone()[0] == 0
+    store.close()
+
+
+def test_offline_tick_looks_past_first_three_pages_once_for_all_recent_pending_rows(tmp_path):
+    async def run():
+        store, post = offline_engine(tmp_path, [])
+        post.PAGE_SIZE = 2
+        old_id = submit_row(store, ['magnet:?xt=urn:btih:missing'])
+        later_id = submit_row(store, ['magnet:?xt=urn:btih:abc123'])
+        young_id = submit_row(store, ['magnet:?xt=urn:btih:young'])
+        with store.db:
+            store.db.execute('UPDATE offline_submissions SET submitted_at=? WHERE id IN (?,?)',
+                             (time.time() - 700, old_id, later_id))
+        pages = []
+        async def page(number, size):
+            pages.append(number)
+            tasks = [{'id': str(number * 10 + i), 'percent': 30} for i in range(size)]
+            if number == 4:
+                tasks = [{'info_hash': 'abc123', 'percent': 40, 'status': '下载中'}]
+            return {'data': tasks, 'page': number, 'page_count': 4, 'count': 7}
+        post.engine.cloud.offline_task_page = page
+        await post.tick()
+        states = {r['id']: (r['state'], r['message']) for r in store.db.execute('SELECT * FROM offline_submissions')}
+        assert pages == [1, 2, 3, 4]
+        assert states[old_id][0] == 'needs_review' and '未找到' in states[old_id][1]
+        assert states[later_id][0] == 'submitted' and '下载进行中' in states[later_id][1]
+        assert states[young_id][0] == 'submitted'
+        store.close()
+    asyncio.run(run())
+
+
+def test_offline_missing_item_requires_complete_cloud_pagination(tmp_path):
+    store, post = offline_engine(tmp_path, [])
+    sid = submit_row(store, ['magnet:?xt=urn:btih:abc123'])
+    with store.db:
+        store.db.execute('UPDATE offline_submissions SET submitted_at=? WHERE id=?', (time.time() - 700, sid))
+    async def incorrect_count(page, size):
+        return {'data': [], 'page': page, 'page_count': 1, 'count': 50}
+    post.engine.cloud.offline_task_page = incorrect_count
+    row = store.db.execute('SELECT * FROM offline_submissions WHERE id=?', (sid,)).fetchone()
+    asyncio.run(post.check(row))
+    assert store.db.execute('SELECT state FROM offline_submissions').fetchone()[0] == 'submitted'
     store.close()
 
 

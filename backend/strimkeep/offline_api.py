@@ -178,8 +178,6 @@ class OfflinePostProcess:
     """离线提交登记与完成核查（U06）：提交 → 云端任务 → 产物 → 本批整理任务。"""
 
     INTERVAL = 60
-    EXPIRE_SECONDS = 86400
-
     def __init__(self, engine):
         self.engine, self.store = engine, engine.store
         self.next_run = 0.0
@@ -352,6 +350,9 @@ class OfflinePostProcess:
                                   (state, message, time.time(), sid))
 
     EXPIRE_SECONDS = 3 * 86400
+    UNMATCHED_GRACE_SECONDS = STALL_SECONDS
+    PAGE_SIZE = 50
+    MAX_LOOKUP_PAGES = 60
     # 115 说完成到产物出现在目录之间可能有个延迟，给 5 分钟宽限再判「产物不在」。
     PRODUCT_GRACE_SECONDS = 300
 
@@ -370,11 +371,23 @@ class OfflinePostProcess:
                 (now, now - self.EXPIRE_SECONDS)).rowcount
         if expired:
             self.store.event('offline', '%d 条离线提交超过 72 小时未认领产物，已自动结项。' % expired)
+        rows = self.store.db.execute(
+            "SELECT * FROM offline_submissions WHERE state IN ('submitted','submitting') ORDER BY last_checked,id LIMIT 5").fetchall()
+        if not rows:
+            return
+        try:
+            listing = await self._lookup_tasks(rows)
+        except Exception as exc:
+            if isinstance(exc, CloudError) and exc.code in ('LOGIN_REQUIRED', 'LOGIN_INVALID'):
+                return
+            message = str(exc)[:120] if isinstance(exc, CloudError) else type(exc).__name__
+            for row in rows:
+                self._retry_later(row, '核查未完成：' + message)
+            return
         checked = []
-        for row in self.store.db.execute(
-                "SELECT * FROM offline_submissions WHERE state IN ('submitted','submitting') ORDER BY last_checked,id LIMIT 5").fetchall():
+        for row in rows:
             try:
-                await self.check(row)
+                await self.check(row, listing)
             except CloudError as exc:
                 if exc.code in ('LOGIN_REQUIRED', 'LOGIN_INVALID'):
                     return  # 等登录恢复，不算失败。
@@ -387,6 +400,39 @@ class OfflinePostProcess:
             await self.report_stalled(now, checked)
         except Exception:
             pass
+
+    async def _lookup_tasks(self, rows):
+        """Share one strict paginated lookup per batch. A partial scan cannot prove absence."""
+        stale_urls = [url for row in rows if time.time() - row['submitted_at'] >= self.UNMATCHED_GRACE_SECONDS
+                      for url in json.loads(row['urls'])]
+        tasks, seen_pages, seen_items = [], set(), set()
+        expected = None
+        stable = True
+        for page in range(1, self.MAX_LOOKUP_PAGES + 1):
+            raw = await self.engine.cloud.offline_task_page(page, self.PAGE_SIZE)
+            items, _ = _tasks(raw)
+            try:
+                reported_page, last_page, count = (int(raw[key]) for key in ('page', 'page_count', 'count'))
+            except (TypeError, KeyError, ValueError):
+                reported_page, last_page, count = page, None, None
+            if reported_page != page:
+                return tasks, False
+            fingerprint = tuple((item['id'], item['url'], item['file_id']) for item in items)
+            if items and fingerprint in seen_pages:
+                return tasks, False
+            seen_pages.add(fingerprint)
+            tasks.extend(items)
+            if page == 1:
+                expected = (last_page, count)
+            stable = stable and (last_page, count) == expected and not seen_items.intersection(fingerprint)
+            seen_items.update(fingerprint)
+            if last_page is not None and page >= last_page:
+                return tasks, stable and len(seen_items) == count and len(tasks) == count
+            if last_page is None and len(items) < self.PAGE_SIZE:
+                return tasks, False
+            if page >= 3 and (not stale_urls or all(self._matching_tasks([url], tasks) for url in stale_urls)):
+                return tasks, False
+        return tasks, False
 
     def _matching_tasks(self, urls, tasks):
         """把提交的链接与 115 离线任务对应：磁力/电驴按 hash，其余按 URL 包含。
@@ -453,29 +499,19 @@ class OfflinePostProcess:
     def _done(cls, task):
         return cls._state(task) == 'done'
 
-    async def check(self, row):
+    async def check(self, row, listing=None):
         urls = json.loads(row['urls'])
-        target = row['target_cid']
-        # 查询在线任务状态（先查询结果，绝不重复提交）。
-        tasks = []
-        try:
-            for page in (1, 2, 3):
-                tasks_raw, _ = await self.engine.cloud.offline_tasks(page, 50)
-                items, _total = _tasks(tasks_raw)
-                tasks.extend(items)
-                if len(items) < 50:
-                    break
-        except CloudError as exc:
-            if exc.code not in ('FILE_NOT_FOUND', 'OBJECT_NOT_FOUND'):
-                raise
+        tasks, complete = listing if listing is not None else await self._lookup_tasks([row])
         # 一条提交里的每个链接都必须唯一匹配到云端任务；目录有新增文件并不证明属于本次提交。
         matched = []
         for url in urls:
             matches = self._matching_tasks([url], tasks)
             if len(matches) != 1 or matches[0] in matched:
                 age = time.time() - row['submitted_at']
-                if age > self.EXPIRE_SECONDS:
-                    self._set(row['id'], 'needs_review', '无法唯一匹配全部离线任务，请人工核查；不会认领目录中的其他文件。')
+                if (complete or matches) and age >= self.UNMATCHED_GRACE_SECONDS:
+                    message = ('115 离线列表未找到本次提交，请到 115 核查。' if not matches
+                               else '115 离线列表有多条匹配记录，请核查任务身份。')
+                    self._set(row['id'], 'needs_review', message)
                 else:
                     self._set(row['id'], 'submitted', '等待确认离线任务身份；不会认领目录中的其他文件。')
                 return
@@ -754,6 +790,19 @@ def install_offline(app, store, admin):
             'SELECT * FROM offline_submissions ORDER BY id DESC LIMIT ? OFFSET ?', (limit, offset)).fetchall()
         return {'items': [dict(r) for r in rows], 'total': total,
                 'has_more': offset + len(rows) < total, 'offset': offset}
+
+    @app.get('/api/v1/offline/submissions/attention', dependencies=[Depends(admin)])
+    async def submissions_attention():
+        with store.transaction():
+            result = {}
+            for section, states in (('active', ('submitted', 'submitting')), ('review', ('needs_review',))):
+                where = 'WHERE state IN (' + ','.join('?' for state in states) + ')'
+                total = store.db.execute('SELECT count(*) FROM offline_submissions ' + where, states).fetchone()[0]
+                rows = store.db.execute(
+                    'SELECT id,target_label,submitted_at,state,message FROM offline_submissions '
+                    + where + ' ORDER BY id DESC LIMIT 20', states).fetchall()
+                result[section] = {'total': total, 'items': [dict(row) for row in rows]}
+        return result
 
     @app.get('/api/v1/offline/tasks', dependencies=[Depends(admin)])
     async def tasks():

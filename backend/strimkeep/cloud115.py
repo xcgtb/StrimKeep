@@ -574,10 +574,14 @@ class Cloud115:
         finally:
             playback_request.reset(token)
 
+    async def offline_task_page(self, page=1, size=20):
+        client = self.client()
+        return await self.call(client.clouddownload_task_list, {'page': page, 'page_size': size, 'stat': 0}, _scope='offline')
+
     async def offline_tasks(self, page=1, size=20):
         """云下载任务列表与运行中数量。"""
+        rows = await self.offline_task_page(page, size)
         client = self.client()
-        rows = await self.call(client.clouddownload_task_list, {'page': page, 'page_size': size, 'stat': 0})
         try:
             running = await self.call(client.clouddownload_task_cnt, {'flag': 0})
         except CloudError:

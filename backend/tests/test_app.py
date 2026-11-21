@@ -59,6 +59,22 @@ def sample(client):
     return response.json()
 
 
+def test_task_center_offline_attention_reads_older_active_and_review_records(app, client):
+    import time
+    submitted_at = time.time()
+    with app.state.store.db:
+        app.state.store.db.executemany(
+            'INSERT INTO offline_submissions(urls,target_cid,submitted_at,state) VALUES(?,?,?,?)',
+            [('[]', '123', submitted_at, state)
+             for state in ['submitted', 'needs_review'] + ['completed'] * 55 + ['submitting'] * 20])
+    response = client.get('/api/v1/offline/submissions/attention')
+    assert response.status_code == 200, response.text
+    summary = response.json()
+    assert summary['active']['total'] == 21 and len(summary['active']['items']) == 20
+    assert summary['review']['total'] == 1 and summary['review']['items'][0]['state'] == 'needs_review'
+    assert 'urls' not in summary['active']['items'][0]
+
+
 def test_playback_cleanup_preserves_moved_legacy_strm(app, client):
     kept = sample(client)['id']
     app.state.store.db.execute(

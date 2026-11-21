@@ -11,7 +11,11 @@ import DeepDeleteHistory from './DeepDeleteHistory.vue'
 import ManualMatch from './ManualMatch.vue'
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>,embedded?:boolean}>()
 const active=shallowRef<any[]>([]),history=shallowRef<any[]>([]),detail=shallowRef<any>(null),busy=ref(false),error=ref(''),live=ref(false),more=ref(false)
-const offlinePending=ref<any[]>([]),offlineStatusError=ref('')
+type OfflineRecord={id:number,target_label:string,submitted_at:number,state:string,message:string}
+type OfflineSection={total:number,items:OfflineRecord[]}
+const offlinePending=ref<OfflineSection>({total:0,items:[]})
+const offlineReview=ref<OfflineSection>({total:0,items:[]})
+const offlineStatusError=ref('')
 let stream:EventSource|undefined,timer:ReturnType<typeof setInterval>|undefined,polling=false,visible=false
 const inProgress=(job:any)=>['queued','running','paused','waiting_login'].includes(job.state)
 const taskSource=taskSourceLabel
@@ -24,6 +28,8 @@ const matchTab=(job:any)=>tab.value==='all'||bucketOf(job)===tab.value
 const shownActive=computed(()=>active.value.filter(matchTab))
 const shownHistory=computed(()=>history.value.filter(matchTab))
 const bucketCount=(bucket:string)=>allJobs.value.filter(job=>bucketOf(job)===bucket).length
+  +(bucket==='progress'?offlinePending.value.total:bucket==='failed'?offlineReview.value.total:0)
+const shownProgressCount=computed(()=>shownActive.value.length+offlinePending.value.total)
 const itemFilter=ref('all')
 const manualItem=ref<any>(null)
 const itemText=(item:any)=>`${item.step||''} ${item.message||''}`
@@ -36,7 +42,16 @@ const unidentifiedItems=computed(()=>detail.value?.items.filter(isUnidentified)|
 const failedItems=computed(()=>detail.value?.items.filter(isFailedItem)||[])
 const doneItems=computed(()=>detail.value?.items.filter(isDoneItem)||[])
 const detailItems=computed(()=>{const items=detail.value?.items||[];if(itemFilter.value==='unidentified')return items.filter(isUnidentified);if(itemFilter.value==='failed')return items.filter(isFailedItem);if(itemFilter.value==='done')return items.filter(isDoneItem);return items})
-async function loadOffline(){try{const o=await props.api('/offline/submissions?limit=50');offlinePending.value=(o.items||[]).filter((x:any)=>['submitting','submitted'].includes(x.state));offlineStatusError.value=''}catch{offlineStatusError.value='离线下载状态暂时无法读取'}}
+async function loadOffline(){
+  try {
+    const result=await props.api('/offline/submissions/attention')
+    offlinePending.value=result.active
+    offlineReview.value=result.review
+    offlineStatusError.value=''
+  } catch {
+    offlineStatusError.value='离线下载状态暂时无法读取'
+  }
+}
 async function load(older=false){const before=older&&history.value.length?'?before='+history.value.at(-1).id:'';const data=await props.api('/tasks'+before);active.value=reconcileRows(active.value,data.active);history.value=reconcileRows(history.value,older?[...history.value,...data.history]:data.history);more.value=data.has_more;await loadOffline()}
 async function run(fn:()=>Promise<void>){if(busy.value)return;busy.value=true;error.value='';try{await fn()}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
 function fmtAgo(ts:number){if(!ts)return '';const diff=Date.now()/1000-ts;if(diff<60)return '刚刚';if(diff<3600)return Math.floor(diff/60)+' 分钟前';if(diff<86400)return Math.floor(diff/3600)+' 小时前';const d=new Date(ts*1000);return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`}
@@ -68,7 +83,7 @@ usePageActivity(()=>{visible=true;connect();void run(()=>load());timer=setInterv
 <section class="panel tasks-panel">
   <div class="section-title"><h2>任务</h2><el-button v-if="tab!=='deep-delete'" :disabled="busy" @click="run(()=>load())">刷新</el-button></div>
   <el-tabs v-model="tab">
-    <el-tab-pane :label="`全部 ${allJobs.length}`" name="all"/>
+    <el-tab-pane :label="'全部 '+(allJobs.length+offlinePending.total+offlineReview.total)" name="all"/>
     <el-tab-pane :label="`进行中 ${bucketCount('progress')}`" name="progress"/>
     <el-tab-pane :label="`完成 ${bucketCount('done')}`" name="done"/>
     <el-tab-pane :label="`过滤 ${bucketCount('filtered')}`" name="filtered"/>
@@ -79,12 +94,18 @@ usePageActivity(()=>{visible=true;connect();void run(()=>load());timer=setInterv
   </el-tabs>
   <DeepDeleteHistory v-if="tab==='deep-delete'" :api="api"/>
   <template v-else>
-  <p v-if="more" class="hint">数量仅包含已载入的任务；可在下方载入更早记录。</p>
-  <h2>进行中 <span class="task-count">{{shownActive.length}}</span></h2>
-  <p class="hint">整理、转存和 STRM 同步分别处理；同类任务按顺序执行，访问同一目录时可能短暂等待。暂停、等待登录或失败的批次不阻塞后续任务。</p>
-  <p v-if="offlineStatusError" class="hint">{{offlineStatusError}}</p>
-  <div v-if="offlinePending.length" class="job-card"><strong>离线下载 · 等待 115 完成或核实产物</strong><p class="hint">显示最近 50 条提交中仍待处理的任务；后台约每分钟检查，任务较多或遇到限流时可能更久。</p><p v-for="item in offlinePending" :key="item.id" class="hint">#{{item.id}} · {{item.target_label||'离线目录'}} · {{item.message||'等待下载状态'}}</p></div>
-  <el-empty v-if="!shownActive.length" :description="tab==='all'?'当前没有进行中的任务':'此分类没有进行中的任务'" :image-size="64"/>
+  <p v-if="more&&tab!=='progress'" class="hint">可在下方载入更早的整理、转存和同步记录。</p>
+  <p v-if="offlineStatusError&&['all','progress','failed'].includes(tab)" class="hint">{{offlineStatusError}}</p>
+  <template v-if="tab==='all'||tab==='progress'">
+  <h2>进行中 <span class="task-count">{{shownProgressCount}}</span></h2>
+  <div v-if="offlinePending.total" class="job-card">
+    <strong>离线下载 <span class="task-count">{{offlinePending.total}}</span></strong>
+    <p v-for="item in offlinePending.items" :key="item.id" class="hint">
+      #{{item.id}} · {{fmtAgo(item.submitted_at)}} · {{item.target_label||'离线目录'}} · {{item.message||'等待 115 返回状态'}}
+    </p>
+    <p v-if="offlinePending.total>offlinePending.items.length" class="hint">显示最近 {{offlinePending.items.length}} 条</p>
+  </div>
+  <el-empty v-if="!shownProgressCount&&!offlineStatusError" description="当前没有进行中的任务" :image-size="64"/>
   <div v-for="(job,i) in shownActive" :key="job.id" v-memo="[job,busy]" class="job-card">
     <p class="hint"><span :title="new Date(job.updated*1000).toLocaleString()">{{fmtAgo(job.updated)}}</span> · #{{job.id}} · {{kinds[job.kind]||job.kind}} · {{taskSource(job)}}任务
       <el-tag :type="taskStatus(job).type" size="small">{{taskStatus(job).label}}</el-tag></p>
@@ -101,8 +122,17 @@ usePageActivity(()=>{visible=true;connect();void run(()=>load());timer=setInterv
       <el-button type="danger" plain :disabled="busy" @click="control(job,'cancel')">取消</el-button>
     </div>
   </div>
-  <h2>已结束 <span class="task-count">{{shownHistory.length}}</span></h2>
-  <el-empty v-if="!shownHistory.length" description="这个分类下还没有已结束的任务" :image-size="64"/>
+  </template>
+  <div v-if="offlineReview.total&&(tab==='all'||tab==='failed')" class="job-card">
+    <strong>离线下载需核查 <span class="task-count">{{offlineReview.total}}</span></strong>
+    <p v-for="item in offlineReview.items" :key="item.id" class="hint">
+      #{{item.id}} · {{fmtAgo(item.submitted_at)}} · {{item.target_label||'离线目录'}} · {{item.message||'请到 115 核查'}}
+    </p>
+    <p v-if="offlineReview.total>offlineReview.items.length" class="hint">显示最近 {{offlineReview.items.length}} 条</p>
+  </div>
+  <template v-if="tab!=='progress'">
+  <h2 v-if="shownHistory.length||tab!=='failed'||!offlineReview.total">已结束 <span class="task-count">{{shownHistory.length}}</span></h2>
+  <el-empty v-if="!shownHistory.length&&!(tab==='failed'&&offlineReview.total)" description="这个分类下还没有已结束的任务" :image-size="64"/>
   <div v-for="job in shownHistory" :key="job.id" v-memo="[job,busy]" class="job-card">
     <p class="hint"><span :title="new Date(job.updated*1000).toLocaleString()">{{fmtAgo(job.updated)}}</span> · #{{job.id}} · {{kinds[job.kind]||job.kind}} · {{taskSource(job)}}任务
       <el-tag :type="taskStatus(job).type" size="small">{{taskStatus(job).label}}</el-tag></p>
@@ -127,6 +157,7 @@ usePageActivity(()=>{visible=true;connect();void run(()=>load());timer=setInterv
     </details>
   </div>
   <el-button v-if="more" :disabled="busy" @click="run(()=>load(true))">更早的任务</el-button>
+  </template>
   </template>
 </section>
 <el-drawer :model-value="!!detail" :title="detail?`任务 #${detail.job.id} 处理结果`:'处理结果'" size="min(900px, 100%)" @close="detail=null">

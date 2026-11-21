@@ -29,8 +29,8 @@ class ShareCloud(MemoryCloud):
         self.writes.append(('offline_add', tuple(urls), cid))
         return {'state': True}
 
-    async def offline_tasks(self, page=1, size=20):
-        return self.offline_rows, 0
+    async def offline_task_page(self, page=1, size=20):
+        return self.offline_rows
 
 
 def share_setup(tmp_path):
