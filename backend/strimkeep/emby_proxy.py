@@ -18,6 +18,7 @@ import socket
 import time
 import uuid
 from urllib.parse import urlsplit
+from .emby_connection import strm_mount_path
 
 import httpx
 import uvicorn
@@ -268,8 +269,7 @@ class ProxyServer:
         """Emby 给的 /media/... 换成容器里的 /strm/...；越界或不像 STRM 一律拒绝。"""
         if not emby_path or not emby_path.lower().endswith('.strm'):
             return ''
-        config = self.store.get('console_config', {}) or {}
-        emby_root = str(config.get('emby_strm_path') or '/media').rstrip('/')
+        emby_root = strm_mount_path(self.store, '/media').rstrip('/')
         local_root = str(os.environ.get('STRIMKEEP_STRM_DIR') or '/strm').rstrip('/')
         if not emby_root or not emby_path.startswith(emby_root + '/'):
             return ''

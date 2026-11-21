@@ -9,7 +9,7 @@ from pydantic import BaseModel,Field,ConfigDict
 import httpx
 from .network import emby_request
 from .message_templates import cloud_sign_notice, cloud_recycle_notice
-from .emby_connection import probe,fingerprint,error_message
+from .emby_connection import probe,fingerprint,error_message,strm_mount_path
 
 class ConsoleConfig(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -51,7 +51,9 @@ def activity_time(value):
 
 def install_console(app,store,admin):
     @app.get('/api/v1/console/config',dependencies=[Depends(admin)])
-    async def config():return {'config':{**ConsoleConfig().model_dump(),'strm_container_path':str(app.state.strms),**store.get('console_config',{})}}
+    async def config():
+        return {'config': {**ConsoleConfig().model_dump(), **store.get('console_config', {}),
+                           'strm_container_path': str(app.state.strms), 'emby_strm_path': strm_mount_path(store)}}
     @app.put('/api/v1/console/config',dependencies=[Depends(admin)])
     async def save(body:ConsoleConfig):
         for path in (body.strm_container_path,body.emby_strm_path):

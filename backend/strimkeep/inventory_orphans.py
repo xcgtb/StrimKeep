@@ -10,6 +10,7 @@ import secrets
 from pathlib import Path, PurePosixPath
 
 from .fsops import SIDECAR_EXT
+from .inventory_fs import SHARE_ROOT, library_path
 from .media import KNOWN_VIDEOS
 
 MEDIA_DIR = re.compile(r'(?i)\{tmdb-[1-9]\d*\}')
@@ -42,9 +43,13 @@ def _directory(root, relative):
     return root.joinpath(*rel.parts)
 
 
+def _within_scope(path, allowed_roots):
+    return any(path != PurePosixPath(name) and path.is_relative_to(name) for name in allowed_roots)
+
+
 def inventory(root, relative, allowed_roots):
     rel = PurePosixPath(relative)
-    if not rel.parts or rel.parts[0] not in allowed_roots:
+    if not _within_scope(rel, allowed_roots):
         raise ValueError('目录不属于已配置的媒体库')
     base = _directory(root, relative)
     entries = {}
@@ -114,21 +119,19 @@ def scan(root, allowed_roots):
                               'detail': str(detail)[:200], 'attention':attention})
 
     for name in allowed_roots:
-        if not name or name in ('.', '..') or '/' in name or '\\' in name:
-            raise ValueError('库根配置无效')
-        library = root / name
-        if library.is_symlink() or not library.is_dir(): raise ValueError('库根不可用：' + name)
+        library = library_path(root, name)
+        if library is None:
+            continue
+        side = 'share' if name == SHARE_ROOT else 'cloud'
         def onerror(error): raise error
         for folder, dirs, files in os.walk(library, topdown=True, followlinks=False, onerror=onerror):
             directory = Path(folder)
             linked = [name for name in dirs if (directory / name).is_symlink()]
-            for name in linked:
-                note((directory / name).relative_to(root).as_posix(),
-                     'share' if name == '分享影视库' else 'cloud', 'symlink')
+            for link in linked:
+                note((directory / link).relative_to(root).as_posix(), side, 'symlink')
             dirs[:] = [name for name in dirs if name not in linked]
             if directory == library or not MEDIA_DIR.search(directory.name): continue
             relative = directory.relative_to(root).as_posix()
-            side = 'share' if name == '分享影视库' else 'cloud'
             try:
                 entries = inventory(root, relative, allowed_roots)
             except OSError as exc:
@@ -138,7 +141,7 @@ def scan(root, allowed_roots):
                 note(relative, side, _skip_reason(str(exc)), exc,
                      not (isinstance(exc, ProtectedContent) and exc.ordinary))
                 continue
-            hits.append({'path': relative, 'side': 'share' if name == '分享影视库' else 'cloud',
+            hits.append({'path': relative, 'side': side,
                          'files': sum(x['kind'] == 'file' for x in entries.values()),
                          'dirs': sum(x['kind'] == 'dir' for x in entries.values()),
                          'fingerprint': fingerprint(entries)})
@@ -244,7 +247,7 @@ def sidecars_for_deleted(root, allowed_roots, source):
     """Return exact-name sidecars of a recently deleted registered STRM."""
     source_path = PurePosixPath(source)
     if (source_path.is_absolute() or source_path.as_posix() != source or len(source_path.parts) < 3
-            or source_path.parts[0] not in allowed_roots or source_path.suffix.lower() != '.strm'
+            or not _within_scope(source_path, allowed_roots) or source_path.suffix.lower() != '.strm'
             or any(x in ('', '.', '..') for x in source_path.parts) or '\\' in source):
         raise ValueError('原 STRM 路径无效')
     if not any(MEDIA_DIR.search(p) for p in source_path.parts[1:-1]):

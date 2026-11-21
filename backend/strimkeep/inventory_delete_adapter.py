@@ -10,21 +10,19 @@ revoked 更新）；网盘侧必须有登记，否则拒绝——不能凭文件
 import os
 from pathlib import Path, PurePosixPath
 
-from .inventory_fs import is_synthetic
+from .inventory_fs import is_synthetic, resolve_roots
 from .inventory_snapshot import _fingerprint
 from .inventory_sources import source_fingerprints
 
 
 def cleanup_empty_work(engine, relative):
     """After a confirmed deletion, remove an empty TMDB work directory."""
-    from .inventory_orphans import MEDIA_DIR, clean_one, fingerprint, inventory
-    from .organize_options import library_root
+    from .inventory_orphans import MEDIA_DIR, _within_scope, clean_one, fingerprint, inventory
     try:
-        config = engine.store.get('organize_config', {}) or {}
-        roots = [library_root(config), '分享影视库']
-        parts = PurePosixPath(relative).parts
-        if not parts or parts[0] not in roots:
+        roots = list(resolve_roots(engine.root, engine.store).values())
+        if not _within_scope(PurePosixPath(relative), roots):
             return
+        parts = PurePosixPath(relative).parts
         candidates = [i for i, name in enumerate(parts[:-1]) if MEDIA_DIR.search(name)]
         if len(candidates) != 1:
             return

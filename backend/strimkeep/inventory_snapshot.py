@@ -12,6 +12,7 @@ import hashlib
 import os
 import stat
 from pathlib import Path, PurePosixPath
+from .inventory_fs import library_path
 
 MAX_STRM_BYTES = 64 * 1024
 
@@ -19,6 +20,16 @@ MAX_STRM_BYTES = 64 * 1024
 def _identity(path):
     info = path.stat()
     return [info.st_dev, info.st_ino]
+
+
+def library_identities(root, roots):
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError('STRM 根目录不可用')
+    identity = {'root': _identity(root)}
+    for side, name in roots.items():
+        base = library_path(root, name)
+        identity[side] = _identity(base) if base is not None else None
+    return identity
 
 
 def _fingerprint(root, relative):
@@ -76,7 +87,7 @@ def capture_snapshot(root, roots, rows, policy, *, source_reader, scope_reader=N
                        str(item.get('reason') or '')) for item in unsupported or ()
                       if isinstance(item, dict) and item.get('side') in ('cloud', 'share')
                       and item.get('path')})
-    identity = {'root': _identity(root), **{side: _identity(root / name) for side, name in roots.items()}}
+    identity = library_identities(root, roots)
     files = []
     for side, record_id, relative in sorted(rows):
         files.append({'side': side, 'id': str(record_id), 'path': relative,
@@ -87,7 +98,7 @@ def capture_snapshot(root, roots, rows, policy, *, source_reader, scope_reader=N
         second = scope_reader()
         valid_scope = second['rows'] == sorted(rows) and second['sources'] == sources
     if (not valid_scope or sources != source_reader()
-            or identity != {'root': _identity(root), **{side: _identity(root / name) for side, name in roots.items()}}):
+            or identity != library_identities(root, roots)):
         raise ValueError('目录在建立快照时发生变化')
     return {'version': 2, 'roots': dict(roots), 'identity': identity, 'files': files, 'sources': sources,
             # 目录里存在、但来源核不上（或作品目录认不出）的文件：进不了计划，

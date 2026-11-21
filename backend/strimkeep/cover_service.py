@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 
 from .native_media_info import emby_request
 from .fsutil import atomic_write
+from .emby_connection import strm_mount_path
 
 
 class CoverService:
@@ -44,8 +45,7 @@ class CoverService:
 
     # ---- 路径映射：Emby Path（/media/...）↔ 本地 STRM 根 ----
     def _prefix(self):
-        mapping = self.store.get('console_config', {}) or {}
-        return str(PurePosixPath(mapping.get('emby_strm_path', '/strimkeep'))).rstrip('/')
+        return str(PurePosixPath(strm_mount_path(self.store))).rstrip('/')
 
     def local_dir(self, emby_path, item_type):
         prefix = self._prefix()

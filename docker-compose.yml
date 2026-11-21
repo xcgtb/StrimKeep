@@ -24,6 +24,7 @@ services:
       - STRIMKEEP_METRICS_TOKEN=${STRIMKEEP_METRICS_TOKEN:-}              # 可选：/metrics 口令
       - STRIMKEEP_EMBY_LIBRARY_DB=${STRIMKEEP_EMBY_LIBRARY_DB:-}          # 可选：写 Emby 媒体信息
       - STRIMKEEP_EMBY_STRM_MOUNT=${STRIMKEEP_EMBY_STRM_MOUNT:-}          # 可选：同上
+      - STRIMKEEP_EMBY_STRM_PATH=${STRIMKEEP_EMBY_STRM_PATH:-/media}      # Emby 容器内的媒体挂载点
     volumes:
       - ./data:/data                 # 数据库、配置、锁文件（备份就备份这个目录）
       - ./strm:/strm                 # 生成的 STRM 文件，Emby 库指到这个目录
@@ -47,4 +48,4 @@ services:
       - "8100:8096"                  # 换成你想要的端口
     volumes:
       - ./emby:/config               # Emby 自己的配置
-      - ./strm:/media                # 媒体库目录 = StrimKeep 生成的 STRM
+      - ./strm:${STRIMKEEP_EMBY_STRM_PATH:-/media}  # 与 StrimKeep 共享生成目录

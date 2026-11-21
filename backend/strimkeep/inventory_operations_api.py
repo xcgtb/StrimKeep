@@ -16,7 +16,6 @@ from .inventory_preview import governance_preview
 from .inventory_revision import governance_revision
 from .inventory_snapshot import capture_snapshot
 from .inventory_sources import source_fingerprints
-from .organize_options import library_root
 from .quality import public_policy
 
 
@@ -52,16 +51,18 @@ def install_inventory_operations(app, store, admin):
         config = store.get('organize_config', {}) or {}
         if not isinstance(config, dict):
             raise ValueError('整理配置无效')
-        archive, labels = str(config.get('archive_cid') or ''), config.get('directory_labels') or {}
-        if not config.get('library_dir_name') and (not isinstance(labels, dict) or not labels.get(archive)):
-            raise ValueError('网盘库根目录名称未配置')
-        roots = {'cloud': library_root(config), 'share': '分享影视库'}
+        if not config.get('library_dir_name') and not config.get('archive_cid'):
+            raise ValueError('请先设置影视整理的归档目录')
+        from .inventory_fs import check_missing_registrations, resolve_roots, scan as filesystem_rows
+        roots = resolve_roots(app.state.strms, store)
+        check_missing_registrations(app.state.strms, roots, store.db)
         account = engine.index.account({})
         tie_config = inventory_config_value(store.get('inventory_config', {}))
         policy = {'upgrade': public_policy(store.get('upgrade_policy')), 'inventory': tie_config, 'guard_revision': 4}
-        from .inventory_fs import scan as filesystem_rows
         from .inventory_partition import partition
         if reuse:
+            if reuse['roots'] != roots:
+                raise ValueError('库目录发生变化，请重新扫描')
             # 预览刚扫过：复用那次的库存，只让快照自己再核一遍「文件/来源有没有变」。
             selected, scope_reader = reuse['scoped'], reuse['recheck']
         else:

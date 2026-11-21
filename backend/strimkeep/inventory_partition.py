@@ -24,7 +24,8 @@ def path_keys(relative, roots):
     if not isinstance(relative, str) or not relative or '\\' in relative:
         return None
     p = PurePosixPath(relative)
-    if p.is_absolute() or '..' in p.parts or len(p.parts) < 3 or p.parts[0] not in roots.values():
+    if p.is_absolute() or '..' in p.parts or not any(
+            p.is_relative_to(name) and len(p.parts) >= len(PurePosixPath(name).parts) + 2 for name in roots.values()):
         return None
     parts = p.parts[:-1]
     tagged = [(i, name) for i, name in enumerate(parts) if _ID.search(name)]

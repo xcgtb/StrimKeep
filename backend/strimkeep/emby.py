@@ -15,6 +15,7 @@ import httpx
 from .playaddr import parse_play_path
 from .store import digest
 from .network import emby_request
+from .emby_connection import strm_mount_path
 from .native_media_info import NativeMediaInfo
 
 
@@ -155,7 +156,7 @@ class EmbyDelivery:
         folders = await self.library_folders(connection[0], connection[1])
         if folders is None:
             return None
-        root = str(self.store.get('console_config', {}).get('emby_strm_path') or '/strimkeep').rstrip('/')
+        root = strm_mount_path(self.store).rstrip('/')
         # 「库根落在 STRM 目录内」才算覆盖：README 推荐的配置本来就是把库指向
         # /strimkeep/影视媒体库/电影 这类子目录，不能要求库根必须等于 /strimkeep。
         inside = [folder for folder in folders
@@ -383,8 +384,7 @@ class EmbyDelivery:
             folder = PurePosixPath(relative).parent.name
             if folder.startswith('Season '): folder = PurePosixPath(relative).parent.parent.name
             title = details.get('title') or details.get('name') or re.split(r'\s*\(\d{4}\)|\s*\{tmdb-', folder)[0]
-            mapping=self.store.get('console_config',{})
-            emby_path=str(PurePosixPath(mapping.get('emby_strm_path','/strimkeep'))/relative)
+            emby_path=str(PurePosixPath(strm_mount_path(self.store))/relative)
             pid = 'share/' + shares[relative] if relative in shares else row['file_id']
             result.append({'emby_path':emby_path,'update_type':update_type,'relative':relative, 'pid':pid, 'kind':hint.get('media_type'),
                            'tmdb':details.get('id') or hint.get('tmdb_id'), 'title':title, 'confirmed':False})
@@ -415,7 +415,7 @@ class EmbyDelivery:
             self.store.db.execute('UPDATE emby_deliveries SET '+','.join(k+'=?' for k in values)+' WHERE job_id=?', (*values.values(), jid))
 
     def updates(self, jid, payload):
-        mapping=self.store.get('console_config',{}).get('emby_strm_path','/strimkeep')
+        mapping = strm_mount_path(self.store)
         changed={t.get('emby_path',str(PurePosixPath(mapping)/t['relative'])):t.get('update_type','Created') for t in payload['targets']}
         config=json.loads(self.engine.job(jid)['config'])
         for relative in config.get('emby_deleted_paths',[]):

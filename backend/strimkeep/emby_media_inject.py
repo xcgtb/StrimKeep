@@ -17,6 +17,7 @@ import json
 import shutil
 import sqlite3
 import time
+from .emby_connection import strm_mount_path
 
 # Emby 的 MediaStreamType：1=Audio 2=Video 3=Subtitle 4=EmbeddedImage（按线上库统计核对过）
 TYPE_CODE = {'Video': 2, 'Audio': 1, 'Subtitle': 3, 'EmbeddedImage': 4, 'Attachment': 4}
@@ -51,8 +52,7 @@ def emby_strm_mount(store):
     mount = str(store.get('emby_strm_mount') or os.environ.get('STRIMKEEP_EMBY_STRM_MOUNT') or '').strip()
     if mount:
         return mount.rstrip('/')
-    console = store.get('console_config') or {}
-    return str(console.get('emby_strm_path') or '/media').rstrip('/')
+    return strm_mount_path(store, '/media').rstrip('/')
 
 
 

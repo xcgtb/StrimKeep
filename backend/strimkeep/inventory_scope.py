@@ -4,9 +4,9 @@ import re
 from pathlib import Path, PurePosixPath
 
 from .inventory import registered_rows
-from .inventory_snapshot import _fingerprint, _identity
+from .inventory_fs import check_missing_registrations, resolve_roots
+from .inventory_snapshot import _fingerprint, library_identities
 from .inventory_sources import source_fingerprints
-from .organize_options import library_root
 from .quality import public_policy
 
 _ID = re.compile(r'(?i)\{tmdb-(\d+)\}')
@@ -42,15 +42,13 @@ def verify_work(engine, expected, action, work_paths=None):
     """
     from .inventory_api import inventory_config_value
     store, root = engine.store, Path(engine.root)
-    config = store.get('organize_config', {}) or {}
-    roots = {'cloud': library_root(config), 'share': '分享影视库'}
+    roots = resolve_roots(root, store)
     policy = {'upgrade': public_policy(store.get('upgrade_policy')),
               'inventory': inventory_config_value(store.get('inventory_config', {})), 'guard_revision': 4}
     if roots != expected.get('roots') or policy != expected.get('policy'):
         raise ValueError('库目录或治理规则已改变')
-    if root.is_symlink() or any((root / name).is_symlink() for name in roots.values()):
-        raise ValueError('库根目录不可核实')
-    identity = {'root': _identity(root), **{side:_identity(root / name) for side, name in roots.items()}}
+    check_missing_registrations(root, roots, store.db)
+    identity = library_identities(root, roots)
     if identity != expected.get('identity'):
         raise ValueError('库根目录已改变')
     work_id, work_folder = _work(action['path'])
@@ -112,6 +110,6 @@ def verify_work(engine, expected, action, work_paths=None):
         actual = _fingerprint(root, item['path'])
         if any(actual.get(k) != item.get(k) for k in ('sha256','size','mtime_ns','device','inode')):
             raise ValueError('待删文件或保留依据已变化')
-    if identity != {'root': _identity(root), **{side:_identity(root / name) for side, name in roots.items()}}:
+    if identity != library_identities(root, roots):
         raise ValueError('核对期间库根目录发生变化')
     return True

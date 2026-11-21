@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing import Literal
 
 from .inventory import missing_season, project, registered_rows, work_complete
-from .inventory_fs import scan as filesystem_rows
+from .inventory_fs import check_missing_registrations, resolve_roots, scan as filesystem_rows
 from .inventory_audit import audit_roots
 from .inventory_preview import governance_preview
 from .inventory_revision import governance_revision
@@ -148,10 +148,11 @@ def install_inventory(app, store, admin):
         config = store.get('organize_config', {}) or {}
         if not isinstance(config, dict):
             raise ValueError('整理配置无效')
-        archive, labels = str(config.get('archive_cid') or ''), config.get('directory_labels') or {}
-        if not config.get('library_dir_name') and (not isinstance(labels, dict) or not labels.get(archive)):
-            raise ValueError('网盘库根目录名称未配置')
-        return [library_root(config), '分享影视库']
+        if not config.get('library_dir_name') and not config.get('archive_cid'):
+            raise ValueError('请先设置影视整理的归档目录')
+        roots = resolve_roots(app.state.strms, store)
+        check_missing_registrations(app.state.strms, roots, store.db)
+        return list(roots.values())
 
     def registered_under(path):
         prefix = path.rstrip('/') + '/'
@@ -328,9 +329,7 @@ def install_inventory(app, store, admin):
 
     def scan():
         settings = inventory_config_value(store.get('inventory_config', {}))
-        config = store.get('organize_config', {}) or {}
-        roots = {'cloud': library_root(config if isinstance(config, dict) else {}),
-                 'share': '分享影视库'}
+        roots = resolve_roots(app.state.strms, store)
         # 库存 = 目录里真实存在的 STRM；台账只用来挂上来源编号。
         rows = filesystem_rows(app.state.strms, roots, store.db)
         snapshot = project(rows, app.state.strms, settings.get('match_strategy', 'title_year'))
@@ -486,14 +485,7 @@ def install_inventory(app, store, admin):
                             headers=dict(NO_STORE))
 
     def audit():
-        config = store.get('organize_config', {}) or {}
-        if not isinstance(config, dict):
-            raise ValueError('整理配置无效')
-        archive = str(config.get('archive_cid') or '')
-        labels = config.get('directory_labels') or {}
-        if not config.get('library_dir_name') and (not isinstance(labels, dict) or not labels.get(archive)):
-            raise ValueError('网盘库根目录名称未配置')
-        roots = {'cloud': library_root(config), 'share': '分享影视库'}
+        roots = resolve_roots(app.state.strms, store)
         return audit_roots(app.state.strms, roots, registered_rows(store))
 
     @app.post('/api/v1/inventory/audit', dependencies=[Depends(admin)])
@@ -554,7 +546,7 @@ def install_inventory(app, store, admin):
     async def run_governance_scan(body: PreviewRequest):
         try:
             settings = inventory_config_value(store.get('inventory_config', {}))
-            roots = {'cloud': stale_root(), 'share': '分享影视库'}
+            roots = resolve_roots(app.state.strms, store)
             try:
                 account = app.state.organizer.index.account({})
             except Exception:
@@ -594,7 +586,7 @@ def install_inventory(app, store, admin):
                     return {'rows': again['rows'], 'sources': again['sources']}
                 return {'rows': sorted(supported), 'sources': now_sources}
 
-            result['_reuse'] = {'rows': scoped['rows'], 'scoped': scoped, 'recheck': recheck}
+            result['_reuse'] = {'roots': roots, 'rows': scoped['rows'], 'scoped': scoped, 'recheck': recheck}
             return result
         except (OSError, ValueError) as exc:
             reason = str(exc)

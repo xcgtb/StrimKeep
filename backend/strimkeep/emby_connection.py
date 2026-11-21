@@ -1,10 +1,15 @@
 """Read-only Emby discovery with explicit errors and a connection-bound API base."""
+import os
 from urllib.parse import urlsplit,urlunsplit
 from .network import emby_request,is_local_host
 import httpx
 from .store import digest
 
 def fingerprint(url,key):return digest(url.rstrip('/')+'|'+key)
+
+def strm_mount_path(store, fallback='/strimkeep'):
+    mapping = store.get('console_config', {}) or {}
+    return str(mapping.get('emby_strm_path') or os.environ.get('STRIMKEEP_EMBY_STRM_PATH') or fallback)
 
 def saved_base(store):
     url,key=store.get('emby_url'),store.get('emby_key')

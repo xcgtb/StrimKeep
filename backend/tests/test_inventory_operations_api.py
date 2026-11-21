@@ -10,14 +10,15 @@ from fastapi.testclient import TestClient
 from strimkeep.inventory_operations_api import install_inventory_operations
 
 
-def setup_app(root, monkeypatch):
+def setup_app(root, monkeypatch, include_share=True):
     relative = '分享影视库/剧集/Show {tmdb-12}/Season 01/Show.S01E01.1080p.strm'
     path = root / relative
-    path.parent.mkdir(parents=True)
-    (path.parents[1] / 'tvshow.nfo').write_text('show', encoding='utf-8')
-    (path.parents[1] / 'poster.jpg').write_text('poster', encoding='utf-8')
+    if include_share:
+        path.parent.mkdir(parents=True)
+        (path.parents[1] / 'tvshow.nfo').write_text('show', encoding='utf-8')
+        (path.parents[1] / 'poster.jpg').write_text('poster', encoding='utf-8')
+        path.write_text('http://example/play115/share/s1/a', encoding='utf-8')
     (root / 'cloud').mkdir()
-    path.write_text('http://example/play115/share/s1/a', encoding='utf-8')
     db = sqlite3.connect(':memory:', check_same_thread=False)
     db.row_factory = sqlite3.Row
     db.executescript('''CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -27,7 +28,8 @@ def setup_app(root, monkeypatch):
       CREATE TABLE share_strms(id TEXT,share_code TEXT,receive_code TEXT,file_id TEXT,pickcode TEXT,strm_path TEXT,token_hash TEXT,revoked INTEGER);
       CREATE TABLE output_registry(account_id TEXT,file_id TEXT,source TEXT,trail TEXT,playback_id TEXT,relative_path TEXT,files TEXT,active INTEGER);
       CREATE TABLE owned_outputs(relative_path TEXT,account_id TEXT,file_id TEXT,digest TEXT);''')
-    db.execute('INSERT INTO share_strms VALUES (?,?,?,?,?,?,?,?)', ('s1', 'code', '', 'f1', '', relative, 'hash', 0))
+    if include_share:
+        db.execute('INSERT INTO share_strms VALUES (?,?,?,?,?,?,?,?)', ('s1', 'code', '', 'f1', '', relative, 'hash', 0))
     db.commit()
     settings = {'organize_config': {'library_dir_name': 'cloud'}}
     store = SimpleNamespace(db=db, root=root / 'state', get=settings.get)
@@ -42,6 +44,32 @@ def setup_app(root, monkeypatch):
     def admin(): raise HTTPException(401)
     install_inventory_operations(app, store, admin)
     return app, admin, path, db
+
+
+def test_single_cloud_library_can_plan_and_absence_is_revalidated(tmp_path, monkeypatch):
+    app, admin, _, db = setup_app(tmp_path, monkeypatch, include_share=False)
+    relative = 'cloud/Movie {tmdb-78}/Movie.strm'
+    media = tmp_path / relative
+    media.parent.mkdir()
+    media.write_text('http://example/cloud', encoding='utf-8')
+    checksum = 'a' * 64
+    db.execute('INSERT INTO organized_files VALUES (?,?,?)', ('13', 'p1', relative))
+    db.execute('INSERT INTO output_registry VALUES (?,?,?,?,?,?,?,1)',
+               ('account', '13', '{}', '[]', 'p1', relative, json.dumps({relative: checksum})))
+    db.execute('INSERT INTO owned_outputs VALUES (?,?,?,?)', (relative, 'account', '13', checksum))
+    db.commit()
+    with TestClient(app) as client:
+        app.dependency_overrides[admin] = lambda: None
+        request = {'mode': 'manual', 'selections': [{'kind': 'movie', 'tmdb_id': 78, 'side': 'cloud'}]}
+        response = client.post('/api/v1/inventory/delete/plan', json=request)
+        assert response.status_code == 200, response.text
+        assert [action['side'] for action in response.json()['actions']] == ['cloud']
+        (tmp_path / '分享影视库').mkdir()
+        plan_id = response.json()['plan_id']
+        assert client.post(f'/api/v1/inventory/delete/{plan_id}/execute').status_code == 200
+        assert wait(client, plan_id)['state'] == 'failed'
+        assert media.exists()
+    db.close()
 
 
 def wait(client, plan_id):

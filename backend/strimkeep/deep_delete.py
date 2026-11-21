@@ -15,6 +15,7 @@ import json
 import re
 import time
 from pathlib import Path
+from .emby_connection import strm_mount_path
 
 TYPES = ('Movie', 'Episode', 'Season', 'Series')
 
@@ -57,8 +58,7 @@ def _relative_candidates(store, path):
     对不上时，再退一步去掉第一段（当作挂载点）、以及原样三种候选。
     """
     normalized = '/' + str(path).strip('/')
-    mapping = store.get('console_config', {}) or {}
-    prefix = str(mapping.get('emby_strm_path') or '').rstrip('/')
+    prefix = strm_mount_path(store, '').rstrip('/')
     candidates = []
     if prefix and (normalized == prefix or normalized.startswith(prefix + '/')):
         candidates.append(normalized[len(prefix):].strip('/'))
@@ -172,8 +172,7 @@ def selftest(store, item_type_movie='Movie', item_type_episode='Episode'):
     不写任何东西、不看开关、永远不删——面板上的「链路自检」按钮就是调它，
     这样即使 Emby 那头还没配好，也能立刻知道我们这侧的匹配逻辑是否正常。
     """
-    mapping = store.get('console_config', {}) or {}
-    prefix = str(mapping.get('emby_strm_path') or '/strimkeep').rstrip('/')
+    prefix = strm_mount_path(store).rstrip('/')
     cases = []
 
     def run(label, path, item_type):

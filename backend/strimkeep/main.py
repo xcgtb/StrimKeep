@@ -200,7 +200,8 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
             if paths and connection:
                 from pathlib import PurePosixPath
                 from .network import emby_request
-                mapping = store.get('console_config', {}).get('emby_strm_path', '/strimkeep')
+                from .emby_connection import strm_mount_path
+                mapping = strm_mount_path(store)
                 updates = [{'Path': str(PurePosixPath(mapping) / p), 'UpdateType': 'Modified'} for p in paths]
                 for start in range(0, len(updates), 200):
                     response = await emby_request(app.state.http, 'POST', connection[0] + '/Library/Media/Updated',

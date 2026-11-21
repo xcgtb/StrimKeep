@@ -96,6 +96,40 @@ def test_mapping_page_reports_actual_strm_scan_roots(app, client):
     assert result['scan_sources'][0]['exists'] and result['scan_sources'][0]['strm_count'] == 1
 
 
+def test_inventory_uses_confirmed_nested_archive_path_with_no_share_library(app, client):
+    from strimkeep.inventory_fs import resolve_roots
+    from strimkeep.outputs import Outputs
+    settings = {'archive_cid': '123', 'directory_labels': {'123': '115 网盘 / 旧称'}}
+    app.state.store.set_many({'organize_config': settings})
+    (app.state.strms / '旧称').mkdir()
+    relative = '自定义 / 影视/归档/作品 (2024) {tmdb-17}/作品.strm'
+    file = app.state.strms / relative
+    file.parent.mkdir(parents=True)
+    file.write_text('https://example.invalid/stream')
+    outsider = app.state.strms / '另外的资料' / '作品 (2024) {tmdb-99}' / '无归属.strm'
+    outsider.parent.mkdir(parents=True)
+    outsider.write_text('https://example.invalid/unrelated')
+    Outputs(app.state.organizer).remember('account', {'id': '17'}, ['0', '100', '101', '123', '124'],
+                                         {'relative_path': relative, 'local_files': {relative: 'test'}})
+    roots = resolve_roots(app.state.strms, app.state.store)
+    assert roots['cloud'] == '自定义 / 影视/归档'
+    result = client.get('/api/v1/inventory/mapping/page?media=all&refresh=1').json()
+    assert result['total'] == 1 and result['rows'][0]['tmdb_id'] == 17
+    assert not result['scan_sources'][1]['exists']
+    audit = client.post('/api/v1/inventory/audit')
+    assert audit.status_code == 200, audit.text
+    assert audit.json()['libraries']['cloud']['on_disk'] == 1
+
+
+def test_console_mapping_uses_current_container_path_and_deployment_default(app, client, monkeypatch):
+    monkeypatch.setenv('STRIMKEEP_EMBY_STRM_PATH', '/media')
+    app.state.store.set_many({'console_config': {'strm_container_path': '/old-local'}})
+    config = client.get('/api/v1/console/config').json()['config']
+    assert config['strm_container_path'] == str(app.state.strms) and config['emby_strm_path'] == '/media'
+    app.state.store.set_many({'console_config': {'emby_strm_path': '/my-library'}})
+    assert client.get('/api/v1/console/config').json()['config']['emby_strm_path'] == '/my-library'
+
+
 def test_playback_cleanup_preserves_moved_legacy_strm(app, client):
     kept = sample(client)['id']
     app.state.store.db.execute(

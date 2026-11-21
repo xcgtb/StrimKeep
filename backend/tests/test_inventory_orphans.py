@@ -31,6 +31,20 @@ def test_scan_and_clean_orphan_backups_and_keeps_roots(tmp_path):
         assert archive.extractfile(item['path'] + '/poster.jpg').read() == b'poster'
 
 
+def test_nested_single_cloud_scope_does_not_scan_sibling_directories(tmp_path):
+    root = tmp_path / 'strm'
+    in_scope = root / '我的网盘' / '归档' / '片名 {tmdb-27}'
+    sibling = root / '我的网盘' / '旁边的资料' / '另一部作品 {tmdb-28}'
+    for work in (in_scope, sibling):
+        work.mkdir(parents=True)
+        (work / 'poster.jpg').write_bytes(b'poster')
+    roots = ['我的网盘/归档', '分享影视库']
+    result = scan(root, roots)
+    assert [item['path'] for item in result['items']] == [in_scope.relative_to(root).as_posix()]
+    with pytest.raises(ValueError):
+        inventory(root, sibling.relative_to(root).as_posix(), roots)
+
+
 def test_live_video_unknown_and_changed_directory_are_never_removed(tmp_path):
     root, work, season = setup_tree(tmp_path)
     item = scan(root, ['cloud', '分享影视库'])['items'][0]

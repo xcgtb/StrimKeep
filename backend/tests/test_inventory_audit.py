@@ -27,8 +27,10 @@ def test_reconcile_both_libraries_and_bound_examples(tmp_path):
 
 def test_missing_or_ambiguous_roots_cannot_look_empty(tmp_path):
     (tmp_path / 'cloud').mkdir()
-    with pytest.raises(ValueError):
-        audit_roots(tmp_path, {'cloud': 'cloud', 'share': 'share'}, [])
+    result = audit_roots(tmp_path, {'cloud': 'cloud', 'share': 'share'}, [])
+    assert result['libraries']['cloud']['exists'] and not result['libraries']['share']['exists']
+    with pytest.raises(ValueError, match='仍有已登记文件'):
+        audit_roots(tmp_path, {'cloud': 'cloud', 'share': 'share'}, [('share', '1', 'share/a.strm')])
     with pytest.raises(ValueError):
         audit_roots(tmp_path, {'cloud': 'cloud', 'share': 'cloud'}, [])
     with pytest.raises(ValueError):
