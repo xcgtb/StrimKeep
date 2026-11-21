@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PageHeader from './PageHeader.vue'
 import {useVisiblePolling} from './pageActivity'
 import {onMounted,shallowRef,ref,computed} from 'vue'
 import {VideoPlay,Refresh,Film,Collection,Cloudy,List,Link,Grid,Finished} from '@element-plus/icons-vue'
@@ -37,17 +38,12 @@ const hero=computed(()=>[
 ])
 onMounted(()=>{void load();void loadAux();void loadCloud()});useVisiblePolling(load,20000);useVisiblePolling(loadAux,60000);useVisiblePolling(loadCloud,600000)
 </script>
-<template><div class="page-title"><div><h1>媒体总览</h1><p class="muted">媒体库规模、整理进度与播放动态。</p></div><el-button :icon="Refresh" :loading="busy" @click="refreshAll">刷新</el-button></div>
+<template><PageHeader title="媒体总览"><template #actions><el-button :icon="Refresh" :loading="busy" @click="refreshAll">刷新</el-button></template></PageHeader>
 <el-alert v-if="error" :title="error" type="warning"/>
 <el-skeleton v-if="!data&&busy" :rows="8" animated/>
 <template v-if="data">
 <el-alert v-if="data.emby.error" :title="data.emby.error" type="warning" :closable="false" class="global-error"/>
 <p v-if="data.emby.stale" class="hint stale-hint">当前显示上次成功读取的 Emby 数据，非实时数据。</p>
-
-<section v-if="data.emby.recent?.length" class="overview-feature" aria-label="最近入库推荐">
-  <img v-if="posterUrl(data.emby.recent[0])&&!posterFailed[data.emby.recent[0].id]" class="overview-feature-art" :src="posterUrl(data.emby.recent[0])" alt="" @error="posterError(data.emby.recent[0])"/>
-  <div class="overview-feature-copy"><span class="overview-feature-eyebrow">最近入库 · YOUR MEDIA LIBRARY</span><h2>{{data.emby.recent[0].name}}</h2><p>{{data.emby.recent[0].kind==='Series'?'剧集':'电影'}}<template v-if="data.emby.recent[0].year"> · {{data.emby.recent[0].year}}</template><template v-if="data.emby.recent[0].episode"> · {{data.emby.recent[0].episode}}</template></p><button @click="$emit('navigate','explore')">探索更多影视 <span aria-hidden="true">→</span></button></div>
-</section>
 
 <div class="hero-stats">
   <article v-for="h in hero" :key="h.label" class="hero-card">
@@ -59,9 +55,14 @@ onMounted(()=>{void load();void loadAux();void loadCloud()});useVisiblePolling(l
 
 
 
+<section v-if="data.emby.recent?.length" class="overview-feature" aria-label="最近入库推荐">
+  <img v-if="posterUrl(data.emby.recent[0])&&!posterFailed[data.emby.recent[0].id]" class="overview-feature-art" :src="posterUrl(data.emby.recent[0])" alt="" @error="posterError(data.emby.recent[0])"/>
+  <div class="overview-feature-copy"><span class="overview-feature-eyebrow">最近入库</span><h2>{{data.emby.recent[0].name}}</h2><p>{{data.emby.recent[0].kind==='Series'?'剧集':'电影'}}<template v-if="data.emby.recent[0].year"> · {{data.emby.recent[0].year}}</template><template v-if="data.emby.recent[0].episode"> · {{data.emby.recent[0].episode}}</template></p><button @click="$emit('navigate','explore')">探索更多影视 <span aria-hidden="true">→</span></button></div>
+</section>
+
 <section class="panel recent-panel">
   <div class="section-title recent-heading"><div class="recent-heading-main"><el-icon class="section-icon"><Grid/></el-icon><h2>最近添加</h2><div class="recent-tabs" aria-label="筛选最近添加"><button :class="{selected:recentKind==='all'}" @click="recentKind='all';showAllRecent=false">全部</button><button :class="{selected:recentKind==='Movie'}" @click="recentKind='Movie';showAllRecent=false">电影</button><button :class="{selected:recentKind==='Series'}" @click="recentKind='Series';showAllRecent=false">剧集</button></div></div><button v-if="(data.emby.recent||[]).filter((item:any)=>recentKind==='all'||item.kind===recentKind).length>6" class="text-link" @click="showAllRecent=!showAllRecent">{{showAllRecent?'收起':'显示更多'}} ›</button></div>
-  <div v-if="recentList.length" class="poster-grid" :class="{expanded:showAllRecent}"><article v-for="item in recentList" :key="item.id" class="poster-card"><div class="poster-image"><img v-if="posterUrl(item)&&!posterFailed[item.id]" :src="posterUrl(item)" loading="lazy" :alt="item.name" @error="posterError(item)"/><div v-else class="poster-placeholder"><el-icon><Film/></el-icon><span>暂无海报</span></div><span class="poster-type">{{item.kind==='Series'?'剧集':'电影'}}</span></div><h3>{{item.name}}</h3><p class="muted poster-description">{{item.episode||item.year||'Emby 媒体库'}}</p><span class="library-badge">已入库</span></article></div>
+  <div v-if="recentList.length" class="poster-grid" :class="{expanded:showAllRecent}"><article v-for="item in recentList" :key="item.id" class="poster-card"><div class="poster-image"><img v-if="posterUrl(item)&&!posterFailed[item.id]" :src="posterUrl(item)" loading="lazy" :alt="item.name" @error="posterError(item)"/><div v-else class="poster-placeholder"><el-icon><Film/></el-icon><span>暂无海报</span></div><span class="poster-type">{{item.kind==='Series'?'剧集':'电影'}}</span></div><h3>{{item.name}}</h3><p class="muted poster-description">{{item.episode||item.year||'Emby 媒体库'}}</p></article></div>
   <el-empty v-else :description="data.emby.connected?'暂无对应的最近入库内容':'连接 Emby 后显示最近入库'" :image-size="65"/>
 </section>
 <div class="overview-duo">
@@ -91,7 +92,7 @@ onMounted(()=>{void load();void loadAux();void loadCloud()});useVisiblePolling(l
 </section>
 <section class="panel half">
   <div class="section-title"><h2>近 {{data.emby.trend_days||14}} 天观看</h2><span class="muted">共 {{trendTotal}} 次播放</span></div>
-  <svg v-if="data.emby.trend.length" viewBox="0 0 620 160" class="trend-chart" role="img" aria-label="近 14 天播放次数">
+  <svg v-if="data.emby.trend.length" viewBox="0 0 620 160" class="trend-chart" role="img" :aria-label="'近 '+(data.emby.trend_days||14)+' 天播放次数'">
     <defs><linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="var(--el-color-primary)" stop-opacity=".9"/>
       <stop offset="1" stop-color="var(--el-color-primary)" stop-opacity=".45"/>

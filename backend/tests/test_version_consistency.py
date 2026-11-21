@@ -35,10 +35,9 @@ def test_frontend_package_version_matches_backend_version():
     assert lock['packages']['']['version'] == __version__
 
 
-def test_readme_heading_matches_backend_version():
-    heading = re.search(r'(?m)^#\s*(?:🎬\s*)?StrimKeep\s+([\w.\-]+)$',
-                        (ROOT / 'README.md').read_text(encoding='utf-8'))
-    assert heading and heading.group(1) == __version__
+def test_readme_heading_has_no_version():
+    heading = (ROOT / 'README.md').read_text(encoding='utf-8').splitlines()[0]
+    assert heading == '# 🎬 StrimKeep'
 
 
 def test_deploy_config_renders_current_version_not_a_constant():

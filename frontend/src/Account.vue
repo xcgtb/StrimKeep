@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PageHeader from './PageHeader.vue'
 import {computed,onMounted,onUnmounted,ref,shallowRef,nextTick,watch} from 'vue'
 import {ElMessage,ElMessageBox} from 'element-plus'
 import CloudLoginDialog from './CloudLoginDialog.vue'
@@ -45,7 +46,7 @@ function fmtTime(ts:number){if(!ts)return '—';const d=new Date(ts*1000);const 
 
 onMounted(async()=>{try{configured.value=(await props.api('/settings')).cookie_configured}catch(e){error.value=(e as Error).message};void loadAccount();void loadMaint();void loadRecycle()})
 </script>
-<template><div class="page-title"><div><h1>115 网盘</h1><p class="muted">管理账号、浏览目录、签到与回收站。</p></div></div><el-alert v-if="error" :title="error" type="error"/>
+<template><PageHeader title="115 网盘"/><el-alert v-if="error" :title="error" type="error"/>
 <section class="panel account-panel">
   <div class="section-title"><div><h2>115 账号</h2><p class="account-caption">管理登录状态与网盘容量</p></div><el-tag :type="status==='已登录'?'success':'info'">{{configured?status:'尚未登录'}}</el-tag></div>
   <div v-if="account&&!account.error" class="account-card"><div class="account-row"><div class="account-avatar"><img v-if="account.avatar" :src="account.avatar" alt=""/><span v-else>115</span></div><div class="account-id"><strong>{{account.nickname||'115 账号'}}</strong><small>UID {{account.uid||'—'}}</small></div><el-tag v-if="account.vip_level" type="warning" effect="light">VIP</el-tag><el-button text :loading="accountBusy" @click="loadAccount(true)">刷新容量</el-button></div><div class="usage"><div class="usage-head"><span>已用 {{tb(account.space_used)}}</span><span class="muted">共 {{tb(account.space_total)}}</span></div><div class="usage-bar"><i :style="{width:pct(account.space_used,account.space_total)+'%'}"/></div></div></div>
@@ -53,6 +54,16 @@ onMounted(async()=>{try{configured.value=(await props.api('/settings')).cookie_c
   <div class="button-row account-actions"><el-button type="primary" @click="qr=true">扫码登录</el-button><el-button :loading="busy" @click="check">检查登录</el-button></div>
   <details class="cookie-options"><summary>手动填写 Cookie</summary><p class="hint">也可以手动填写登录信息，留空不会覆盖已保存的值。</p><el-form label-position="top"><el-form-item label="Cookie"><el-input v-model="cookie" type="password" autocomplete="new-password" show-password :placeholder="configured?'已加密保存，留空保留原值':'UID、CID、SEID'"/></el-form-item></el-form><el-button :disabled="!cookie||busy" @click="saveCookie">保存 Cookie</el-button></details>
 </section>
+<section class="panel cloud-browser-panel"><div class="section-title"><h2>网盘目录与文件</h2><el-button :disabled="listLoading||!configured" @click="browse()">刷新当前目录</el-button></div>
+<div v-if="configured" class="cloud-browser">
+  <aside class="cloud-tree-pane" aria-label="目录树"><el-tree-v2 ref="tree" :data="treeData" :height="treeHeight" :item-size="34" :props="{value:'id',label:'name',children:'children',disabled:'disabled'}" :default-expanded-keys="['0']" :expand-on-click-node="false" highlight-current @node-expand="(node:FolderNode)=>expandFolder(node)" @node-collapse="(node:FolderNode)=>expanded.delete(node.id)" @node-click="treeSelect"/></aside>
+  <div class="cloud-files">
+    <nav class="cloud-breadcrumbs" aria-label="当前目录"><template v-for="(p,i) in path" :key="p.id"><span v-if="i" class="cloud-path-divider" aria-hidden="true">/</span><button :aria-current="i===path.length-1?'location':undefined" @click="browse(p.id,undefined,i)">{{p.name}}</button></template></nav>
+    <div class="cloud-list-toolbar"><el-button :disabled="listLoading||path.length<2" @click="browse(path[path.length-2].id,undefined,path.length-2)">返回上级</el-button><span class="muted">{{files.length}}{{more?'＋':''}} 项</span></div>
+    <CloudEntryList :items="files" :loading="listLoading" @open="r=>browse(r.id,r.name)"/>
+    <div v-if="offset||more" class="cloud-pagination"><el-button :disabled="listLoading||!offset" @click="browse(cid,undefined,undefined,Math.max(0,offset-100))">上一页</el-button><span class="muted">第 {{Math.floor(offset/100)+1}} 页</span><el-button :disabled="listLoading||!more" @click="browse(cid,undefined,undefined,next)">下一页</el-button></div>
+  </div>
+</div><el-empty v-else description="登录 115 后即可浏览目录"/></section>
 <section class="panel">
   <div class="section-title maint-section-title"><div><h2>签到与回收站</h2><p class="account-caption">每日签到、按计划清空回收站</p></div><el-button type="primary" :loading="busy" :disabled="!maintLoaded" @click="saveMaint">保存定时设置</el-button></div>
   <div v-if="!maintLoaded" class="button-row"><el-button @click="loadMaint">重新读取设置</el-button></div>
@@ -74,16 +85,7 @@ onMounted(async()=>{try{configured.value=(await props.api('/settings')).cookie_c
     </div>
   </div>
 </section>
-<section class="panel cloud-browser-panel"><div class="section-title"><h2>网盘目录与文件</h2><el-button :disabled="listLoading||!configured" @click="browse()">刷新当前目录</el-button></div>
-<div v-if="configured" class="cloud-browser">
-  <aside class="cloud-tree-pane" aria-label="目录树"><el-tree-v2 ref="tree" :data="treeData" :height="treeHeight" :item-size="34" :props="{value:'id',label:'name',children:'children',disabled:'disabled'}" :default-expanded-keys="['0']" :expand-on-click-node="false" highlight-current @node-expand="(node:FolderNode)=>expandFolder(node)" @node-collapse="(node:FolderNode)=>expanded.delete(node.id)" @node-click="treeSelect"/></aside>
-  <div class="cloud-files">
-    <nav class="cloud-breadcrumbs" aria-label="当前目录"><template v-for="(p,i) in path" :key="p.id"><span v-if="i" class="cloud-path-divider" aria-hidden="true">/</span><button :aria-current="i===path.length-1?'location':undefined" @click="browse(p.id,undefined,i)">{{p.name}}</button></template></nav>
-    <div class="cloud-list-toolbar"><el-button :disabled="listLoading||path.length<2" @click="browse(path[path.length-2].id,undefined,path.length-2)">返回上级</el-button><span class="muted">{{files.length}}{{more?'＋':''}} 项</span></div>
-    <CloudEntryList :items="files" :loading="listLoading" @open="r=>browse(r.id,r.name)"/>
-    <div v-if="offset||more" class="cloud-pagination"><el-button :disabled="listLoading||!offset" @click="browse(cid,undefined,undefined,Math.max(0,offset-100))">上一页</el-button><span class="muted">第 {{Math.floor(offset/100)+1}} 页</span><el-button :disabled="listLoading||!more" @click="browse(cid,undefined,undefined,next)">下一页</el-button></div>
-  </div>
-</div><el-empty v-else description="登录 115 后即可浏览目录"/></section>
+
 <CloudLoginDialog v-model="qr" :api="api" @connected="saved"/></template>
 <style scoped>
 .cloud-browser :deep(.cloud-entry-list){min-height:300px}

@@ -1,10 +1,25 @@
 <script setup lang="ts">
-import {computed,onMounted,onUnmounted,ref,watch,shallowRef} from 'vue'
+import {computed,nextTick,onMounted,onUnmounted,ref,watch,shallowRef} from 'vue'
 import {useRoute,useRouter} from 'vue-router'
 import {createApi} from './api/client'
 import {Monitor,FirstAidKit,House,Cloudy,FolderOpened,Refresh,Document,Setting,Menu,Sunny,Moon,SwitchButton,List,Link,Download,Film,Promotion,MagicStick,Search,Share} from '@element-plus/icons-vue'
 const route=useRoute(),router=useRouter()
 const ready=ref(false),logged=ref(false),csrf=ref(''),username=ref(''),busy=ref(false),error=ref(''),mobile=ref(false),version=ref('—')
+const closeNavigation=ref<HTMLButtonElement>()
+let menuTrigger:HTMLElement|null=null
+const narrowViewport=window.matchMedia('(max-width: 760px)')
+function openNavigation(event:MouseEvent){
+  menuTrigger=event.currentTarget as HTMLElement
+  mobile.value=true
+}
+function closeOnResize(){if(!narrowViewport.matches)mobile.value=false}
+watch(mobile, async open=>{
+  await nextTick()
+  if(open && mobile.value)closeNavigation.value?.focus()
+  else if(!open && !mobile.value && narrowViewport.matches)menuTrigger?.focus()
+})
+onMounted(()=>narrowViewport.addEventListener('change',closeOnResize))
+onUnmounted(()=>narrowViewport.removeEventListener('change',closeOnResize))
 const draft=ref({username:'',password:''})
 const connectionError=ref(false)
 const menu=[
@@ -99,15 +114,15 @@ onUnmounted(()=>{matcher.removeEventListener('change',systemTheme)})
 <template>
 <div v-if="!ready" class="loading">正在连接 StrimKeep…</div>
 <main v-else-if="connectionError" class="auth-page"><section class="auth-card"><h1>连接暂不可用</h1><p>服务可能正在重启，请稍后重试。</p><el-button type="primary" @click="restoreSession">重试连接</el-button></section></main>
-<main v-else-if="!logged" class="auth-page"><section class="auth-card"><div class="app-logo">S</div><h1>StrimKeep</h1><p class="muted">让资源归位，让观看更简单。</p><el-form label-position="top" @submit.prevent="login"><el-form-item label="管理员账号"><el-input v-model="draft.username" autocomplete="username" size="large"/></el-form-item><el-form-item label="密码"><el-input v-model="draft.password" type="password" show-password autocomplete="current-password" size="large"/></el-form-item><el-alert v-if="error" :title="error" type="error" :closable="false"/><el-button type="primary" native-type="submit" :loading="busy" size="large" class="full">登录</el-button></el-form><small class="muted">{{version}} · 响应式工作台</small></section></main>
+<main v-else-if="!logged" class="auth-page"><section class="auth-card"><div class="app-logo">S</div><h1>StrimKeep</h1><p class="muted">登录管理工作台</p><el-form label-position="top" @submit.prevent="login"><el-form-item label="管理员账号"><el-input v-model="draft.username" autocomplete="username" size="large"/></el-form-item><el-form-item label="密码"><el-input v-model="draft.password" type="password" show-password autocomplete="current-password" size="large"/></el-form-item><el-alert v-if="error" :title="error" type="error" :closable="false"/><el-button type="primary" native-type="submit" :loading="busy" size="large" class="full">登录</el-button></el-form><small class="muted">版本 {{version}}</small></section></main>
 <div v-else class="app-shell" :class="{'has-wallpaper':appearance.background_url}">
- <aside id="main-navigation" :class="['app-sidebar',{open:mobile}]"><div class="app-brand"><div class="app-logo">S</div><div><strong>StrimKeep</strong><small>私人媒体工作台</small></div><button class="sidebar-close icon-button" aria-label="关闭导航" @click="mobile=false">×</button></div>
+ <aside id="main-navigation" :class="['app-sidebar',{open:mobile}]"><div class="app-brand"><div class="app-logo">S</div><div><strong>StrimKeep</strong><small>私人媒体工作台</small></div><button ref="closeNavigation" type="button" class="sidebar-close icon-button" aria-label="关闭导航" @click="mobile=false">×</button></div>
   <nav aria-label="主导航"><template v-for="group in ['media','system']" :key="group"><p class="nav-group-heading">{{group==='media'?'媒体管理':'运行与系统'}}</p><button v-for="m in orderedMenu.filter(m=>m.group===group)" :key="m.id" :class="{active:page===m.id}" :aria-current="page===m.id?'page':undefined" @click="go(m.id)"><el-icon><component :is="m.icon"/></el-icon><span>{{m.title}}</span></button></template></nav>
-  <div class="sidebar-info"><span class="status-light"/>服务运行状态以总览为准<small>版本 {{version}}</small></div>
+  <div class="sidebar-info"><small>版本 {{version}}</small></div>
  </aside><div v-if="mobile" class="app-scrim" @click="mobile=false"/>
- <main class="app-main"><header class="app-header"><div class="header-leading"><button class="icon-button mobile-menu" aria-label="打开导航" aria-controls="main-navigation" :aria-expanded="mobile" @click="mobile=true"><el-icon><Menu/></el-icon></button><span class="desktop-crumb">工作空间</span><span class="muted desktop-crumb">/</span><strong class="desktop-crumb">{{title}}</strong><div class="mobile-brand"><span class="mini-logo">S</span><span><b>StrimKeep</b><small>私人媒体工作台</small></span></div></div><div class="header-actions"><form class="header-search" @submit.prevent="searchMedia"><el-icon><Search/></el-icon><input v-model="headerSearch" aria-label="搜索电影或剧集" placeholder="搜索电影、剧集或关键词…"/></form><button class="icon-button" :aria-label="dark?'切换浅色':'切换深色'" @click="toggleTheme()"><el-icon><Sunny v-if="dark"/><Moon v-else/></el-icon></button><span class="user-name">{{username}}</span><el-button text :icon="SwitchButton" @click="logout">退出</el-button></div></header>
+ <main class="app-main" :inert="mobile"><header class="app-header"><div class="header-leading"><button class="icon-button mobile-menu" aria-label="打开导航" aria-controls="main-navigation" :aria-expanded="mobile" @click="openNavigation"><el-icon><Menu/></el-icon></button><span class="desktop-crumb">工作空间</span><span class="muted desktop-crumb">/</span><strong class="desktop-crumb">{{title}}</strong><div class="mobile-brand"><span class="mini-logo">S</span><span><b>StrimKeep</b><small>私人媒体工作台</small></span></div></div><div class="header-actions"><form class="header-search" @submit.prevent="searchMedia"><el-icon><Search/></el-icon><input v-model="headerSearch" aria-label="搜索电影或剧集" placeholder="搜索电影、剧集或关键词…"/></form><button class="icon-button" :aria-label="dark?'切换浅色':'切换深色'" @click="toggleTheme()"><el-icon><Sunny v-if="dark"/><Moon v-else/></el-icon></button><span class="user-name">{{username}}</span><el-button text :icon="SwitchButton" @click="logout">退出</el-button></div></header>
   <div class="app-content"><section class="cached-workspace" :data-page="page"><RouterView v-slot="{Component}"><KeepAlive :max="12"><component :is="Component" :key="route.name" v-bind="pageProps" ref="currentViewRef" :api="api" @navigate="go" @appearance="applyAppearance"/></KeepAlive></RouterView></section></div>
  </main>
- <nav class="mobile-bottom-nav" aria-label="常用导航"><button v-for="m in quickMenu" :key="m.id" :class="{active:page===m.id}" :aria-current="page===m.id?'page':undefined" @click="go(m.id)"><el-icon><component :is="m.icon"/></el-icon><span>{{m.title}}</span></button><button aria-label="打开完整导航" aria-controls="main-navigation" :aria-expanded="mobile" @click="mobile=true"><el-icon><Menu/></el-icon><span>导航</span></button></nav>
+ <nav class="mobile-bottom-nav" aria-label="常用导航" :inert="mobile"><button v-for="m in quickMenu" :key="m.id" :class="{active:page===m.id}" :aria-current="page===m.id?'page':undefined" @click="go(m.id)"><el-icon><component :is="m.icon"/></el-icon><span>{{m.title}}</span></button><button aria-label="打开完整导航" aria-controls="main-navigation" :aria-expanded="mobile" @click="openNavigation"><el-icon><Menu/></el-icon><span>导航</span></button></nav>
 </div>
 </template>

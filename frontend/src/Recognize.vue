@@ -1,8 +1,11 @@
 <script setup lang="ts">
+import PageHeader from './PageHeader.vue'
+import WorkspaceSections from './WorkspaceSections.vue'
 import {ref,computed} from 'vue'
 import {ElMessage} from 'element-plus'
 import TmdbLookup from './TmdbLookup.vue'
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>()
+const section = ref<'lookup' | 'test'>('lookup')
 const text=ref('')
 const folder=ref('')
 const useTmdb=ref(true)
@@ -52,12 +55,15 @@ function note(row:any){
 </script>
 
 <template>
-<div class="page-heading"><div><h1>识别测试</h1><p class="muted">手动查询作品或测试文件名识别；查询不会修改网盘和本地文件。</p></div></div>
-<TmdbLookup :api="api"/>
-<details class="advanced-recognize"><summary>高级工具：文件名识别测试</summary><p class="hint">粘贴文件名，预览整理时的识别与命名结果。</p>
+<PageHeader title="识别测试" description="查询 TMDB 或预览文件名识别结果。"/>
+<WorkspaceSections v-model="section" label="识别工具" :items="[
+  {id:'lookup', label:'TMDB 查询'}, {id:'test', label:'文件名测试'},
+]"/>
+<div v-show="section==='lookup'"><TmdbLookup :api="api"/></div>
+<div v-show="section==='test'">
 <section class="panel recognize-input">
   <div class="section-title"><h2>待测文件名</h2><span class="muted">{{lines.length}} 行</span></div>
-  <el-input v-model="text" type="textarea" :rows="5" placeholder="每行粘贴一个文件名，例如：繁花.S01E01.1080p.mp4"/>
+  <el-input v-model="text" aria-label="待测文件名" type="textarea" :rows="5" placeholder="每行一个文件名，例如 繁花.S01E01.1080p.mp4"/>
   <el-form label-position="top" class="mt">
     <el-form-item label="父目录（可选）">
       <el-input v-model="folder" placeholder="例如 媒体库/剧集/欧美剧集/末日地堡 (2023) {tmdb-125988}/Season 1"/>
@@ -65,7 +71,7 @@ function note(row:any){
   </el-form>
   <div class="button-row">
     <el-checkbox v-model="useTmdb">同时查询 TMDB，给出最终文件名</el-checkbox>
-    <el-button type="primary" :loading="busy" @click="test">开始识别</el-button>
+    <el-button type="primary" :loading="busy" :disabled="!lines.length" @click="test">开始识别</el-button>
   </div>
   <el-alert v-if="error" :title="error" type="error" :closable="false" class="mt"/>
 </section>
@@ -83,11 +89,11 @@ function note(row:any){
     <el-table-column label="说明" min-width="160"><template #default="{row}"><el-tag :type="row.ok?'success':'warning'" size="small">{{note(row)}}</el-tag></template></el-table-column>
   </el-table>
 </section>
-</details>
+</div>
 </template>
 
 <style scoped>
 
-.advanced-recognize{margin-top:16px}.advanced-recognize>summary{cursor:pointer;color:var(--el-color-primary);font-weight:600;padding:12px 4px}.advanced-recognize>.hint{margin:0 4px 12px}.recognize-input :deep(.el-textarea__inner){min-height:140px;background:var(--surface-soft);padding:14px;line-height:1.8}.recognize-results :deep(.el-table){border:1px solid var(--line);border-radius:8px;overflow:hidden}.recognize-results :deep(.el-table__cell){padding:11px 0}.recognize-results .mono{overflow-wrap:anywhere}.mobile-table-hint{display:none}
+.recognize-input :deep(.el-textarea__inner){min-height:140px;background:var(--surface-soft);padding:14px;line-height:1.8}.recognize-results :deep(.el-table){border:1px solid var(--line);border-radius:8px;overflow:hidden}.recognize-results :deep(.el-table__cell){padding:11px 0}.recognize-results .mono{overflow-wrap:anywhere}.mobile-table-hint{display:none}
 @media(max-width:760px){.recognize-input .button-row{align-items:flex-start}.recognize-input .button-row :deep(.el-button){margin-left:auto}.recognize-results{padding:14px 10px!important}.mobile-table-hint{display:block;margin:0 0 10px;font-size:12px}}
 </style>

@@ -211,15 +211,6 @@ button:disabled{cursor:not-allowed}
 .stat strong{color:#234883}
 .stat{border-color:#e2e9f4}
 .section-title{flex-wrap:wrap}
-.workflow-toolbar{z-index:18;background:#ffffffee;backdrop-filter:blur(16px);margin:0 0 24px;border:1px solid #e1e8f3;border-radius:16px;box-shadow:0 8px 28px #243a5a06}
-.workflow-toolbar-top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
-.workflow-toolbar h1{margin:0}
-.workflow-save-state{display:flex;align-items:center;gap:4px;flex-shrink:0;font-size:12px;color:#7b879b}
-.workflow-save-state .el-icon{color:#36816a}
-.workflow-save-state.dirty{color:#ae711c}
-.workflow-toolbar-actions{display:flex;gap:12px}
-.workflow-toolbar-actions .el-input{flex:1;min-width:0}
-.workflow-toolbar-actions>.el-button{height:40px;margin:0;flex-shrink:0;padding:0 16px}
 .setting-card{background:#fff;border:1px solid #e2e9f4;border-radius:20px;box-shadow:0 4px 20px #243a5a03}
 .setting-card-heading{display:flex;align-items:center;width:100%;border:0;text-align:left}
 .setting-card-heading:focus-visible{outline:2px solid #2563eb;outline-offset:-4px;border-radius:20px}
@@ -278,13 +269,6 @@ button:disabled{cursor:not-allowed}
   .header-path{gap:4px;font-size:11px}
   .account-dot{display:none}
   .sidebar{width:260px;padding:24px 16px}
-  .workflow-toolbar{top:56px;padding:16px;margin-bottom:16px;border-radius:16px}
-  .workflow-toolbar-top{margin-bottom:12px}
-  .workflow-toolbar h1{font-size:20px}
-  .workflow-save-state{font-size:11px}
-  .workflow-toolbar-actions{gap:8px}
-  .workflow-toolbar-actions>.el-button{padding:0 12px;font-size:12px}
-  .workflow-toolbar-actions .el-input__inner{font-size:12px}
   .setting-card{border-radius:16px;margin-bottom:16px}
   .setting-card-heading{gap:12px;padding:20px 16px}
   .setting-card-icon{width:38px;height:38px;font-size:20px;border-radius:12px}
@@ -348,7 +332,7 @@ button,input{font:inherit}
 .page-title h1{margin:0 0 8px}
 .page-title p{margin:0}
 .page-title .eyebrow{font-size:11px;letter-spacing:1.8px;margin-bottom:8px}
-.panel,.setting-card,.workflow-toolbar{background:var(--surface)!important;color:var(--text);border:1px solid var(--line)!important;border-radius:16px !important;box-shadow:none !important;margin-bottom:20px}
+.panel, .setting-card{background:var(--surface)!important;color:var(--text);border:1px solid var(--line)!important;border-radius:16px !important;box-shadow:none !important;margin-bottom:20px}
 .panel{}
 .panel h2{font-size:16px;margin:0 0 20px;color:var(--text)}
 .panel h3{color:var(--text)}
@@ -393,7 +377,6 @@ button,input{font:inherit}
 .auth-card small{display:block;text-align:center;margin-top:24px}
 .auth-card .full{margin-top:8px}
 .save-bar{margin-bottom:24px}
-.workflow-toolbar{position:static !important;top:auto!important}
 .setting-card-heading{background:transparent !important;color:var(--text)}
 .setting-card-copy strong,.execution-row strong,.workflow-switch-row strong,.page-heading h1{color:var(--text)!important}
 .setting-card-copy>span,.setting-card-copy small,.workflow-switch-row p,.execution-row p,.task-peek>strong,.workflow-field-row>label,.setting-expand{color:var(--muted)!important}
@@ -444,15 +427,12 @@ html.dark .quality-rule,html.dark .quality-option,html.dark .rule-card,html.dark
   .log-line>span:last-child{grid-column:1/-1}
   .auth-card{padding:28px 24px}
   .save-bar{bottom:10px}
-  .workflow-toolbar-actions{flex-wrap:wrap}
   .el-tabs__item{padding:0 12px}
   .el-dialog{max-width:calc(100vw - 28px)}
   .el-radio-button__inner{padding-left:12px;padding-right:12px}
 }
 html.dark .workflow-rules-drawer .el-drawer__body{background:var(--app-bg)!important}
 html.dark .workflow-rules-drawer .el-drawer__header{border-color:var(--line)}
-.workflow-toolbar h1{color:var(--text)!important}
-html.dark .workflow-toolbar-actions .el-input__wrapper{background:var(--surface-soft)!important}
 html.dark .el-table{--el-table-header-bg-color:var(--surface-soft);--el-table-border-color:var(--line)}
 html.dark .el-table th.el-table__cell{color:var(--muted)}
 html.dark .el-input__wrapper,html.dark .el-select__wrapper{box-shadow:0 0 0 1px var(--line) inset}
@@ -523,7 +503,7 @@ button, .el-button{-webkit-tap-highlight-color:transparent}
 .page-title h1{font-size:clamp(22px, 2.1vw, 26px);font-weight:730;letter-spacing:-.4px;color:var(--text)}
 .page-title p{font-size:12px;line-height:1.75}
 .eyebrow{color:var(--accent);font-size:11px;letter-spacing:.11em}
-.panel, .setting-card, .workflow-toolbar{border-radius:12px !important;border:1px solid var(--line) !important;background:var(--surface) !important;color:var(--text) !important;box-shadow:var(--panel-shadow) !important;margin-bottom:16px}
+.panel, .setting-card{border-radius:12px !important;border:1px solid var(--line) !important;background:var(--surface) !important;color:var(--text) !important;box-shadow:var(--panel-shadow) !important;margin-bottom:16px}
 .panel{padding:20px 24px}
 .panel h2, .section-title h2{font-size:14px;font-weight:700}
 .panel h3{font-size:13px}
@@ -545,10 +525,6 @@ button, .el-button{-webkit-tap-highlight-color:transparent}
 .system-grid{grid-template-columns:repeat(3,minmax(0,1fr));row-gap:16px}
 .system-grid>div{display:flex;align-items:center;gap:4px;flex-wrap:wrap;overflow-wrap:anywhere}
 .workflow-page{max-width:1240px;margin:0 auto}
-.workflow-toolbar{padding:20px 20px !important}
-.workflow-toolbar h1{font-size:22px;font-weight:730;letter-spacing:-.35px}
-.workflow-toolbar-actions .el-input__wrapper{min-height:40px;background:var(--surface-soft) !important}
-.workflow-toolbar-actions > .el-button{min-height:40px}
 .setting-card{overflow:hidden;scroll-margin-top:84px}
 .setting-card-heading{min-height:76px;padding:16px 20px !important;gap:12px;transition:background-color .12s ease}
 .setting-card-heading:hover{background:var(--surface-soft) !important}
@@ -640,12 +616,6 @@ html.dark .el-button--primary{--el-button-bg-color:#3976ea;--el-button-border-co
   .poster-card h3{font-size:12px}
   .watching-grid, .system-grid{grid-template-columns:1fr}
   .workflow-page{width:100%}
-  .workflow-toolbar{padding:16px 12px !important;margin-bottom:12px}
-  .workflow-toolbar-top{align-items:center;gap:8px;flex-wrap:wrap}
-  .workflow-toolbar h1{font-size:20px}
-  .workflow-toolbar-actions{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;width:100%}
-  .workflow-toolbar-actions .el-input{min-width:0}
-  .workflow-toolbar-actions>.el-button{padding:0 12px;min-height:40px}
   .setting-card{margin-bottom:12px !important;border-radius:12px !important}
   .setting-card-heading{min-height:72px;padding:12px 12px !important;gap:8px}
   .setting-card-copy strong{font-size:14px}
@@ -697,8 +667,6 @@ html.dark .el-button--primary{--el-button-bg-color:#3976ea;--el-button-border-co
   .app-content{padding-inline:10px}
   .metric{padding:12px 12px}
   .header-actions .el-button{padding:4px}
-  .workflow-toolbar-actions{grid-template-columns:1fr}
-  .workflow-toolbar-actions>.el-button{width:100%}
 }
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{scroll-behavior:auto !important;animation-duration:.01ms !important;transition-duration:.01ms !important}
@@ -808,10 +776,9 @@ html.dark .app-sidebar nav button{color:var(--muted)}
 .page-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin:0 0 22px}
 .page-heading h1{margin:0 0 7px;font-size:25px;line-height:1.25;letter-spacing:-.5px;color:var(--text)}
 .page-heading p,.page-title p{margin:0;line-height:1.6;color:var(--muted)}
-.panel,.setting-card,.workflow-toolbar{border-radius:10px!important;box-shadow:0 2px 12px rgba(27,49,80,.025)!important}
+.panel, .setting-card{border-radius:10px!important;box-shadow:0 2px 12px rgba(27,49,80,.025)!important}
 .panel{padding:21px 22px}.panel h2,.section-title h2{font-size:15px;letter-spacing:.01em}.section-title{align-items:center;gap:12px}
 .panel>.hint,.setting-card-body>.hint{line-height:1.75}
-.workflow-toolbar{padding:20px!important}.workflow-toolbar h1{font-size:23px}.workflow-toolbar-actions .el-input__wrapper{background:var(--surface-soft)!important}
 .setting-card{overflow:hidden}.setting-card-heading{padding:17px 20px!important}.setting-card-icon{border-radius:9px!important;color:var(--accent)!important;background:color-mix(in srgb,var(--accent) 10%,var(--surface))!important}
 .setting-card-copy strong{font-size:14px}.setting-card-copy>span,.setting-card-copy small{line-height:1.6}.setting-card-body{padding:20px!important}
 .setting-card.expanded .setting-card-heading{background:color-mix(in srgb,var(--accent) 2%,var(--surface))!important}
@@ -825,7 +792,7 @@ html.dark .app-sidebar nav button{color:var(--muted)}
 .log-toolbar{flex-wrap:wrap}.virtual-log{background:var(--surface);border:1px solid var(--line);border-radius:9px}.virtual-log-line{font-variant-numeric:tabular-nums}.virtual-log-line:hover{background:var(--surface-soft)}
 @media(max-width:760px){
  .page-heading{gap:10px;margin-bottom:17px}.page-heading h1{font-size:23px}.page-heading p{font-size:12px}
- .panel{padding:16px 14px}.setting-card-heading{padding:14px!important}.setting-card-body{padding:15px 14px!important}.workflow-toolbar{padding:15px 14px!important}.workflow-toolbar h1{font-size:20px}
+ .panel{padding:16px 14px}.setting-card-heading{padding:14px!important}.setting-card-body{padding:15px 14px!important}
  .job-card{padding:14px 12px;margin:10px 0}.job-card .button-row{gap:7px}.job-card .button-row .el-button{max-width:100%;white-space:normal;height:auto;min-height:32px}
  .el-dialog{max-width:calc(100vw - 24px);margin-top:4vh!important}.el-dialog__body{overflow-wrap:anywhere}.el-drawer{max-width:100vw}
  .log-toolbar>.el-input{min-width:0;flex-basis:100%}.log-toolbar>.el-select{flex:1;min-width:0}.cloud-entry-name{overflow-wrap:anywhere}
@@ -837,7 +804,7 @@ html.dark{--app-bg:#101a29;--surface:#192638;--surface-soft:#213149;--line:#3446
 .app-brand{border-bottom:1px solid var(--line)}.app-brand strong{letter-spacing:-.035em}.app-sidebar nav button{min-height:39px}.app-sidebar nav button.active{background:color-mix(in srgb,var(--accent) 12%,var(--surface));color:var(--accent)}
 .app-header{background:color-mix(in srgb,var(--surface) 96%,transparent)}.header-search{width:clamp(200px,21vw,300px)}.header-search:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--focus-ring)}
 .app-content{max-width:1540px}.page-title,.page-heading{align-items:center}.page-title h1,.page-heading h1{font-weight:750;letter-spacing:-.035em}.page-title p,.page-heading p{max-width:72ch}
-.panel,.setting-card,.workflow-toolbar{border-color:var(--line)!important;box-shadow:var(--panel-shadow)!important}.section-title h2,.panel h2{color:var(--text)}.section-title{min-width:0}.section-title>div{min-width:0}
+.panel, .setting-card{border-color:var(--line)!important;box-shadow:var(--panel-shadow)!important}.section-title h2,.panel h2{color:var(--text)}.section-title{min-width:0}.section-title>div{min-width:0}
 .el-button{transition:background-color .15s,border-color .15s,color .15s}.el-button:focus-visible,.icon-button:focus-visible,.app-sidebar button:focus-visible,.mobile-bottom-nav button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .el-input__wrapper.is-focus,.el-select__wrapper.is-focused{box-shadow:0 0 0 1px var(--accent) inset,0 0 0 3px var(--focus-ring)!important}.el-form-item__label{font-weight:600}.el-tabs__item{min-height:44px}.el-alert{margin-bottom:14px}.hint{line-height:1.7}
 /* Overview and media discovery */
@@ -849,7 +816,7 @@ html.dark{--app-bg:#101a29;--surface:#192638;--surface-soft:#213149;--line:#3446
 [data-page="transfer"] .transfer-entry,[data-page="offline"] .offline-submit,[data-page="sharestrm"] .share-parse,[data-page="recognize"] .recognize-input{border-top:3px solid var(--accent)!important}
 [data-page="transfer"] .transfer-history,[data-page="offline"] .job-card,[data-page="channels"] .channel-card,[data-page="sharestrm"] .share-card{overflow-wrap:anywhere}
 /* Workflow pages, task history, logs and settings */
-.workflow-toolbar{border-top:3px solid var(--accent)!important}.workflow-toolbar-top{gap:12px}.setting-card-heading:hover{background:var(--surface-soft)!important}.setting-card-heading:focus-visible{position:relative;z-index:1;outline-offset:-3px}.setting-card-copy{overflow-wrap:anywhere}
+.setting-card-heading:hover{background:var(--surface-soft)!important}.setting-card-heading:focus-visible{position:relative;z-index:1;outline-offset:-3px}.setting-card-copy{overflow-wrap:anywhere}
 [data-page="tasks"] .tasks-panel>h2{margin-top:26px;padding-top:20px;border-top:1px solid var(--line)}[data-page="tasks"] .job-card,[data-page="logs"] .job-card{background:var(--surface-soft);border-color:var(--line)!important}[data-page="tasks"] .job-card h3,[data-page="logs"] .job-card h3{overflow-wrap:anywhere}
 [data-page="logs"] .log-toolbar{padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:14px}[data-page="logs"] .virtual-log{font-variant-numeric:tabular-nums}
 [data-page="settings"] .settings-panel{max-width:1100px}[data-page="settings"] .settings-panel h2{padding-bottom:13px;margin-top:0;border-bottom:1px solid var(--line)}[data-page="settings"] .settings-tabs{margin-bottom:18px}
@@ -858,7 +825,7 @@ html.dark{--app-bg:#101a29;--surface:#192638;--surface-soft:#213149;--line:#3446
  .panel{padding:16px 14px!important}.section-title{flex-wrap:wrap}.section-title h2{min-width:0}.button-row{display:flex;flex-wrap:wrap;gap:8px}.button-row .el-button+.el-button{margin-left:0}.mobile-bottom-nav button{min-height:50px}
  [data-page="account"] .account-card{padding:12px}[data-page="account"] .cloud-browser-panel .section-title>.el-button{margin-left:auto}[data-page="explore"] .filter-bar{padding:13px}[data-page="explore"] .search-row{min-width:0}[data-page="explore"] .search-input{min-width:0}
  [data-page="tasks"] .tasks-panel>h2{margin-top:20px;padding-top:16px}[data-page="tasks"] .job-card,[data-page="logs"] .job-card{padding:14px 12px}[data-page="logs"] .log-toolbar{gap:10px}
- [data-page="settings"] .settings-tabs .el-tabs__nav-scroll{overflow-x:auto}[data-page="settings"] .settings-panel .el-input-number{max-width:100%}
+ [data-page="settings"] .settings-panel .el-input-number{max-width:100%}
 }
 @media(prefers-reduced-motion:reduce){[data-page="overview"] .poster-card img{transition:none}}
 
@@ -873,7 +840,6 @@ html.dark{--app-bg:#101a29;--surface:#192638;--surface-soft:#213149;--line:#3446
 [data-page="channels"] .channel-card{border-color:var(--line)}
 [data-page="channels"] .channel-head{row-gap:10px}
 [data-page="recognize"] .recognize-results{min-width:0;overflow:hidden}
-[data-page="organize"] .workflow-toolbar,[data-page="sync"] .workflow-toolbar{scroll-margin-top:75px}
 [data-page="tasks"] .job-card .hint,[data-page="logs"] .job-card .hint{line-height:1.65;overflow-wrap:anywhere}
 [data-page="tasks"] .task-extra summary,[data-page="logs"] .task-extra summary{cursor:pointer;color:var(--accent);padding:8px 0}
 [data-page="settings"] .settings-panel .hint{display:inline-block;overflow-wrap:anywhere;max-width:75ch}
@@ -896,3 +862,15 @@ html.dark .upgrade-page .rule-number,html.dark .upgrade-page .preference-number{
 
 /* Readable placeholders in both color modes. */
 .el-input__inner::placeholder,.el-textarea__inner::placeholder{color:var(--muted);opacity:1}
+
+.workspace-tabs .el-tabs__nav-scroll { overflow: hidden; }
+.workspace-tabs .el-tabs__item:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.workspace-tabs .el-tabs__nav-wrap.is-scrollable { padding-inline: 25px; }
+.workspace-tabs .el-tabs__nav-prev,
+.workspace-tabs .el-tabs__nav-next { width: 24px; text-align: center; }
+
+@media (max-width: 760px) {
+  .app-sidebar:not(.open) { visibility: hidden; }
+  .app-sidebar nav button { min-height: 44px; }
+  .app-header .icon-button { min-width: 44px; min-height: 44px; }
+}

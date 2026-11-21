@@ -34,6 +34,5 @@ python3 scripts/version.py --check        # 校验所有落点是否一致
 
 - `frontend/package.json`、`frontend/package-lock.json`
 - `docker-compose.yml` 的发布通道
-- `README.md` 标题
 
 发版顺序不变：`version.py` → 构建镜像 → 提交/tag → 等镜像 → 部署 → 发布说明。

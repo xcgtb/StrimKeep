@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PageHeader from './PageHeader.vue'
 import {computed,onMounted,ref} from 'vue'
 import {ArrowDown,Refresh} from '@element-plus/icons-vue'
 import {useVisiblePolling} from './pageActivity'
@@ -20,10 +21,9 @@ const healthy=computed(()=>data.value?.checks.filter(check=>check.status==='ok')
 const checkedAt=computed(()=>data.value ? new Date(data.value.generated_at*1000) : null)
 </script>
 <template>
-<div class="page-title health-heading">
-  <h1>系统健康</h1>
-  <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
-</div>
+<PageHeader title="系统健康">
+  <template #actions><el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button></template>
+</PageHeader>
 <el-alert v-if="error" :title="error" type="error" :closable="false" class="global-error"/>
 <el-skeleton v-if="!data&&loading" :rows="2" animated/>
 <section v-if="data" class="panel health-panel" :aria-busy="loading">
@@ -59,8 +59,6 @@ const checkedAt=computed(()=>data.value ? new Date(data.value.generated_at*1000)
 </section>
 </template>
 <style scoped>
-.health-heading{flex-wrap:nowrap;align-items:center}
-.health-heading h1{margin:0}
 .health-panel{padding:0 18px}
 .health-summary,.health-details summary{display:flex;align-items:center;justify-content:space-between;gap:8px 16px}
 .health-summary{flex-wrap:wrap;padding:16px 0}

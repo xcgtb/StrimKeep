@@ -1,8 +1,11 @@
 <script setup lang="ts">
+import WorkspaceSections from './WorkspaceSections.vue'
+import PageHeader from './PageHeader.vue'
 import {computed,ref,onMounted,onUnmounted} from 'vue'
 import {ElMessage,ElMessageBox} from 'element-plus'
 import {useRoute} from 'vue-router'
 import DirectoryPicker from './DirectoryPicker.vue'
+const section = ref<'channels' | 'session' | 'schedule'>('channels')
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>()
 const emit=defineEmits<{navigate:[page:string]}>()
 const route=useRoute()
@@ -122,9 +125,12 @@ onMounted(()=>{window.addEventListener('beforeunload',beforeUnload);loadTelegram
 onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
 </script>
 <template>
-<div class="page-title channel-page-head"><div><h1>频道监控</h1><p class="muted">管理公开频道、保存目录与分流规则。</p></div><div class="channel-head-actions"><span role="status">{{!baseline?'正在读取设置':dirty?'有未保存修改':'设置已保存'}}</span><el-button type="primary" :loading="busy" :disabled="!dirty" @click="save">保存修改</el-button></div></div>
+<PageHeader class="channel-page-head" title="频道监控" description="按频道设置保存目录、关键词和处理方式。"><template #actions><div class="channel-head-actions"><span v-if="!baseline||dirty" role="status">{{!baseline?'正在读取设置':'有未保存修改'}}</span><el-button type="primary" :loading="busy" :disabled="!dirty" @click="save">保存修改</el-button></div></template></PageHeader>
 <el-alert v-if="error" :title="error" type="error" show-icon style="margin-bottom:14px"/>
-<section class="panel agent-session"><div class="section-title"><h2>Telegram 用户会话</h2>
+<WorkspaceSections v-model="section" label="频道监控分区" :items="[
+  {id:'channels', label:'频道规则'}, {id:'session', label:'Telegram 会话'}, {id:'schedule', label:'轮询与通知'},
+]"/>
+<section v-show="section==='session'" class="panel agent-session"><div class="section-title"><h2>Telegram 用户会话</h2>
 <el-tag size="small" :type="tg.logged_in?'success':'info'">{{tg.logged_in?('已登录 '+tg.phone):'未登录'}}</el-tag>
 <el-button v-if="!tg.logged_in" size="small" :disabled="busy" @click="tgOpen=true">登录</el-button>
 <el-button v-else size="small" :disabled="busy" @click="tgLogout">退出</el-button></div>
@@ -160,7 +166,7 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
 </template>
 </el-form></el-dialog>
 
-<section class="panel"><div class="section-title"><h2>轮询与通知</h2><el-tag :type="dirty?'warning':config.enabled?'success':'info'">{{dirty?'有未保存修改':config.enabled?'已启用':'已停用'}}</el-tag></div>
+<section v-show="section==='schedule'" class="panel"><div class="section-title"><h2>轮询与通知</h2><el-tag :type="dirty?'warning':config.enabled?'success':'info'">{{dirty?'有未保存修改':config.enabled?'已启用':'已停用'}}</el-tag></div>
  <el-form label-position="top" :disabled="busy">
   <el-form-item label="启用频道监控"><el-switch v-model="config.enabled"/></el-form-item>
   <el-form-item label="轮询方式"><el-radio-group v-model="config.schedule_mode"><el-radio-button value="interval">固定间隔</el-radio-button><el-radio-button value="cron">cron 表达式</el-radio-button></el-radio-group></el-form-item>
@@ -168,14 +174,14 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
   <el-form-item v-else label="cron（5 段，按服务器时区）"><el-input v-model="config.cron" placeholder="*/10 * * * *"/></el-form-item>
   <el-form-item label="抓到新分享时推送通知"><el-switch v-model="config.notify"/></el-form-item>
  </el-form>
- <div class="button-row"><el-button type="primary" :loading="busy" @click="save">保存设置</el-button><el-button :loading="busy" :disabled="dirty" @click="check">立即检查一轮</el-button><span v-if="dirty" class="hint">请先保存修改，再检查频道。</span></div>
+ <div class="button-row"><el-button :loading="busy" :disabled="dirty" @click="check">立即检查一轮</el-button><span v-if="dirty" class="hint">请先保存修改，再检查频道。</span></div>
  <p class="hint">公开预览页只支持公开频道；使用已登录的 Telegram 用户会话可读取已加入的私密频道或群组。首次检查按各频道设置的回溯页数读取，之后跟进新帖。</p>
 </section>
 
 
-<section class="panel"><div class="section-title"><h2>频道与规则</h2><span class="muted">{{config.channels.length}} 个</span></div>
+<section v-show="section==='channels'" class="panel"><div class="section-title"><h2>频道与规则</h2><span class="muted">{{config.channels.length}} 个</span></div>
  <div class="button-row" style="margin-bottom:6px"><el-input v-model="draft" aria-label="公开频道用户名或链接" placeholder="@channel_name 或 t.me/channel_name" style="max-width:320px" :disabled="busy" @keyup.enter="addChannel"/><el-button :disabled="busy" @click="addChannel">添加频道</el-button></div>
- <p class="hint" v-if="!config.channels.length">还没添加频道。添加后保存，再点「立即检查一轮」验证能不能读到。</p>
+ <p class="hint" v-if="!config.channels.length">还没添加频道。添加后保存，可在「轮询与通知」里立即检查。</p>
 
  <div v-for="c in config.channels" :key="c.name" class="channel-card">
   <div class="channel-head">
@@ -256,7 +262,7 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
    <div class="organize-option"><label>跳过匹配的帖子（正则）</label><el-input v-model="c.exclude" :disabled="busy" placeholder="例如 预告|求片|失效"/></div>
   </div>
  </div>
- <div class="button-row" v-if="config.channels.length" style="margin-top:14px"><el-button type="primary" :loading="busy" @click="save">保存频道规则</el-button></div>
+ <div class="button-row" v-if="config.channels.length && dirty"><el-button type="primary" :loading="busy" @click="save">保存修改</el-button></div>
 </section>
 <el-dialog v-model="renameOpen" title="改频道名字" width="440px">
  <p class="hint" style="margin:0 0 10px">频道从公开转私密后用户名会失效（预览页变 302），这时把用户名换成数字 ID，例如 <code>-1004419698318</code>。落点、正则、分流规则全部保留，跟进位置也一起搬过去，不会重扫旧帖。</p>

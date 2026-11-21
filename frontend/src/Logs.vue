@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PageHeader from './PageHeader.vue'
 import {ref,shallowRef,computed,watch,nextTick,onUnmounted} from 'vue'
 import {usePageActivity} from './pageActivity'
 import {levelOf} from './logLevel'
@@ -66,7 +67,7 @@ watch(paused,value=>{if(!value)void load()})
 usePageActivity(()=>{visible=true;void load()},()=>{visible=false;disconnect();if(queryTimer)clearTimeout(queryTimer)})
 </script>
 <template>
-<div class="page-title"><div><h1>实时日志</h1><p class="muted">查看运行过程和异常信息。</p></div><div class="button-row"><el-tag :type="live?'success':'info'">{{live?'实时连接':'连接待恢复'}}</el-tag><el-button text @click="emit('navigate','tasks')">任务中心 →</el-button></div></div>
+<PageHeader title="实时日志"><template #actions><div class="button-row"><el-tag :type="live?'success':'info'">{{live?'实时连接':'连接待恢复'}}</el-tag><el-button text @click="emit('navigate','tasks')">任务中心 →</el-button></div></template></PageHeader>
 <section class="panel">
  <div class="log-toolbar">
   <el-radio-group v-model="level" size="small">
@@ -74,14 +75,16 @@ usePageActivity(()=>{visible=true;void load()},()=>{visible=false;disconnect();i
    <el-radio-button value="warn">注意 {{counts.warn}}</el-radio-button>
    <el-radio-button value="error">异常 {{counts.error}}</el-radio-button>
   </el-radio-group>
-  <el-select v-model="kind" clearable placeholder="全部类别" style="width:130px">
+  <el-select v-model="kind" clearable aria-label="日志类别" placeholder="全部类别" class="log-category">
    <el-option v-for="k in kindOptions" :key="k" :value="k" :label="kindLabel(k)"/>
   </el-select>
-  <el-input v-model="search" clearable placeholder="搜索内容，例如频道名、文件名" aria-label="搜索日志" style="max-width:280px"/>
+  <el-input v-model="search" clearable placeholder="搜索内容，例如频道名、文件名" aria-label="搜索日志" class="log-search"/>
   
+  <div class="log-actions">
   <el-button @click="paused=!paused">{{paused?'继续显示':'暂停'}}</el-button>
   <el-button :loading="loading" @click="load(false)">刷新</el-button>
   <el-button :disabled="!rows.length" @click="download">下载日志</el-button>
+  </div>
  </div>
 
  <div ref="viewport" class="live-log virtual-log" role="log" @scroll="scrollTop=($event.target as HTMLElement).scrollTop">
@@ -98,7 +101,7 @@ usePageActivity(()=>{visible=true;void load()},()=>{visible=false;disconnect();i
  </div>
 
  <div class="button-row">
-  <span class="hint">已载入 {{rows.length}} 条，含每一步的执行细节</span>
+  <span class="hint">已载入 {{rows.length}} 条</span>
   <el-button v-if="older&&rows.length<5000" :loading="loading" @click="load(true)">载入更早</el-button>
  </div>
 </section>
@@ -112,6 +115,14 @@ usePageActivity(()=>{visible=true;void load()},()=>{visible=false;disconnect();i
 </el-drawer>
 </template>
 <style scoped>
+.log-category { width: min(156px, 100%); }
+.log-search { flex: 1 1 180px; min-width: 0; max-width: 360px; }
+.log-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.log-actions .el-button { margin: 0; }
+@media (max-width: 600px) {
+  .log-search { max-width: none; flex-basis: 100%; }
+  .log-actions { width: 100%; }
+}
 .log-toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px}
 .log-row{display:flex;align-items:center;gap:10px;width:100%;border:0;background:transparent;text-align:left;padding:0 8px;border-radius:8px;cursor:pointer;border-bottom:1px solid var(--line)}
 .log-row:hover{background:var(--surface-soft)}

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import WorkspaceSections from './WorkspaceSections.vue'
+import PageHeader from './PageHeader.vue'
 import {computed,ref,onMounted,onUnmounted} from 'vue'
 import {useVisiblePolling} from './pageActivity'
 import {ElMessage,ElMessageBox} from 'element-plus'
@@ -106,23 +108,24 @@ async function canLeave(){if(profileEditor.value&&!await profileEditor.value.can
 defineExpose({canLeave})
 </script>
 <template>
-<div class="page-heading"><div><h1>分享 STRM</h1><p class="muted">用 115 分享链接生成 STRM，整理后加入分享影视库。</p></div></div>
+<PageHeader title="分享 STRM" description="解析 115 分享，免转存生成 STRM。"/>
 <el-alert v-if="error" :title="error" type="error" show-icon class="global-error"/>
 <el-alert v-if="watchJob" :title="`整理任务 #${watchJob} 已提交，结束后自动刷新列表；详细状态请查看任务中心。`" type="info" :closable="false" class="global-error"/>
 <el-alert v-if="watchError" :title="watchError" type="warning" :closable="false" class="global-error"/>
-<div class="share-intro"><strong>免转存分享入库</strong><p>解析 115 分享 → 选择视频并生成 STRM → 整理到分享影视库。原分享失效后对应链接将无法播放。</p></div>
-<nav class="share-page-tabs" aria-label="分享 STRM 页面分组"><button v-for="item in [{id:'library',label:'分享列表'},{id:'add',label:'添加分享'},{id:'settings',label:'整理与监控'}]" :key="item.id" type="button" :class="{active:pageSection===item.id}" :aria-pressed="pageSection===item.id" @click="pageSection=item.id as typeof pageSection">{{item.label}}</button></nav>
+<WorkspaceSections v-model="pageSection" label="分享 STRM 分区" :items="[
+  {id:'library', label:'分享列表'}, {id:'add', label:'添加分享'}, {id:'settings', label:'整理与监控'},
+]"/>
 <div v-show="pageSection==='add'" class="share-page-group">
 
 
-<section class="panel share-parse" v-if="!parsed"><div class="share-block-heading"><div><h2>添加 115 分享</h2><p>先解析分享，再选择要生成 STRM 的视频。</p></div><span class="share-step">1 / 2</span></div>
+<section class="panel share-parse" v-if="!parsed"><div class="share-block-heading"><div><h2>添加 115 分享</h2><p>先解析分享，再选择要生成 STRM 的视频。</p></div></div>
 <el-form label-position="top"><el-form-item label="分享链接（可含提取码）">
 <el-input v-model="shareText" :disabled="busy" placeholder="https://115.com/s/xxxxx?password=yyyy" @keydown.enter="parse"/></el-form-item></el-form>
 <el-button type="primary" :disabled="busy||!shareText.trim()" @click="parse" style="margin-top:8px">解析链接</el-button>
 </section>
 
 <section class="panel" v-if="parsed">
-<div class="share-block-heading"><div><h2>选择视频</h2><p>共 {{parsed.video_count}} 个视频；生成后进入待整理列表。</p></div><span class="share-step">2 / 2</span></div><el-button text @click="parsed=null">← 修改分享链接</el-button>
+<div class="share-block-heading"><div><h2>选择视频</h2><p>共 {{parsed.video_count}} 个视频，生成后进入待整理列表。</p></div></div><el-button text @click="parsed=null">← 修改分享链接</el-button>
 <div class="filter-row" style="margin-bottom:12px">
 <el-button size="small" @click="toggleAll">{{selected.size===parsed.videos.length?'全不选':'全选'}}</el-button>
 <el-button type="primary" size="small" :disabled="busy||!selected.size" @click="generate">生成 {{selected.size}} 个 STRM</el-button>
@@ -138,7 +141,7 @@ defineExpose({canLeave})
 </div>
 <div v-show="pageSection==='library'" class="share-page-group">
 <section class="panel" >
-<div class="library-heading"><div><h2>分享列表</h2><p>查看待整理和已入库的分享 STRM；删除即清空登记，没有「已撤销」状态。</p></div><el-button type="primary" @click="pageSection='add'">添加分享</el-button></div>
+<div class="library-heading"><div><h2>分享列表</h2><p>查看待整理和已入库的分享 STRM。</p></div><el-button type="primary" @click="pageSection='add'">添加分享</el-button></div>
 <div class="section-title share-actions">
 <button v-for="(label,t) in tabLabels" :key="t" class="library-tab" :class="{active:tab===t}" type="button" @click="switchTab(t)">{{label}}</button>
 <el-input v-model="query" size="small" placeholder="搜索名称/分享码" style="max-width:200px" clearable @change="refreshAt(0)"/>
@@ -180,7 +183,7 @@ defineExpose({canLeave})
 <style scoped>
 .check-report{margin-top:18px;padding-top:16px;border-top:1px solid var(--line)}.check-report-head{display:flex;justify-content:space-between;gap:12px}.check-report .hint{line-height:1.6}.check-progress{color:var(--accent);font-size:13px}.check-error{color:var(--el-color-danger);font-size:13px}.check-history{margin-top:8px;border:1px solid var(--line);border-radius:9px;padding:10px 12px}.check-history summary{cursor:pointer;display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}.check-history summary small,.check-detail span,.check-detail small{display:block;color:var(--muted);font-size:12px;margin-top:4px}.check-history-body{padding-top:8px}.check-detail{padding:9px 0;border-top:1px solid var(--line);overflow-wrap:anywhere;font-size:13px}
 
-.share-intro{padding:16px 18px;margin-bottom:14px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}.share-intro strong{font-size:15px}.share-intro p,.share-block-heading p{font-size:12px;color:var(--muted);line-height:1.6;margin:6px 0 0}.share-page-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}.share-page-tabs button{border:1px solid var(--line);border-radius:9px;background:var(--surface);padding:9px 15px;color:var(--muted);font-size:13px;cursor:pointer}.share-page-tabs button.active{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--surface));color:var(--accent);font-weight:650}.share-block-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:18px}.share-block-heading h2{margin:0;font-size:16px}.share-step{flex:none;font-size:12px;color:var(--muted)}.share-maintenance{margin-top:16px;padding-top:14px;border-top:1px solid var(--line);font-size:13px}.share-maintenance summary{cursor:pointer;color:var(--muted)}.share-monitor-panel .monitor-section{margin:0;padding:0;border:0}@media(max-width:640px){.share-page-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}.share-page-tabs button{padding:9px 4px;font-size:12px}.share-intro{padding:13px}.monitor-row{align-items:flex-start;flex-wrap:wrap}.monitor-input{flex-wrap:wrap}}
+.share-block-heading p{font-size:12px;color:var(--muted);line-height:1.6;margin:6px 0 0}.share-block-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:18px}.share-block-heading h2{margin:0;font-size:16px}.share-maintenance{margin-top:16px;padding-top:14px;border-top:1px solid var(--line);font-size:13px}.share-maintenance summary{cursor:pointer;color:var(--muted)}.share-monitor-panel .monitor-section{margin:0;padding:0;border:0}@media(max-width:640px){.monitor-row{align-items:flex-start;flex-wrap:wrap}.monitor-input{flex-wrap:wrap}}
 
 .share-list{display:grid;gap:10px;min-width:0}
 .share-card{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--surface-soft);min-width:0}

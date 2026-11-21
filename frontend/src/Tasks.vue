@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import PageHeader from './PageHeader.vue'
+import WorkspaceSections from './WorkspaceSections.vue'
 import {computed,ref,shallowRef} from 'vue'
 import {ElMessage,ElMessageBox} from 'element-plus'
 import {mergeTaskDetail} from './taskDetails'
@@ -29,6 +31,16 @@ const shownActive=computed(()=>active.value.filter(matchTab))
 const shownHistory=computed(()=>history.value.filter(matchTab))
 const bucketCount=(bucket:string)=>allJobs.value.filter(job=>bucketOf(job)===bucket).length
   +(bucket==='progress'?offlinePending.value.total:bucket==='failed'?offlineReview.value.total:0)
+const taskSections = computed(() => [
+  {id:'all', label:'全部 ' + (allJobs.value.length + offlinePending.value.total)},
+  {id:'progress', label:'进行中 ' + bucketCount('progress')},
+  {id:'done', label:'完成 ' + bucketCount('done')},
+  {id:'filtered', label:'过滤 ' + bucketCount('filtered')},
+  {id:'unidentified', label:'未识别 ' + bucketCount('unidentified')},
+  {id:'failed', label:'需处理 ' + bucketCount('failed')},
+  {id:'cancelled', label:'已取消 ' + bucketCount('cancelled')},
+  {id:'deep-delete', label:'深度删除'},
+])
 const shownProgressCount=computed(()=>shownActive.value.length+offlinePending.value.total)
 const itemFilter=ref('all')
 const manualItem=ref<any>(null)
@@ -78,25 +90,17 @@ async function poll(){
 usePageActivity(()=>{visible=true;connect();void run(()=>load());timer=setInterval(poll,5000)},()=>{visible=false;live.value=false;stream?.close();stream=undefined;if(timer)clearInterval(timer);timer=undefined})
 </script>
 <template>
-<div v-if="!embedded" class="page-title"><div><h1>任务中心</h1><p class="muted">查看进行中和已结束的任务，跟踪处理结果。</p></div></div>
+<PageHeader v-if="!embedded" title="任务中心">
+  <template v-if="tab!=='deep-delete'" #actions><el-button :disabled="busy" @click="run(()=>load())">刷新</el-button></template>
+</PageHeader>
 <el-alert v-if="error" :title="error" type="error" show-icon class="global-error"/>
 <section class="panel tasks-panel">
-  <div class="section-title"><h2>任务</h2><el-button v-if="tab!=='deep-delete'" :disabled="busy" @click="run(()=>load())">刷新</el-button></div>
-  <el-tabs v-model="tab">
-    <el-tab-pane :label="'全部 '+(allJobs.length+offlinePending.total)" name="all"/>
-    <el-tab-pane :label="`进行中 ${bucketCount('progress')}`" name="progress"/>
-    <el-tab-pane :label="`完成 ${bucketCount('done')}`" name="done"/>
-    <el-tab-pane :label="`过滤 ${bucketCount('filtered')}`" name="filtered"/>
-    <el-tab-pane :label="`未识别 ${bucketCount('unidentified')}`" name="unidentified"/>
-    <el-tab-pane :label="`需处理 ${bucketCount('failed')}`" name="failed"/>
-    <el-tab-pane :label="`已取消 ${bucketCount('cancelled')}`" name="cancelled"/>
-    <el-tab-pane label="深度删除" name="deep-delete"/>
-  </el-tabs>
+  <div v-if="embedded" class="section-title"><h2>任务</h2><el-button v-if="tab!=='deep-delete'" :disabled="busy" @click="run(()=>load())">刷新</el-button></div>
+  <WorkspaceSections v-model="tab" label="任务状态与记录" :items="taskSections" class="task-sections"/>
   <DeepDeleteHistory v-if="tab==='deep-delete'" :api="api"/>
   <template v-else>
-  <p v-if="more&&tab!=='progress'" class="hint">可在下方载入更早的整理、转存和同步记录。</p>
   <p v-if="offlineStatusError&&['all','progress','failed'].includes(tab)" class="hint">{{offlineStatusError}}</p>
-  <template v-if="tab==='all'||tab==='progress'">
+  <template v-if="tab==='progress'||(tab==='all'&&shownProgressCount)">
   <h2>进行中 <span class="task-count">{{shownProgressCount}}</span></h2>
   <div v-if="offlinePending.total" class="job-card">
     <strong>离线下载 <span class="task-count">{{offlinePending.total}}</span></strong>
@@ -204,7 +208,12 @@ usePageActivity(()=>{visible=true;connect();void run(()=>load());timer=setInterv
 </template>
 
 <style scoped>
+.tasks-panel > h2:first-of-type { margin-top: 10px; padding-top: 0; border-top: 0; }
+@media (max-width: 600px) {
+  .task-sections { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .task-sections :deep(button) { padding-inline: 2px; font-size: 12px; }
+}
 
-.tasks-panel :deep(.el-tabs__header){margin-bottom:22px}.tasks-panel>.hint{margin:0 0 12px}.tasks-panel>.job-card{border-left:3px solid color-mix(in srgb,var(--accent) 38%,var(--line))!important}.tasks-panel>.job-card h3{font-size:14px}.tasks-panel>.job-card .hint{line-height:1.6}.tasks-panel :deep(.el-empty){padding:20px 0}.tasks-panel :deep(.el-progress-bar__outer){background:var(--surface-soft)}.task-count{display:inline-block;min-width:20px;margin-left:5px;padding:2px 6px;border-radius:10px;background:var(--surface-soft);color:var(--muted);font-size:11px;text-align:center;vertical-align:middle}
-@media(max-width:760px){.tasks-panel :deep(.el-tabs__item){padding:0 12px}.tasks-panel>.job-card{padding:13px}.tasks-panel :deep(.el-empty){padding:16px 0}}
+.tasks-panel>.hint{margin:0 0 12px}.tasks-panel>.job-card{border-left:3px solid color-mix(in srgb,var(--accent) 38%,var(--line))!important}.tasks-panel>.job-card h3{font-size:14px}.tasks-panel>.job-card .hint{line-height:1.6}.tasks-panel :deep(.el-empty){padding:20px 0}.tasks-panel :deep(.el-progress-bar__outer){background:var(--surface-soft)}.task-count{display:inline-block;min-width:20px;margin-left:5px;padding:2px 6px;border-radius:10px;background:var(--surface-soft);color:var(--muted);font-size:11px;text-align:center;vertical-align:middle}
+@media(max-width:760px){.tasks-panel>.job-card{padding:13px}.tasks-panel :deep(.el-empty){padding:16px 0}}
 </style>

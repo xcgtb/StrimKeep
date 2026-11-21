@@ -1,4 +1,5 @@
 ﻿<script setup lang="ts">
+import PageHeader from './PageHeader.vue'
 import {useVisiblePolling} from './pageActivity'
 import {ref,onMounted,onUnmounted,computed} from 'vue'
 import {ElMessage,ElMessageBox} from 'element-plus'
@@ -109,11 +110,12 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
 useVisiblePolling(async()=>{if(!busy.value)await refresh()},5000)
 </script>
 <template>
-<div class="page-heading"><div><h1>资源入库</h1><p class="muted">分享链接走转存，磁力 / ED2K / 直链走离线下载；各自选择目录，并决定落盘后是否立即整理。</p></div></div>
+<PageHeader title="资源入库" description="粘贴 115 分享、磁力、ED2K 或直链。"/>
 <el-alert v-if="error" :title="error" type="error" show-icon class="global-error"/>
 
-<section class="panel intake-entry"><el-input v-model="intakeText" type="textarea" :rows="5" :disabled="busy" placeholder="粘贴任意链接：115 分享 / magnet:?xt=... / ed2k://|file|... / https://...
-可以混着贴，系统会按类型分别入库。" aria-label="入库链接"/><p class="hint">分享 → 转存目录；磁力 / ED2K / 直链 → 各自的离线目录。落盘后是否立即整理由下面的「落盘后处理」决定。</p><div class="button-row"><el-button type="primary" :disabled="busy||!ready||!intakeText.trim()" @click="submitAll">提交</el-button></div></section>
+<section class="panel intake-entry">
+ <div class="section-title"><h2>提交链接</h2></div>
+ <el-input v-model="intakeText" type="textarea" :rows="5" :disabled="busy" placeholder="粘贴链接，可以混合多种类型" aria-label="入库链接"/><p class="hint">115 分享走转存，其余链接走对应的离线目录。</p><div class="button-row"><el-button type="primary" :disabled="busy||!ready||!intakeText.trim()" @click="submitAll">提交</el-button></div></section>
 
 
 <TransferDirectories ref="directoryEditor" :api="api" :disabled="dirty||busy||!ready" :hide-channel="true" @saved="destinationsSaved" @navigate="page=>emit('navigate',page)"/>

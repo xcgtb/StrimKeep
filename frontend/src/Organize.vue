@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import WorkspaceSections from './WorkspaceSections.vue'
 import {useVisiblePolling} from './pageActivity'
 import {ref,onMounted,computed,onUnmounted} from 'vue'
 import {useRoute} from 'vue-router'
@@ -39,10 +40,11 @@ useVisiblePolling(async()=>{if(!busy.value)await refreshJob()},5000)
 </script>
 <template>
 <div class="workflow-page">
-<WorkflowToolbar v-model:query="query" title="影视整理" :dirty="dirty" :busy="busy" :ready="ready" @save="save"/>
+<WorkflowToolbar v-model:query="query" title="影视整理" description="扫描 115 待整理目录，识别归档后生成 STRM。" :dirty="dirty" :busy="busy" :ready="ready" @save="save"/>
 <el-alert v-if="error" :title="error" type="error" show-icon class="global-error"/>
-<div class="organize-intro"><div><strong>从待整理目录入库</strong><p>扫描网盘目录，识别并归档视频，随后生成 STRM。先选目录，再设置规则和定时；洗版优先级在对应面板单独保存。</p></div></div>
-<nav class="organize-tabs" aria-label="影视整理设置分组"><button v-for="item in [{id:'start',label:'开始与目录'},{id:'rules',label:'文件与命名'},{id:'advanced',label:'洗版与联动'}]" :key="item.id" type="button" :class="{active:section===item.id}" :aria-pressed="section===item.id" @click="section=item.id as typeof section">{{item.label}}</button></nav>
+<WorkspaceSections v-if="!query.trim()" v-model="section" label="影视整理分区" :items="[
+  {id:'start', label:'执行与目录'}, {id:'rules', label:'文件与命名'}, {id:'advanced', label:'洗版与联动'},
+]"/>
 <p v-if="query" class="search-caption">正在搜索全部分组，清空后返回当前分组。</p>
 <div v-show="section==='start'||!!query.trim()" class="organize-group">
 <SettingCard title="整理执行" description="手动执行与定时扫描都在这里。" :summary="schedule.enabled?`定时已开启 · ${schedule.mode==='cron'?schedule.cron:'每 '+schedule.minutes+' 分钟'}`:'定时已关闭 · 可手动执行'" :icon="VideoPlay" :query="query" keywords="立即扫描 自动 定时 任务 间隔" :default-open="true">
@@ -109,7 +111,7 @@ useVisiblePolling(async()=>{if(!busy.value)await refreshJob()},5000)
 </div>
 </template>
 <style scoped>
-.organize-intro{margin:0 0 14px;padding:16px 18px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}.organize-intro strong{font-size:15px}.organize-intro p,.organize-group-title p{margin:6px 0 0;color:var(--muted);font-size:12px;line-height:1.6}.organize-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}.organize-tabs button{border:1px solid var(--line);border-radius:9px;background:var(--surface);padding:9px 15px;color:var(--muted);font-size:13px;cursor:pointer}.organize-tabs button.active{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--surface));color:var(--accent);font-weight:650}.organize-group-title{padding:4px 2px 14px}.organize-group-title strong{font-size:15px}.organize-schedule{margin:16px 0;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface-soft)}.organize-schedule>summary{cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:12px}.organize-schedule>summary strong,.organize-schedule>summary small{display:block}.organize-schedule>summary small{margin-top:4px;color:var(--muted)}.organize-schedule>summary>span:last-child{color:var(--accent);font-size:12px}@media(max-width:640px){.organize-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}.organize-tabs button{padding:9px 4px;font-size:12px}.organize-intro{padding:13px}}
+.organize-group-title p{margin:6px 0 0;color:var(--muted);font-size:12px;line-height:1.6}.organize-group-title{padding:4px 2px 14px}.organize-group-title strong{font-size:15px}.organize-schedule{margin:16px 0;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface-soft)}.organize-schedule>summary{cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:12px}.organize-schedule>summary strong,.organize-schedule>summary small{display:block}.organize-schedule>summary small{margin-top:4px;color:var(--muted)}.organize-schedule>summary>span:last-child{color:var(--accent);font-size:12px}@media(max-width:640px){}
 
 .ext-row{align-items:flex-start}
 .ext-chips{display:flex;flex-wrap:wrap;gap:6px;min-width:0}

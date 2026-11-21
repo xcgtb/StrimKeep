@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import PageHeader from './PageHeader.vue'
+import WorkspaceSections from './WorkspaceSections.vue'
 import { nextTick, onActivated, onMounted, ref, watch } from 'vue'
-import { Connection, FolderOpened, Picture, Tickets } from '@element-plus/icons-vue'
+import { Connection, FolderOpened, Tickets } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useRoute } from 'vue-router'
 import EmbyMapping from './EmbyMapping.vue'
@@ -10,6 +12,8 @@ import SettingCard from './SettingCard.vue'
 
 const props = defineProps<{ api: (path: string, method?: string, body?: unknown) => Promise<any> }>()
 const route = useRoute()
+const section = ref<'proxy' | 'media' | 'covers'>(route.hash === '#media-info' ? 'media' : 'proxy')
+const coversVisited = ref(false)
 const mediaSection = ref<HTMLElement>()
 const mediaCard = ref<InstanceType<typeof SettingCard>>()
 const connectionBusy = ref('')
@@ -107,8 +111,9 @@ async function loadMediaStatus() {
 
 async function revealMedia() {
   if (route.name !== 'embyproxy' || route.hash !== '#media-info') return
-  mediaCard.value?.expand()
+  section.value = 'media'
   await nextTick()
+  mediaCard.value?.expand()
   mediaSection.value?.scrollIntoView({ block: 'start' })
 }
 
@@ -118,10 +123,15 @@ onMounted(() => {
 })
 onActivated(revealMedia)
 watch(() => route.hash, revealMedia, { flush: 'post' })
+watch(section, value => { if (value === 'covers') coversVisited.value = true })
 </script>
 
 <template>
-  <div class="page-title"><div><h1>Emby 反代</h1></div></div>
+  <PageHeader title="Emby 反代" description="管理播放实例、路径映射和媒体库设置。"/>
+  <WorkspaceSections v-model="section" label="Emby 反代分区" :items="[
+    {id:'proxy', label:'反代与连接'}, {id:'media', label:'媒体信息'}, {id:'covers', label:'媒体库封面'},
+  ]"/>
+  <div v-show="section === 'proxy'">
   <EmbyProxyServers :api="api" :revision="connectionRevision + mappingRevision" />
 
   <SettingCard title="主 Emby 连接" description="供入库通知、库存读取和媒体库封面使用。" :summary="savedUrl || undefined" :icon="Connection">
@@ -142,10 +152,11 @@ watch(() => route.hash, revealMedia, { flush: 'post' })
   <SettingCard title="默认路径映射" description="供主 Emby 和沿用默认映射的反代使用。" :icon="FolderOpened">
     <EmbyMapping :api="api" @saved="mappingRevision++" />
   </SettingCard>
+  </div>
 
-  <div id="media-info" ref="mediaSection">
+  <div v-show="section === 'media'" id="media-info" ref="mediaSection">
     <SettingCard ref="mediaCard" title="媒体信息写入" :description="media ? (media.enabled ? '已启用' : '已关闭') : undefined"
-      :icon="Tickets" :default-open="route.hash === '#media-info'">
+      :icon="Tickets" default-open>
       <el-alert v-if="mediaError" :title="mediaError" type="error" :closable="false" />
       <div v-if="media" class="media-settings">
         <div class="workflow-switch-row"><strong>媒体信息处理</strong><el-switch v-model="media.enabled" :disabled="!!mediaBusy" aria-label="媒体信息处理" /></div>
@@ -179,9 +190,7 @@ watch(() => route.hash, revealMedia, { flush: 'post' })
     </SettingCard>
   </div>
 
-  <SettingCard title="媒体库封面" :icon="Picture">
-    <LibraryCovers :api="api" :connection-revision="connectionRevision" embedded />
-  </SettingCard>
+  <LibraryCovers v-if="coversVisited" v-show="section === 'covers'" :api="api" :connection-revision="connectionRevision" />
 </template>
 
 <style scoped>
