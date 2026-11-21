@@ -83,7 +83,7 @@ usePageActivity(()=>{visible=true;connect();void run(()=>load());timer=setInterv
 <section class="panel tasks-panel">
   <div class="section-title"><h2>任务</h2><el-button v-if="tab!=='deep-delete'" :disabled="busy" @click="run(()=>load())">刷新</el-button></div>
   <el-tabs v-model="tab">
-    <el-tab-pane :label="'全部 '+(allJobs.length+offlinePending.total+offlineReview.total)" name="all"/>
+    <el-tab-pane :label="'全部 '+(allJobs.length+offlinePending.total)" name="all"/>
     <el-tab-pane :label="`进行中 ${bucketCount('progress')}`" name="progress"/>
     <el-tab-pane :label="`完成 ${bucketCount('done')}`" name="done"/>
     <el-tab-pane :label="`过滤 ${bucketCount('filtered')}`" name="filtered"/>
@@ -123,7 +123,7 @@ usePageActivity(()=>{visible=true;connect();void run(()=>load());timer=setInterv
     </div>
   </div>
   </template>
-  <div v-if="offlineReview.total&&(tab==='all'||tab==='failed')" class="job-card">
+  <div v-if="tab==='failed'&&offlineReview.total" class="job-card">
     <strong>离线下载需核查 <span class="task-count">{{offlineReview.total}}</span></strong>
     <p v-for="item in offlineReview.items" :key="item.id" class="hint">
       #{{item.id}} · {{fmtAgo(item.submitted_at)}} · {{item.target_label||'离线目录'}} · {{item.message||'请到 115 核查'}}
