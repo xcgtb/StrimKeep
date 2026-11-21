@@ -1,4 +1,4 @@
-# 🎬 StrimKeep 3.6.76
+# 🎬 StrimKeep 3.6.77
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python" alt="Python">

@@ -17,6 +17,7 @@ from . import __version__, commands
 from .cloud115 import Cloud115
 from .housekeeping import housekeeping_loop
 from .leases import reap_stale_jobs
+from .library_covers import LibraryCovers
 from .media_info_api import inject_loop
 from .network import ServiceHTTP
 from .organizer import Organizer
@@ -78,10 +79,10 @@ async def command_loop(store, engine, stop, kinds=commands.KINDS):
                 result = await engine.rebuild.run(dry_run=bool(payload.get('dry_run')))
             elif row['kind'] == 'strm_rebuild_rollback':
                 result = await engine.rebuild.rollback(payload.get('backup_id') or None)
-            elif row['kind'] == commands.COVER_SWEEP:
-                result = await engine.cover.run()
-                if result.get('error'):
-                    raise RuntimeError(result['error'])
+            elif row['kind'] == commands.LIBRARY_COVER:
+                result = await engine.library_covers.apply(payload)
+            elif row['kind'] == commands.RETIRED_COVER:
+                result = {'message': '影片封面补齐已停用。'}
             else:
                 raise RuntimeError('未知的后台命令：%s' % row['kind'])
             await asyncio.to_thread(commands.finish, store, row['id'], result)
@@ -124,7 +125,7 @@ async def run_worker():
     app.state.strms = strm_root.resolve()
     app.state.organizer = engine
     engine.start()
-    engine.cover.queue_daily = True
+    engine.library_covers = LibraryCovers(store, http)
     await asyncio.to_thread(commands.recover_running, store)
     scan_app = inventory_app(store, engine, strm_root.resolve(), http)
     background = [
@@ -132,7 +133,8 @@ async def run_worker():
         asyncio.create_task(inject_loop(app, store)),
         asyncio.create_task(housekeeping_loop(app, store)),
         asyncio.create_task(command_loop(store, engine, stop, commands.OPERATIONS)),
-        asyncio.create_task(command_loop(store, engine, stop, (commands.COVER_SWEEP,))),
+        asyncio.create_task(command_loop(store, engine, stop, commands.COVER_OPERATIONS)),
+        asyncio.create_task(engine.library_covers.schedule_loop()),
         asyncio.create_task(scan_app.state.inventory_scan_loop()),
     ]
     store.event('system', f'StrimKeep worker {__version__} started.')

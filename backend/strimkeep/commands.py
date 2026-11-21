@@ -7,27 +7,25 @@ import asyncio
 import json
 import time
 
-COVER_SWEEP = 'cover_sweep'
+LIBRARY_COVER = 'library_cover'
+RETIRED_COVER = 'cover_sweep'
+COVER_OPERATIONS = (LIBRARY_COVER, RETIRED_COVER)
 OPERATIONS = ('share_check', 'strm_rebuild', 'strm_rebuild_rollback')
-KINDS = (*OPERATIONS, COVER_SWEEP)
+KINDS = (*OPERATIONS, *COVER_OPERATIONS)
 KEEP_SECONDS = 7 * 24 * 3600
 MAX_ATTEMPTS = 1
 
 
-def submit(store, kind, payload=None, *, unique=False):
+def submit(store, kind, payload=None):
     if kind not in KINDS:
         raise ValueError('unknown command kind: %s' % kind)
     now = time.time()
-    sql = ('INSERT INTO worker_commands(kind,payload,state,attempts,created,updated) '
-           "SELECT ?,?, 'queued', 0, ?, ?")
-    params = (kind, json.dumps(payload or {}, ensure_ascii=False), now, now)
-    if unique:
-        sql += (" WHERE NOT EXISTS (SELECT 1 FROM worker_commands "
-                "WHERE kind=? AND state IN ('queued','running'))")
-        params += (kind,)
-    with store.db:
-        cursor = store.db.execute(sql, params)
-    return cursor.lastrowid if cursor.rowcount else None
+    with store.transaction():
+        cursor = store.db.execute(
+            'INSERT INTO worker_commands(kind,payload,state,attempts,created,updated) '
+            "VALUES(?,?, 'queued', 0, ?, ?)",
+            (kind, json.dumps(payload or {}, ensure_ascii=False), now, now))
+    return cursor.lastrowid
 
 
 def get(store, command_id):
@@ -77,8 +75,9 @@ def finish(store, command_id, result=None, error=None):
         payload = json.dumps(result, ensure_ascii=False, default=str)
     with store.db:
         store.db.execute(
-            'UPDATE worker_commands SET state=?,updated=?,finished=?,message=?,result=? '
-            'WHERE id=?', (state, now, now, (error or '')[:500], payload, command_id))
+            "UPDATE worker_commands SET state=?,updated=?,finished=?,message=?,result=?, "
+            "payload=CASE WHEN kind=? THEN json_remove(payload,'$.image') ELSE payload END "
+            "WHERE id=?", (state, now, now, (error or '')[:500], payload, LIBRARY_COVER, command_id))
 
 
 def recover_running(store):
@@ -97,7 +96,9 @@ def recover_running(store):
             else:
                 store.db.execute(
                     "UPDATE worker_commands SET state='failed',updated=?,finished=?,"
-                    "message='后台重启，任务未完成' WHERE id=?", (now, now, row['id']))
+                    "message='后台重启，任务未完成',"
+                    "payload=CASE WHEN kind=? THEN json_remove(payload,'$.image') ELSE payload END "
+                    "WHERE id=?", (now, now, LIBRARY_COVER, row['id']))
     return changed
 
 

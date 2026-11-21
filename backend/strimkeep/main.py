@@ -41,6 +41,7 @@ from .metrics import Metrics, install_metrics, is_streaming
 from .db_worker import DbWorker
 from .emby_proxy import EmbyProxyManager
 from .emby_proxy_api import install_emby_proxy
+from .library_covers import MAX_COVER_REQUEST, install_library_covers, is_cover_image_request
 from .media_info_api import inject_loop, install_media_info
 from .housekeeping import housekeeping_loop, install as install_housekeeping
 
@@ -267,7 +268,8 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
                 return JSONResponse({'error': {'code': 'ORIGIN_REJECTED', 'message': '请求来源不匹配。'}},
                                     403, headers={'X-Request-Id': request_id})
             size = request.headers.get('content-length', '')
-            if size.isdigit() and int(size) > 65536:
+            limit = MAX_COVER_REQUEST if is_cover_image_request(request.url.path) else 65536
+            if size.isdigit() and int(size) > limit:
                 return JSONResponse({'error': {'code': 'BODY_TOO_LARGE', 'message': '请求内容过大。'}},
                                     413, headers={'X-Request-Id': request_id})
         response = await call_next(request)
@@ -701,8 +703,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
     install_share(app, store, admin)
     from .channels_api import install_channels
     install_channels(app, store, admin)
-    from .cover_service import install_cover
-    install_cover(app, admin)
+    install_library_covers(app, store, admin)
 
     def archive_scope():
         config = store.get('organize_config', {})

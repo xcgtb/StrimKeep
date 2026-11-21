@@ -24,7 +24,7 @@ if [ -z "$TESTS" ]; then
    tests/test_app.py tests/test_organize.py tests/test_transfer.py tests/test_upgrade.py
    tests/test_cleanup_candidates.py tests/test_empty_directories.py tests/test_recycle_readback.py
    tests/test_recycle_small_videos.py tests/test_emby_delivery_states.py
-   tests/test_emby_scan_fallback.py tests/test_children_cache.py tests/test_cover_service.py
+   tests/test_emby_scan_fallback.py tests/test_children_cache.py tests/test_library_covers.py tests/test_offline_receipts.py
    tests/test_native_media_info.py tests/test_sweep_offline.py tests/test_phase5.py"
 fi
 

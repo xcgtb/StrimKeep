@@ -161,8 +161,6 @@ class Organizer:
         self.emby.task = asyncio.create_task(self.emby.loop())
         self.emby.media_info.task = asyncio.create_task(self.emby.media_info.loop())
         self.drain_task = asyncio.create_task(self.deep_delete_loop())
-        from .cover_service import CoverService
-        self.cover = CoverService(self.emby, self.root, self.store)
 
     async def deep_delete_loop(self):
         """深度删除的后台 worker：按序执行队列，单条回读确认。"""
@@ -189,9 +187,6 @@ class Organizer:
             await asyncio.gather(self.emby.media_info.task, return_exceptions=True)
         for task in self.notice_tasks: task.cancel()
         if self.notice_tasks: await asyncio.gather(*list(self.notice_tasks), return_exceptions=True)
-        cover = getattr(self, 'cover', None)
-        if cover is not None and hasattr(cover, 'close'):
-            await cover.close()
         if self.drain_task:
             self.drain_task.cancel()
             await asyncio.gather(self.drain_task, return_exceptions=True)
@@ -921,7 +916,6 @@ class Organizer:
                 await self.maintenance_tick()
                 await self.share_scan_tick()
                 await self.offline_scan_tick()
-                await self.cover.tick_daily()
                 await self.prewarm.tick()
                 if time.time() - self._notice_retried >= 30:
                     self._notice_retried = time.time()

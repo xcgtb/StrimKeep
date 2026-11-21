@@ -2,9 +2,9 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRoute } from 'vue-router'
-import { useVisiblePolling } from './pageActivity'
 import EmbyMapping from './EmbyMapping.vue'
 import EmbyProxyServers from './EmbyProxyServers.vue'
+import LibraryCovers from './LibraryCovers.vue'
 
 const props = defineProps<{ api: (path: string, method?: string, body?: unknown) => Promise<any> }>()
 const route = useRoute()
@@ -14,10 +14,7 @@ const error = ref('')
 const connections = ref({ emby_url: '', emby_key: '' })
 const mask = ref<any>({})
 const checks = ref<Record<string, string>>({})
-const coverBusy = ref(false)
-const coverMsg = ref('')
-const coverStatus = ref<any>(null)
-const coverError = ref('')
+const connectionRevision = ref(0)
 const media = ref<any>({ enabled: true, extract: true, cron_enabled: false, cron: '0 4 * * *', timezone: 'Asia/Shanghai' })
 const mediaBusy = ref(false)
 const mediaMsg = ref('')
@@ -42,6 +39,7 @@ async function saveConnections() {
     if (connections.value.emby_key) body.emby_key = connections.value.emby_key
     mask.value = await props.api('/settings', 'PUT', body)
     connections.value.emby_key = ''
+    connectionRevision.value++
     ElMessage.success('Emby 服务连接已保存')
   } catch (e) { error.value = (e as Error).message }
   finally { busy.value = false }
@@ -55,20 +53,6 @@ async function checkEmby() {
     ElMessage.success('连接正常')
   } catch (e) { checks.value.emby = (e as Error).message }
   finally { busy.value = false }
-}
-async function runCover() {
-  coverBusy.value = true; coverMsg.value = ''
-  try {
-    const result = await props.api('/cover/run', 'POST')
-    coverMsg.value = result.message
-    await loadCoverStatus()
-  }
-  catch (e) { coverMsg.value = (e as Error).message }
-  finally { coverBusy.value = false }
-}
-async function loadCoverStatus() {
-  try { coverStatus.value = await props.api('/cover/status'); coverError.value = '' }
-  catch (e) { coverError.value = (e as Error).message }
 }
 async function saveMedia() {
   busy.value = true
@@ -99,12 +83,8 @@ async function loadMediaStatus() {
 }
 onMounted(() => {
   void load()
-  void loadCoverStatus()
   if (route.hash === '#media-info') mediaSection.value?.scrollIntoView()
 })
-useVisiblePolling(async () => {
-  if (coverStatus.value?.running) await loadCoverStatus()
-}, 3000)
 </script>
 
 
@@ -121,15 +101,7 @@ useVisiblePolling(async () => {
   <el-button type="primary" :loading="busy" @click="saveConnections">保存服务连接</el-button>
   <p class="hint">STRM 播放基础地址不在这里维护，请到「STRM 管理 → 播放地址」。</p>
 </section>
-<section class="panel settings-panel"><h2>Emby 封面</h2>
-  <p class="hint">补齐媒体库封面（Primary 图片），任务在后台执行。</p>
-  <el-button :loading="coverBusy" :disabled="coverStatus?.running" @click="runCover">立即补齐封面</el-button>
-  <el-button @click="loadCoverStatus">查看封面任务状态</el-button>
-  <span class="hint">{{ coverMsg }}</span>
-  <span v-if="coverError" class="hint">读取失败：{{ coverError }}</span>
-  <p v-if="coverStatus" class="hint">{{ coverStatus.queued ? '封面任务已排队' : coverStatus.running ? '封面任务进行中' : '当前无封面任务' }}<template v-if="coverStatus.last">；上次成功：扫描 {{ coverStatus.last.scanned }}，写入 {{ coverStatus.last.written }}，已有 {{ coverStatus.last.skipped }}，无图源 {{ coverStatus.last.no_image }}，未映射 {{ coverStatus.last.unmapped }}</template></p>
-  <el-alert v-if="coverStatus?.error" :title="coverStatus.error" type="error" :closable="false" />
-</section>
+<LibraryCovers :api="api" :connection-revision="connectionRevision" />
 <section id="media-info" ref="mediaSection" class="panel settings-panel"><h2>媒体信息写入</h2>
   <p class="hint">总开关关闭后暂停提取、补扫并停止向 Emby 写入媒体信息；已有文件与待处理队列保留。</p>
   <p class="hint">STRM 同级的 <code>*-media-info.json</code> 是 StrimKeep 生成的媒体信息，Emby 不会直接读取；Emby 只读 NFO 和图片。编码、分辨率、音轨、章节需要写入 Emby 的 library.db。</p>

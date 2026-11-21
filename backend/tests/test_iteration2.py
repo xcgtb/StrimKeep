@@ -14,7 +14,6 @@ import pytest
 import strimkeep.organizer as organizer_module
 from strimkeep import fsutil
 from strimkeep.cloud115 import Cloud115
-from strimkeep.cover_service import CoverService
 from strimkeep.fsutil import UnsafePath, atomic_write, write_once
 from strimkeep.organizer import Organizer, Stopped, UncertainState
 from strimkeep.store import Store
@@ -325,24 +324,4 @@ def test_children_memo_and_ledger_are_scoped(tmp_path):
         assert cloud.ledger_summary()['ops'] == scope_a['ops']
         await cloud.close()
         store.close()
-    asyncio.run(run())
-
-
-def test_cover_service_hosts_background_tasks(tmp_path):
-    """封面补齐的后台协程必须留引用，停机时能被收拢。"""
-    async def run():
-        cover = CoverService(None, tmp_path, None)
-        started = asyncio.Event()
-        release = asyncio.Event()
-
-        async def work():
-            started.set()
-            await release.wait()
-
-        task = cover.spawn(work())
-        await started.wait()
-        assert task in cover.tasks, '后台任务必须留引用，避免被 GC 中途回收'
-        await cover.close()
-        assert task.done() and task.cancelled()
-        assert not [t for t in cover.tasks if not t.done()]
     asyncio.run(run())

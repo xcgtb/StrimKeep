@@ -11,7 +11,7 @@ RUN npm run build
 FROM python:3.12-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \
     STRIMKEEP_DATA_DIR=/data STRIMKEEP_STRM_DIR=/strm STRIMKEEP_STATIC_DIR=/app/static
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates fonts-wqy-microhei \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY backend/requirements.lock ./requirements.lock
