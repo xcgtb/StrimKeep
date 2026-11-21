@@ -6,7 +6,7 @@
 import re
 from pathlib import Path
 
-from .media import NeedsReview, parse_name
+from .media import ANIMATED_MOVIE, NeedsReview, parse_name
 
 
 def quality_rank(stem):
@@ -22,6 +22,8 @@ def quality_rank(stem):
 
 def is_share_category(value):
     text = re.sub(r'[\s._/\-]+', '', str(value or '')).casefold()
+    if text == ANIMATED_MOVIE:
+        return True
     return bool(re.fullmatch(r'(?:国产|欧美|日韩|海外|外语|华语|大陆|港台|中国|英国|美国|日本|韩国|全部)?(?:电影|影片|剧集|电视剧|连续剧|动漫|动画|综艺|纪录片|影视|资源|分享|合集|网盘)', text))
 
 

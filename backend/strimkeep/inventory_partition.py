@@ -14,10 +14,15 @@ from pathlib import PurePosixPath
 
 from .inventory import _title_identity, project
 from .inventory_sources import source_fingerprints
+from .media import ANIMATED_MOVIE
 
 _ID = re.compile(r'(?i)\{tmdb-(\d+)\}')
 _SEASON = re.compile(r'(?i)season[ ._-]*\d+')
-_CATEGORIES = {'电影','剧集','影视','国产剧','国产剧集','欧美剧','欧美剧集','日韩剧','日韩剧集','动漫','动漫剧','综艺','纪录片','国产电影','欧美电影','日韩电影','其他电影','其他剧集'}
+_CATEGORIES = {
+    '电影', ANIMATED_MOVIE, '剧集', '影视', '国产剧', '国产剧集', '欧美剧', '欧美剧集',
+    '日韩剧', '日韩剧集', '动漫', '动漫剧', '综艺', '纪录片',
+    '国产电影', '欧美电影', '日韩电影', '其他电影', '其他剧集',
+}
 
 
 def path_keys(relative, roots):

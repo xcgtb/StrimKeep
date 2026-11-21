@@ -14,6 +14,7 @@ PROBE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit
 
 METADATA = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tbn',
             '.nfo', '.xml', '.sfv', '.md5', '.sha1'}
+ANIMATED_MOVIE = '动画电影'
 CATEGORIES = ('电影', '剧集', '动漫', '综艺', '儿童节目', '纪录片', '演唱会')
 REGIONS = ('国产', '欧美', '日韩', '其他')
 WESTERN = set('US GB FR DE IT ES PT CA AU NZ IE AT BE CH DK FI IS NO SE NL LU GR PL CZ HU RO BG UA RU BR MX AR CL CO'.split())
@@ -644,11 +645,12 @@ def classify(details, media_type):
     regions = {'国产' if c in ('CN', 'HK', 'MO', 'TW') else '日韩' if c in ('JP', 'KR') else '欧美' if c in WESTERN else '其他' for c in origins}
     region = next(iter(regions)) if len(regions) == 1 else '其他'
     genres = {g['id'] for g in details.get('genres', [])}
-    category = ('电影' if media_type == 'movie' and 16 in genres else
-                '儿童节目' if 10762 in genres else '动漫' if 16 in genres else
+    if 16 in genres:
+        return (ANIMATED_MOVIE if media_type == 'movie' else '动漫'), region
+    category = ('儿童节目' if 10762 in genres else
                 '纪录片' if 99 in genres else '综艺' if genres & {10764, 10767} else
                 '剧集' if media_type == 'tv' else '电影')
-    if media_type == 'movie' and 10402 in genres and 16 not in genres:
+    if media_type == 'movie' and 10402 in genres:
         # Music genre alone does not establish concert identity.
         title = ' '.join(str(details.get(k) or '') for k in ('title','name','original_title','original_name'))
         if re.search(r'(?i)演唱会|演唱會|\bconcert\b|\blive\s+tour\b', title):category = '演唱会'
@@ -704,14 +706,18 @@ def work_parts(hint, details, options=None):
             classified_details = {**details, 'genres': [v for v in details.get('genres', []) if v.get('id') != 10402]}
         category, region = classify(classified_details, hint['media_type'])
         if category == '儿童节目' and not options.get('children_enabled', True):
-            category = '动漫' if 16 in {v['id'] for v in details.get('genres', [])} else ('剧集' if hint['media_type'] == 'tv' else '电影')
+            category = '剧集' if hint['media_type'] == 'tv' else '电影'
         if category == '演唱会' and not options.get('concert_enabled', True):category = '电影'
     else:
         category, region = ('剧集' if hint['media_type']=='tv' else '电影'), ''
     short_title = component(title, 100)
     series = f'{short_title} ({year}) {{tmdb-{details["id"]}}}'
-    parts = [category]
-    if options.get('classify_enabled', True) and options.get('region_enabled', True):parts.append(region + category)
+    if category == ANIMATED_MOVIE:
+        parts = ['电影', category]
+    else:
+        parts = [category]
+        if region and options.get('region_enabled', True):
+            parts.append(region + category)
     if options.get('year_enabled', False):parts.append(year)
     parts.append(series)
     if hint['media_type'] == 'tv':

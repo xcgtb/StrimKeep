@@ -425,7 +425,8 @@ def test_identity_and_naming_do_not_guess_unknown_values():
     with pytest.raises(NeedsReview):
         choose_match(hint, [{**TV, 'first_air_date': '2023-01-01'}])
     assert classify({**TV, 'origin_country': ['US','CN']}, 'tv') == ('剧集', '其他')
-    assert classify({**TV, 'genres': [{'id':16},{'id':10762}]}, 'tv')[0] == '儿童节目'
+    assert classify({**TV, 'genres': [{'id':16},{'id':10762}]}, 'tv')[0] == '动漫'
+    assert classify({**TV, 'genres': [{'id':10762}]}, 'tv')[0] == '儿童节目'
     media = {**MEDIA, 'dynamic_range': '未知', 'bit_depth': None, 'fps': None}
     _, filename, _, _ = naming(hint, TV, [{'name': '第3集'}], media, '测试剧集 (2024).S01E03.mkv')
     assert '.SDR.' not in filename and '.WEB' not in filename and 'bit' not in filename
@@ -445,6 +446,31 @@ def test_exact_alias_recognition_keeps_tmdb_canonical_title(tmp_path):
         assert engine.job(jid)['state'] == 'completed'
         assert cloud.nodes['1000']['name'].startswith('测试剧集.2024.S01E03')
         await engine.http.aclose(); store.close()
+    asyncio.run(scenario())
+
+
+def test_existing_animated_movie_directory_is_found_by_tmdb_id(tmp_path):
+    async def scenario():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        movies = (await cloud.mkdir(CONFIG['archive_cid'], '电影'))['cid']
+        animation = (await cloud.mkdir(movies, '动画电影'))['cid']
+        existing_title = '旧译名 (2024) {tmdb-20}'
+        existing = (await cloud.mkdir(animation, existing_title))['cid']
+        job = new_job(store, {**CONFIG, 'keep_existing_names': True})
+        engine.update_job(job, state='running')
+        plan = {
+            'hint': {'media_type': 'movie'},
+            'details': MOVIE,
+            'parts': ['电影', '动画电影', '测试电影 (2024) {tmdb-20}'],
+        }
+
+        await engine.index.refresh_related(job, plan)
+
+        assert plan['parts'] == ['电影', '动画电影', existing_title]
+        assert existing in plan['conflict_parent_ids']
+        await http.aclose()
+        store.close()
+
     asyncio.run(scenario())
 
 

@@ -4,11 +4,12 @@ import json
 import time
 from pathlib import Path
 
+import httpx
 import pytest
 
 from strimkeep import share_service
 from strimkeep.offline_api import OfflinePostProcess
-from test_organize import MemoryCloud, setup, CONFIG, new_job
+from test_organize import CONFIG, MOVIE, TV, MemoryCloud, handler, new_job, setup
 
 
 class ShareCloud(MemoryCloud):
@@ -131,6 +132,57 @@ def test_share_season_report_is_emitted_before_next_movie(tmp_path):
         items=store.db.execute('SELECT state FROM organize_items WHERE job_id=?',(jid,)).fetchall()
         assert len(items)==3 and all(r['state']=='done' for r in items)
         await http.aclose();store.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(('kind', 'countries', 'category_parts'), [
+    pytest.param('movie', ['CN', 'HK', 'MO', 'TW'], ['电影', '动画电影'], id='chinese-movie'),
+    pytest.param('movie', ['JP'], ['电影', '动画电影'], id='japanese-movie'),
+    pytest.param('movie', ['US'], ['电影', '动画电影'], id='us-movie'),
+    pytest.param('movie', ['US', 'JP'], ['电影', '动画电影'], id='cross-region-movie'),
+    pytest.param('movie', [], ['电影', '动画电影'], id='movie-without-country'),
+    pytest.param('tv', ['CN', 'HK', 'MO', 'TW'], ['动漫', '国产动漫'], id='chinese-series'),
+    pytest.param('tv', ['JP'], ['动漫', '日韩动漫'], id='japanese-series'),
+])
+def test_animation_classification_in_both_libraries(tmp_path, kind, countries, category_parts):
+    async def scenario():
+        store, cloud, _, engine, _ = share_setup(tmp_path)
+        is_series = kind == 'tv'
+        fixture = TV if is_series else MOVIE
+        details = {**fixture, 'origin_country': countries, 'genres': [{'id': 16}, {'id': 10762}]}
+
+        def tmdb(request):
+            if request.url.path == f'/3/{kind}/{details["id"]}':
+                return httpx.Response(200, json=details)
+            return handler(request)
+
+        await engine.http.aclose()
+        engine.http = httpx.AsyncClient(transport=httpx.MockTransport(tmdb))
+        name = '测试剧集 (2024) S01E03.mkv' if is_series else '测试电影 (2024).mkv'
+        work_dir = f'{fixture.get("title") or fixture["name"]} (2024) {{tmdb-{fixture["id"]}}}'
+        parts = [*category_parts, work_dir]
+        if is_series:
+            parts.append('Season 1')
+        source = cloud.add_video(name=name)
+        drive_job = new_job(store, {**CONFIG, 'directory_labels': {'200': '115 网盘 / 归档'}})
+        await engine.run_job(drive_job)
+        assert engine.job(drive_job)['state'] == 'completed'
+        path = await cloud.path_info(source['parent_id'])
+        assert [entry['name'] for entry in path[2:]] == parts
+        assert len(list((engine.root / '归档').joinpath(*parts).glob('*.strm'))) == 1
+
+        share_service.generate(store, engine.root, {'share_code': 'animation', 'receive_code': ''}, [
+            {'id': '301', 'name': name, 'size': 5000, 'path': '/'.join(category_parts) + '/'},
+        ])
+        share_job = share_service.enqueue_organize(engine)
+        await engine.run_job(share_job)
+        assert engine.job(share_job)['state'] == 'completed'
+        assert len(list((engine.root / '分享影视库').joinpath(*parts).glob('*.strm'))) == 1
+        if engine.notice_tasks:
+            await asyncio.gather(*engine.notice_tasks)
+        await engine.http.aclose()
+        store.close()
+
     asyncio.run(scenario())
 
 

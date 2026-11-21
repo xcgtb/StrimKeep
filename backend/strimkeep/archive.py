@@ -5,7 +5,9 @@ import time
 from pathlib import Path
 
 from .cloud115 import CloudError
-from .media import CATEGORIES, REGIONS, KNOWN_VIDEOS as VIDEOS, NeedsReview, choose_match, parse_name
+from .media import (
+    ANIMATED_MOVIE, CATEGORIES, REGIONS, KNOWN_VIDEOS as VIDEOS, NeedsReview, choose_match, parse_name,
+)
 from .organize_options import file_title
 
 
@@ -268,6 +270,7 @@ class ArchiveIndex:
                         works[entry['id']] = relative
                     continue  # Never scan inside an unrelated work.
                 if ((not parts and entry['name'] in CATEGORIES) or
+                        relative == ('电影', ANIMATED_MOVIE) or
                         (len(parts) in (1, 2) and re.fullmatch(r'(?:19|20)\d{2}', entry['name'])) or
                         (len(parts) == 1 and entry['name'] in {r + parts[0] for r in REGIONS})):
                     stack.append((entry['id'], relative))
