@@ -1,38 +1,31 @@
 """Render literal Compose in the same predictable order as the install example."""
-import argparse
-import json
-import os
-import re
+import json,sys,os,re
 from pathlib import Path
 
 VERSION=re.search(r"__version__\s*=\s*'([^']+)'",(Path(__file__).resolve().parents[1]/'backend/strimkeep/__init__.py').read_text(encoding='utf-8')).group(1)
 
 
-def scalar(value, preserve_interpolation=False):
+def scalar(value):
     if not isinstance(value,str):return json.dumps(value,ensure_ascii=False)
-    if not preserve_interpolation:
-        value=value.replace('$','$$')
+    value=value.replace('$','$$')
     ambiguous=re.fullmatch(r'(?:null|true|false|yes|no|on|off|~|[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?|\d{4}-\d\d-\d\d)',value,re.I)
     if value and not ambiguous and re.fullmatch(r"[\w./:=+@%,-]+",value,re.UNICODE) and not value.startswith(('-','@','%',',','=')):
         return value
     return json.dumps(value,ensure_ascii=False)
 
 
-def yaml(value,indent=0,preserve_interpolation=False):
+def yaml(value,indent=0):
     lines=[];pad=' '*indent
-    def render(item):
-        return scalar(item, preserve_interpolation)
-
     if isinstance(value,dict):
         for key,item in value.items():
             if isinstance(item,(dict,list)) and item:
-                lines.append(pad+render(str(key))+':');lines.extend(yaml(item,indent+2,preserve_interpolation))
-            else:lines.append(pad+render(str(key))+': '+render(item))
+                lines.append(pad+scalar(str(key))+':');lines.extend(yaml(item,indent+2))
+            else:lines.append(pad+scalar(str(key))+': '+scalar(item))
     else:
         for item in value:
             if isinstance(item,(dict,list)) and item:
-                lines.append(pad+'-');lines.extend(yaml(item,indent+2,preserve_interpolation))
-            else:lines.append(pad+'- '+render(item))
+                lines.append(pad+'-');lines.extend(yaml(item,indent+2))
+            else:lines.append(pad+'- '+scalar(item))
     return lines
 
 
@@ -84,7 +77,7 @@ def env_reference(name, value, env_path):
         return value
 
 
-def convert(model, env_path=None, *, preserve_interpolation=False):
+def convert(model, env_path=None):
     service=model['services']['strimkeep']
     service['image']='strimkeep:'+VERSION
     build=service.get('build',{})
@@ -101,56 +94,25 @@ def convert(model, env_path=None, *, preserve_interpolation=False):
         if str(env.get('SESSION_COOKIE_SECURE','')).lower() in ('','false'):env.pop('SESSION_COOKIE_SECURE',None)
         if not env.get('ALLOWED_ORIGINS'):env.pop('ALLOWED_ORIGINS',None)
         # 口令永远只做变量引用，不把明文写回 compose（先占位，渲染后再还原成 ${...}）。
-        password = str(env.get('ADMIN_PASSWORD') or '')
-        if password and (not preserve_interpolation or '$' not in password.replace('$$', '')):
-            if preserve_interpolation:
-                password = password.replace('$$', '$')
-            reference=env_reference('ADMIN_PASSWORD',password,env_path)
+        if env.get('ADMIN_PASSWORD'):
+            reference=env_reference('ADMIN_PASSWORD',str(env['ADMIN_PASSWORD']),env_path)
             if reference.startswith('${'):env['ADMIN_PASSWORD']=ENV_PLACEHOLDER
-        if env:
-            env=ordered(env,('TZ','ADMIN_USERNAME','ADMIN_PASSWORD'))
-            service['environment']=[k if v is None else k+'='+str(v) for k,v in env.items()]
-        else:
-            service.pop('environment',None)
-    for n, mount in enumerate(service.get('volumes', [])):
-        if not isinstance(mount, dict):
-            continue
-        source = mount.get('source', '')
-        mount_type = mount.get('type')
-        simple_bind = (
-            mount_type == 'bind'
-            and set(mount) <= {'type', 'source', 'target', 'read_only', 'bind'}
-            and set(mount.get('bind', {})) <= {'create_host_path'}
-            and mount.get('bind', {}).get('create_host_path', True) is not False
-            and ':' not in source
-        )
-        # A short mount with a variable source is classified before interpolation.
-        # Keep short syntax so Compose can infer bind vs. named volume after expansion.
-        variable_volume = (
-            preserve_interpolation and mount_type == 'volume' and source.startswith('$')
-            and set(mount) <= {'type', 'source', 'target', 'read_only', 'volume'}
-            and not mount.get('volume')
-        )
-        if source and (simple_bind or variable_volume):
-            service['volumes'][n] = source + ':' + mount['target'] + (':ro' if mount.get('read_only') else '')
-    model['services']['strimkeep']=ordered(service,('image','build','container_name','network_mode','env_file','environment','volumes','restart','init','logging'))
+        env=ordered(env,('TZ','ADMIN_USERNAME','ADMIN_PASSWORD'))
+        service['environment']=[k if v is None else k+'='+str(v) for k,v in env.items()]
+    for n,mount in enumerate(service.get('volumes',[])):
+        if isinstance(mount,dict) and mount.get('type')=='bind' and set(mount)<={'type','source','target','read_only','bind'} and set(mount.get('bind',{}))<={'create_host_path'} and mount.get('bind',{}).get('create_host_path',True) is not False and ':' not in mount['source']:
+            service['volumes'][n]=mount['source']+':'+mount['target']+(':ro' if mount.get('read_only') else '')
+    model['services']['strimkeep']=ordered(service,('image','build','container_name','network_mode','environment','volumes','restart','init','logging'))
     model.pop('version',None)
     model=ordered(model,('name','services'))
     # Keep blank lines between project name and services, as in the reference.
-    text='\n\n'.join('\n'.join(yaml({k:v},preserve_interpolation=preserve_interpolation)) for k,v in model.items())+'\n'
+    text='\n\n'.join('\n'.join(yaml({k:v})) for k,v in model.items())+'\n'
     if reference and reference.startswith('${'):
         text=text.replace('ADMIN_PASSWORD='+ENV_PLACEHOLDER,'ADMIN_PASSWORD='+reference)
     return text
 
 
 if __name__=='__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('model', type=Path)
-    parser.add_argument('output', type=Path)
-    parser.add_argument('env_path', nargs='?')
-    parser.add_argument('--preserve-interpolation', action='store_true')
-    args = parser.parse_args()
-    output = args.output
-    model = json.loads(args.model.read_text(encoding='utf-8'))
-    output.write_text(convert(model, args.env_path, preserve_interpolation=args.preserve_interpolation), encoding='utf-8')
+    env_path=sys.argv[3] if len(sys.argv)>3 else None
+    output=Path(sys.argv[2]);output.write_text(convert(json.loads(Path(sys.argv[1]).read_text()),env_path))
     os.chmod(output,0o600)
