@@ -52,8 +52,7 @@ def make_db(stage, notify_state='pending'):
 
 
 def engine_on(conn):
-    engine = Notifications.__new__(Notifications)
-    engine.store = Store(conn)
+    engine = Notifications(Store(conn), http=None)
     engine.published = []
 
     async def media_report(row):
