@@ -94,6 +94,13 @@ class OrganizeConfig(OrganizeOptions, Input):
     wash_enabled: bool = True
 
 
+UNRECOGNIZED_ITEM = (
+    "state IN ('pending','review','skipped') "
+    "AND step NOT IN ('人工忽略未识别','已人工忽略','已转手动匹配') "
+    "AND (step LIKE '%未识别%' OR message LIKE '%未识别%')"
+)
+
+
 class DismissUnrecognized(Input):
     """人工确认未识别项：只改任务记录，不碰云端文件。"""
     item_ids: list[int] = Field(default_factory=list, max_length=200)
@@ -582,7 +589,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
             marks = ','.join('?' * len(job_ids))
             for jid, n in store.db.execute(
                     f"SELECT job_id,count(*) FROM organize_items WHERE job_id IN ({marks}) "
-                    "AND step LIKE '%未识别%' GROUP BY job_id", job_ids):
+                    f"AND ({UNRECOGNIZED_ITEM}) GROUP BY job_id", job_ids):
                 unidentified[jid] = n
             for jid, n in store.db.execute(
                     f"SELECT job_id,count(*) FROM organize_items WHERE job_id IN ({marks}) AND ("
@@ -629,7 +636,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
             filtered_items = stats['filtered'].get(row['id'], 0)
         else:
             unidentified = store.db.execute(
-                "SELECT count(*) FROM organize_items WHERE job_id=? AND step LIKE '%未识别%'",
+                f"SELECT count(*) FROM organize_items WHERE job_id=? AND ({UNRECOGNIZED_ITEM})",
                 (row['id'],)).fetchone()[0]
             filtered_items = store.db.execute(
                 "SELECT count(*) FROM organize_items WHERE job_id=? AND ("
@@ -770,10 +777,12 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         if not row:
             raise HTTPException(404, '任务不存在。')
         items = []
-        for item in store.db.execute('SELECT * FROM organize_items WHERE job_id=? AND id>? ORDER BY id LIMIT 100', (job_id, after)):
+        for item in store.db.execute(
+                f'SELECT *, ({UNRECOGNIZED_ITEM}) AS unidentified FROM organize_items '
+                'WHERE job_id=? AND id>? ORDER BY id LIMIT 100', (job_id, after)):
             original, plan = json.loads(item['original']), json.loads(item['plan'])
             items.append({k: item[k] for k in ('id','file_id','state','step','message')} |
-                         {'original_name': original.get('name') or item['file_id'], 'source_cid': original.get('parent_id') or '',
+                         {'unidentified': bool(item['unidentified']), 'original_name': original.get('name') or item['file_id'], 'source_cid': original.get('parent_id') or '',
                           'target_name': plan.get('target_name', ''), 'cloud_parts': plan.get('parts', []),
                           'relative_path': plan.get('relative_path', ''), 'media': plan.get('media'),
                           'tmdb_id': plan.get('details', {}).get('id'), 'warnings': plan.get('warnings', []),
@@ -788,7 +797,8 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         if not row:
             raise HTTPException(404, '任务不存在。')
         item = store.db.execute(
-            'SELECT * FROM organize_items WHERE id=? AND job_id=?', (item_id, job_id)).fetchone()
+            f'SELECT *, ({UNRECOGNIZED_ITEM}) AS unidentified FROM organize_items '
+            'WHERE id=? AND job_id=?', (item_id, job_id)).fetchone()
         if not item:
             raise HTTPException(404, '任务条目不存在。')
         if row['state'] in ('queued', 'running', 'paused', 'waiting_login'):
@@ -796,7 +806,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         source_config = json.loads(row['config'] or '{}')
         if source_config.get('job_kind', 'organize') != 'organize':
             raise HTTPException(409, '只有扫描整理任务的未识别项支持手动匹配。')
-        if not ('未识别' in (item['step'] or '') or '未识别' in (item['message'] or '')):
+        if not item['unidentified']:
             raise HTTPException(409, '只有未识别项可以手动匹配。')
         if body.media_type == 'tv' and (body.season is None or body.episode is None):
             raise HTTPException(422, '剧集手动匹配需要填写季号和集号。')
@@ -846,12 +856,22 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
             # 手动匹配失败时原位保留，避免再次把文件往未识别目录搬。
             'pending_cid': '',
         })
-        new_job_id = app.state.organizer.jobs.create(config)
-        app.state.organizer.jobs.insert_item(new_job_id, original['id'], current, state='discovered')
-        app.state.organizer.jobs.set_manifest(new_job_id, 1)
-        app.state.organizer.update_item(
-            item_id, step='已转手动匹配',
-            message=f'已创建手动匹配任务 #{new_job_id}：TMDB {body.tmdb_id}。原任务记录保留。')
+        with store.transaction(immediate=True):
+            # Another request or the Worker may have dealt with the source
+            # while we were waiting for 115/TMDB. Claim it before publishing.
+            eligible = store.db.execute(
+                f'SELECT 1 FROM organize_items WHERE id=? AND job_id=? AND original=? '
+                f'AND ({UNRECOGNIZED_ITEM}) AND EXISTS (SELECT 1 FROM organize_jobs '
+                "WHERE id=? AND state NOT IN ('queued','running','paused','waiting_login'))",
+                (item_id, job_id, item['original'], job_id)).fetchone()
+            if not eligible:
+                raise HTTPException(409, '该条目已变更，请刷新任务详情。')
+            new_job_id = store.jobs.create(config)
+            store.jobs.insert_item(new_job_id, original['id'], current, state='discovered')
+            store.jobs.set_manifest(new_job_id, 1)
+            store.jobs.update_item(
+                item_id, step='已转手动匹配',
+                message=f'已创建手动匹配任务 #{new_job_id}：TMDB {body.tmdb_id}。原任务记录保留。')
         store.event('organize', f'任务 {job_id} 条目 {item_id}：已创建手动匹配任务 #{new_job_id}。')
         return {'job': job_public(app.state.organizer.job(new_job_id)),
                 'source_job': job_id, 'source_item': item_id}
@@ -863,29 +883,33 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
             raise HTTPException(404, '任务不存在。')
         if row['state'] in ('queued', 'running', 'paused', 'waiting_login'):
             raise HTTPException(409, '任务仍在进行，请先等待结束或取消后再人工处理未识别项。')
-        # 只允许处理明确带「未识别」标记的条目，避免把其他失败项一并吞掉。
-        sql = ("SELECT * FROM organize_items WHERE job_id=? "
-               "AND (step LIKE '%未识别%' OR message LIKE '%未识别%')")
-        params: list = [job_id]
-        if body.item_ids:
-            marks = ','.join('?' for _ in body.item_ids)
-            sql += f' AND id IN ({marks})'
-            params.extend(body.item_ids)
-        items = store.db.execute(sql + ' ORDER BY id', tuple(params)).fetchall()
-        if not items:
-            raise HTTPException(409, '没有可忽略的未识别项。')
-        for item in items:
-            app.state.organizer.update_item(
-                item['id'], state='skipped', step='人工忽略未识别',
-                message='人工确认：未识别项不再处理，原文件保留。')
-        closed = False
-        if row['state'] in ('partial', 'needs_review'):
-            remaining = store.db.execute(
-                "SELECT count(*) FROM organize_items WHERE job_id=? "
-                "AND state IN ('review','pending','planned','discovered')", (job_id,)).fetchone()[0]
-            if not remaining:
-                app.state.organizer.jobs.close(job_id, '人工忽略未识别项后结项')
-                closed = True
+        with store.transaction(immediate=True):
+            row = store.jobs.get(job_id)
+            if row['state'] in ('queued', 'running', 'paused', 'waiting_login'):
+                raise HTTPException(409, '任务状态已变更，请刷新任务详情。')
+            sql = f'SELECT id FROM organize_items WHERE job_id=? AND ({UNRECOGNIZED_ITEM})'
+            params: list = [job_id]
+            if body.item_ids:
+                marks = ','.join('?' for _ in body.item_ids)
+                sql += f' AND id IN ({marks})'
+                params.extend(body.item_ids)
+            items = store.db.execute(sql + ' ORDER BY id', tuple(params)).fetchall()
+            if not items:
+                raise HTTPException(409, '没有可忽略的未识别项。')
+            for item in items:
+                store.jobs.update_item(item['id'], state='skipped', step='已人工忽略',
+                                       message='已确认忽略，原文件保留。')
+            closed = False
+            if row['state'] in ('partial', 'needs_review'):
+                remaining = store.db.execute(
+                    'SELECT 1 FROM organize_items WHERE job_id=? AND ('
+                    "state IN ('review','pending','planned','discovered') "
+                    "OR (state='skipped' AND step NOT IN ('人工忽略未识别','已人工忽略') "
+                    "AND json_extract(plan,'$.blocks_job')=1) "
+                    f'OR ({UNRECOGNIZED_ITEM})) LIMIT 1', (job_id,)).fetchone()
+                if not remaining:
+                    store.jobs.close(job_id, '人工忽略未识别项后结项')
+                    closed = True
         store.event('organize', f'任务 {job_id}：人工忽略 {len(items)} 个未识别项'
                     + ('并结项。' if closed else '。'))
         return {'dismissed': len(items), 'closed': closed,

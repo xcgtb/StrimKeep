@@ -91,7 +91,7 @@ class Jobs:
         每条写各自提交会把前一半先落库（门禁 test_phase2 的
         `test_channel_job_and_claim_commit_together` 抓到过）。
         """
-        if getattr(self.store, '_tx_depth', 0) > 0:
+        if getattr(self.store, 'in_explicit_transaction', False):
             return contextlib.nullcontext()
         return self.store.db
 

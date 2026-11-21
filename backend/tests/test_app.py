@@ -377,9 +377,19 @@ def test_dismiss_unrecognized_items_closes_job(app, client):
     assert data['closed'] is True
     assert data['job']['state'] == 'completed'
     item = app.state.store.db.execute(
-        'SELECT state,step FROM organize_items WHERE job_id=?', (job_id,)).fetchone()
+        'SELECT id,state,step FROM organize_items WHERE job_id=?', (job_id,)).fetchone()
     assert item['state'] == 'skipped'
-    assert item['step'] == '人工忽略未识别'
+    assert item['step'] == '已人工忽略'
+    assert data['job']['unidentified'] == 0
+    detail = client.get(f'/api/v1/organize/jobs/{job_id}').json()
+    assert detail['items'][0]['unidentified'] is False
+    assert client.post(f'/api/v1/organize/jobs/{job_id}/dismiss-unrecognized', json={}).status_code == 409
+
+    # Old records used a label that contained the search keyword.
+    jobs.update_item(item['id'], step='人工忽略未识别', message='未识别项不再处理')
+    detail = client.get(f'/api/v1/organize/jobs/{job_id}').json()
+    assert detail['job']['unidentified'] == 0
+    assert detail['items'][0]['unidentified'] is False
 
 
 def test_manual_match_creates_single_file_job(app, client, monkeypatch):
@@ -404,6 +414,15 @@ def test_manual_match_creates_single_file_job(app, client, monkeypatch):
         return {'id': 603, 'title': '黑客帝国', 'release_date': '1999-03-31'}
 
     monkeypatch.setattr(app.state.organizer, 'tmdb', fake_tmdb)
+    set_manifest = jobs.set_manifest
+
+    def check_worker_visibility(new_id, manifest):
+        # A separate WAL reader models the Worker polling between writes.
+        with sqlite3.connect(app.state.store.path) as reader:
+            assert reader.execute('SELECT 1 FROM organize_jobs WHERE id=?', (new_id,)).fetchone() is None
+        return set_manifest(new_id, manifest)
+
+    monkeypatch.setattr(jobs, 'set_manifest', check_worker_visibility)
     response = client.post(
         f'/api/v1/organize/jobs/{job_id}/items/{item["id"]}/manual-match',
         json={'tmdb_id': 603, 'media_type': 'movie'})
@@ -426,6 +445,9 @@ def test_manual_match_creates_single_file_job(app, client, monkeypatch):
     source = app.state.store.db.execute(
         'SELECT step FROM organize_items WHERE id=?', (item['id'],)).fetchone()
     assert source['step'] == '已转手动匹配'
+    assert client.post(
+        f'/api/v1/organize/jobs/{job_id}/items/{item["id"]}/manual-match',
+        json={'tmdb_id': 603, 'media_type': 'movie'}).status_code == 409
 
 
 def test_build_plan_uses_manual_hint_without_identify(app, client, monkeypatch):

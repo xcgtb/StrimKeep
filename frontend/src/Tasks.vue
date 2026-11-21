@@ -27,7 +27,9 @@ const bucketCount=(bucket:string)=>allJobs.value.filter(job=>bucketOf(job)===buc
 const itemFilter=ref('all')
 const manualItem=ref<any>(null)
 const itemText=(item:any)=>`${item.step||''} ${item.message||''}`
-const isUnidentified=(item:any)=>/未识别/.test(itemText(item))
+const isUnidentified=(item:any)=>item.unidentified===true
+const canHandleUnidentified=computed(()=>detail.value&&!['queued','running','paused','waiting_login'].includes(detail.value.job.state))
+const canManualMatch=computed(()=>canHandleUnidentified.value&&(detail.value?.job.config?.job_kind||'organize')==='organize')
 const isFailedItem=(item:any)=>item.state==='review'||/失败|异常|未完成/.test(itemText(item))
 const isDoneItem=(item:any)=>['done','skipped','archived','recycled'].includes(item.state)
 const unidentifiedItems=computed(()=>detail.value?.items.filter(isUnidentified)||[])
@@ -141,7 +143,7 @@ usePageActivity(()=>{visible=true;connect();void run(()=>load());timer=setInterv
         <el-radio-button value="failed">失败 {{failedItems.length}}</el-radio-button>
         <el-radio-button value="done">已处理 {{doneItems.length}}</el-radio-button>
       </el-radio-group>
-      <el-button v-if="unidentifiedItems.length" type="warning" plain :disabled="busy" @click="dismissUnrecognized()">忽略未识别并结项</el-button>
+      <el-button v-if="unidentifiedItems.length&&canHandleUnidentified" type="warning" plain :disabled="busy" @click="dismissUnrecognized()">忽略未识别并结项</el-button>
     </div>
     <p v-if="unidentifiedItems.length" class="hint">忽略只把未识别项标记为已跳过，不删除文件；文件仍在原目录或未识别目录。需要重新识别时先复制文件名到「识别测试」核对。</p>
     <el-empty v-if="!detailItems.length" description="这个筛选下没有条目" :image-size="56"/>
@@ -151,9 +153,9 @@ usePageActivity(()=>{visible=true;connect();void run(()=>load());timer=setInterv
       <p class="hint wrap">{{item.relative_path}}</p>
       <p v-if="item.message" class="wrap">{{item.message}}</p>
       <div v-if="isUnidentified(item)" class="button-row">
-        <el-button size="small" type="primary" plain :disabled="busy" @click="manualItem=item">手动匹配</el-button>
+        <el-button v-if="canManualMatch" size="small" type="primary" plain :disabled="busy" @click="manualItem=item">手动匹配</el-button>
         <el-button size="small" @click="copyName(item.original_name)">复制文件名</el-button>
-        <el-button size="small" type="warning" plain :disabled="busy" @click="dismissUnrecognized([item.id])">忽略此项</el-button>
+        <el-button v-if="canHandleUnidentified" size="small" type="warning" plain :disabled="busy" @click="dismissUnrecognized([item.id])">忽略此项</el-button>
       </div>
       <details class="task-extra"><summary>文件与洗版详情</summary>
         <p>文件 ID {{item.file_id}}</p>

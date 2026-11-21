@@ -370,6 +370,56 @@ def test_card_updates_in_place_after_emby_confirmation(tmp_path,legacy):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize('historical', [False, True])
+def test_verified_delivery_repairs_existing_warning_card(tmp_path, historical):
+    from test_organize import setup, new_job
+    import httpx
+
+    async def scenario():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        store.set_many({'notification_config': {
+            'telegram_enabled': True, 'bot_token': 'test', 'chat_id': '7'}})
+        jid = new_job(store, {'notify_emby': True})
+        relative = '剧集/第一集.strm'
+        item = store.jobs.insert_item(jid, '1000', {}, plan={'relative_path': relative}, state='done')
+        store.jobs.finish(jid, 'completed')
+        store.jobs.set_notify_state(jid, 'unconfirmed')
+        event = f'show_done:{jid}:group:{item}'
+        payload = json.dumps({'targets': [{'relative': relative, 'confirmed': True}]})
+        warning = '⚠️ 状态：Emby 入库未确认，请检查媒体库'
+        with store.db:
+            store.db.execute("INSERT INTO emby_deliveries(job_id,state,payload,next_due,deadline) VALUES(?,?,?,0,0)",
+                             (jid, 'verified' if historical else 'unconfirmed', payload))
+            store.db.execute('INSERT INTO media_notice_groups VALUES(?,?,?)', (event, jid, json.dumps([item])))
+            store.db.execute("INSERT INTO notifications(at,level,job_id,event_key,title,message,telegram_state) "
+                             "VALUES(0,'warning',?,?,?,?,'sent')", (jid, event, '整理完成', warning))
+            store.db.execute('INSERT INTO telegram_message_refs(event_key,chat_id,message_id,photo,edited) '
+                             'VALUES(?,?,?,1,?)', (event, '7', 123, 'unconfirmed'))
+        edits = []
+
+        async def send(token, method, body):
+            edits.append((method, body))
+            return httpx.Response(200, json={'ok': True}, request=httpx.Request('POST', 'https://example.test'))
+
+        engine.notifications.send = send
+        if not historical:
+            # Finish after the initial scan already ran, as on a long-lived Worker.
+            await engine.notifications.drain_media()
+            assert not edits
+            await engine.emby.finish(jid, 'verified', '已确认')
+        await engine.notifications.drain_media()
+        await engine.notifications.drain_media()
+        assert len(edits) == 1
+        method, body = edits[0]
+        assert method == 'editMessageCaption' and body['message_id'] == 123
+        assert 'Emby 已入库' in body['caption'] and '未确认' not in body['caption']
+        assert not store.db.execute('SELECT 1 FROM media_notice_outbox WHERE job_id=?', (jid,)).fetchone()
+        await http.aclose()
+        store.close()
+
+    asyncio.run(scenario())
+
+
 def test_season_size_and_strm_report_arrive_after_background_publication(tmp_path):
     from test_organize import setup,new_job,CONFIG
     async def scenario():

@@ -737,6 +737,9 @@ class EmbyDelivery:
         notification_config=self.store.get('notification_config',{})
         if (notification_config.get('telegram_enabled') and notification_config.get('categories',{}).get('media',True)
                 and self.store.db.execute("SELECT 1 FROM media_notice_groups g LEFT JOIN notifications n ON n.event_key=g.event_key WHERE g.job_id=? AND (n.event_key IS NULL OR n.telegram_state NOT IN ('failed','disabled')) LIMIT 1",(jid,)).fetchone()):
+            if state == 'verified':
+                with self.store.db:
+                    self.store.db.execute('INSERT OR IGNORE INTO media_notice_outbox(job_id) VALUES(?)', (jid,))
             return
         task = asyncio.create_task(self.engine.notifications.publish(
             f'emby-result:{jid}:{state}:{len(payload.get("handled_items", []))}:{(progress or {}).get("total", 0)}:{(progress or {}).get("confirmed", 0)}',

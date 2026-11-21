@@ -262,6 +262,7 @@ class Notifications:
         self.retry_gate = asyncio.Lock()
         self.next_send = 0.0
         self.media_gate = asyncio.Lock()
+        self._verified_cards_requeued = False
         with self.store.db:
             self.store.db.execute('CREATE TABLE IF NOT EXISTS notification_dependencies(event_key TEXT PRIMARY KEY, depends_on TEXT NOT NULL)')
             self.store.db.execute("UPDATE notifications SET telegram_state='unknown',next_try=0 WHERE telegram_state='inflight'")
@@ -630,6 +631,22 @@ class Notifications:
     async def drain_media(self):
         """Edit the original Telegram card after Emby settles; never send a second card."""
         async with self.media_gate:
+            if not self._verified_cards_requeued:
+                # Recover cards left behind before verified results could requeue them.
+                with self.store.db:
+                    self.store.db.execute("""
+                        INSERT OR IGNORE INTO media_notice_outbox(job_id)
+                        SELECT g.job_id FROM media_notice_groups g
+                        JOIN emby_deliveries d ON d.job_id=g.job_id
+                        JOIN notifications n ON n.event_key=g.event_key
+                        JOIN telegram_message_refs r ON r.event_key=g.event_key
+                        WHERE d.state='verified' AND n.telegram_state='sent'
+                          AND r.edited IN ('','unconfirmed')
+                          AND (r.edited='unconfirmed' OR instr(n.message,'Emby 入库未确认')>0
+                               OR instr(n.message,'Emby 部分入库')>0
+                               OR instr(n.message,'入库待核实')>0)
+                    """)
+                self._verified_cards_requeued = True
             jobs=self.store.db.execute("SELECT j.* FROM media_notice_outbox o JOIN organize_jobs j ON j.id=o.job_id ORDER BY j.id LIMIT 20").fetchall()
             for job in jobs:
                 config=json.loads(job['config'])
@@ -663,10 +680,14 @@ class Notifications:
                     status='verified' if is_confirmed else 'unconfirmed'
                     if ref['edited']==status:continue
                     if ref['next_try']>time.time():waiting=True;continue
-                    old='⏳ 状态：Emby 入库待核实' if '⏳ 状态：Emby 入库待核实' in notice['message'] else '⏳ Emby：入库待核实'
-                    new='✅ 状态：Emby 已入库' if status=='verified' else '⚠️ 状态：Emby 入库未确认，请检查媒体库'
-                    updated=notice['message'].replace(old,new)
-                    if old not in notice['message']:continue
+                    pending_lines = ('⏳ 状态：Emby 入库待核实', '⏳ Emby：入库待核实')
+                    warning_line = '⚠️ 状态：Emby 入库未确认，请检查媒体库'
+                    partial_line = '⚠️ 状态：Emby 部分入库，未确认的条目请检查媒体库'
+                    old_lines = (*pending_lines, warning_line, partial_line) if is_confirmed else pending_lines
+                    new = '✅ 状态：Emby 已入库' if is_confirmed else warning_line
+                    lines = notice['message'].split('\n')
+                    updated = '\n'.join(new if line in old_lines else line for line in lines)
+                    if updated == notice['message']:continue
                     cfg=self.store.get('notification_config',{})
                     token=cfg.get('bot_token')
                     if not token:
@@ -695,7 +716,7 @@ class Notifications:
                         continue
                     with self.store.db:
                         self.store.db.execute('UPDATE notifications SET title=?,message=? WHERE event_key=?',(updated_title,updated,key))
-                        self.store.db.execute('UPDATE telegram_message_refs SET edited=? WHERE event_key=?',(status,key))
+                        self.store.db.execute('UPDATE telegram_message_refs SET edited=?,attempts=0,next_try=0 WHERE event_key=?',(status,key))
                 if not waiting:
                     with self.store.db:self.store.db.execute('DELETE FROM media_notice_outbox WHERE job_id=?',(job['id'],))
 

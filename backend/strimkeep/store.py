@@ -439,16 +439,25 @@ class Store:
             pass
 
 
+    @property
+    def in_explicit_transaction(self):
+        return getattr(self._local, 'explicit_transaction', False)
+
     @contextlib.contextmanager
-    def transaction(self):
-        """显式事务：`store.jobs` 的写入会并入它，而不是各自提交。"""
-        depth = getattr(self, '_tx_depth', 0)
-        self._tx_depth = depth + 1
+    def transaction(self, *, immediate=False):
+        """同一线程的任务写入并入显式事务，其他线程各自提交。"""
+        if self.in_explicit_transaction:
+            yield
+            return
+        db = self.db
+        self._local.explicit_transaction = True
         try:
-            with self.db:
+            with db:
+                if immediate and not db.in_transaction:
+                    db.execute('BEGIN IMMEDIATE')
                 yield
         finally:
-            self._tx_depth = depth
+            self._local.explicit_transaction = False
 
     @property
     def jobs(self):
