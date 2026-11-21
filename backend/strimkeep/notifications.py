@@ -17,6 +17,13 @@ from .telegram_security import is_public_poster_url, safe_telegram_error
 
 MAX_PUBLIC_POSTER_BYTES = 8 * 1024 * 1024
 PNG_MAGIC = b'\x89PNG\r\n\x1a\n'
+OFFLINE_RECEIPT_STAGES = {'submitted': 0, 'stalled': 1, 'completed': 2}
+OFFLINE_RECEIPT_PREFIX = 'offline_receipt:'
+
+
+def original_post_buttons(options):
+    post_url = options.get('post_url')
+    return {'inline_keyboard': [[{'text': '查看原帖', 'url': post_url}]]} if post_url else None
 
 
 async def download_public_poster(http, url):
@@ -302,6 +309,46 @@ class Notifications:
         async with self.delivery_gate:
             return await self._publish(*args, **kwargs)
 
+    def stage_offline(self, submission_id, stage, title, message, *, photo=None, telegram_options=None, chat_override=None):
+        """Persist the newest receipt before sending it. May join the download state transaction."""
+        key = f'{OFFLINE_RECEIPT_PREFIX}{submission_id}'
+        with self.store.transaction(immediate=True):
+            previous = self.store.db.execute(
+                'SELECT photo,telegram_options FROM notifications WHERE event_key=?', (key,)).fetchone()
+            options = json.loads(previous['telegram_options']) if previous else {}
+            if OFFLINE_RECEIPT_STAGES.get(options.get('offline_stage'), -1) >= OFFLINE_RECEIPT_STAGES[stage]:
+                return False
+            options.update(telegram_options or {})
+            options['offline_stage'] = stage
+            if chat_override:
+                options['chat_override'] = str(chat_override)
+            config = self.store.get('notification_config', {})
+            enabled = options.get('chat_override') or (config.get('telegram_enabled') and
+                                                       (config.get('categories') or {}).get('offline', True))
+            self.store.db.execute(
+                "INSERT INTO notifications(at,level,event_key,title,message,telegram_state,photo,telegram_options) "
+                "VALUES(?,'info',?,?,?,?,?,?) ON CONFLICT(event_key) DO UPDATE SET "
+                "at=excluded.at,title=excluded.title,message=excluded.message,telegram_state=excluded.telegram_state,"
+                "photo=excluded.photo,telegram_options=excluded.telegram_options,read_at=NULL,attempts=0,next_try=0",
+                (time.time(), key, title, message, 'waiting' if enabled else 'disabled',
+                 photo or (previous['photo'] if previous else None), json.dumps(options)))
+            return True
+
+    async def flush_offline(self, submission_id, stage):
+        async with self.delivery_gate:
+            key = f'{OFFLINE_RECEIPT_PREFIX}{submission_id}'
+            row = self.store.db.execute('SELECT * FROM notifications WHERE event_key=?', (key,)).fetchone()
+            options = json.loads(row['telegram_options']) if row else {}
+            if options.get('offline_stage') != stage:
+                return
+            body = row['message']
+            if options.get('post_url'):
+                body += '\n↗ 频道原帖  ' + options['post_url']
+            await self._deliver_webhook(row['title'], body, 'offline')
+            if row['telegram_state'] == 'waiting':
+                cfg = self.store.get('notification_config', {})
+                await self._attempt_queued(row, time.time(), cfg.get('chat_id'), cfg.get('bot_token'))
+
     async def _publish(self, key, title, message, level='info', job_id=None, test=False, photo=None, chat_override=None, force=False, category=None, depends_on=None, telegram_options=None):
         config = self.store.get('notification_config', {})
         category=category or category_for(key)
@@ -345,6 +392,8 @@ class Notifications:
         return min(RETRY_CAP_SECONDS, base * random.uniform(0.85, 1.15))
 
     async def _deliver_notice(self, key, title, message, photo, chat, token, telegram_options=None):
+        if key.startswith(OFFLINE_RECEIPT_PREFIX):
+            return await self._deliver_offline_notice(key, title, message, photo, chat, token, telegram_options)
         values = {'telegram_options': telegram_options} if telegram_options else {}
         if key.startswith('strm:') and ':group:' in key:
             prefix, _, group = key.partition(':group:')
@@ -356,7 +405,47 @@ class Notifications:
                 values['reply_to'] = ref['message_id']
         return await self._deliver(title, message, photo, chat, token, **values)
 
-    async def _deliver(self, title, message, photo, chat, token, *, reply_to=None, telegram_options=None):
+    async def _deliver_offline_notice(self, key, title, message, photo, chat, token, options):
+        ref = self.store.db.execute(
+            'SELECT message_id,photo FROM telegram_message_refs WHERE event_key=? AND chat_id=?',
+            (key, str(chat))).fetchone() if chat and token else None
+        if ref:
+            content = title + '\n' + message
+            payload = {'chat_id': chat, 'message_id': ref['message_id']}
+            buttons = original_post_buttons(options)
+            if buttons:
+                payload['reply_markup'] = buttons
+            if ref['photo']:
+                method = 'editMessageCaption'
+                payload['caption'] = clipped(content, 1000)
+            else:
+                method = 'editMessageText'
+                payload.update(text=clipped(content, 4000), link_preview_options={'is_disabled': True})
+            try:
+                response = await self.send(token, method, payload)
+                data = response.json()
+                if not isinstance(data, dict):
+                    data = {}
+                description = str(data.get('description', '')).lower()
+                if data.get('ok') is True or (response.status_code == 400 and 'message is not modified' in description):
+                    return 'sent', None
+                # Only replace a card after Telegram confirms that it cannot be edited.
+                missing = response.status_code == 400 and any(reason in description for reason in (
+                    'message to edit not found', "message can't be edited", 'message_id_invalid'))
+                if not missing:
+                    retryable = response.status_code == 429 or response.status_code >= 500 or response.is_success
+                    return ('unknown' if retryable else 'failed'), f'HTTP {response.status_code}'
+            except (httpx.HTTPError, ValueError):
+                return 'unknown', 'offline receipt edit unconfirmed'
+            photo = None
+            options = {'post_url': options.get('post_url')}
+        delivery = {}
+        state, detail = await self._deliver(title, message, photo, chat, token, telegram_options=options, delivery=delivery)
+        if state == 'sent' and isinstance(detail, int):
+            detail = (detail, delivery.get('photo', False))
+        return state, detail
+
+    async def _deliver(self, title, message, photo, chat, token, *, reply_to=None, telegram_options=None, delivery=None):
         """一次发送。unknown 表示可重试（网络/5xx/429），failed 表示对方明确拒收（4xx）。"""
         if not token or not chat:
             return 'failed', 'missing token or chat'
@@ -365,8 +454,9 @@ class Notifications:
             payload = {'chat_id': chat}
             if reply_to is not None:
                 payload['reply_parameters'] = {'message_id': reply_to, 'allow_sending_without_reply': True}
-            if options.get('post_url'):
-                payload['reply_markup'] = {'inline_keyboard': [[{'text': '查看原帖', 'url': options['post_url']}]]}
+            buttons = original_post_buttons(options)
+            if buttons:
+                payload['reply_markup'] = buttons
             text = title + '\n' + message
             file = None
             source = options.get('photo_source')
@@ -412,6 +502,8 @@ class Notifications:
             response.raise_for_status()
             data = response.json()
             if isinstance(data,dict) and data.get('ok') is True:
+                if delivery is not None:
+                    delivery['photo'] = not text_only
                 if text_only and poster_issue:
                     try:
                         self.store.event('channel', f'频道通知改发文字 · {poster_issue}')
@@ -435,7 +527,7 @@ class Notifications:
         now = time.time() if now is None else now
         config = self.store.get('notification_config', {})
         token, chat = config.get('bot_token'), config.get('chat_id')
-        if not config.get('telegram_enabled') or not token or not chat:
+        if not token:
             return 0
         sent = 0
         for _ in range(limit):
@@ -445,25 +537,45 @@ class Notifications:
                 LEFT JOIN notifications p ON p.event_key=d.depends_on
                 WHERE ((n.telegram_state='unknown' AND n.attempts<? AND n.next_try<=?)
                     OR n.telegram_state='waiting')
+                  AND (? OR (n.event_key GLOB 'offline_receipt:*'
+                    AND json_extract(n.telegram_options,'$.chat_override') IS NOT NULL))
                   AND (p.event_key IS NULL OR p.telegram_state IN ('sent','disabled','failed')
                     OR (p.telegram_state='unknown' AND p.attempts>=?))
-                ORDER BY n.id LIMIT 1""", (RETRY_LIMIT, now, RETRY_LIMIT)).fetchone()
+                ORDER BY n.id LIMIT 1""", (RETRY_LIMIT, now, bool(config.get('telegram_enabled') and chat), RETRY_LIMIT)).fetchone()
             if not row:
                 break
-            with self.store.db:
-                self.store.db.execute("UPDATE notifications SET telegram_state='inflight' WHERE id=?", (row['id'],))
-            state, detail = await self._deliver_notice(
-                row['event_key'], row['title'], row['message'], row['photo'], chat, token,
-                json.loads(row['telegram_options']))
-            attempts = row['attempts'] + 1
-            with self.store.db:
-                self.store.db.execute(
-                    'UPDATE notifications SET telegram_state=?,attempts=?,next_try=? WHERE id=?',
-                    (state, attempts, now + self.backoff(attempts) if state == 'unknown' else 0, row['id']))
-                if state=='sent' and isinstance(detail,int) and (row['event_key'].startswith('show_done:') or row['event_key'].startswith('media:')):
-                    self.store.db.execute('INSERT OR REPLACE INTO telegram_message_refs(event_key,chat_id,message_id,photo) VALUES(?,?,?,?)',(row['event_key'],str(chat),detail,int(bool(row['photo']))))
-            sent += 1 if state == 'sent' else 0
+            sent += await self._attempt_queued(row, now, chat, token) == 'sent'
         return sent
+
+    async def _attempt_queued(self, row, now, chat, token):
+        key = row['event_key']
+        options = json.loads(row['telegram_options'])
+        chat = options.get('chat_override') or chat
+        with self.store.db:
+            changed = self.store.db.execute(
+                "UPDATE notifications SET telegram_state='inflight' WHERE id=? AND telegram_options=? "
+                "AND telegram_state IN ('waiting','unknown')", (row['id'], row['telegram_options'])).rowcount
+        if not changed:
+            return 'superseded'
+        state, detail = await self._deliver_notice(key, row['title'], row['message'], row['photo'], chat, token, options)
+        attempts = row['attempts'] + 1
+        with self.store.db:
+            # A newer offline stage can be staged while Telegram is sending the earlier card.
+            # Keep its pending state, but record the delivered message so the new stage can edit it.
+            self.store.db.execute(
+                "UPDATE notifications SET telegram_state=?,attempts=?,next_try=? WHERE id=? "
+                "AND telegram_state='inflight' AND telegram_options=?",
+                (state, attempts, now + self.backoff(attempts) if state == 'unknown' else 0, row['id'], row['telegram_options']))
+            if state == 'sent' and isinstance(detail, tuple) and key.startswith(OFFLINE_RECEIPT_PREFIX):
+                message_id, has_photo = detail
+                self.store.db.execute(
+                    'INSERT OR REPLACE INTO telegram_message_refs(event_key,chat_id,message_id,photo) VALUES(?,?,?,?)',
+                    (key, str(chat), message_id, int(has_photo)))
+            elif state == 'sent' and isinstance(detail,int) and key.startswith(('show_done:', 'media:')):
+                self.store.db.execute(
+                    'INSERT OR REPLACE INTO telegram_message_refs(event_key,chat_id,message_id,photo) VALUES(?,?,?,?)',
+                    (key, str(chat), detail, int(bool(row['photo']))))
+        return state
 
     async def send(self,token,method,payload,*,file=None):
         async with self.send_gate:

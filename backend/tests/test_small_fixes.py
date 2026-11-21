@@ -22,6 +22,8 @@ def test_offline_done_accepts_percent_forms_and_rejects_midway_states():
 def test_offline_completion_displays_verified_result_and_channel_context(tmp_path):
     import asyncio
     from types import SimpleNamespace
+    import json
+    from strimkeep.notifications import Notifications
     from strimkeep.offline_api import OfflinePostProcess
     from strimkeep.store import Store
 
@@ -42,17 +44,12 @@ def test_offline_completion_displays_verified_result_and_channel_context(tmp_pat
 
     async def run():
         store = Store(tmp_path / 'data', 'admin', 'test-password-1234')
-        notified = []
-
-        async def publish(**kwargs):
-            notified.append(kwargs)
-
         async def scan_scope_allows(cids):
             return True
 
         # OfflinePostProcess 的第一个参数就是 engine，store / 通知都从它身上取。
         engine = SimpleNamespace(store=store, cloud=Cloud(), tasks=SimpleNamespace(config=lambda _: {}),
-                                 notifications=SimpleNamespace(publish=publish),
+                                 notifications=Notifications(store, None),
                                  scan_scope_allows=scan_scope_allows)
         context = {'channel': '示例频道', 'subject': '影片', 'note': '#DEMO-001', 'resource_kind': '磁力',
                    'post_url': 'https://t.me/example/44'}
@@ -65,11 +62,13 @@ def test_offline_completion_displays_verified_result_and_channel_context(tmp_pat
             row = store.db.execute('SELECT * FROM offline_submissions WHERE id=?', (sid,)).fetchone()
             assert row['state'] == 'completed', dict(row)
             assert bool(row['organize_job_id']) == organize
-            receipt = notified[-1]
-            assert receipt['key'] == f'offline_done:{sid}'
+            receipt = store.db.execute('SELECT * FROM notifications WHERE event_key=?',
+                                       (f'offline_receipt:{sid}',)).fetchone()
+            options = json.loads(receipt['telegram_options'])
+            assert options['offline_stage'] == 'completed' and options['post_url'] == context['post_url']
             assert '频道离线下载 · 已完成' in receipt['title']
             assert all(value in receipt['message'] for value in (
-                '示例频道', context['post_url'], 'landed.mkv', f'离线记录  #{sid}', '已核实落盘  1 项'))
+                '示例频道', 'landed.mkv', f'离线记录  #{sid}', '已核实落盘  1 项'))
             assert '#DEMO-001' not in receipt['message']
             assert 'submitted.mkv' not in receipt['message']
             assert ('已入队' if organize else '仅落盘') in receipt['message']

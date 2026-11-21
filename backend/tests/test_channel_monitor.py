@@ -20,6 +20,13 @@ class FakeNotifications:
         self.sent.append((args, kwargs))
         return 'ok'
 
+    def stage_offline(self, sid, stage, title, body, **kwargs):
+        self.sent.append(((f'offline_receipt:{sid}', title, body), kwargs))
+        return True
+
+    async def flush_offline(self, sid, stage):
+        pass
+
 
 class FakeResponse:
     def __init__(self, status_code, text=''):
@@ -647,7 +654,8 @@ def test_channel_offline_receipt_records_note_and_post_link(tmp_path):
         assert ctx == {'channel': '示例频道', 'subject': '示例影片', 'note': '#LTX #DEMO-001 · 备注：修复字幕',
                        'post_url': 'https://t.me/c/1234567890/88', 'resource_kind': 'ED2K'}
         args, kwargs = monitor.engine.notifications.sent[0]
-        assert all(value in args[2] for value in ('#LTX #DEMO-001\n备注：修复字幕', '离线记录  #1', 'ED2K'))
+        assert all(value in args[2] for value in ('示例影片', '离线记录  #1', 'ED2K'))
+        assert '备注：修复字幕' not in args[2]
         assert kwargs['telegram_options']['post_url'] == ctx['post_url']
         assert 'abcd' not in args[2] and 'secret' not in args[2]
         store.close()

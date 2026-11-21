@@ -35,15 +35,20 @@ class Store:
     def set_meta(self, key, value):
         self.values[key] = value
 
+    def transaction(self, **kwargs):
+        return self.db
+
 
 class FakeNotifications:
     def __init__(self):
         self.sent = []
 
-    async def publish(self, key, title, message, level='info', job_id=None, test=False,
-                      photo=None, chat_override=None, force=False, category=None):
+    def stage_offline(self, sid, stage, title, message, **kwargs):
         self.sent.append((title, message))
-        return 'sent'
+        return True
+
+    async def flush_offline(self, sid, stage):
+        pass
 
 
 def make_db(state='submitted', attempts=0, age=0):
@@ -123,7 +128,7 @@ def test_stalled_tasks_get_one_summary_receipt():
     title, message = engine.notifications.sent[0]
     assert title == '⏳ 离线下载 · 超时'
     assert '📄 文件  Movie.S01E01.mkv' in message
-    assert '👉 到 115 离线列表删掉换源' in message
+    assert '115 仍在下载，可到离线列表核对或换源。' in message
     assert '115 网盘 / 115 网盘' not in message      # 前缀只出现一次
     # 同一个任务已经回执过，不再重复
     assert asyncio.run(engine.report_stalled(now=now + 600, ids=[1])) == 0

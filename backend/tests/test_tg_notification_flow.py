@@ -3,15 +3,13 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from strimkeep.store import Store
 from strimkeep.telegram_bot import TelegramBot
+from test_telegram_share_cmd import Notices
 
-class Notices:
-    def __init__(self):self.items=[]
-    async def publish(self,*args,**kwargs):self.items.append((args,kwargs))
 class Offline:
     def __init__(self):self.calls=[]
-    async def submit(self,urls,cid,label,origin='web',organize=True):
+    async def submit(self,urls,cid,label,origin='web',organize=True,notice_context=None):
         # 0.8.40：submit 多带来源与「是否自动整理」，机器人必须传 origin='bot'。
-        self.calls.append((urls,cid,label,origin,organize));return 42
+        self.calls.append((urls,cid,label,origin,organize));return 41 + len(self.calls)
 class Transfer:
     def __init__(self):self.calls=[]
     async def enqueue(self,text,dest,auto,origin,identity):
@@ -34,8 +32,9 @@ def test_mixed_share_and_magnet_are_routed_independently(tmp_path):
         assert offline.calls[1][0]==['ed2k://|file|a|1|hash|/'] and offline.calls[1][1]=='124'
         assert [c[3] for c in offline.calls]==['bot','bot'] and all(c[4] is True for c in offline.calls)
         assert len(transfer.calls)==1 and transfer.calls[0][1]=='456'
-        assert len(notices.items)==2 and notices.items[0][0][0]!=notices.items[1][0][0]
-        assert '批次 #42' in notices.items[0][0][2] and '#43' in notices.items[1][0][2]
+        assert len(notices.items)==3
+        assert '离线记录  #42' in notices.items[0][0][2] and '离线记录  #43' in notices.items[1][0][2]
+        assert '#43' in notices.items[2][0][2]
         store.close()
     asyncio.run(run())
 
@@ -64,6 +63,6 @@ def test_share_strm_command_routes_multiple_shares_and_magnet(tmp_path):
         with patch('strimkeep.share_service.enqueue_organize',side_effect=[71,72]) as enqueue:
             await bot.handle(message('/share https://115.com/s/one https://115.com/s/two magnet:?xt=urn:btih:1234'),{'allowed_user_id':'42'},'test')
         assert enqueue.call_count==2 and len(offline.calls)==1 and not transfer.calls
-        assert len(notices.items)==2 and '#71、#72' in notices.items[0][0][2] and '批次 #42' in notices.items[1][0][2]
+        assert len(notices.items)==2 and '#71、#72' in notices.items[0][0][2] and '离线记录  #42' in notices.items[1][0][2]
         store.close()
     asyncio.run(run())

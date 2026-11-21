@@ -8,7 +8,7 @@ from .cloud115 import CloudError
 from .offline_api import links_in, directory_config, route_target, OFFLINE_MAX_LINKS
 from .transfer import LINK, shares as parse_shares
 from . import share_service
-from .message_templates import transfer_received, cloud_sign_notice
+from .message_templates import transfer_received, cloud_sign_notice, offline_submitted
 from .telegram_security import safe_telegram_error
 
 # 磁力与电驴可以自动识别；http/ftp 直链与分享链接容易混，必须显式 /offline。
@@ -305,6 +305,7 @@ class TelegramBot:
         ed2ks=[u for u in urls if u.lower().startswith('ed2k://')]
         others=[u for u in urls if not u.lower().startswith(('magnet:','ed2k://'))]
         results=[]
+        receipts=[]
         for group,kind,title in ((magnets,'bot_magnet','磁力'),(ed2ks,'bot_ed2k','ED2K'),(others,'target','直链')):
             if not group:continue
             target_cid=cfg.get(kind+'_cid') or ''
@@ -314,16 +315,25 @@ class TelegramBot:
                 target_cid,label=route_target(routes,text,target_cid,label)
             if not target_cid:
                 results.append(f'⚠️ {title}未提交：尚未选择目录。');continue
+            context = {'resource_kind': title}
             try:
                 sid=await self.engine.offline.submit(group,target_cid,label,origin='bot',
-                    organize=organize_flag_for(cfg,'magnet' if kind=='bot_magnet' else ('ed2k' if kind=='bot_ed2k' else 'direct'),'bot'))
-                results.append(f'✅ {title}：已提交 {len(group)} 个 · 批次 #{sid}\n📂 115 网盘 / {label}\n⏳ 等待下载完成并核查')
+                    organize=organize_flag_for(cfg,'magnet' if kind=='bot_magnet' else ('ed2k' if kind=='bot_ed2k' else 'direct'),'bot'),
+                    notice_context=context)
             except CloudError as exc:
                 results.append(f'⚠️ {title}：提交结果待核查 · {self._safe_error(exc)}\n请先检查 115 离线任务，避免重复提交。')
             except Exception:
                 results.append(f'⚠️ {title}：提交结果未确认。请先检查 115 离线任务，避免重复提交。')
+            else:
+                target = self.store.directory_label(target_cid, label)
+                heading, body = offline_submitted(target, len(group), context=context, submission_id=sid)
+                if self.engine.notifications.stage_offline(sid, 'submitted', heading, body, chat_override=str(chat['id'])):
+                    receipts.append(sid)
+        for sid in receipts:
+            await self.engine.notifications.flush_offline(sid, 'submitted')
         if ignored:results.append(f'ℹ️ 单次最多 {OFFLINE_MAX_LINKS} 个链接，另有 {ignored} 个未提交。')
-        await self.engine.notifications.publish(key,'🧲 离线下载 · 提交结果','\n\n'.join(results),chat_override=str(chat['id']),force=True)
+        if results:
+            await self.engine.notifications.publish(key,'🧲 离线下载 · 提交结果','\n\n'.join(results),chat_override=str(chat['id']),force=True)
         return has_share
 
     async def _handle_share(self,text,key,chat):

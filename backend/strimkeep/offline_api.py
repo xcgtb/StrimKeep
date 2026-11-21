@@ -325,16 +325,17 @@ class OfflinePostProcess:
             except (TypeError, ValueError):
                 urls = []
             name = self._url_names(row['urls'])
+            context = json.loads(row['notice_context'])
             heading, body = offline_stalled(self._label(row['target_cid'], row['target_label']),
-                                            len(urls or []), name, context=json.loads(row['notice_context']),
+                                            len(urls or []), name, context=context,
                                             submission_id=row['id'])
-            await self.engine.notifications.publish(
-                key='offline_stalled:%d' % row['id'], title=heading, message=body,
-                level='info', category='offline')
-            with self.store.db:
+            with self.store.transaction(immediate=True):
+                self.engine.notifications.stage_offline(row['id'], 'stalled', heading, body,
+                    telegram_options={'post_url': context.get('post_url', '')})
                 self.store.db.execute('UPDATE offline_submissions SET stalled_at=? WHERE id=?',
                                       (now, row['id']))
-            self.store.event('offline', '离线提交 #%d 超过 10 分钟没下完，已发回执。' % row['id'])
+            await self.engine.notifications.flush_offline(row['id'], 'stalled')
+            self.store.event('offline', '离线提交 #%d 超过 10 分钟没下完，已更新回执。' % row['id'])
             sent += 1
         return sent
 
@@ -345,7 +346,7 @@ class OfflinePostProcess:
         return self.store.directory_label(cid, fallback)
 
     def _set(self, sid, state, message):
-        with self.store.db:
+        with self.store.transaction():
             self.store.db.execute('UPDATE offline_submissions SET state=?,message=?,last_checked=? WHERE id=?',
                                   (state, message, time.time(), sid))
 
@@ -564,10 +565,12 @@ class OfflinePostProcess:
             elif time.time() - finished_seen_at > self.PRODUCT_GRACE_SECONDS:
                 # 115 明确说下载完成：回执照发（产物不在就注明），不静默。
                 # 现场 115 的任务列表里有 20 个 done，目标目录却一个都没多——这种情况很常见。
-                self._set(row['id'], 'completed',
-                          '115 显示下载完成，但产物不在目标目录（可能已被移动或删除）。')
                 names = [str(task['name']) for task in matched if task.get('name')]
-                await self._notify_completed(row, [], task_names=names)
+                with self.store.transaction(immediate=True):
+                    self._stage_completed(row, [], task_names=names)
+                    self._set(row['id'], 'completed',
+                              '115 显示下载完成，但产物不在目标目录（可能已被移动或删除）。')
+                await self.engine.notifications.flush_offline(row['id'], 'completed')
                 self.store.event('offline', '离线提交 #%d：115 显示完成（产物不在目录），已发回执。'
                                  % row['id'])
             else:
@@ -577,15 +580,16 @@ class OfflinePostProcess:
             organize = row['organize']
         except (IndexError, KeyError):
             organize = 1
-        job_id = None
         if not organize or not await self.engine.scan_scope_allows([row['target_cid']]):
             # 只落盘；目标目录不在待整理范围时同样只落盘，不建整理任务。
-            self._set(row['id'], 'completed', '下载完成，本批 %d 项已落盘。' % len(produced))
+            with self.store.transaction(immediate=True):
+                self._stage_completed(row, produced)
+                self._set(row['id'], 'completed', '下载完成，本批 %d 项已落盘。' % len(produced))
         else:
-            job_id = await self._enqueue_organize(row, produced)
-        await self._notify_completed(row, produced, job_id)
+            await self._enqueue_organize(row, produced)
+        await self.engine.notifications.flush_offline(row['id'], 'completed')
 
-    async def _notify_completed(self, row, produced, job_id=None, *, task_names=()):
+    def _stage_completed(self, row, produced, job_id=None, *, task_names=()):
         target = row['target_cid']
         label = self._label(target, row['target_label'])
         parents = {str(entry['parent_id']) for entry in produced if entry.get('parent_id') is not None}
@@ -594,12 +598,12 @@ class OfflinePostProcess:
             actual_label = self._label(next(iter(parents)))
             if actual_label:
                 label, actual = actual_label, True
+        context = json.loads(row['notice_context'])
         heading, body = offline_completed(
-            label, produced, job_id, context=json.loads(row['notice_context']),
+            label, produced, job_id, context=context,
             submission_id=row['id'], task_names=task_names, actual_location=actual)
-        await self.engine.notifications.publish(
-            key='offline_done:%d' % row['id'], title=heading, message=body,
-            level='info', category='offline')
+        self.engine.notifications.stage_offline(row['id'], 'completed', heading, body,
+            telegram_options={'post_url': context.get('post_url', '')})
 
     async def _enqueue_organize(self, row, produced):
         config = self.engine.tasks.config('organize')
@@ -616,7 +620,7 @@ class OfflinePostProcess:
         else:
             config.pop('only_file_ids', None)
         now = time.time()
-        with self.store.db:
+        with self.store.transaction(immediate=True):
             def comparable(value):
                 value = dict(value)
                 value.pop('origin', None)
@@ -637,6 +641,7 @@ class OfflinePostProcess:
             merged = jid is not None
             if jid is None:
                 jid = self.store.jobs.create(json.dumps(config, ensure_ascii=False))
+            self._stage_completed(row, produced, jid)
             self.store.db.execute(
                 'UPDATE offline_submissions SET state=?,message=?,organize_job_id=? WHERE id=?',
                 ('completed', f'下载完成，本批 {len(produced)} 项已{ "合并到" if merged else "加入" }整理任务 #{jid}。', jid, row['id']))

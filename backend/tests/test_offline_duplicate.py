@@ -30,6 +30,9 @@ class Store:
     def set_meta(self, key, value):
         self.values[key] = value
 
+    def transaction(self, **kwargs):
+        return self.db
+
 
 def make_db():
     conn = sqlite3.connect(':memory:')

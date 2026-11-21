@@ -14,6 +14,13 @@ class Notices:
     async def publish(self, *args, **kwargs):
         self.items.append((args, kwargs))
 
+    def stage_offline(self, sid, stage, title, body, **kwargs):
+        self.items.append(((f'offline_receipt:{sid}', title, body), kwargs))
+        return True
+
+    async def flush_offline(self, sid, stage):
+        pass
+
 
 def update(message_id=1, text='/shareorganize'):
     return {'update_id': message_id,

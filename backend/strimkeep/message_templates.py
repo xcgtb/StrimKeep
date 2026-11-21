@@ -119,6 +119,17 @@ def channel_notice(channel, text, queued, mode, target='', count=None, resource_
     return heading, result
 
 
+def offline_submitted(target, count, *, context=None, submission_id=None, omitted=0):
+    context = context or {}
+    heading = ('📡 频道离线下载' if context.get('channel') else '🧲 离线下载') + ' · 已提交'
+    lines = offline_context_lines(context, submission_id)
+    lines.append(f'📂 保存至  {compact(target) or "已配置目录"}')
+    lines.append(f'⏳ {count} 个链接已提交，等待 115 下载')
+    if omitted:
+        lines.append(f'⚠️ {omitted} 个链接超过单次上限')
+    return heading, '\n'.join(lines)
+
+
 def offline_completed(target, produced, job_id=None, *, context=None, submission_id=None,
                       task_names=(), actual_location=True):
     context = context or {}
@@ -132,17 +143,20 @@ def offline_completed(target, produced, job_id=None, *, context=None, submission
             lines.append('📄 115 任务  ' + compact('、'.join(task_names), 180))
         return heading, '\n'.join(lines)
     lines.append(f'📄 已核实落盘  {len(produced)} 项')
+    if job_id:
+        lines.append(f'🎬 整理任务 #{job_id} 已入队')
+    else:
+        lines.append('📥 仅落盘')
     for entry in produced[:8]:
         name = compact(entry.get('name'), 135) or '文件名未返回'
         lines.append(('📁 ' if entry.get('is_dir') else '· ') + name)
     if len(produced) > 8:
         lines.append(f'另有 {len(produced) - 8} 项已落盘')
-    lines.append(f'🎬 整理  任务 #{job_id} 已入队' if job_id else '📥 处理  仅落盘')
     return heading, '\n'.join(lines)
 
 
 def offline_context_lines(context, submission_id):
-    lines = channel_post_lines({**context, 'note': ''})
+    lines = channel_post_lines({**context, 'note': '', 'post_url': ''})
     if context.get('resource_kind'): lines.append('🧲 类型  ' + context['resource_kind'])
     if submission_id is not None: lines.append(f'📋 离线记录  #{submission_id}')
     return lines
@@ -155,7 +169,7 @@ def offline_stalled(target, count, name='', *, context=None, submission_id=None)
     lines = offline_context_lines(context, submission_id)
     lines.append(f'📂 目标  {compact(target) or "已配置目录"}')
     lines.append(f'📄 文件  {compact(name, 70)}' if name else f'🔗 链接  {count} 个')
-    lines.append('👉 到 115 离线列表删掉换源')
+    lines.append('115 仍在下载，可到离线列表核对或换源。')
     return heading, '\n'.join(lines)
 
 

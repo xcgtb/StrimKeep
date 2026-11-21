@@ -26,7 +26,7 @@ from .cloud115 import CloudError
 from . import share_service
 from .share_service import enqueue_organize
 from .transfer import shares as parse_shares
-from .message_templates import channel_notice, channel_post_text
+from .message_templates import channel_notice, channel_post_text, offline_submitted
 from .telegram_security import is_public_poster_url
 
 PREVIEW = 'https://t.me/s/{name}'
@@ -761,14 +761,22 @@ class ChannelMonitor:
         if (session_photo or photo) and not options['spoiler']:
             options['copy_source'] = {'from_chat_id': '@' + name if CHANNEL_NAME.fullmatch(name) else name,
                                       'message_id': message['id']}
-        text = '' if protected else message.get('text', '')
-        heading,body=channel_notice(title or name, text, queued, mode, target, count,
-                                    resource_kind, omitted, context=context,
-                                    submission_id=submission_id, original=True)
-        job_id = queued[0][0] if queued and isinstance(queued[0][0], int) else None
-        task = asyncio.create_task(self.engine.notifications.publish(
-            'channel:%s:%s:%s:%s' % (name, message['id'], mode, resource_kind), heading, body, job_id=job_id,
-            photo=photo, telegram_options=options))
+        notifications = self.engine.notifications
+        if mode == 'offline' and submission_id is not None:
+            heading, body = offline_submitted(target, count, context=context,
+                                              submission_id=submission_id, omitted=omitted)
+            if not notifications.stage_offline(submission_id, 'submitted', heading, body, photo=photo, telegram_options=options):
+                return
+            publish = notifications.flush_offline(submission_id, 'submitted')
+        else:
+            text = '' if protected else message.get('text', '')
+            heading, body = channel_notice(title or name, text, queued, mode, target, count,
+                                          resource_kind, omitted, context=context, original=True)
+            job_id = queued[0][0] if queued and isinstance(queued[0][0], int) else None
+            publish = notifications.publish(
+                'channel:%s:%s:%s:%s' % (name, message['id'], mode, resource_kind), heading, body, job_id=job_id,
+                photo=photo, telegram_options=options)
+        task = asyncio.create_task(publish)
         self.engine.notice_tasks.add(task)
         task.add_done_callback(self.engine.notice_tasks.discard)
 
