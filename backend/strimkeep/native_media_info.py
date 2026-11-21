@@ -14,6 +14,17 @@ from .network import emby_request
 from .store import digest
 
 
+def sync_sidecar_identity(data):
+    if not isinstance(data, dict) or data.get('version') != 1 or data.get('source') != 'ffprobe':
+        return None
+    source = data.get('netdisk_source')
+    if (isinstance(source, dict) and isinstance(source.get('file_id'), str) and source['file_id'].isdigit()
+            and isinstance(source.get('sha1'), str) and re.fullmatch(r'[A-Fa-f0-9]{40}', source['sha1'])
+            and type(source.get('size')) is int and source['size'] > 0):
+        return source
+    return None
+
+
 class NativeMediaInfo:
     # 首次入库的大文件要等 Emby 扫描 + ffprobe 拉 115 直链，重试窗口给足。
     MAX_ATTEMPTS = 8
@@ -330,8 +341,10 @@ class NativeMediaInfo:
                     except Exception:
                         source_size = None
                     break
-        if media is None:
-            return None
+        return self.measured_item(media, source_size, item)
+
+    @staticmethod
+    def measured_item(media, source_size, item):
         if (not isinstance(media, dict) or media.get('estimated') or not media.get('probe_revision')
                 or not isinstance(media.get('codec'), str) or not media['codec']
                 or not isinstance(media.get('width'), (int, float)) or media['width'] <= 0):
@@ -629,7 +642,8 @@ class NativeMediaInfo:
                 data = json.loads(sidecar.read_text(encoding='utf-8') or '{}')
             except (OSError, ValueError):
                 continue
-            if not isinstance(data, dict) or data.get('version') != 1 or 'playback_id' not in data:
+            native = isinstance(data, dict) and data.get('version') == 1 and 'playback_id' in data
+            if not native and not sync_sidecar_identity(data):
                 continue
             try:
                 sidecar.unlink()

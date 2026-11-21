@@ -10,6 +10,7 @@ const open=computed(()=>props.query.trim()?!searchCollapsed.value:expanded.value
 watch(open,value=>{if(value)initialized.value=true},{immediate:true})
 watch(()=>props.query,()=>{searchCollapsed.value=false})
 function toggle(){if(props.query.trim())searchCollapsed.value=!searchCollapsed.value;else expanded.value=!expanded.value}
+defineExpose({expand:()=>{expanded.value=true}})
 </script>
 <template>
 <section v-show="matches" class="setting-card" :class="{expanded:open}">

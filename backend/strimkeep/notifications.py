@@ -786,6 +786,8 @@ class Notifications:
             att_updated = sum(bool(plan.get('sync_attachment_updated')) for items in groups.values() for plan, _ in items)
             lines.extend(['', f'🎬 STRM：新增 {created} 个 · 更新 {updated} 个 · 未变化 {reused} 个',
                           f'核对视频：{len(entries)} 个', f'清理本地：{c.get("sync_removed",0)} 个文件'])
+            if technical_summary := (c.get('sync_technical_stats') or {}).get('summary'):
+                lines.append(technical_summary)
             if att_created or att_updated:
                 lines.append(f'附属文件：写入 {att_created + att_updated} 个（新增 {att_created}、更新 {att_updated}）')
             metadata=list((c.get('sync_metadata_stats') or {}).values())

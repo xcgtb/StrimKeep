@@ -1,8 +1,11 @@
 """NFO 与海报：内容对不对、开关关掉时是否不写、写失败是否影响整理。"""
 import asyncio
+import json
 
+from strimkeep.cloud115 import CloudError
 from strimkeep.metadata_files import build_nfo, build_tvshow_nfo, write_sidecars
-from test_organize import CONFIG, MOVIE, TV, new_job, setup
+from strimkeep.probe import PROBE_REVISION
+from test_organize import CONFIG, MEDIA, MOVIE, TV, new_job, setup
 
 
 def plan_for(details, media_type='movie', season=None, episode=None, episodes=()):
@@ -199,6 +202,66 @@ def test_sync_prefers_cloud_nfo_to_generated_and_source_mode_never_identifies(tm
         assert (target.parent/'poster.jpg').read_bytes()==b'cloud nfo'
         assert not cloud.writes
         await http.aclose();store.close()
+    asyncio.run(run())
+
+
+def test_sync_technical_media_does_not_depend_on_emby_or_replace_scraped_files(tmp_path):
+    async def run():
+        calls = []
+
+        async def probe(url, headers):
+            calls.append(url)
+            if len(calls) == 1:
+                raise CloudError('模拟探测失败', 'PROBE_INCOMPLETE', 422)
+            return {**MEDIA, 'probe_revision': PROBE_REVISION}
+
+        store, cloud, http, engine, requests = setup(tmp_path, probe)
+        store.set_many({'sync_config': {'generate_nfo': True, 'generate_images': True,
+                                       'metadata_extensions': ['.nfo', '.jpg'],
+                                       'emby_media_info': True, 'notify_emby': True}})
+        cloud.nodes['100']['name'] = '外部刮削'
+        cloud.add_video(name='样片.mp4')['sha1'] = 'A' * 40
+        cloud.add_video('1001', '样片.nfo')
+        cloud.add_video('1002', 'poster.jpg')
+        folder = engine.root / '外部刮削'
+        folder.mkdir(parents=True)
+        nfo, poster = folder / '样片.nfo', folder / 'poster.jpg'
+        nfo.write_bytes(b'local nfo')
+        poster.write_bytes(b'local poster')
+        profile = {'id': 'manual', 'name': '外部刮削', 'source_cid': '100',
+                   'mode': 'incremental', 'metadata_mode': 'technical'}
+        config = engine.tasks.sync_profile_config(profile)
+        target = folder / '样片.strm'
+        sidecar = folder / '样片-media-info.json'
+
+        async def sync():
+            job = new_job(store, config)
+            await engine.run_job(job)
+            return engine.job(job)
+
+        first = await sync()
+        assert first['state'] == 'partial' and target.is_file() and not sidecar.exists()
+        assert json.loads(first['config'])['sync_technical_stats']['failed'] == 1
+        second = await sync()
+        assert second['state'] == 'completed'
+        data = json.loads(sidecar.read_text(encoding='utf-8'))
+        assert data['source'] == 'ffprobe'
+        assert data['netdisk_source'] == {'file_id': '1000', 'sha1': 'A' * 40, 'size': 1000}
+        assert [(stream['Type'], stream['Codec']) for stream in data['streams']] == [
+            ('Video', 'hevc'), ('Audio', 'eac3')]
+        third = await sync()
+        assert json.loads(third['config'])['sync_technical_stats']['reused'] == 1
+        assert len(calls) == 2
+        cloud.nodes['1000']['sha1'] = 'B' * 40
+        fourth = await sync()
+        assert json.loads(fourth['config'])['sync_technical_stats']['written'] == 1
+        assert json.loads(sidecar.read_text(encoding='utf-8'))['netdisk_source']['sha1'] == 'B' * 40
+        assert len(calls) == 3
+        assert nfo.read_bytes() == b'local nfo' and poster.read_bytes() == b'local poster'
+        assert not requests and not cloud.writes
+        await http.aclose()
+        store.close()
+
     asyncio.run(run())
 
 

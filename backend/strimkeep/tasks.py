@@ -76,6 +76,9 @@ class Tasks:
             # Keep user-selected subtitles/sidecars and add common pre-existing metadata.
             extras = {'.nfo', '.jpg', '.jpeg', '.png', '.webp'} - set(config['video_extensions'])
             config['metadata_extensions'] = sorted(set(config['metadata_extensions']) | extras)
+        elif config['metadata_mode'] == 'technical':
+            config.update(generate_nfo=False, generate_images=False, emby_media_info=False,
+                          metadata_extensions=[], notify_emby=False)
         labels = profile.get('source_labels') or {profile['source_cid']:profile.get('source_label', profile['source_cid'])}
         config['directory_labels'] = {**config.get('directory_labels', {}), **labels}
         if not incremental:

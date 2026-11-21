@@ -1,146 +1,197 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { nextTick, onActivated, onMounted, ref, watch } from 'vue'
+import { Connection, FolderOpened, Picture, Tickets } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useRoute } from 'vue-router'
 import EmbyMapping from './EmbyMapping.vue'
 import EmbyProxyServers from './EmbyProxyServers.vue'
 import LibraryCovers from './LibraryCovers.vue'
+import SettingCard from './SettingCard.vue'
 
 const props = defineProps<{ api: (path: string, method?: string, body?: unknown) => Promise<any> }>()
 const route = useRoute()
 const mediaSection = ref<HTMLElement>()
-const busy = ref(false)
-const error = ref('')
+const mediaCard = ref<InstanceType<typeof SettingCard>>()
+const connectionBusy = ref('')
+const connectionError = ref('')
 const connections = ref({ emby_url: '', emby_key: '' })
-const mask = ref<any>({})
-const checks = ref<Record<string, string>>({})
+const savedUrl = ref('')
+const mainKeyConfigured = ref(false)
 const connectionRevision = ref(0)
-const media = ref<any>({ enabled: true, extract: true, cron_enabled: false, cron: '0 4 * * *', timezone: 'Asia/Shanghai' })
-const mediaBusy = ref(false)
-const mediaMsg = ref('')
-const mediaStatus = ref<any>(null)
-const mediaFailures = ref<any>(null)
+const mappingRevision = ref(0)
+const media = ref<{ enabled: boolean; extract: boolean; cron_enabled: boolean; cron: string; timezone: string }>()
+const mediaBusy = ref('')
 const mediaError = ref('')
+const diagnosticsBusy = ref(false)
+const diagnosticsError = ref('')
+const mediaStatus = ref<any>()
+const mediaFailures = ref<any>()
 
-async function load() {
-  error.value = ''
-  try {
-    const info: any = await props.api('/settings')
-    connections.value.emby_url = info.emby_url || ''
-    mask.value = info
-  } catch (e) { error.value = (e as Error).message }
-  try { media.value = { ...media.value, ...await props.api('/emby/media-info/config') } }
-  catch (e) { error.value = (e as Error).message }
+function updateConnection(info: { emby_url: string; emby_key_configured: boolean }) {
+  savedUrl.value = info.emby_url || ''
+  mainKeyConfigured.value = info.emby_key_configured
+  connections.value = { emby_url: savedUrl.value, emby_key: '' }
 }
-async function saveConnections() {
-  busy.value = true; error.value = ''
+
+async function loadConnection() {
+  connectionBusy.value = 'load'
+  try { updateConnection(await props.api('/settings')) }
+  catch (e) { connectionError.value = (e as Error).message }
+  finally { connectionBusy.value = '' }
+}
+
+async function saveConnection() {
+  connectionBusy.value = 'save'
+  connectionError.value = ''
   try {
-    const body: any = { emby_url: connections.value.emby_url }
-    if (connections.value.emby_key) body.emby_key = connections.value.emby_key
-    mask.value = await props.api('/settings', 'PUT', body)
-    connections.value.emby_key = ''
+    const { emby_url, emby_key } = connections.value
+    const response = await props.api('/settings', 'PUT', emby_key ? { emby_url, emby_key } : { emby_url })
+    updateConnection(response)
     connectionRevision.value++
-    ElMessage.success('Emby 服务连接已保存')
-  } catch (e) { error.value = (e as Error).message }
-  finally { busy.value = false }
+    ElMessage.success('主 Emby 连接已保存')
+  } catch (e) { connectionError.value = (e as Error).message }
+  finally { connectionBusy.value = '' }
 }
-async function checkEmby() {
-  busy.value = true; checks.value.emby = ''
+
+async function checkConnection() {
+  connectionBusy.value = 'test'
+  connectionError.value = ''
   try {
-    await props.api('/connections/emby/test', 'POST',
-      { emby_url: connections.value.emby_url, emby_key: connections.value.emby_key })
-    checks.value.emby = '填写的地址和密钥（留空时使用已保存的值）连接正常'
-    ElMessage.success('连接正常')
-  } catch (e) { checks.value.emby = (e as Error).message }
-  finally { busy.value = false }
+    await props.api('/connections/emby/test', 'POST', connections.value)
+    ElMessage.success('主 Emby 连接正常')
+  } catch (e) { connectionError.value = (e as Error).message }
+  finally { connectionBusy.value = '' }
 }
+
+async function loadMedia() {
+  try { media.value = await props.api('/emby/media-info/config') }
+  catch (e) { mediaError.value = (e as Error).message }
+}
+
 async function saveMedia() {
-  busy.value = true
-  try {
-    media.value = { ...media.value, ...await props.api('/emby/media-info/config', 'PUT', {
-      enabled: !!media.value.enabled, extract: !!media.value.extract,
-      cron_enabled: !!media.value.cron_enabled, cron: media.value.cron }) }
-    ElMessage.success('媒体信息设置已保存')
-  } catch (e) { error.value = (e as Error).message }
-  finally { busy.value = false }
-}
-async function injectMedia() {
-  mediaBusy.value = true; mediaMsg.value = ''
-  try {
-    const r: any = await props.api('/emby/media-info/inject', 'POST')
-    mediaMsg.value = r.injected ? `已写入 ${r.injected} 条（${r.streams} 条流）` : `没有需要补的条目（候选 ${r.candidates} 条）`
-    ElMessage.success(mediaMsg.value)
-  } catch (e) { mediaMsg.value = (e as Error).message }
-  finally { mediaBusy.value = false }
-}
-async function loadMediaStatus() {
+  if (!media.value) return
+  mediaBusy.value = 'save'
   mediaError.value = ''
   try {
-    const [status, failures] = await Promise.all([
-      props.api('/emby/media-info/status'), props.api('/emby/media-info/failures?limit=200')])
-    mediaStatus.value = status; mediaFailures.value = failures
+    const { enabled, extract, cron_enabled, cron } = media.value
+    media.value = await props.api('/emby/media-info/config', 'PUT', { enabled, extract, cron_enabled, cron })
+    ElMessage.success('媒体信息设置已保存')
   } catch (e) { mediaError.value = (e as Error).message }
+  finally { mediaBusy.value = '' }
 }
+
+async function injectMedia() {
+  mediaBusy.value = 'inject'
+  mediaError.value = ''
+  try {
+    const result = await props.api('/emby/media-info/inject', 'POST')
+    const errors = Number(result.failed || result.failures?.length || 0)
+    if (errors) ElMessage.warning(`已写入 ${result.injected} 条，失败 ${errors} 条`)
+    else ElMessage.success(result.injected ? `已写入 ${result.injected} 条` : '没有需要补写的条目')
+  } catch (e) { mediaError.value = (e as Error).message }
+  finally { mediaBusy.value = '' }
+}
+
+async function loadMediaStatus() {
+  diagnosticsBusy.value = true
+  diagnosticsError.value = ''
+  try {
+    const [status, failures] = await Promise.all([
+      props.api('/emby/media-info/status'), props.api('/emby/media-info/failures?limit=200'),
+    ])
+    mediaStatus.value = status
+    mediaFailures.value = failures
+  } catch (e) { diagnosticsError.value = (e as Error).message }
+  finally { diagnosticsBusy.value = false }
+}
+
+async function revealMedia() {
+  if (route.name !== 'embyproxy' || route.hash !== '#media-info') return
+  mediaCard.value?.expand()
+  await nextTick()
+  mediaSection.value?.scrollIntoView({ block: 'start' })
+}
+
 onMounted(() => {
-  void load()
-  if (route.hash === '#media-info') mediaSection.value?.scrollIntoView()
+  void loadConnection()
+  void loadMedia()
 })
+onActivated(revealMedia)
+watch(() => route.hash, revealMedia, { flush: 'post' })
 </script>
 
-
 <template>
-<div class="page-title"><div><h1>Emby 反代</h1><p class="muted">Emby 服务连接、媒体信息写入、反代播放与路径映射。</p></div></div>
-<el-alert v-if="error" :title="error" type="error" :closable="false" />
-<section class="panel settings-panel"><h2>Emby 服务连接</h2>
-  <el-form label-position="top" :disabled="busy">
-    <el-form-item label="Emby 服务地址"><el-input v-model="connections.emby_url" placeholder="http://192.0.2.10:8096" /></el-form-item>
-    <el-form-item label="Emby API Key"><el-input v-model="connections.emby_key" type="password" autocomplete="new-password" show-password :placeholder="mask.emby_key_configured ? '已保存，留空保留原值' : '填写 API Key'" /></el-form-item>
-  </el-form>
-  <el-button :loading="busy" @click="checkEmby">检查连接</el-button>
-  <span class="hint">{{ checks.emby }}</span>
-  <el-button type="primary" :loading="busy" @click="saveConnections">保存服务连接</el-button>
-  <p class="hint">STRM 播放基础地址不在这里维护，请到「STRM 管理 → 播放地址」。</p>
-</section>
-<LibraryCovers :api="api" :connection-revision="connectionRevision" />
-<section id="media-info" ref="mediaSection" class="panel settings-panel"><h2>媒体信息写入</h2>
-  <p class="hint">总开关关闭后暂停提取、补扫并停止向 Emby 写入媒体信息；已有文件与待处理队列保留。</p>
-  <p class="hint">STRM 同级的 <code>*-media-info.json</code> 是 StrimKeep 生成的媒体信息，Emby 不会直接读取；Emby 只读 NFO 和图片。编码、分辨率、音轨、章节需要写入 Emby 的 library.db。</p>
-  <details class="media-diagnostics" open><summary>先建库还是先整理？立即补写是做什么的？</summary>
-    <p><strong>先建库后整理：</strong>Emby 里已经有这个媒体库时，新条目整理后会自动提取并立即写入 Emby，一般不需要手动补写。</p>
-    <p><strong>先整理后建库：</strong>整理时 Emby 还没有这个库或条目，STRM、NFO、图片和媒体信息 JSON 已经生成，但媒体流没写进 Emby；把目录加入 Emby 媒体库并刷新后，点一次「立即补写」补齐。</p>
-    <p><strong>立即补写：</strong>扫描 Emby 里缺少视频流的 STRM 条目，按同级媒体信息 JSON 写入媒体流和章节；已经有视频流的条目会跳过，即使信息不完整也不会自动覆盖。</p>
-    <p><strong>定时补写：</strong>按 cron 做同样的兜底，适合旧条目、漏写或 Emby 数据库恢复后补齐。</p>
-    <p class="hint">立即补写和定时补写都需要 StrimKeep 容器挂载 Emby 的 data 目录，并配置 STRIMKEEP_EMBY_LIBRARY_DB。</p>
-  </details>
-  <el-form label-position="top" :disabled="busy">
-    <el-form-item label="启用本项目媒体信息处理"><el-switch v-model="media.enabled" /></el-form-item>
-    <el-form-item label="新入库自动提取"><el-switch v-model="media.extract" :disabled="!media.enabled" /></el-form-item>
-    <el-form-item label="定时补写缺失信息">
-      <el-switch v-model="media.cron_enabled" :disabled="!media.enabled" />
-      <el-input v-model="media.cron" :disabled="!media.enabled || !media.cron_enabled" placeholder="0 4 * * *" style="max-width:200px;margin-left:10px" />
-    </el-form-item>
-  </el-form>
-  <p class="hint">定时时区：{{ media.timezone }}</p>
-  <el-button type="primary" :loading="busy" @click="saveMedia">保存媒体信息设置</el-button>
-  <el-button :loading="mediaBusy" :disabled="!media.enabled" @click="injectMedia">立即补写</el-button>
-  <span class="hint">{{ mediaMsg }}</span>
-  <details class="media-diagnostics"><summary>媒体信息写入状态与失败记录</summary>
-    <el-button @click="loadMediaStatus">读取状态</el-button>
-    <el-alert v-if="mediaError" :title="mediaError" type="error" :closable="false" />
-    <template v-if="mediaStatus">
-      <p class="hint">数据库：{{ !mediaStatus.configured ? '未配置' : mediaStatus.exists ? '已找到' : '未找到' }} · 待写入：{{ mediaStatus.pending ?? '暂不可用' }} · 未修复：{{ mediaFailures?.count ?? 0 }}</p>
-      <p v-if="mediaStatus.hint" class="hint">{{ mediaStatus.hint }}</p>
-      <details v-for="row in mediaFailures?.items || []" :key="row.item_id" class="media-failure">
-        <summary>{{ row.name || row.item_id }} · {{ row.reason_text }}</summary>
-        <p class="file-path">{{ row.path }}</p>
+  <div class="page-title"><div><h1>Emby 反代</h1></div></div>
+  <EmbyProxyServers :api="api" :revision="connectionRevision + mappingRevision" />
+
+  <SettingCard title="主 Emby 连接" description="供入库通知、库存读取和媒体库封面使用。" :summary="savedUrl || undefined" :icon="Connection">
+    <el-alert v-if="connectionError" :title="connectionError" type="error" :closable="false" />
+    <el-form label-position="top" :disabled="!!connectionBusy" @submit.prevent="saveConnection">
+      <el-form-item label="Emby 服务地址"><el-input v-model="connections.emby_url" placeholder="http://192.0.2.10:8096" /></el-form-item>
+      <el-form-item label="Emby API Key">
+        <el-input v-model="connections.emby_key" type="password" autocomplete="new-password" show-password
+          :placeholder="mainKeyConfigured ? '已保存，留空保留原值' : '填写 API Key'" />
+      </el-form-item>
+    </el-form>
+    <div class="emby-actions">
+      <el-button :loading="connectionBusy === 'test'" :disabled="!!connectionBusy && connectionBusy !== 'test'" @click="checkConnection">检查连接</el-button>
+      <el-button type="primary" :loading="connectionBusy === 'save'" :disabled="!!connectionBusy && connectionBusy !== 'save'" @click="saveConnection">保存连接</el-button>
+    </div>
+  </SettingCard>
+
+  <SettingCard title="默认路径映射" description="供主 Emby 和沿用默认映射的反代使用。" :icon="FolderOpened">
+    <EmbyMapping :api="api" @saved="mappingRevision++" />
+  </SettingCard>
+
+  <div id="media-info" ref="mediaSection">
+    <SettingCard ref="mediaCard" title="媒体信息写入" :description="media ? (media.enabled ? '已启用' : '已关闭') : undefined"
+      :icon="Tickets" :default-open="route.hash === '#media-info'">
+      <el-alert v-if="mediaError" :title="mediaError" type="error" :closable="false" />
+      <div v-if="media" class="media-settings">
+        <div class="workflow-switch-row"><strong>媒体信息处理</strong><el-switch v-model="media.enabled" :disabled="!!mediaBusy" aria-label="媒体信息处理" /></div>
+        <div class="workflow-switch-row"><strong>新入库自动提取</strong><el-switch v-model="media.extract" :disabled="!media.enabled || !!mediaBusy" aria-label="新入库自动提取" /></div>
+        <div class="workflow-switch-row"><strong>定时补写</strong><el-switch v-model="media.cron_enabled" :disabled="!media.enabled || !!mediaBusy" aria-label="定时补写" /></div>
+        <el-form v-if="media.cron_enabled" class="media-schedule" label-position="top" :disabled="!media.enabled || !!mediaBusy">
+          <el-form-item :label="'Cron · ' + media.timezone"><el-input v-model="media.cron" placeholder="0 4 * * *" /></el-form-item>
+        </el-form>
+        <div class="emby-actions">
+          <el-button :loading="mediaBusy === 'inject'" :disabled="!media.enabled || (mediaBusy !== '' && mediaBusy !== 'inject')" @click="injectMedia">立即补写</el-button>
+          <el-button type="primary" :loading="mediaBusy === 'save'" :disabled="!!mediaBusy && mediaBusy !== 'save'" @click="saveMedia">保存设置</el-button>
+        </div>
+      </div>
+      <details class="emby-details">
+        <summary>补写说明</summary>
+        <p>先在 Emby 添加并扫描媒体库，再补写缺少视频流的 STRM 条目。补写需要挂载 Emby 数据目录并设置 <code>STRIMKEEP_EMBY_LIBRARY_DB</code>。</p>
       </details>
-    </template>
-  </details>
-</section>
-<section class="panel settings-panel"><h2>Emby 反代播放</h2><EmbyProxyServers :api="api" /></section>
-<section class="panel settings-panel"><h2>Emby 路径映射</h2><EmbyMapping :api="api" /></section>
+      <details class="emby-details">
+        <summary>写入状态与失败记录</summary>
+        <el-button :loading="diagnosticsBusy" @click="loadMediaStatus">读取状态</el-button>
+        <el-alert v-if="diagnosticsError" :title="diagnosticsError" type="error" :closable="false" />
+        <template v-if="mediaStatus">
+          <p>数据库 {{ !mediaStatus.configured ? '未配置' : mediaStatus.exists ? '已找到' : '未找到' }} · 待写入 {{ mediaStatus.pending ?? '暂不可用' }} · 未修复 {{ mediaFailures?.count ?? 0 }}</p>
+          <p v-if="mediaStatus.hint">{{ mediaStatus.hint }}</p>
+          <details v-for="row in mediaFailures?.items || []" :key="row.item_id">
+            <summary>{{ row.name || row.item_id }} · {{ row.reason_text }}</summary>
+            <p>{{ row.path }}</p>
+          </details>
+        </template>
+      </details>
+    </SettingCard>
+  </div>
+
+  <SettingCard title="媒体库封面" :icon="Picture">
+    <LibraryCovers :api="api" :connection-revision="connectionRevision" embedded />
+  </SettingCard>
 </template>
 
 <style scoped>
-#media-info { scroll-margin-top: 80px }
+#media-info{scroll-margin-top:84px}
+.emby-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:12px}
+.emby-actions :deep(.el-button){margin:0}
+.emby-details{margin-top:12px;padding-top:10px;border-top:1px solid var(--line);color:var(--muted);font-size:13px;overflow-wrap:anywhere}
+.emby-details summary{cursor:pointer;margin-bottom:7px;width:fit-content}
+.emby-details p{margin:7px 0}
+.media-settings .workflow-switch-row{min-height:46px;padding:7px 0}
+.media-schedule{max-width:285px;margin-top:10px}
+.media-schedule :deep(.el-form-item){margin-bottom:0}
 </style>

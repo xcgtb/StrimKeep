@@ -549,6 +549,120 @@ class Sync:
         if json.dumps(plan, sort_keys=True, ensure_ascii=False) != original_plan:
             self.engine.update_item(row['id'], plan=plan)
 
+    async def probe_technical_item(self, jid, row):
+        from .fsutil import atomic_write, write_once
+        from .media_info_policy import media_info_enabled
+        from .native_media_info import NativeMediaInfo, sync_sidecar_identity
+
+        plan = json.loads(row['plan'])
+        target = self.engine.outputs.path(plan['relative_path'])
+        sidecar = target.with_name(target.stem + '-media-info.json')
+        source = json.loads(row['original'])
+        if target.is_symlink() or sidecar.is_symlink():
+            return 'preserved'
+        output_identity, _ = identity_of_file(target)
+        if not output_identity or output_identity.get('kind') != 'netdisk':
+            raise ValueError('STRM 缺少可核实的网盘身份')
+        if not self.engine.measurements.fingerprint(source) or not source.get('pickcode'):
+            current = await self.cloud.file(source['id'])
+            self.engine.check_source(source, current, source['name'], source['parent_id'])
+            source = current
+        if ((output_identity['file_id'], output_identity['sha1'], output_identity['size'], output_identity['pickcode'])
+                != (str(source['id']), str(source.get('sha1') or '').upper(), source.get('size'), source.get('pickcode'))):
+            raise ValueError('STRM 与云盘源文件身份不一致')
+        identity = {key: output_identity[key] for key in ('file_id', 'sha1', 'size')}
+
+        existing_bytes = None
+        if sidecar.exists():
+            try:
+                existing_bytes = sidecar.read_bytes()
+                existing = json.loads(existing_bytes)
+            except (OSError, ValueError):
+                return 'preserved'
+            owner = sync_sidecar_identity(existing)
+            if not owner:
+                return 'preserved'
+            streams = existing.get('streams')
+            if owner == identity and isinstance(streams, list) and any(
+                isinstance(stream, dict) and stream.get('Type') == 'Video' for stream in streams
+            ):
+                return 'reused'
+
+        media, _, _ = await self.engine.measurements.measure(jid, source)
+        item = NativeMediaInfo.measured_item(media, identity['size'], {})
+        if not item:
+            raise ValueError('未取得有效的视频流')
+        content = (json.dumps({
+            'version': 1, 'source': 'ffprobe', 'netdisk_source': identity,
+            'size': item['Size'], 'duration_ticks': item['RunTimeTicks'], 'bitrate': item['Bitrate'],
+            'streams': item['MediaStreams'], 'chapters': [],
+        }, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+        async with self.engine.publication_gate:
+            self.engine.boundary(jid)
+            if not media_info_enabled(self.store):
+                return 'disabled'
+            current_identity, _ = identity_of_file(target)
+            if target.is_symlink() or current_identity != output_identity:
+                raise ValueError('探测期间 STRM 身份已变化')
+            if existing_bytes is None:
+                return 'written' if write_once(sidecar, content, self.engine.root) else 'preserved'
+            if sidecar.is_symlink() or not sidecar.is_file() or sidecar.read_bytes() != existing_bytes:
+                return 'preserved'
+            atomic_write(sidecar, content, self.engine.root)
+        return 'written'
+
+    async def extract_technical(self, jid):
+        from .core import UncertainState, dumps
+        from .media_info_policy import media_info_enabled
+
+        rows = self.store.db.execute(
+            "SELECT * FROM organize_items WHERE job_id=? AND state='done' ORDER BY id", (jid,)).fetchall()
+        stats = dict.fromkeys(('written', 'reused', 'preserved', 'failed', 'pending'), 0)
+        total = len(rows)
+        next_progress = 0.0
+        for position, row in enumerate(rows):
+            if not media_info_enabled(self.store):
+                stats['pending'] = total - position
+                stats['disabled'] = True
+                break
+            self.engine.boundary(jid)
+            now = time.monotonic()
+            if now >= next_progress:
+                self.engine.update_job(jid, stage=f'提取技术媒体信息 {position + 1}/{total}')
+                next_progress = now + 1.0
+            try:
+                outcome = await self.probe_technical_item(jid, row)
+            except (CloudError, UncertainState, OSError, ValueError, httpx.HTTPError) as exc:
+                source = json.loads(row['original'])
+                if isinstance(exc, CloudError):
+                    reason = exc.code
+                elif isinstance(exc, (UncertainState, ValueError)):
+                    reason = str(exc)[:100]
+                else:
+                    reason = type(exc).__name__
+                self.store.event('sync', f'任务 {jid}：媒体信息提取失败 · {source["name"]} · {reason}')
+                stats['failed'] += 1
+                if isinstance(exc, CloudError) and exc.code in FATAL_CODES:
+                    stats['pending'] = total - position - 1
+                    break
+                continue
+            if outcome == 'disabled':
+                stats['pending'] = total - position
+                stats['disabled'] = True
+                break
+            stats[outcome] += 1
+        parts = [f'写入 {stats["written"]} 个', f'复用 {stats["reused"]} 个']
+        for key, label in (('preserved', '保留原文件'), ('failed', '失败'), ('pending', '待提取')):
+            if stats[key]:
+                parts.append(f'{label} {stats[key]} 个')
+        if stats.get('disabled'):
+            parts.append('媒体信息总开关已关闭')
+        stats['summary'] = '技术媒体信息：' + ' · '.join(parts)
+        config = json.loads(self.engine.job(jid)['config'])
+        config['sync_technical_stats'] = stats
+        self.engine.update_job(jid, config=dumps(config))
+        return stats
+
     # ---- 条目写库批量提交 ----------------------------------------------
     def begin_batch(self):
         self._batch = []
@@ -1106,10 +1220,13 @@ class Sync:
         if config.get('stale_detect'):
             # The task is not complete until this configured check finishes.
             await self.stale_check(jid, config)
+        technical = await self.extract_technical(jid) if config.get('metadata_mode') == 'technical' else {}
         if json.loads(self.engine.job(jid)['config']).get('output_changed') and config.get('notify_emby',True):
             await self.engine.notify_emby(jid)
         self.engine.boundary(jid)
-        partial = bool(warnings) or self.engine.job(jid)['notify_state'] in ('failed','unknown')
+        partial = bool(warnings or technical.get('failed')) or self.engine.job(jid)['notify_state'] in ('failed','unknown')
+        if technical:
+            warnings.append(technical['summary'])
         if not partial and self.store.get('sync_full_due'):
             self.store.set_many({'sync_full_due': 0})
         self.engine.update_job(jid,state='partial' if partial else 'completed',stage='STRM 同步结束',

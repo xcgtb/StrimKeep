@@ -51,7 +51,7 @@ class SyncProfileInput(Input):
     source_cids: list[str] = Field(default_factory=list, max_length=20)
     source_labels: dict[str,str] = Field(default_factory=dict, max_length=20)
     mode: str = Field(pattern='^(incremental|full)$')
-    metadata_mode: str | None = Field(default=None, pattern='^(inherit|source)$')
+    metadata_mode: str | None = Field(default=None, pattern='^(inherit|source|technical)$')
     enabled: bool = False
     frequency: str = Field(default='daily', pattern='^(daily|weekly|interval|cron)$')
     interval_minutes: int = Field(default=60, ge=5, le=43200)

@@ -158,5 +158,9 @@ def test_profile_source_metadata_preserved_for_manual_scheduled_and_legacy_edit(
     legacy = {key:value for key,value in body.items() if key != 'metadata_mode'}
     edited = client.put('/api/v1/sync/profiles/'+created['id'], json=legacy).json()
     assert edited['metadata_mode'] == 'source'
+    technical_profile = client.post('/api/v1/sync/profiles', json={**body, 'metadata_mode': 'technical'}).json()
+    technical = app.state.organizer.tasks.sync_profile_config(technical_profile)
+    assert technical['metadata_mode'] == 'technical'
+    assert not any(technical[key] for key in ('generate_nfo', 'generate_images', 'emby_media_info', 'notify_emby', 'metadata_extensions'))
     assert client.post('/api/v1/sync/profiles', json={**body,'metadata_mode':'invalid'}).status_code == 422
     client.__exit__(None, None, None)

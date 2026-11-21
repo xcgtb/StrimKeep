@@ -2,7 +2,7 @@
 import {onMounted,ref} from 'vue'
 import {ElMessage,ElMessageBox} from 'element-plus'
 import DirectoryPicker from './DirectoryPicker.vue'
-type Profile={id?:string;name:string;source_cid:string;source_label:string;source_cids:string[];source_labels:Record<string,string>;mode:'incremental'|'full';metadata_mode:'inherit'|'source';enabled:boolean;frequency:'daily'|'weekly'|'interval'|'cron';weekday:number;time:string;interval_minutes:number;cron:string;timezone:string;next_due?:number}
+type Profile={id?:string;name:string;source_cid:string;source_label:string;source_cids:string[];source_labels:Record<string,string>;mode:'incremental'|'full';metadata_mode:'inherit'|'source'|'technical';enabled:boolean;frequency:'daily'|'weekly'|'interval'|'cron';weekday:number;time:string;interval_minutes:number;cron:string;timezone:string;next_due?:number}
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>()
 const emit=defineEmits<{navigate:[page:string]}>()
 const profiles=ref<Profile[]>([]),draft=ref<Profile|null>(null),picker=ref(false),busy=ref(false),error=ref('')
@@ -32,7 +32,17 @@ function timing(p:Profile){if(!p.enabled)return '仅手动';if(p.frequency==='in
       <label class="sync-field"><span>任务名称</span><el-input v-model="draft.name" maxlength="80" placeholder="例如：电影库每天增量"/></label>
       <div class="sync-field wide"><span>同步目录（可添加多个）</span><div v-for="id in draft.source_cids" :key="id" class="sync-folder"><span>{{draft.source_labels[id]||id}}</span><el-button text type="danger" @click="removeDirectory(id)">移除</el-button></div><div><el-button @click="picker=true">＋ 添加目录</el-button><span class="sync-directory-tip"> 已添加 {{draft.source_cids.length}} / 20</span></div></div>
       <div class="sync-field"><span>同步方式</span><el-radio-group v-model="draft.mode"><el-radio-button value="incremental">增量同步</el-radio-button><el-radio-button value="full">全量同步</el-radio-button></el-radio-group></div>
-      <div class="sync-field wide"><span>元数据处理</span><el-radio-group v-model="draft.metadata_mode"><el-radio-button value="inherit">沿用全局设置</el-radio-button><el-radio-button value="source">使用网盘已有信息</el-radio-button></el-radio-group><span class="sync-directory-tip">{{draft.metadata_mode==='source'?'不通过 TMDB 生成 NFO 或海报；下载网盘中的 NFO、图片和已选附属文件，保留本地同名文件。':'按 STRM 全局设置同步附属文件及补全 NFO、海报。'}}</span></div>
+      <div class="sync-field wide">
+        <span>元数据处理</span>
+        <el-select v-model="draft.metadata_mode" aria-label="元数据处理">
+          <el-option label="沿用全局设置" value="inherit"/>
+          <el-option label="使用网盘已有信息" value="source"/>
+          <el-option label="STRM + 技术媒体信息" value="technical"/>
+        </el-select>
+        <span v-if="draft.metadata_mode==='technical'" class="sync-directory-tip">直接探测源视频并保存分辨率、编码和音轨。保留本地 NFO 和图片，跳过 Emby 入库通知。</span>
+        <span v-else-if="draft.metadata_mode==='source'" class="sync-directory-tip">下载网盘中的 NFO、图片和已选附属文件，保留本地同名文件。</span>
+        <span v-else class="sync-directory-tip">按全局设置同步附属文件及补全 NFO、海报。</span>
+      </div>
       <div class="sync-field"><span>定时执行</span><div class="sync-switch"><el-switch v-model="draft.enabled"/><span>{{draft.enabled?'已开启':'关闭（仍可手动执行）'}}</span></div></div>
       <template v-if="draft.enabled"><div class="sync-field wide"><span>执行频率</span><el-radio-group v-model="draft.frequency"><el-radio-button value="daily">每天</el-radio-button><el-radio-button value="weekly">每周</el-radio-button><el-radio-button value="interval">间隔</el-radio-button><el-radio-button value="cron">Cron</el-radio-button></el-radio-group></div>
         <div v-if="draft.frequency==='weekly'" class="sync-field"><span>星期</span><el-select v-model="draft.weekday"><el-option v-for="(day,i) in weekdays" :key="i" :label="day" :value="i"/></el-select></div>

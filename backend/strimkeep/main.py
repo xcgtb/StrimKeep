@@ -467,9 +467,8 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         store.set_many(values)
         if 'cloud_throttle' in values:
             app.state.cloud._throttle_cache = None
-        # 改了 Emby 服务连接（上游地址 / Key）要重启所有在跑的反代服务器，让它们换到新上游。
         if ('emby_url' in values or 'emby_key' in values) and getattr(app.state, 'emby_proxy', None):
-            await app.state.emby_proxy.restart_all()
+            await app.state.emby_proxy.refresh_default_connection()
         store.event('settings', '连接配置已保存。')
         return await settings_get()
 

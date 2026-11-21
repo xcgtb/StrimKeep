@@ -26,6 +26,7 @@ interface BatchItem extends Library, Progress {}
 const props = defineProps<{
   api: (path: string, method?: string, body?: unknown) => Promise<any>
   connectionRevision: number
+  embedded?: boolean
 }>()
 const prefix = '/emby/library-covers'
 const scope = ref('')
@@ -166,9 +167,9 @@ useVisiblePolling(pollBatch, 3000)
 </script>
 
 <template>
-  <section id="library-covers" class="panel settings-panel cover-studio">
+  <section id="library-covers" class="cover-studio" :class="{ 'panel settings-panel': !embedded }">
     <header class="studio-header">
-      <div>
+      <div v-if="!embedded">
         <h2>媒体库封面</h2>
         <p class="hint">为 Emby「我的媒体」的多个库统一封面样式。</p>
       </div>

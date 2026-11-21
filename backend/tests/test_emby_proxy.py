@@ -12,10 +12,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
 import pytest
+from fastapi import FastAPI
 
 from strimkeep.cloud115 import CloudError
 from strimkeep.emby_proxy import (Config, EmbyProxyManager, ProxyServer, inject_direct_links,
                                   play_identity, resolve_direct)
+from strimkeep.emby_proxy_api import install_emby_proxy
 
 PLAYCODE_PATH = 'http://192.0.2.10:9000/play115/abcdefg/3556939847706871370/11d1a0a8b2/52428800/%E7%89%87.mkv'
 
@@ -302,6 +304,102 @@ def test_manager_rule_level_config_overrides_service_connection():
     assert (config.upstream, config.api_key, config.port, config.ready) == \
         ('http://10.0.0.9:8096', 'k2', 9010, True)
 
+
+
+def test_proxy_instances_route_to_separate_emby_servers_and_keep_keys_separate():
+    class Backend(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_GET(self):
+            if self.path != self.server.expected_path:
+                self.send_error(404)
+                return
+            key = self.headers.get('X-Emby-Token')
+            if key not in (self.server.api_key, 'player-token'):
+                self.send_error(401)
+                return
+            data = json.dumps({'ServerName': self.server.label, 'Id': self.server.label}).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    first = HTTPServer(('127.0.0.1', 0), Backend)
+    second = HTTPServer(('127.0.0.1', 0), Backend)
+    first.label, first.api_key, first.expected_path = 'Main', 'main-secret', '/emby/System/Info'
+    second.label, second.api_key, second.expected_path = 'Indie', 'second-secret', '/service/emby/System/Info'
+    upstream = 'http://127.0.0.1:%d' % first.server_port
+    other = 'http://127.0.0.1:%d/service/emby' % second.server_port
+    for http in (first, second):
+        threading.Thread(target=http.serve_forever, daemon=True).start()
+    with socket.socket() as a, socket.socket() as b:
+        a.bind(('127.0.0.1', 0))
+        b.bind(('127.0.0.1', 0))
+        ports = [a.getsockname()[1], b.getsockname()[1]]
+
+    async def run():
+        prefix = '/api/v1/emby-proxy'
+        store = FakeStore({'emby_url': upstream, 'emby_key': first.api_key, 'emby_proxy_servers': []})
+        manager = EmbyProxyManager(store, FakeCloud())
+        app = FastAPI()
+        install_emby_proxy(app, store, lambda: True, lambda: manager)
+        try:
+            async with (
+                httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://admin') as api,
+                httpx.AsyncClient(trust_env=False) as player,
+            ):
+                paths = [prefix + '/servers/' + (await api.post(prefix + '/servers')).json()['id'] for _ in ports]
+                response = await api.put(paths[0], json={'port': ports[0]})
+                assert response.status_code == 200
+                response = await api.put(paths[1], json={'port': ports[1], 'upstream': other, 'api_key': second.api_key})
+                assert response.status_code == 200
+                assert first.api_key not in response.text and second.api_key not in response.text
+                assert [s['upstream_override'] for s in response.json()['servers']] == ['', other]
+                for path, port, label in zip(paths, ports, ('Main', 'Indie')):
+                    assert (await api.post(path + '/test')).json()['ok']
+                    assert (await api.post(path + '/enable')).status_code == 200
+                    result = await player.get(f'http://127.0.0.1:{port}/emby/System/Info',
+                                              headers={'X-Emby-Token': 'player-token'})
+                    assert result.json()['ServerName'] == label
+
+                second_id = paths[1].rsplit('/', 1)[1]
+                listener = manager.servers[second_id].server
+                assert (await api.put(paths[1], json={'port': ports[0]})).status_code == 409
+                assert (await api.put(paths[1], json={'name': 'Renamed'})).status_code == 200
+                assert manager.servers[second_id].server is listener
+                draft = await api.post(paths[1] + '/test', json={'upstream': upstream})
+                assert not draft.json()['ok']
+                assert (await api.post(paths[1] + '/test')).json()['ok']
+                response = await api.put(paths[1], json={'upstream': upstream})
+                assert response.status_code == 200
+                assert not response.json()['servers'][1]['api_key_configured']
+                assert not Config(store, manager.find(second_id)).api_key
+                for path in paths:
+                    assert (await api.delete(path)).status_code == 200
+                assert (await api.get(prefix)).json()['servers'] == []
+        finally:
+            await manager.stop_all()
+            store.db.close()
+
+    try:
+        asyncio.run(run())
+    finally:
+        for http in (first, second):
+            http.shutdown()
+            http.server_close()
+
+
+def test_proxy_can_resolve_its_own_strm_mapping(tmp_path, monkeypatch):
+    monkeypatch.setenv('STRIMKEEP_STRM_DIR', str(tmp_path))
+    store = FakeStore({'console_config': {'emby_strm_path': '/main'}})
+    proxy = ProxyServer({'id': 'secondary', 'emby_strm_path': '/secondary/library'}, store, FakeCloud())
+    config = proxy.config()
+    assert proxy._local_strm('/secondary/library/film.strm', config) == str(tmp_path / 'film.strm')
+    assert proxy._local_strm('/main/film.strm', config) == ''
+    assert proxy._local_strm('/secondary/library//film.strm', config) == ''
+    assert proxy._local_strm('/secondary/library/../film.strm', config) == ''
 
 
 def test_port_conflict_only_fails_that_one_server():

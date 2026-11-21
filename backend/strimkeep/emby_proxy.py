@@ -1,4 +1,4 @@
-﻿"""Emby 反代：把 115 直链交给播放器（与「Emby 与飞牛反代」页面的行为一致）。
+﻿"""Emby 反代：把 115 直链交给播放器。
 
 上游的快不来自 STRM 里写的地址，而来自反代：客户端连反代端口 → 反代保留客户端凭据
 转发 Emby 接口 → 在 PlaybackInfo 的返回体里补上 ``MediaSources[*].DirectStreamUrl``，
@@ -7,8 +7,7 @@
 SupportsDirectPlay 一字未改。）客户端于是直接向 CDN 取流：视频不经过 Emby、不经过
 反代、也不经过 frp 隧道。本模块只转发 API 流量（KB 级），视频字节一个都不代理。
 
-形态与设置页一致：**可以有多台反代服务器**，每台一条规则（名称 / 上游 / API Key / 端口 /
-开关），各自独立监听、独立启停、独立播放记录；上游与 Key 留空即沿用「Emby 服务连接」。
+每条规则独立监听，使用主 Emby 连接或专用地址及密钥，并可单独设置 STRM 路径映射。
 """
 import asyncio
 import json
@@ -191,8 +190,8 @@ LEGACY_KEYS = ('emby_proxy_enabled', 'emby_proxy_port', 'emby_proxy_upstream', '
 class Config:
     """一条反代规则的生效配置。
 
-    上游与 API Key 留空即回落到「Emby 服务连接」（`emby_url` / `emby_key`）；
-    环境变量只作用于默认规则，便于容器化部署时不落库。
+    未指定独立上游时使用主 Emby 地址，可沿用其 API Key。
+    环境变量只作用于默认规则。
 
     注意：这里**不读** `emby_proxy_*` 那套老键。它们曾和规则字段并存，导致"设置里
     改了没效果"（页面写规则、旧键还在被读）。现在只在迁移时作为来源读一次。
@@ -211,14 +210,26 @@ class Config:
             return store.get(fallback, '') if fallback else ''
 
         self.port = int(pick('port', 'STRIMKEEP_EMBY_PROXY_PORT', '') or DEFAULT_PORT)
-        self.upstream = str(pick('upstream', 'STRIMKEEP_EMBY_UPSTREAM', 'emby_url') or '').rstrip('/')
-        self.api_key = str(pick('api_key', 'STRIMKEEP_EMBY_KEY', 'emby_key') or '')
+        custom_upstream = pick('upstream', 'STRIMKEEP_EMBY_UPSTREAM')
+        self.upstream = str(custom_upstream or store.get('emby_url') or '').rstrip('/')
+        try:
+            upstream_path = urlsplit(self.upstream).path
+        except ValueError:
+            upstream_path = ''
+        self.emby_prefix = upstream_path.lower().endswith('/emby')
+        self.api_key = str(pick('api_key', 'STRIMKEEP_EMBY_KEY', '' if custom_upstream else 'emby_key') or '')
+        self.strm_path = str(rule.get('emby_strm_path') or strm_mount_path(store, '/media')).rstrip('/')
         enabled = rule.get('enabled')
         if enabled is None:
             flag = str(os.environ.get('STRIMKEEP_EMBY_PROXY', '')).strip().lower() if default else ''
             enabled = flag in ('1', 'true', 'yes', 'on') if flag else bool(self.upstream)
         self.enabled = bool(enabled)
         self.ready = self.enabled and bool(self.upstream)
+
+    def upstream_url(self, path):
+        if self.emby_prefix and (path.lower() == '/emby' or path.lower().startswith('/emby/')):
+            path = path[5:]
+        return self.upstream + path
 
 
 class ProxyServer:
@@ -243,7 +254,7 @@ class ProxyServer:
         return Config(self.store, self.rule)
 
     def running(self):
-        return bool(self.server and self.server.started)
+        return bool(self.server and self.server.started and self.task and not self.task.done())
 
     def event(self, message, throttle=60.0):
         """写操作记录；同类失败按节流合并，避免播放器重连刷屏。"""
@@ -265,18 +276,22 @@ class ProxyServer:
     def _query(self, request, config, inject_key=False):
         return request.url.query
 
-    def _local_strm(self, emby_path):
+    def _local_strm(self, emby_path, config):
         """Emby 给的 /media/... 换成容器里的 /strm/...；越界或不像 STRM 一律拒绝。"""
         if not emby_path or not emby_path.lower().endswith('.strm'):
             return ''
-        emby_root = strm_mount_path(self.store, '/media').rstrip('/')
-        local_root = str(os.environ.get('STRIMKEEP_STRM_DIR') or '/strm').rstrip('/')
+        emby_root = config.strm_path
         if not emby_root or not emby_path.startswith(emby_root + '/'):
             return ''
         relative = emby_path[len(emby_root) + 1:]
-        if not relative or '..' in relative.split('/'):
+        if not relative or relative.startswith('/') or '\0' in relative or '..' in relative.split('/'):
             return ''
-        return os.path.join(local_root, relative)
+        local_root = os.path.realpath(os.environ.get('STRIMKEEP_STRM_DIR') or '/strm')
+        local_path = os.path.realpath(os.path.join(local_root, relative))
+        try:
+            return local_path if os.path.commonpath((local_root, local_path)) == local_root else ''
+        except ValueError:
+            return ''
 
     def _read_strm(self, path):
         """读 STRM 内容（只读开头几 KB）：里面就是 play115 地址。"""
@@ -316,7 +331,7 @@ class ProxyServer:
         body = json.dumps({'EnableDirectPlay': True, 'EnableDirectStream': True})
         try:
             response = await self._ensure_client().post(
-                config.upstream + '/emby/Items/' + item + '/PlaybackInfo',
+                config.upstream_url('/emby/Items/' + item + '/PlaybackInfo'),
                 params=params, headers=headers, content=body, timeout=8.0)
             response.raise_for_status()
             payload = response.json()
@@ -349,7 +364,7 @@ class ProxyServer:
         identity = play_identity(path) if path else None
         if not identity and path:
             # Emby 的 Path 是库里的 .strm 文件（/media/...），真正的 play115 地址在文件内容里。
-            local = self._local_strm(path)
+            local = self._local_strm(path, config)
             if local:
                 identity = play_identity(self._read_strm(local))
         ua = request.headers.get('user-agent', '')
@@ -393,7 +408,7 @@ class ProxyServer:
             body = request.stream()
         else:
             body = await request.body()
-        url = config.upstream + request.url.path
+        url = config.upstream_url(request.url.path)
         if request.url.query:
             url += '?' + self._query(request, config, rewrite)
         started = time.monotonic()
@@ -472,7 +487,7 @@ class ProxyServer:
             await socket.close(code=1008)
             return
         try:
-            parts = urlsplit(config.upstream + socket.url.path)
+            parts = urlsplit(config.upstream_url(socket.url.path))
             if parts.scheme not in ('http', 'https') or not parts.netloc:
                 await socket.close(code=1008)
                 return
@@ -550,7 +565,8 @@ class ProxyServer:
         # 端口自己先绑：uvicorn 在后台任务里绑失败会 sys.exit(3)，SystemExit 会从 Task 抛出
         # 把整个事件循环带崩（实测：整个应用卡在 startup）。先绑一次就不会走到那条路径。
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        option = getattr(socket, 'SO_EXCLUSIVEADDRUSE', socket.SO_REUSEADDR)
+        listener.setsockopt(socket.SOL_SOCKET, option, 1)
         try:
             listener.bind(('0.0.0.0', config.port))
             listener.listen(2048)
@@ -610,6 +626,7 @@ class EmbyProxyManager:
         self.cloud = cloud
         self.metrics = metrics
         self.servers = {}   # rule_id -> ProxyServer
+        self.config_lock = asyncio.Lock()
         self.ensure_table()
 
     # ---------- 存储 ----------
@@ -631,10 +648,8 @@ class EmbyProxyManager:
 
     def rules(self):
         """当前规则列表；老版本只有单台配置时迁移成一条默认规则，并把老键删掉。"""
-        rules = self.store.get(STORAGE_KEY) or []
+        rules = self.store.get(STORAGE_KEY, None)
         if not isinstance(rules, list):
-            rules = []
-        if not rules:
             rules = [self._migrate_legacy()]
             self.save_rules(rules)
         else:
@@ -642,13 +657,16 @@ class EmbyProxyManager:
             self._forget_legacy()
         changed = False
         for index, rule in enumerate(rules):
-            rule.setdefault('id', uuid.uuid4().hex[:12])
+            if not rule.get('id'):
+                rule['id'] = uuid.uuid4().hex[:12]
+                changed = True
             rule.setdefault('name', 'Emby-%d' % (index + 1))
             rule.setdefault('upstream', '')
             rule.setdefault('api_key', '')
             rule.setdefault('port', DEFAULT_PORT)
             rule.setdefault('enabled', False)
-            changed = changed or 'id' not in rules[index]
+        if changed:
+            self.save_rules(rules)
         return rules
 
     def _forget_legacy(self):
@@ -673,9 +691,10 @@ class EmbyProxyManager:
         shared_key = str(self.store.get('emby_key') or '')
         legacy_url = str(self.store.get('emby_proxy_upstream') or '').rstrip('/')
         legacy_key = str(self.store.get('emby_proxy_api_key') or '')
+        custom_url = legacy_url if legacy_url != shared_url else ''
         rule = {'id': uuid.uuid4().hex[:12], 'name': 'Emby-1',
-                'upstream': legacy_url if legacy_url and legacy_url != shared_url else '',
-                'api_key': legacy_key if legacy_key and legacy_key != shared_key else '',
+                'upstream': custom_url,
+                'api_key': legacy_key if custom_url or legacy_key != shared_key else '',
                 'port': int(port), 'enabled': enabled}
         self._forget_legacy()
         return rule
@@ -698,7 +717,10 @@ class EmbyProxyManager:
             result.append({'id': rule['id'], 'name': rule['name'], 'port': config.port,
                            'enabled': bool(rule.get('enabled')), 'running': bool(server and server.running()),
                            'upstream': config.upstream,
-                           'api_key_configured': bool(config.api_key)})
+                           'upstream_override': rule.get('upstream') or '',
+                           'api_key_configured': bool(config.api_key),
+                           'api_key_override_configured': bool(rule.get('api_key')),
+                           'emby_strm_path': rule.get('emby_strm_path') or ''})
         return result
 
 
@@ -718,6 +740,8 @@ class EmbyProxyManager:
         config = Config(self.store, rule)
         if not config.ready:
             await server.stop()
+            return server
+        if server.running() and server.server.config.port == config.port:
             return server
         await server.restart()
         return server
@@ -742,11 +766,12 @@ class EmbyProxyManager:
                                                         for rule in enabled)))
         return self.status()
 
-    async def restart_all(self):
-        """改了 Emby 服务连接（上游地址 / Key）后，所有在跑的服务器都换到新上游。"""
-        for rule in self.rules():
-            await self.apply_rule(rule)
-        return self.status()
+    async def refresh_default_connection(self):
+        """只刷新使用主 Emby 地址的反代。"""
+        async with self.config_lock:
+            for rule in self.rules():
+                if not rule.get('upstream'):
+                    await self.apply_rule(rule)
 
     async def stop_all(self):
         for server in list(self.servers.values()):
@@ -775,32 +800,39 @@ class EmbyProxyManager:
         self.save_rules(rules)
         return rules
 
-    async def test_rule(self, rule_id):
-        """照上游的「测试」：带 API Key 打一次上游 Emby，回报版本与延迟。"""
+    async def test_rule(self, rule_id, overrides=None):
+        """检查指定上游及其 API Key，回报版本与延迟。"""
         rule = self.find(rule_id)
         if rule is None:
             return None
-        config = Config(self.store, rule)
+        config = Config(self.store, {**rule, **(overrides or {})})
         if not config.upstream:
-            return {'ok': False, 'message': '还没有配置 Emby 服务连接：请先在上面填写地址与 API Key。'}
+            return {'ok': False, 'message': '请先配置这条反代的 Emby 服务地址。'}
+        if not config.api_key:
+            return {'ok': False, 'message': '请填写这条反代使用的 Emby API Key。'}
         started = time.monotonic()
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=10.0,
                                                                write=10.0, pool=5.0)) as client:
-                response = await client.get(config.upstream + '/emby/System/Info',
-                                            headers={'X-Emby-Token': config.api_key} if config.api_key else {})
+                paths = [config.upstream_url('/emby/System/Info'), config.upstream_url('/System/Info')]
+                for url in dict.fromkeys(paths):
+                    response = await client.get(url, headers={'X-Emby-Token': config.api_key})
+                    if response.status_code not in (404, 405):
+                        break
             elapsed = (time.monotonic() - started) * 1000
             data = response.json() if response.headers.get('content-type', '').startswith('application/json') else {}
             if response.status_code != 200:
                 return {'ok': False, 'message': 'Emby 返回 HTTP %d' % response.status_code,
                         'latency_ms': round(elapsed)}
+            if not isinstance(data, dict) or not any(data.get(k) for k in ('ServerName', 'Version', 'Id')):
+                return {'ok': False, 'message': '这个地址没有返回有效的 Emby 服务信息。'}
             return {'ok': True, 'latency_ms': round(elapsed),
                     'message': '连接正常：%s %s' % (data.get('ServerName', ''), data.get('Version', ''))}
         except (httpx.HTTPError, ValueError) as exc:
             return {'ok': False, 'message': '连不上 Emby：%s' % type(exc).__name__}
 
     def record_play(self, server, request, filled, outcome, reason=''):
-        """播放记录（对应上游的「播放记录」）：只留必要字段，路径截断。"""
+        """按反代实例记录取链结果，只保存诊断需要的字段。"""
         config = Config(self.store, server.rule)
         try:
             with self.store.db:
