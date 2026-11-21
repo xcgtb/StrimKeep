@@ -15,7 +15,7 @@
 第二位留给成组的跨模块改动，第一位只在破坏性变更时动。
 
 落点：__init__.py（唯一来源）、frontend/package.json、frontend/package-lock.json、
-      docker-compose.yml 的发布通道（ghcr 发布镜像 + dev 本地镜像）、README.md 首行标题。
+      Docker Compose 发布通道和本地构建镜像。
 scripts/deploy_config.py 不落版本，运行时从 __init__.py 读。
 """
 import re
@@ -28,7 +28,6 @@ VERSION_RE = re.compile(r"__version__\s*=\s*'([^']+)'")
 IMAGE_RE = re.compile(r"(?m)^(\s*image:\s*strimkeep(?:-dev)?:)(\S+)[ \t]*$")
 PUBLISHED_RE = re.compile(r"(?m)^\s*image:\s*ghcr\.io/xcgtb/strimkeep:(\S+)\s*$")
 DEV_RE = re.compile(r"(?m)^\s*image:\s*strimkeep:(\S+)\s*$")
-README_RE = re.compile(r"(?m)^#\s*(?:\U0001F3AC\s*)?StrimKeep\s+([\w.\-]+)$")
 FIELD_RE = re.compile(r'("version"\s*:\s*")([^"]+)(")')
 
 # (文件, 只取前几处 version) —— package-lock 后面全是依赖版本，不能一起动。
@@ -84,16 +83,7 @@ def packages_drift(version, write=False):
     return drift
 
 
-def readme_drift(version, write=False):
-    path = ROOT / 'README.md'
-    old, _ = _rewrite(path, README_RE, lambda m: f'# \U0001F3AC StrimKeep {version}', write, 1)
-    match = README_RE.search(old)
-    if match and match.group(1) != version:
-        return [f'README.md 标题是 {match.group(1)}']
-    return []
-
-
-CHECKS = (compose_drift, packages_drift, readme_drift)
+CHECKS = (compose_drift, packages_drift)
 
 
 def check(version=None):
@@ -161,8 +151,7 @@ def main(argv):
         for item in problems:
             print('  -', item)
         return 1
-    print(f'已刷成 {version}：__init__.py、package.json、package-lock.json、'
-          f'docker-compose.yml 通道、README.md')
+    print(f'已刷成 {version}：__init__.py、package.json、package-lock.json；已核对 Compose 通道。')
     return 0
 
 

@@ -38,3 +38,24 @@ def test_update_restores_missing_defaults_but_keeps_explicit_custom_settings():
     preserved=module.convert(custom)
     assert 'init: false' in preserved and 'max-size: 5m' in preserved
     assert 'max-file: "8"' in preserved
+
+
+def test_update_keeps_env_file_and_compose_variable_references(tmp_path):
+    env = tmp_path / '.env'
+    original = 'ADMIN_PASSWORD=example-password\n'
+    env.write_text(original, encoding='utf-8')
+    model = {
+        'services': {
+            'strimkeep': {
+                'env_file': [{'path': '.env', 'required': True}],
+                'environment': {'ADMIN_PASSWORD': '${ADMIN_PASSWORD:?set password}', 'OTHER': '$$literal'},
+                'volumes': [{'type': 'volume', 'source': '${STRM_ROOT:-./strm}', 'target': '/strm', 'volume': {}}],
+            },
+        },
+    }
+    rendered = converter().convert(model, env, preserve_interpolation=True)
+    assert 'path: .env' in rendered
+    assert 'ADMIN_PASSWORD=${ADMIN_PASSWORD:?set password}' in rendered
+    assert 'OTHER=$$literal' in rendered
+    assert '- "${STRM_ROOT:-./strm}:/strm"' in rendered
+    assert env.read_text(encoding='utf-8') == original

@@ -1,0 +1,14 @@
+services:
+  emby_strimkeep:
+    image: emby/embyserver:latest
+    container_name: emby_strimkeep
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      UID: "0"
+      GID: "0"
+    ports:
+      - "8100:8096"
+    volumes:
+      - ./emby:/config
+      - ./strm:/media
