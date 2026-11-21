@@ -12,7 +12,7 @@ from PIL import Image
 
 from strimkeep import commands
 from strimkeep.library_cover_image import COVER_LAYOUTS, SIZE, render_cover
-from strimkeep.library_covers import CoverSettings, LibraryCovers, install_library_covers
+from strimkeep.library_covers import CoverStudio, LibraryCovers, install_library_covers
 from strimkeep.store import Store
 from strimkeep.worker import command_loop
 
@@ -25,7 +25,7 @@ class Emby:
         self.uploads = []
         self.searches = []
         self.tag = 'current-tag'
-        self.cover = image_bytes((320, 180))
+        self.poster_reads = 0
         self.poster = image_bytes((180, 270))
         self.on_upload = None
 
@@ -48,10 +48,10 @@ class Emby:
             ] if parents['ParentId'] == '21' else []})
         if path == '/Items/800/Images/Primary' and request.method == 'GET':
             assert request.url.params['Tag'] == self.tag
+            self.poster_reads += 1
             return httpx.Response(200, content=self.poster)
         if path in ('/Items/21/Images/Primary', '/Items/76/Images/Primary'):
-            if request.method == 'GET':
-                return httpx.Response(200, content=self.cover)
+            assert request.method == 'POST'
             assert request.headers['content-type'] == 'image/jpeg'
             data = base64.b64decode(request.content, validate=True)
             assert Image.open(BytesIO(data)).size == SIZE
@@ -74,7 +74,7 @@ def make_store(tmp_path):
     return store
 
 
-def test_cover_previews_do_not_write_and_worker_applies_exact_library_image(tmp_path):
+def test_gallery_reuses_real_posters_and_single_library_write_routes_are_removed(tmp_path):
     async def run():
         store = make_store(tmp_path)
         emby = Emby()
@@ -88,46 +88,27 @@ def test_cover_previews_do_not_write_and_worker_applies_exact_library_image(tmp_
         async with (httpx.AsyncClient(transport=httpx.MockTransport(emby)) as upstream,
                     httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://app') as client):
             app.state.http = upstream
-            app.state.organizer = SimpleNamespace(web_only=True)
-            store.set_meta('worker_heartbeat', {'at': time.time()})
             listing = (await client.get(ROOT)).json()
             scope = listing['scope']
             assert [item['id'] for item in listing['items']] == ['21', '76']
-            assert not any(item['settings']['enabled'] for item in listing['items'])
-            current = await client.get(ROOT + '/21/current', params={'scope': scope})
-            assert current.content == emby.cover and current.headers['cache-control'] == 'no-store'
+            assert listing['settings']['library_ids'] == ['21', '76']
+            assert not listing['settings']['enabled']
 
-            settings = {'scope': scope, 'title': '测试片库', 'layout': 'grid', 'posters': 4}
-            saved = await client.put(ROOT + '/21/settings', json=settings)
-            assert saved.json()['settings']['title'] == '测试片库'
-            generated = (await client.post(ROOT + '/21/preview', json=settings)).json()
+            options = {'scope': scope, 'library_id': '21', 'layouts': list(COVER_LAYOUTS)}
+            generated = (await client.post(ROOT + '/gallery', json=options)).json()
             assert generated['poster_count'] == 1
-            assert Image.open(BytesIO(base64.b64decode(generated['image']))).size == SIZE
-            empty = (await client.post(ROOT + '/76/preview', json=settings)).json()
-            assert empty['poster_count'] == 0 and empty['image'] != generated['image']
-            uploaded = (await client.post(ROOT + '/21/upload-preview', json={
-                'scope': scope, 'image': base64.b64encode(image_bytes((300, 300), 'PNG')).decode()})).json()
-            exact = base64.b64decode(uploaded['image'])
-            assert Image.open(BytesIO(exact)).size == SIZE
-            assert not emby.uploads
-            assert (await client.post(ROOT + '/800/apply', json={'scope': scope, **uploaded})).status_code == 409
-            result = await client.post(ROOT + '/21/apply', json={'scope': scope, **uploaded})
-            assert result.status_code == 200 and result.json()['state'] == 'queued'
-            assert (await client.post(ROOT + '/21/apply', json={'scope': scope, **uploaded})).status_code == 409
-            stop = asyncio.Event()
-            emby.on_upload = stop.set
-            service = LibraryCovers(store, upstream)
-            await asyncio.wait_for(command_loop(store, SimpleNamespace(library_covers=service),
-                                                stop, commands.COVER_OPERATIONS), timeout=5)
-            assert emby.uploads == [('/Items/21/Images/Primary', exact)]
-            row = commands.get(store, result.json()['command_id'])
-            assert row['state'] == 'done' and 'image' not in json.loads(row['payload'])
-            status = (await client.get(ROOT + '/21/status', params={'scope': scope})).json()
-            assert status['last']['applied_at'] and status['state'] == 'done'
+            assert [item['id'] for item in generated['items']] == list(COVER_LAYOUTS)
+            assert emby.searches == ['21'] and emby.poster_reads == 1
+            for item in generated['items']:
+                with Image.open(BytesIO(base64.b64decode(item['image']))) as image:
+                    assert image.size == (640, 360)
+            for route in ('/21/apply', '/21/upload-preview'):
+                assert (await client.post(ROOT + route, json={})).status_code == 404
+            assert (await client.put(ROOT + '/21/settings', json={})).status_code == 404
+            assert not emby.uploads and commands.running(store) is None
 
             store.set_many({'emby_url': 'http://127.0.0.1:8097'})
-            assert (await client.post(ROOT + '/21/preview', json=settings)).status_code == 409
-            assert (await client.get(ROOT)).json()['items'][0]['settings']['title'] == ''
+            assert (await client.post(ROOT + '/gallery', json=options)).status_code == 409
         store.close()
 
     asyncio.run(run())
@@ -140,8 +121,11 @@ def test_daily_refresh_uses_saved_schedule_and_skips_unchanged_cover(tmp_path):
         async with httpx.AsyncClient(transport=httpx.MockTransport(emby)) as upstream:
             covers = LibraryCovers(store, upstream)
             scope = covers.connection()[2]
-            covers.save(scope, '21', CoverSettings(enabled=True, daily_at='04:00'))
-            covers.save(scope, '76', CoverSettings(enabled=False))
+            store.set_many({'emby_library_covers': {scope: {
+                '21': {'enabled': True, 'daily_at': '04:00'},
+                '76': {'enabled': False},
+            }}})
+            assert covers.studio(scope).library_ids == ['21']
             assert covers.schedule(datetime(2026, 11, 21, 3, 59)) == 0
 
             async def refresh(day):
@@ -159,7 +143,7 @@ def test_daily_refresh_uses_saved_schedule_and_skips_unchanged_cover(tmp_path):
             assert len(emby.uploads) == 1
             assert '没有变化' in (await refresh(22))['message']
             assert len(emby.uploads) == 1
-            covers.save(scope, '21', CoverSettings(title='New title', enabled=True, daily_at='04:00'))
+            covers.save_studio(scope, CoverStudio(library_ids=['21'], layout='hero', enabled=True, daily_at='04:00'))
             await refresh(23)
             assert len(emby.uploads) == 2 and emby.uploads[0][1] != emby.uploads[1][1]
             assert emby.searches == ['21', '21', '21']
@@ -175,14 +159,15 @@ def test_templates_produce_distinct_valid_covers():
         Image.new('RGB', (175, 260), color).save(buffer, 'JPEG')
         posters.append(buffer.getvalue())
     images = [render_cover('A Media Library', 'Recently added', '#426bad', style, posters) for style in COVER_LAYOUTS]
-    assert len(images) == len(set(images)) == 8
+    assert len(images) == len(set(images)) == 12
     for image in images:
         with Image.open(BytesIO(image)) as photo:
             assert photo.size == SIZE and photo.format == 'JPEG'
-    assert images[-1] == render_cover('A Media Library', 'Recently added', '#426bad', 'minimal', [])
+    assert images[list(COVER_LAYOUTS).index('minimal')] == render_cover(
+        'A Media Library', 'Recently added', '#426bad', 'minimal', [])
 
 
-def test_batch_applies_only_selected_library_covers_and_keeps_saved_styles(tmp_path):
+def test_batch_uses_one_style_for_selected_libraries_and_saves_it_for_the_schedule(tmp_path):
     async def run():
         store = make_store(tmp_path)
         emby = Emby()
@@ -200,8 +185,8 @@ def test_batch_applies_only_selected_library_covers_and_keeps_saved_styles(tmp_p
             assert {style['id'] for style in listing['layouts']} == set(COVER_LAYOUTS)
             scope = listing['scope']
             covers = LibraryCovers(store, upstream)
-            covers.save(scope, '21', CoverSettings(layout='grid', title='My TV'))
-            data = {'scope': scope, 'library_ids': ['21', '76', '21'], 'layout': 'minimal'}
+            data = {'scope': scope, 'library_ids': ['21', '76', '21'], 'layout': 'minimal',
+                    'color': '#446699', 'enabled': True, 'daily_at': '06:30'}
             invalid = await client.post(ROOT + '/batch', json={**data, 'library_ids': ['21', '800']})
             assert invalid.status_code == 409 and commands.running(store) is None
             submitted = (await client.post(ROOT + '/batch', json=data)).json()['items']
@@ -210,6 +195,8 @@ def test_batch_applies_only_selected_library_covers_and_keeps_saved_styles(tmp_p
             second_batch = (await client.post(ROOT + '/batch', json=data)).json()['items']
             assert all(item['state'] == 'skipped' for item in second_batch)
             ids = [item['command_id'] for item in submitted]
+            assert all(json.loads(commands.get(store, command_id)['payload'])['style'] ==
+                       {'layout': 'minimal', 'color': '#446699', 'posters': 6} for command_id in ids)
             params = {'scope': scope, 'command_ids': ','.join(map(str, ids))}
             waiting = (await client.get(ROOT + '/batch-status', params=params)).json()['items']
             assert all(item['state'] == 'queued' for item in waiting)
@@ -228,8 +215,9 @@ def test_batch_applies_only_selected_library_covers_and_keeps_saved_styles(tmp_p
             assert all(item['state'] == 'done' and item['outcome'] == 'updated' for item in done)
             assert [target for target, _ in emby.uploads] == ['/Items/21/Images/Primary', '/Items/76/Images/Primary']
             assert not emby.searches
-            assert covers.settings(scope, '21').layout == 'grid'
-            assert covers.settings(scope, '21').title == 'My TV'
+            assert len({image for _, image in emby.uploads}) == 2
+            saved = (await client.get(ROOT)).json()['settings']
+            assert (saved['layout'], saved['daily_at'], saved['library_ids']) == ('minimal', '06:30', ['21', '76'])
         store.close()
 
     asyncio.run(run())

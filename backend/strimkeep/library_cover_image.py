@@ -3,12 +3,13 @@ from io import BytesIO
 from pathlib import Path
 from typing import Literal
 
-from PIL import Image, ImageColor, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 
 SIZE = (1280, 720)
 MAX_IMAGE_BYTES = 2 * 1024 * 1024
-CoverLayout = Literal['collage', 'grid', 'hero', 'filmstrip', 'stack', 'magazine', 'panorama', 'minimal']
+CoverLayout = Literal['collage', 'grid', 'hero', 'filmstrip', 'stack', 'magazine', 'panorama', 'minimal',
+                      'gallery', 'arc', 'split', 'soft']
 COVER_LAYOUTS = {
     'collage': ('斜向拼贴', 9),
     'grid': ('整齐网格', 9),
@@ -18,6 +19,10 @@ COVER_LAYOUTS = {
     'magazine': ('杂志拼版', 7),
     'panorama': ('全幅海报', 1),
     'minimal': ('极简标题', 0),
+    'gallery': ('横向画廊', 7),
+    'arc': ('弧形陈列', 7),
+    'split': ('斜切海报', 1),
+    'soft': ('柔焦背景', 1),
 }
 FONTS = (
     '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
@@ -48,10 +53,6 @@ def fit_image(image, size):
     return ImageOps.fit(image, size, Image.Resampling.LANCZOS)
 
 
-def normalize_upload(data):
-    return jpeg(fit_image(open_image(data), SIZE))
-
-
 def _font(size):
     path = next((name for name in FONTS if Path(name).is_file()), None)
     return ImageFont.truetype(path, size) if path else ImageFont.load_default(size=size)
@@ -72,11 +73,7 @@ def _title_lines(text, font, width, max_lines=2):
     return lines
 
 
-def _classic_cover(title, subtitle, color, layout, posters):
-    accent = ImageColor.getrgb(color)
-    end = tuple(round(v * .58) for v in accent)
-    shade = Image.linear_gradient('L').rotate(90).resize(SIZE)
-    canvas = Image.composite(Image.new('RGB', SIZE, end), Image.new('RGB', SIZE, '#101725'), shade).convert('RGBA')
+def _classic_cover(canvas, title, subtitle, accent, layout, posters):
     if posters:
         grid = layout == 'grid'
         tiles = Image.new('RGBA', (540, 648) if grid else (790, 830))
@@ -86,14 +83,14 @@ def _classic_cover(title, subtitle, color, layout, posters):
         for i, blob in enumerate(posters):
             row, column = divmod(i, 3)
             x, y = (column * 153, row * 219) if grid else (94 + column * 178 + row * 40, 22 + row * 258)
-            tiles.paste(fit_image(open_image(blob), mask.size), (x, y), mask)
+            tiles.paste(fit_image(blob, mask.size), (x, y), mask)
         if not grid:
             tiles = tiles.rotate(10, resample=Image.Resampling.BICUBIC, expand=True)
         canvas.alpha_composite(tiles, (724, 38) if grid else (452, -102))
     else:
         artwork = ImageDraw.Draw(canvas)
         artwork.rounded_rectangle((786, 154, 1160, 566), radius=45, outline=accent, width=4)
-        artwork.rounded_rectangle((824, 192, 1122, 528), radius=32, outline=end, width=3)
+        artwork.rounded_rectangle((824, 192, 1122, 528), radius=32, outline=accent, width=2)
 
     draw = ImageDraw.Draw(canvas)
     title_font = _font(69)
@@ -104,7 +101,7 @@ def _classic_cover(title, subtitle, color, layout, posters):
         draw.text((72, first_y + 86 * i), line, font=title_font, fill='#ffffff')
     if subtitle:
         draw.text((75, first_y + 86 * len(lines) + 18), subtitle, font=_font(31), fill='#d9e1f0')
-    return jpeg(canvas.convert('RGB'))
+    return canvas
 
 
 def _card(canvas, poster, box, radius=12, angle=0):
@@ -137,28 +134,63 @@ def _title(canvas, title, subtitle, accent, x, y, width, *, centered=False):
     lines = _title_lines(title, font, width)
     anchor = 'mt' if centered else 'lt'
     origin = x - 27 if centered else x
-    draw.rounded_rectangle((origin, y - 24, origin + 54, y - 17), 4, fill=accent)
+    draw.rounded_rectangle((origin, y - 22, origin + 54, y - 16), 3, fill=accent)
     for i, line in enumerate(lines):
-        draw.text((x, y + i * 82), line, font=font, fill='white', anchor=anchor)
+        draw.text((x, y + i * 82), line, font=font, fill='white', anchor=anchor,
+                  stroke_width=1, stroke_fill='#eff0f4')
     if subtitle:
         text = _title_lines(subtitle, small, width, max_lines=1)[0]
         draw.text((x, y + 82 * len(lines) + 12), text, font=small, fill='#e3e8f2', anchor=anchor)
 
 
-def render_cover(title, subtitle, color, layout, posters):
-    if layout in ('collage', 'grid'):
-        return _classic_cover(title, subtitle, color, layout, posters)
-
-    accent = ImageColor.getrgb(color)
+def _cover_background(accent, posters):
     tint = tuple(round(v * .53) for v in accent)
     shade = Image.linear_gradient('L').rotate(90).resize(SIZE)
-    canvas = Image.composite(Image.new('RGB', SIZE, tint), Image.new('RGB', SIZE, '#101625'), shade).convert('RGBA')
-    posters = [open_image(blob) for blob in posters[:COVER_LAYOUTS[layout][1]]]
+    ground = Image.composite(Image.new('RGB', SIZE, tint), Image.new('RGB', SIZE, '#0c0f17'), shade)
+    if posters:
+        base = fit_image(posters[0], (160, 90)).filter(ImageFilter.GaussianBlur(13)).resize(SIZE, Image.Resampling.BICUBIC)
+        ground = Image.blend(ground, base, .30)
+    return ground.convert('RGBA')
 
-    if layout == 'minimal' or not posters:
+
+def _display_row(canvas, posters, *, curved=False):
+    width = min(190, 1090 // len(posters))
+    mid = (len(posters) - 1) / 2
+    for i in sorted(range(len(posters)), key=lambda idx: -abs(idx - mid)):
+        offset = i - mid
+        gain = abs(offset) / max(1, mid)
+        card_width = round(width * (1.13 - .23 * gain))
+        if curved:
+            x, y, angle = 640 + offset * width * .82, 318 + round(65 * gain), round(-offset * 5)
+        else:
+            x, y, angle = 640 + offset * width, 332 + round(42 * gain), 0
+        _card(canvas, posters[i], (round(x - card_width / 2), y, card_width, round(card_width * 1.51)),
+              radius=12, angle=angle)
+
+
+def render_cover(title, subtitle, color, layout, posters, *, size=SIZE):
+    accent = ImageColor.getrgb(color)
+    posters = [open_image(blob) for blob in posters[:COVER_LAYOUTS[layout][1]]]
+    canvas = _cover_background(accent, posters)
+
+    if layout in ('collage', 'grid'):
+        canvas = _classic_cover(canvas, title, subtitle, accent, layout, posters)
+    elif layout in ('minimal', 'soft') or not posters:
         draw = ImageDraw.Draw(canvas)
-        draw.rounded_rectangle((52, 49, 1228, 671), radius=26, outline=accent, width=2)
+        if layout == 'minimal':
+            draw.rounded_rectangle((52, 49, 1228, 671), radius=26, outline=accent, width=2)
         _title(canvas, title, subtitle, accent, 640, 319 if len(title) < 12 else 268, 1064, centered=True)
+    elif layout in ('gallery', 'arc'):
+        _display_row(canvas, posters, curved=layout == 'arc')
+        _title(canvas, title, subtitle, accent, 640, 96, 1120, centered=True)
+    elif layout == 'split':
+        art = Image.new('RGBA', SIZE)
+        art.paste(fit_image(posters[0], (768, 720)).convert('RGBA'), (512, 0))
+        mask = Image.new('L', SIZE)
+        ImageDraw.Draw(mask).polygon([(700, 0), (1280, 0), (1280, 720), (512, 720)], fill=255)
+        art.putalpha(mask)
+        canvas.alpha_composite(art)
+        _title(canvas, title, subtitle, accent, 68, 251, 438)
     elif layout == 'filmstrip':
         _poster_row(canvas, posters, accent)
         _title(canvas, title, subtitle, accent, 70, 505, 1140)
@@ -185,4 +217,5 @@ def render_cover(title, subtitle, color, layout, posters):
             _card(canvas, poster, (908 + col * 170, 58 + row * 205, 156, 192), radius=9)
         _title(canvas, title, subtitle, accent, 68, 174, 450)
 
-    return jpeg(canvas.convert('RGB'))
+    image = canvas.convert('RGB')
+    return jpeg(image if size == SIZE else image.resize(size, Image.Resampling.LANCZOS))

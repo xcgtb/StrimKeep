@@ -10,68 +10,58 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import httpx
-from fastapi import Depends, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from fastapi import Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import commands
 from .emby_connection import saved_base
 from .library_cover_image import (
-    COVER_LAYOUTS, MAX_IMAGE_BYTES, SIZE, CoverLayout, normalize_upload, open_image, render_cover,
+    COVER_LAYOUTS, MAX_IMAGE_BYTES, CoverLayout, open_image, render_cover,
 )
 from .network import emby_request
 
 
-MAX_COVER_REQUEST = 3 * 1024 * 1024
 LIBRARY_ID = re.compile(r'[A-Za-z0-9_-]{1,128}')
-SETTINGS_KEY = 'emby_library_covers'
+SETTINGS_KEY = 'emby_cover_studio'
+LEGACY_SETTINGS_KEY = 'emby_library_covers'
 
 
 class CoverError(ValueError):
     pass
 
 
-class CoverSettings(BaseModel):
+class CoverStyle(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
-    title: str = Field('', max_length=48)
-    subtitle: str = Field('', max_length=30)
     layout: CoverLayout = 'collage'
     color: str = Field('#287e9c', pattern=r'^#[0-9a-fA-F]{6}$')
     posters: int = Field(6, ge=3, le=9)
+
+
+class QueuedCoverSettings(CoverStyle):
+    title: str = Field('', max_length=48)
+    subtitle: str = Field('', max_length=30)
     enabled: bool = False
     daily_at: str = Field('04:00', pattern=r'^(?:[01]\d|2[0-3]):[0-5]\d$')
 
 
-class ScopedSettings(CoverSettings):
+class CoverStudio(CoverStyle):
+    library_ids: list[str] = Field(default_factory=list, max_length=100)
+    enabled: bool = False
+    daily_at: str = Field('04:00', pattern=r'^(?:[01]\d|2[0-3]):[0-5]\d$')
+
+
+class ScopedStudio(CoverStudio):
     scope: str
 
 
-class CoverImage(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    scope: str
-    image: str = Field(min_length=4, max_length=((MAX_IMAGE_BYTES + 2) // 3) * 4)
-
-
-class CoverBatch(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    scope: str
+class CoverBatch(ScopedStudio):
     library_ids: list[str] = Field(min_length=1, max_length=100)
-    layout: CoverLayout | None = None
 
 
-def is_cover_image_request(path):
-    return bool(re.fullmatch(r'/api/v1/emby/library-covers/[A-Za-z0-9_-]{1,128}/(?:upload-preview|apply)', path))
-
-
-async def image_input(request):
-    body = bytearray()
-    async for chunk in request.stream():
-        if len(body) + len(chunk) > MAX_COVER_REQUEST:
-            raise HTTPException(413, '图片请求过大。')
-        body.extend(chunk)
-    try:
-        return CoverImage.model_validate_json(body)
-    except ValidationError as exc:
-        raise HTTPException(422, '图片或媒体库参数无效。') from exc
+class CoverGallery(CoverStyle):
+    scope: str
+    library_id: str
+    layouts: list[CoverLayout] = Field(min_length=1, max_length=len(COVER_LAYOUTS))
 
 
 def decode_image(image):
@@ -100,16 +90,20 @@ class LibraryCovers:
             raise CoverError('Emby 连接已变更，请重新读取媒体库。')
         return (*pair, scope)
 
-    def load_settings(self, scope):
-        return (self.store.get(SETTINGS_KEY, {}) or {}).get(scope) or {}
+    def studio(self, scope, default_ids=()):
+        saved = (self.store.get(SETTINGS_KEY, {}) or {}).get(scope)
+        if saved is not None:
+            return CoverStudio.model_validate(saved)
+        legacy = (self.store.get(LEGACY_SETTINGS_KEY, {}) or {}).get(scope) or {}
+        enabled_ids = [key for key, value in legacy.items() if value.get('enabled')]
+        first = legacy[enabled_ids[0]] if enabled_ids else next(iter(legacy.values()), {})
+        common = {key: first[key] for key in (*CoverStyle.model_fields, 'daily_at') if key in first}
+        return CoverStudio(**common, enabled=bool(enabled_ids), library_ids=list(enabled_ids or default_ids)[:100])
 
-    def settings(self, scope, library_id):
-        return CoverSettings.model_validate(self.load_settings(scope).get(library_id) or {})
-
-    def save(self, scope, library_id, settings):
+    def save_studio(self, scope, settings):
         with self.store.transaction(immediate=True):
             values = self.store.get(SETTINGS_KEY, {}) or {}
-            values.setdefault(scope, {})[library_id] = settings.model_dump(exclude={'scope'})
+            values[scope] = settings.model_dump(exclude={'scope'})
             self.store.set_many({SETTINGS_KEY: values})
 
     def status(self, scope, library_id):
@@ -184,8 +178,7 @@ class LibraryCovers:
             return response.content
         return None
 
-    async def poster_choices(self, pair, library, settings):
-        limit = min(settings.posters, COVER_LAYOUTS[settings.layout][1])
+    async def poster_choices(self, pair, library, limit):
         if not limit:
             return []
         data = await self.json(pair, '/Items', {'ParentId': library['id'], 'Recursive': 'true',
@@ -207,17 +200,8 @@ class LibraryCovers:
                     break
         return choices
 
-    async def generate(self, pair, library, settings, previous=''):
-        title = settings.title or library['name']
-        subtitle = settings.subtitle or {'movies': 'MOVIES', 'tvshows': 'TV SHOWS'}.get(library['type'], '')
-        choices = await self.poster_choices(pair, library, settings)
-        signature = hashlib.sha256(json.dumps(
-            [title, subtitle, settings.color, settings.layout, choices], ensure_ascii=False).encode()).hexdigest()
-        if previous == signature:
-            return None, signature, len(choices)
-        # Fetch one small set of images concurrently, keeping order from DateCreated.
+    async def fetch_posters(self, pair, choices, width):
         sem = asyncio.Semaphore(3)
-        width = {'hero': 600, 'panorama': 1280}.get(settings.layout, 360)
 
         async def fetch(item_id, tag):
             async with sem:
@@ -232,8 +216,39 @@ class LibraryCovers:
         posters = [image for image in await asyncio.gather(*(fetch(*item) for item in choices)) if image]
         if choices and not posters:
             raise CoverError('没有读到可用的作品海报，请稍后重试。')
+        return posters
+
+    @staticmethod
+    def titles(library):
+        return library['name'], {'movies': 'MOVIES', 'tvshows': 'TV SHOWS'}.get(library['type'], '')
+
+    async def generate(self, pair, library, settings, previous=''):
+        title, subtitle = self.titles(library)
+        if isinstance(settings, QueuedCoverSettings):
+            title, subtitle = settings.title or title, settings.subtitle or subtitle
+        choices = await self.poster_choices(pair, library, min(settings.posters, COVER_LAYOUTS[settings.layout][1]))
+        signature = hashlib.sha256(json.dumps(
+            ['2', title, subtitle, settings.color, settings.layout, choices], ensure_ascii=False).encode()).hexdigest()
+        if previous == signature:
+            return None, signature, len(choices)
+        width = {'hero': 600, 'panorama': 1280, 'split': 920}.get(settings.layout, 360)
+        posters = await self.fetch_posters(pair, choices, width)
         image = await asyncio.to_thread(render_cover, title, subtitle, settings.color, settings.layout, posters)
         return image, signature if len(choices) == len(posters) else '', len(posters)
+
+    async def gallery(self, pair, library, options):
+        layouts = list(dict.fromkeys(options.layouts))
+        limit = min(options.posters, max(COVER_LAYOUTS[key][1] for key in layouts))
+        choices = await self.poster_choices(pair, library, limit)
+        posters = await self.fetch_posters(pair, choices, 640)
+        title, subtitle = self.titles(library)
+
+        def render():
+            return [{'id': key, 'image': base64.b64encode(
+                render_cover(title, subtitle, options.color, key, posters, size=(640, 360))).decode()}
+                    for key in layouts]
+
+        return {'items': await asyncio.to_thread(render), 'poster_count': len(posters)}
 
     async def apply(self, payload):
         library_id = payload['library_id']
@@ -243,13 +258,15 @@ class LibraryCovers:
         key = self.key(scope, library_id)
         previous = self.store.meta_json(key, {}) or {}
         signature = ''
-        generate = payload.get('automatic') or 'settings' in payload
-        if 'settings' in payload:
-            settings = CoverSettings.model_validate(payload['settings'])
+        generate = 'image' not in payload
+        if 'style' in payload:
+            settings = CoverStyle.model_validate(payload['style'])
         elif payload.get('automatic'):
-            settings = self.settings(scope, library_id)
-            if not settings.enabled:
+            settings = self.studio(scope)
+            if not settings.enabled or library_id not in settings.library_ids:
                 return {'outcome': 'skipped', 'message': '该库的定时更新已关闭。'}
+        elif generate:
+            settings = QueuedCoverSettings.model_validate(payload['settings'])
         if generate:
             image, signature, _ = await self.generate(pair, library, settings, previous.get('signature', ''))
             if image is None:
@@ -294,11 +311,11 @@ class LibraryCovers:
         zone = ZoneInfo(self.store.get('timezone') or 'Asia/Shanghai')
         now = now or datetime.now(zone)
         day, clock = now.strftime('%Y-%m-%d'), now.strftime('%H:%M')
+        settings = self.studio(scope)
         queued = 0
-        for library_id, raw in self.load_settings(scope).items():
-            settings = CoverSettings.model_validate(raw)
-            if not settings.enabled or settings.daily_at > clock:
-                continue
+        if not settings.enabled or settings.daily_at > clock:
+            return queued
+        for library_id in settings.library_ids:
             if self.enqueue(scope, library_id, scheduled_day=day, automatic=True):
                 queued += 1
         return queued
@@ -318,34 +335,50 @@ def install_library_covers(app, store, admin):
     def covers():
         return LibraryCovers(store, app.state.http)
 
-    async def checked(service, library_id, scope):
+    async def available(service, scope=None):
         try:
             pair = service.connection(scope)
-            return pair, await service.library(pair, library_id)
+            return pair, await service.libraries(pair)
         except CoverError as exc:
             raise HTTPException(409, str(exc)) from exc
 
     @app.get(prefix, dependencies=[Depends(admin)])
     async def library_covers(service: LibraryCovers = Depends(covers)):
-        try:
-            pair = service.connection()
-            items = await service.libraries(pair)
-        except CoverError as exc:
-            raise HTTPException(409, str(exc)) from exc
+        pair, items = await available(service)
         scope = pair[2]
+        settings = service.studio(scope, items)
+        settings.library_ids = [key for key in settings.library_ids if key in items]
         return {'scope': scope, 'timezone': store.get('timezone') or 'Asia/Shanghai',
+                'settings': settings.model_dump(),
                 'layouts': [{'id': key, 'name': name, 'max_posters': limit}
                             for key, (name, limit) in COVER_LAYOUTS.items()],
-                'items': [{**row, 'settings': service.settings(scope, key).model_dump(),
-                           'status': service.status(scope, key)} for key, row in items.items()]}
+                'items': [{**row, 'status': service.status(scope, key)} for key, row in items.items()]}
+
+    @app.put(prefix + '/settings', dependencies=[Depends(admin)])
+    async def studio_settings(body: ScopedStudio, service: LibraryCovers = Depends(covers)):
+        _, libraries = await available(service, body.scope)
+        body.library_ids = list(dict.fromkeys(body.library_ids))
+        if any(key not in libraries for key in body.library_ids):
+            raise HTTPException(409, '部分媒体库已变更，请刷新列表后重新选择。')
+        if body.enabled and not body.library_ids:
+            raise HTTPException(422, '开启定时更新前请选择媒体库。')
+        service.save_studio(body.scope, body)
+        return {'settings': body.model_dump(exclude={'scope'})}
+
+    @app.post(prefix + '/gallery', dependencies=[Depends(admin)])
+    async def cover_gallery(body: CoverGallery, service: LibraryCovers = Depends(covers)):
+        pair, libraries = await available(service, body.scope)
+        library = libraries.get(body.library_id)
+        if not library:
+            raise HTTPException(409, 'Emby 中找不到这个媒体库，请刷新列表。')
+        try:
+            return await service.gallery(pair, library, body)
+        except CoverError as exc:
+            raise HTTPException(502, str(exc)) from exc
 
     @app.post(prefix + '/batch', dependencies=[Depends(admin)])
     async def batch_covers(body: CoverBatch, service: LibraryCovers = Depends(covers)):
-        try:
-            pair = service.connection(body.scope)
-            libraries = await service.libraries(pair)
-        except CoverError as exc:
-            raise HTTPException(409, str(exc)) from exc
+        _, libraries = await available(service, body.scope)
         library_ids = list(dict.fromkeys(body.library_ids))
         if any(key not in libraries for key in library_ids):
             raise HTTPException(409, '部分媒体库已变更，请刷新列表后重新选择。')
@@ -353,15 +386,15 @@ def install_library_covers(app, store, admin):
             raise HTTPException(503, '后台 Worker 未就绪，请稍后重试。')
 
         items = []
+        style = body.model_dump(include=set(CoverStyle.model_fields))
         with store.transaction(immediate=True):
             for key in library_ids:
-                settings = service.settings(body.scope, key)
-                if body.layout:
-                    settings.layout = body.layout
-                command_id = service.enqueue(body.scope, key, settings=settings.model_dump())
+                command_id = service.enqueue(body.scope, key, style=style)
                 items.append({**libraries[key], 'command_id': command_id,
                               'state': 'queued' if command_id else 'skipped',
                               'message': '' if command_id else '已有封面任务在处理。'})
+            body.library_ids = library_ids
+            service.save_studio(body.scope, body)
         return {'items': items}
 
     @app.get(prefix + '/batch-status', dependencies=[Depends(admin)])
@@ -373,68 +406,3 @@ def install_library_covers(app, store, admin):
         except CoverError as exc:
             raise HTTPException(409, str(exc)) from exc
         return {'items': service.batch_status(scope, [int(item) for item in command_ids.split(',')])}
-
-    @app.get(prefix + '/{library_id}/status', dependencies=[Depends(admin)])
-    async def cover_status(library_id: str, scope: str, service: LibraryCovers = Depends(covers)):
-        try:
-            service.connection(scope)
-        except CoverError as exc:
-            raise HTTPException(409, str(exc)) from exc
-        return service.status(scope, library_id)
-
-    @app.get(prefix + '/{library_id}/current', dependencies=[Depends(admin)])
-    async def current_cover(library_id: str, scope: str, service: LibraryCovers = Depends(covers)):
-        pair, _ = await checked(service, library_id, scope)
-        try:
-            image = await service.artwork(pair, library_id, width=640)
-        except CoverError as exc:
-            raise HTTPException(502, str(exc)) from exc
-        if not image or not image.startswith(b'\xff\xd8'):
-            raise HTTPException(404, '该库还没有主图。')
-        return Response(image, media_type='image/jpeg', headers={'Cache-Control': 'no-store'})
-
-    @app.put(prefix + '/{library_id}/settings', dependencies=[Depends(admin)])
-    async def save_cover(library_id: str, body: ScopedSettings, service: LibraryCovers = Depends(covers)):
-        await checked(service, library_id, body.scope)
-        service.save(body.scope, library_id, body)
-        return {'settings': service.settings(body.scope, library_id).model_dump()}
-
-    @app.post(prefix + '/{library_id}/preview', dependencies=[Depends(admin)])
-    async def preview_cover(library_id: str, body: ScopedSettings, service: LibraryCovers = Depends(covers)):
-        pair, library = await checked(service, library_id, body.scope)
-        try:
-            image, _, count = await service.generate(pair, library, body)
-        except CoverError as exc:
-            raise HTTPException(502, str(exc)) from exc
-        return {'image': base64.b64encode(image).decode(), 'poster_count': count}
-
-    @app.post(prefix + '/{library_id}/upload-preview', dependencies=[Depends(admin)])
-    async def preview_upload(library_id: str, request: Request, service: LibraryCovers = Depends(covers)):
-        body = await image_input(request)
-        await checked(service, library_id, body.scope)
-        try:
-            image = await asyncio.to_thread(normalize_upload, decode_image(body.image))
-        except ValueError as exc:
-            raise HTTPException(422, str(exc)) from exc
-        return {'image': base64.b64encode(image).decode()}
-
-    @app.post(prefix + '/{library_id}/apply', dependencies=[Depends(admin)])
-    async def apply_cover(library_id: str, request: Request, service: LibraryCovers = Depends(covers)):
-        body = await image_input(request)
-        await checked(service, library_id, body.scope)
-        try:
-            image = decode_image(body.image)
-            parsed = await asyncio.to_thread(open_image, image)
-            if parsed.size != SIZE or not image.startswith(b'\xff\xd8'):
-                raise CoverError('请先生成 16:9 封面预览。')
-            if not getattr(app.state.organizer, 'web_only', False):
-                result = await service.apply({'scope': body.scope, 'library_id': library_id, 'image': body.image})
-                return {'state': 'done', **result}
-        except ValueError as exc:
-            raise HTTPException(422, str(exc)) from exc
-        if not commands.worker_ready(store):
-            raise HTTPException(503, '后台 Worker 未就绪，请稍后重试。')
-        command_id = service.enqueue(body.scope, library_id, image=body.image)
-        if command_id is None:
-            raise HTTPException(409, '该媒体库已有封面任务，请等待处理完成。')
-        return {'state': 'queued', 'command_id': command_id, 'message': '封面已提交后台。'}
