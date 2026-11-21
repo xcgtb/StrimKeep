@@ -265,10 +265,26 @@ def install_inventory_operations(app, store, admin):
                         return False
                     return await asyncio.to_thread(verify_work, engine, expected, action, paths)
                 # 逐项核查和提交，避免异步批量过程中保留依据失效或部分结果漏记。
-                await execute_simulated(store.db, plan_id, current,
+                outcome = await execute_simulated(store.db, plan_id, current,
                                         lambda file, source: delete_one(engine, file, source),
                                         lambda action: current_actions.update({plan_id: action}),
                                         verify_work=verify)
+                done = outcome.get('done') if isinstance(outcome, dict) else []
+                if done:
+                    notifications = getattr(engine, 'notifications', None)
+                    if notifications is not None:
+                        lines = ['成功 %d 条' % len(done)]
+                        for action in done[:10]:
+                            icon = '☁️ ' if action.get('side') == 'cloud' else '📄 '
+                            lines.append(icon + str(action.get('path') or action.get('id') or ''))
+                        if len(done) > 10:
+                            lines.append('… 共 %d 条' % len(done))
+                        try:
+                            await notifications.publish(
+                                'inventory_delete:%s' % plan_id, '🧹 片库清理完成',
+                                '\n'.join(lines), 'success', category='general')
+                        except Exception:
+                            pass
         except Exception as exc:
             errors[plan_id] = str(exc)[:180]
         finally:

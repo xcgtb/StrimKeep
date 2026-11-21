@@ -15,3 +15,9 @@ test('zero failures do not hide other warnings',()=>{
   assert.equal(levelOf({kind:'system',message:'失败 0 个，等待重试'}),'warn')
   assert.equal(levelOf({kind:'system',message:'跳过 1 个'}),'warn')
 })
+
+test('successful history purge and already-cleaned webhook are not errors',()=>{
+  assert.equal(levelOf({kind:'deep_delete',message:'深度删除 · 已清除该作品/季 2 条历史失效记录（revoked/已停用）。'}),'info')
+  assert.equal(levelOf({kind:'deep_delete',message:'深度删除 · 已由库存清理完成：该作品/季已无待删除记录（清理 2 条历史记录）。'}),'info')
+  assert.equal(levelOf({kind:'deep_delete',message:'深度删除 · 未匹配：收到「Series」事件 /media/x，没有找到这条文件的取链记录（未执行任何删除）'}),'warn')
+})

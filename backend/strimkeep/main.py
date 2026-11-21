@@ -1357,18 +1357,26 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
                 store.event('deep_delete', '深度删除：事件缺少具体文件或作品路径，仅有 TMDB 编号不能确认删除范围；未执行。')
             return {'accepted': False, 'matched': 0, 'reason': '缺少可核对的文件或作品路径，未执行删除。'}
         targets = deep_delete.match_targets(store, event)
+        purged = 0
         if event.get('type') in ('Season', 'Series'):
             purged = deep_delete.purge_history(store, targets.get('candidates') or [], True)
             if purged and not quiet:
                 store.event('deep_delete', '深度删除 · 已清除该作品/季 %d 条历史失效记录（revoked/已停用）。' % purged)
         matched = len(targets['managed']) + len(targets['share'])
         if not matched:
+            path = event.get('path') or ('tmdb:%s' % event.get('tmdb'))
+            if purged:
+                if not quiet:
+                    store.event('deep_delete', '深度删除 · 已由库存清理完成：该作品/季已无待删除记录（清理 %d 条历史记录）。' % purged)
+                    store.set_meta('deep_delete_last', {'at': time.time(), 'mode': '已清理',
+                                                        'path': path, 'errors': 0, 'details': []})
+                return {'accepted': True, 'matched': 0, 'cleaned': True,
+                        'reason': '库存台账已清理，无需重复删除'}
             if not quiet:
                 store.event('deep_delete', '深度删除 · 未匹配：收到「%s」事件 %s，没有找到这条文件的取链记录（未执行任何删除）'
-                            % (event['type'], event.get('path') or ('tmdb:%s' % event.get('tmdb'))))
+                            % (event['type'], path))
                 store.set_meta('deep_delete_last', {'at': time.time(), 'mode': '未匹配',
-                                                    'path': event.get('path') or ('tmdb:%s' % event.get('tmdb')),
-                                                    'errors': 0, 'details': []})
+                                                    'path': path, 'errors': 0, 'details': []})
             return {'accepted': True, 'matched': 0,
                     'reason': '没有找到这条文件的取链记录，未执行任何删除'}
         dry_run = bool((store.get('sync_config') or {}).get('deep_delete_dry_run', True))

@@ -612,3 +612,10 @@ P1 至此完成。下一步进入 P2：MediaServer / Notifier / CloudDrive 适�
 - 修复第 23 集无播出日期、库内有 24/25 集时仍显示完整的问题，现在正确显示“缺 1 集 / 24/25”；
 - 保留未来集不计缺集、单库/双库分别计算、未知播出日期提示等原有口径；
 - test_inventory 12 passed，inventory 相关 173 passed，前端 39 passed + build。
+
+### 3.6.67：深度删除日志与通知收口
+
+- 片库清理计划成功后发送「🧹 片库清理完成」TG/Webhook 汇总，包含成功条数和路径；以前只写 inventory 事件，不发通知；
+- 深度删除 webhook 命中 0 条但已清理历史台账时，改为「已由库存清理完成」，不再记为未匹配；无历史清理时仍保留未匹配提示；
+- `levelOf` 不再把「已清除…历史失效记录」判为异常，未匹配降为注意；
+- 定向：inventory operations + deep delete 38 passed，前端测试 + build 通过。
