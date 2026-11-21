@@ -116,6 +116,14 @@ onMounted(load)
 </section>
 <section class="panel settings-panel"><h2>媒体信息写入</h2>
   <p class="hint">总开关关闭后暂停提取、补扫并停止向 Emby 写入媒体信息；已有文件与待处理队列保留。</p>
+  <p class="hint">STRM 同级的 <code>*-media-info.json</code> 是 StrimKeep 生成的媒体信息，Emby 不会直接读取；Emby 只读 NFO 和图片。编码、分辨率、音轨、章节需要写入 Emby 的 library.db。</p>
+  <details class="media-diagnostics" open><summary>先建库还是先整理？立即补写是做什么的？</summary>
+    <p><strong>先建库后整理：</strong>Emby 里已经有这个媒体库时，新条目整理后会自动提取并立即写入 Emby，一般不需要手动补写。</p>
+    <p><strong>先整理后建库：</strong>整理时 Emby 还没有这个库或条目，STRM、NFO、图片和媒体信息 JSON 已经生成，但媒体流没写进 Emby；把目录加入 Emby 媒体库并刷新后，点一次「立即补写」补齐。</p>
+    <p><strong>立即补写：</strong>扫描 Emby 里缺少视频流的 STRM 条目，按同级媒体信息 JSON 写入媒体流和章节；已经有视频流的条目会跳过，即使信息不完整也不会自动覆盖。</p>
+    <p><strong>定时补写：</strong>按 cron 做同样的兜底，适合旧条目、漏写或 Emby 数据库恢复后补齐。</p>
+    <p class="hint">立即补写和定时补写都需要 StrimKeep 容器挂载 Emby 的 data 目录，并配置 STRIMKEEP_EMBY_LIBRARY_DB。</p>
+  </details>
   <el-form label-position="top" :disabled="busy">
     <el-form-item label="启用本项目媒体信息处理"><el-switch v-model="media.enabled" /></el-form-item>
     <el-form-item label="新入库自动提取"><el-switch v-model="media.extract" :disabled="!media.enabled" /></el-form-item>
