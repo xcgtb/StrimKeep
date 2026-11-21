@@ -63,10 +63,10 @@ def inventory_app(store, engine, strm_root, http):
     return private
 
 
-async def command_loop(store, engine, stop):
+async def command_loop(store, engine, stop, kinds=commands.KINDS):
     """Consume Web-submitted commands one at a time."""
     while not stop.is_set():
-        row = await asyncio.to_thread(commands.claim, store)
+        row = await asyncio.to_thread(commands.claim, store, kinds)
         if row is None:
             await asyncio.sleep(1)
             continue
@@ -78,6 +78,10 @@ async def command_loop(store, engine, stop):
                 result = await engine.rebuild.run(dry_run=bool(payload.get('dry_run')))
             elif row['kind'] == 'strm_rebuild_rollback':
                 result = await engine.rebuild.rollback(payload.get('backup_id') or None)
+            elif row['kind'] == commands.COVER_SWEEP:
+                result = await engine.cover.run()
+                if result.get('error'):
+                    raise RuntimeError(result['error'])
             else:
                 raise RuntimeError('未知的后台命令：%s' % row['kind'])
             await asyncio.to_thread(commands.finish, store, row['id'], result)
@@ -120,13 +124,15 @@ async def run_worker():
     app.state.strms = strm_root.resolve()
     app.state.organizer = engine
     engine.start()
+    engine.cover.queue_daily = True
     await asyncio.to_thread(commands.recover_running, store)
     scan_app = inventory_app(store, engine, strm_root.resolve(), http)
     background = [
         asyncio.create_task(engine.emby.coverage_loop()),
         asyncio.create_task(inject_loop(app, store)),
         asyncio.create_task(housekeeping_loop(app, store)),
-        asyncio.create_task(command_loop(store, engine, stop)),
+        asyncio.create_task(command_loop(store, engine, stop, commands.OPERATIONS)),
+        asyncio.create_task(command_loop(store, engine, stop, (commands.COVER_SWEEP,))),
         asyncio.create_task(scan_app.state.inventory_scan_loop()),
     ]
     store.event('system', f'StrimKeep worker {__version__} started.')

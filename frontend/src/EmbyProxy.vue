@@ -1,10 +1,14 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useRoute } from 'vue-router'
+import { useVisiblePolling } from './pageActivity'
 import EmbyMapping from './EmbyMapping.vue'
 import EmbyProxyServers from './EmbyProxyServers.vue'
 
 const props = defineProps<{ api: (path: string, method?: string, body?: unknown) => Promise<any> }>()
+const route = useRoute()
+const mediaSection = ref<HTMLElement>()
 const busy = ref(false)
 const error = ref('')
 const connections = ref({ emby_url: '', emby_key: '' })
@@ -54,7 +58,11 @@ async function checkEmby() {
 }
 async function runCover() {
   coverBusy.value = true; coverMsg.value = ''
-  try { await props.api('/cover/run', 'POST'); coverMsg.value = '封面补齐已开始，可在实时日志查看进度。'; await loadCoverStatus() }
+  try {
+    const result = await props.api('/cover/run', 'POST')
+    coverMsg.value = result.message
+    await loadCoverStatus()
+  }
   catch (e) { coverMsg.value = (e as Error).message }
   finally { coverBusy.value = false }
 }
@@ -89,7 +97,14 @@ async function loadMediaStatus() {
     mediaStatus.value = status; mediaFailures.value = failures
   } catch (e) { mediaError.value = (e as Error).message }
 }
-onMounted(load)
+onMounted(() => {
+  void load()
+  void loadCoverStatus()
+  if (route.hash === '#media-info') mediaSection.value?.scrollIntoView()
+})
+useVisiblePolling(async () => {
+  if (coverStatus.value?.running) await loadCoverStatus()
+}, 3000)
 </script>
 
 
@@ -108,13 +123,14 @@ onMounted(load)
 </section>
 <section class="panel settings-panel"><h2>Emby 封面</h2>
   <p class="hint">补齐媒体库封面（Primary 图片），任务在后台执行。</p>
-  <el-button :loading="coverBusy" @click="runCover">立即补齐封面</el-button>
+  <el-button :loading="coverBusy" :disabled="coverStatus?.running" @click="runCover">立即补齐封面</el-button>
   <el-button @click="loadCoverStatus">查看封面任务状态</el-button>
   <span class="hint">{{ coverMsg }}</span>
   <span v-if="coverError" class="hint">读取失败：{{ coverError }}</span>
-  <p v-if="coverStatus" class="hint">{{ coverStatus.running ? '封面任务进行中' : '当前无封面任务' }}<template v-if="coverStatus.last">；上次成功：扫描 {{ coverStatus.last.scanned }}，写入 {{ coverStatus.last.written }}，已有 {{ coverStatus.last.skipped }}，无图源 {{ coverStatus.last.no_image }}，未映射 {{ coverStatus.last.unmapped }}</template></p>
+  <p v-if="coverStatus" class="hint">{{ coverStatus.queued ? '封面任务已排队' : coverStatus.running ? '封面任务进行中' : '当前无封面任务' }}<template v-if="coverStatus.last">；上次成功：扫描 {{ coverStatus.last.scanned }}，写入 {{ coverStatus.last.written }}，已有 {{ coverStatus.last.skipped }}，无图源 {{ coverStatus.last.no_image }}，未映射 {{ coverStatus.last.unmapped }}</template></p>
+  <el-alert v-if="coverStatus?.error" :title="coverStatus.error" type="error" :closable="false" />
 </section>
-<section class="panel settings-panel"><h2>媒体信息写入</h2>
+<section id="media-info" ref="mediaSection" class="panel settings-panel"><h2>媒体信息写入</h2>
   <p class="hint">总开关关闭后暂停提取、补扫并停止向 Emby 写入媒体信息；已有文件与待处理队列保留。</p>
   <p class="hint">STRM 同级的 <code>*-media-info.json</code> 是 StrimKeep 生成的媒体信息，Emby 不会直接读取；Emby 只读 NFO 和图片。编码、分辨率、音轨、章节需要写入 Emby 的 library.db。</p>
   <details class="media-diagnostics" open><summary>先建库还是先整理？立即补写是做什么的？</summary>
@@ -152,3 +168,7 @@ onMounted(load)
 <section class="panel settings-panel"><h2>Emby 反代播放</h2><EmbyProxyServers :api="api" /></section>
 <section class="panel settings-panel"><h2>Emby 路径映射</h2><EmbyMapping :api="api" /></section>
 </template>
+
+<style scoped>
+#media-info { scroll-margin-top: 80px }
+</style>

@@ -23,10 +23,20 @@ const routes: RouteRecordRaw[] = [
   {path: '/:pathMatch(.*)*', redirect: {name: 'overview'}},
 ]
 
-export default createRouter({
+const router = createRouter({
   history: createWebHashHistory(),
   routes,
-  scrollBehavior(_to, _from, saved) {
-    return saved || {top: 0}
+  scrollBehavior(to, _from, saved) {
+    if (saved) return saved
+    if (to.name === 'embyproxy' && to.hash === '#media-info') return {el: to.hash, top: 80}
+    return {top: 0}
   },
 })
+
+router.beforeEach(to => {
+  if (to.name === 'settings' && to.query.section === 'emby') {
+    return {name: 'embyproxy', hash: '#media-info', replace: true}
+  }
+})
+
+export default router

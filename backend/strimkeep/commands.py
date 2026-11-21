@@ -1,29 +1,33 @@
 """Durable command queue between the Web process and the Worker.
 
-Web never executes share checks or STRM rebuilds itself in production: it
-submits a row here and waits for the result. The Worker claims one command at a
-time, runs it, and writes the result back. Commands interrupted by a Worker
-restart are requeued once (both operations are idempotent), then failed.
+Web submits background operations here and the Worker writes their results back.
+Commands interrupted by a Worker restart are requeued once, then failed.
 """
 import asyncio
 import json
 import time
 
-KINDS = ('share_check', 'strm_rebuild', 'strm_rebuild_rollback')
+COVER_SWEEP = 'cover_sweep'
+OPERATIONS = ('share_check', 'strm_rebuild', 'strm_rebuild_rollback')
+KINDS = (*OPERATIONS, COVER_SWEEP)
 KEEP_SECONDS = 7 * 24 * 3600
 MAX_ATTEMPTS = 1
 
 
-def submit(store, kind, payload=None):
+def submit(store, kind, payload=None, *, unique=False):
     if kind not in KINDS:
         raise ValueError('unknown command kind: %s' % kind)
     now = time.time()
+    sql = ('INSERT INTO worker_commands(kind,payload,state,attempts,created,updated) '
+           "SELECT ?,?, 'queued', 0, ?, ?")
+    params = (kind, json.dumps(payload or {}, ensure_ascii=False), now, now)
+    if unique:
+        sql += (" WHERE NOT EXISTS (SELECT 1 FROM worker_commands "
+                "WHERE kind=? AND state IN ('queued','running'))")
+        params += (kind,)
     with store.db:
-        cursor = store.db.execute(
-            'INSERT INTO worker_commands(kind,payload,state,attempts,created,updated) '
-            "VALUES(?,?, 'queued', 0, ?, ?)",
-            (kind, json.dumps(payload or {}, ensure_ascii=False), now, now))
-    return cursor.lastrowid
+        cursor = store.db.execute(sql, params)
+    return cursor.lastrowid if cursor.rowcount else None
 
 
 def get(store, command_id):
@@ -43,11 +47,13 @@ def running(store, kind=None):
     return dict(row) if row else None
 
 
-def claim(store):
+def claim(store, kinds=KINDS):
     """Atomically take the oldest queued command; returns None when idle."""
     with store.db:
+        placeholders = ','.join('?' for _ in kinds)
         row = store.db.execute(
-            "SELECT * FROM worker_commands WHERE state='queued' ORDER BY id LIMIT 1").fetchone()
+            f"SELECT * FROM worker_commands WHERE state='queued' AND kind IN ({placeholders}) "
+            "ORDER BY id LIMIT 1", kinds).fetchone()
         if row is None:
             return None
         now = time.time()

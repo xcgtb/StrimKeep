@@ -1,10 +1,14 @@
 """封面落地：取 Emby Primary/Backdrop 写 poster/fanart，Refresh 时序记录。"""
 import asyncio
+import time
 from types import SimpleNamespace
 
 import httpx
+from fastapi import FastAPI
 
-from strimkeep.cover_service import CoverService
+from strimkeep import commands, worker
+from strimkeep.cover_service import CoverService, install_cover
+from strimkeep.store import Store
 
 
 class FakeDelivery:
@@ -18,7 +22,6 @@ class FakeDelivery:
 
 
 def make(tmp_path):
-    from strimkeep.store import Store
     store = Store(tmp_path / 'data', 'admin', 'test-password-1234')
     store.set_many({'console_config': {'emby_strm_path': '/media'}})
     delivery = FakeDelivery()
@@ -99,4 +102,71 @@ def test_daily_tick_runs_once_per_day(tmp_path, monkeypatch):
     asyncio.run(run())
 
 
-import time  # noqa: E402
+def test_split_web_queues_cover_and_reads_persisted_result(tmp_path, monkeypatch):
+    async def run():
+        store, service, _ = make(tmp_path)
+        web_store = Store(store.root, 'admin', 'test-password-1234')
+        app = FastAPI()
+        app.state.store = web_store
+        app.state.organizer = SimpleNamespace(web_only=True)
+        install_cover(app, lambda: True)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            assert (await client.get('/api/v1/cover/status')).json() == {
+                'running': False, 'queued': False, 'last': None, 'error': ''}
+            assert (await client.post('/api/v1/cover/run')).status_code == 503
+            store.set_meta('worker_heartbeat', {'at': time.time()})
+            rebuild = commands.submit(store, 'strm_rebuild')
+            first = await client.post('/api/v1/cover/run')
+            assert first.status_code == 200 and first.json()['queued']
+            assert (await client.get('/api/v1/cover/status')).json()['queued']
+            assert (await client.post('/api/v1/cover/run')).status_code == 409
+            summary = {'at': time.time(), 'scanned': 2, 'written': 1}
+            stop = asyncio.Event()
+
+            async def sweep():
+                status = (await client.get('/api/v1/cover/status')).json()
+                assert status['running'] and not status['queued']
+                stop.set()
+                return summary
+
+            monkeypatch.setattr(service, 'sweep', sweep)
+            await worker.command_loop(store, SimpleNamespace(cover=service), stop, (commands.COVER_SWEEP,))
+            assert commands.get(store, rebuild)['state'] == 'queued'
+            assert commands.get(store, first.json()['command_id'])['state'] == 'done'
+            assert (await client.get('/api/v1/cover/status')).json() == {
+                'running': False, 'queued': False, 'last': summary, 'error': ''}
+
+            async def failed_sweep():
+                stop.set()
+                return {'error': 'Emby 未配置。'}
+
+            monkeypatch.setattr(service, 'sweep', failed_sweep)
+            stop.clear()
+            assert (await client.post('/api/v1/cover/run')).status_code == 200
+            await worker.command_loop(store, SimpleNamespace(cover=service), stop, (commands.COVER_SWEEP,))
+            assert (await client.get('/api/v1/cover/status')).json() == {
+                'running': False, 'queued': False, 'last': summary, 'error': 'Emby 未配置。'}
+        web_store.close()
+        store.close()
+    asyncio.run(run())
+
+
+def test_scheduled_cover_uses_same_queue_as_manual_cover(tmp_path, monkeypatch):
+    async def run():
+        store, service, _ = make(tmp_path)
+        service.queue_daily = True
+        monkeypatch.setattr(time, 'localtime', lambda *args: time.struct_time((2026, 11, 1, 1, 0, 0, 0, 0, 0)))
+        manual = commands.submit(store, commands.COVER_SWEEP, unique=True)
+        await service.tick_daily()
+        assert commands.running(store, commands.COVER_SWEEP)['id'] == manual
+        assert store.meta('cover_last_day') == ''
+        commands.finish(store, manual, {})
+        await service.tick_daily()
+        daily = commands.running(store, commands.COVER_SWEEP)
+        assert daily['id'] != manual
+        assert store.meta('cover_last_day')
+        commands.finish(store, daily['id'], {})
+        await service.tick_daily()
+        assert commands.running(store, commands.COVER_SWEEP) is None
+        store.close()
+    asyncio.run(run())

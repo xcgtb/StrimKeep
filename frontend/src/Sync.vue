@@ -115,7 +115,7 @@ useVisiblePolling(async()=>{if(!ready.value||busy.value||dirty.value)return;cons
 <p class="hint">开启沿用后，以影视整理保存的扩展名为准；此处显示的是独立设置，关闭沿用后可编辑。未选格式不生成新 STRM，保留原视频和已有输出。</p>
 <div class="workflow-switch-row"><div><strong>生成 NFO</strong><p>在 STRM 旁边写电影/单集的 NFO，剧集还会写 tvshow.nfo；Emby 直接读本地元数据，不用再联网刮削。同步老库时也会现场识别补齐，认不出的文件跳过并记录原因。</p></div><el-switch v-model="config.generate_nfo" :disabled="busy"/></div>
 <div class="workflow-switch-row"><div><strong>下载海报与背景图</strong><p>从 TMDB 取 poster.jpg / fanart.jpg 放进作品目录，失败只跳过，不影响 STRM。</p></div><el-switch v-model="config.generate_images" :disabled="busy"/></div>
-<div class="workflow-switch-row"><div><strong>Emby 媒体信息</strong><p>提取、补写及总开关在系统设置统一管理。</p></div><el-button @click="router.push({name:'settings',query:{section:'emby'}})">前往设置</el-button></div>
+<div class="workflow-switch-row"><div><strong>Emby 媒体信息</strong><p>提取、补写及总开关在「Emby 反代」管理。</p></div><el-button @click="router.push({name:'embyproxy',hash:'#media-info'})">前往设置</el-button></div>
 <div class="strm-field"><label>不生成 STRM 的小视频阈值（MB，0 不限制）</label><el-input-number v-model="config.min_video_size_mb" :min="0" :max="1048576" :disabled="busy"/></div>
 <ExtensionEditor v-model="config.metadata_extensions" label="实体下载的字幕与元数据扩展名" :presets="METADATA_PRESETS" :max-items="60" :excluded="config.inherit_video_extensions?[]:config.video_extensions" :forbidden="['.strm']" :disabled="busy"/>
 <p class="hint">视频只生成链接；这些扩展名实体下载。普通字幕绑定对应视频；其余附属文件增量下载到对应目录，不覆盖已有文件。单个附属文件上限20MB，超限说明并跳过。</p>

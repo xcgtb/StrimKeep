@@ -52,7 +52,7 @@ const apiTokenDraft=ref('')
 const apiTokenValue=ref('')
 async function loadApiToken(){try{apiToken.value=await props.api('/system/api-token')}catch(e){error.value=(e as Error).message}}
 async function saveApiToken(){await run(async()=>{apiToken.value=await props.api('/system/api-token','PUT',{enabled:!!apiToken.value.enabled,token:apiTokenDraft.value});apiTokenDraft.value='';ElMessage.success('API Token 已保存')})}
-async function rotateApiToken(){await run(async()=>{const r:any=await props.api('/system/api-token/rotate','POST',{});apiTokenValue.value=r.token;apiToken.value=await loadApiToken();ElMessage.success('已生成新 Token，请立即复制')})}
+async function rotateApiToken(){await run(async()=>{const r:any=await props.api('/system/api-token/rotate','POST',{});apiTokenValue.value=r.token;await loadApiToken();ElMessage.success('已生成新 Token，请立即复制')})}
 function downloadBackup(){const a=document.createElement('a');a.href='/api/v1/system/backup';a.download='';document.body.appendChild(a);a.click();a.remove()}
 const autoBackups=ref<any[]>([]),backupBusy=ref(false),backupMsg=ref('')
 function fmtBytes(n:number){if(!n)return '0 B';const units=['B','KB','MB','GB'];let value=Number(n),index=0;while(value>=1024&&index<units.length-1){value/=1024;index+=1}return `${value.toFixed(index?1:0)} ${units[index]}`}
