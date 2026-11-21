@@ -102,6 +102,11 @@ function ruleValue(value:any) { if (value == null) return '未知'; return typeo
 const rows = ref<any[]>([]), mappingTotal = ref(0), pageBusy = ref(false), pageFallback = ref(false)
 let pageRequest = 0
 const inventoryComplete = ref(true), inventoryIssues = ref<any[]>([]), inventoryIssueCount = ref(0)
+type ScanSource = {side:string, path:string, exists:boolean, strm_count:number}
+const scanSources = ref<ScanSource[]>([])
+const emptyScan = computed(() => scanSources.value.length > 0 && scanSources.value.every(source => source.strm_count === 0))
+const compareNotice = ref<{text:string, type:'success'|'warning'} | null>(null)
+let compareView = 0
 const totalPages = computed(() => Math.max(1, Math.ceil(mappingTotal.value / pageSize.value)))
 const batchMode = ref(false)
 let swipeState:any = null
@@ -161,6 +166,7 @@ function toggleBatchMode() {
   if (!batchMode.value) chosen.value = []
 }
 const visibleItems = computed(() => rows.value)
+const comparableSeries = computed(() => visibleItems.value.filter(item => item.kind === 'tv' && !item.unidentified))
 function updatePageSize() { pageSize.value = window.innerWidth < 640 ? 30 : 45; page.value = Math.min(page.value, totalPages.value) }
 // 卡片只带"在哪几库/各有几个文件"，统一成模板用的字段；详情打开时再取完整文件清单。
 const allCategories = ref<{name:string, count:number}[]>([])
@@ -211,6 +217,7 @@ async function loadPage(refresh=false) {
     inventoryComplete.value = data.inventory_complete !== false
     inventoryIssues.value = data.issues || []
     inventoryIssueCount.value = data.issue_count ?? inventoryIssues.value.length
+    scanSources.value = data.scan_sources || []
     if (data.refresh_error) error.value = data.refresh_error
   } catch (original) {
     if (request !== pageRequest) return
@@ -218,10 +225,11 @@ async function loadPage(refresh=false) {
     pageFallback.value = true
     if (!snapshot.value) snapshot.value = await props.api('/inventory').catch(() => null)
     if (request !== pageRequest) return
-    if (!snapshot.value) { error.value = (original as Error).message || '片库读取失败'; inventoryComplete.value = false; return }
+    if (!snapshot.value) { error.value = (original as Error).message || '片库读取失败'; inventoryComplete.value = false; scanSources.value = []; return }
     inventoryComplete.value = snapshot.value?.complete !== false
     inventoryIssues.value = snapshot.value?.issues || []
     inventoryIssueCount.value = inventoryIssues.value.length
+    scanSources.value = snapshot.value.scan_sources || []
     const all = (snapshot.value?.items || []).map(withFiles)
     const counts:Record<string, number> = {}
     for (const item of all) for (const name of itemCategories([...(item.cloud || []), ...(item.share || [])])) {
@@ -286,11 +294,13 @@ async function compareItems(list:any[], all=false) {
   finally { if (all && generation === statusGeneration) statusBusy.value = false }
   if (!all && generation === statusGeneration && statusFilter.value !== 'all') await loadPage()
 }
-watch([search, kindFilter, scopeFilter, statusFilter, categoryFilter], () => { page.value = 1; chosen.value = []; void loadPage() })
-watch([page, pageSize], () => { void loadPage() })
+watch([search, kindFilter, scopeFilter, statusFilter, categoryFilter], () => { compareView++; compareNotice.value = null; page.value = 1; chosen.value = []; void loadPage() })
+watch([page, pageSize], () => { compareView++; compareNotice.value = null; void loadPage() })
 watch(visibleItems, list => { void compareItems(list) })
 
 async function load(refresh=true) {
+  compareView++
+  compareNotice.value = null
   busy.value = true; error.value = ''; snapshot.value = null; selected.value = null; seasonResult.value = null; preview.value = null; audit.value = null; statusGeneration++; statusInFlight.clear(); statusById.value = {}; statusBusy.value = false; chosen.value = []; page.value = 1
   try { await loadPage(refresh) }
   catch (e) { error.value = (e as Error).message }
@@ -510,14 +520,16 @@ function compareSummary(list:any[]) {
   const text = parts.length ? '已对照 ' + parts.join(' · ') : '对照完成'
   return stuck.length ? `${text}；仍待对照 ${stuck.length} 部：${stuck.slice(0, 2).join('、')}` : text
 }
-async function compareAll() {
-  const list = visibleItems.value.filter((item:any) => item.kind === 'tv')
-  if (!list.length) { ElMessage.info('本页没有电视剧需要对照'); return }
+async function comparePage() {
+  const list = comparableSeries.value
+  if (!list.length || statusBusy.value || pageBusy.value) return
+  const request = compareView
+  compareNotice.value = null
   try {
     await compareItems(list, true)
+    if (request !== compareView) return
     const summary = compareSummary(list)
-    if (summary.includes('仍待对照')) ElMessage.warning(summary)
-    else ElMessage.success(summary)
+    compareNotice.value = {text:summary, type:summary.includes('仍待对照') ? 'warning' : 'success'}
     await loadPage()
   } catch (e) { error.value = (e as Error).message; ElMessage.error((e as Error).message) }
 }
@@ -590,7 +602,11 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize) })
 <template>
  <section class="inventory-page">
   <header class="inventory-header"><div><h1>库存管理</h1><p class="muted">{{ tab === 'mapping' ? '查看片库与缺集情况' : tab === 'governance' ? '管理两库版本与重复内容' : '检查作品目录中的残留' }}</p></div><el-button :loading="busy" @click="load">刷新库存</el-button></header>
-  <details class="inventory-help"><summary>库存与清理说明</summary><p>库存按本地两库的 STRM 统计，未登记文件也会显示。网盘来源无法核实的文件不会直接删除源文件；清理前请核对计划清单。</p></details>
+  <details class="inventory-help" :open="emptyScan && tab==='mapping'"><summary>本地 STRM 扫描范围</summary>
+   <p>片库映射和双库治理读取本地 STRM。媒体总览的片单来自 Emby。</p>
+   <p v-for="source in scanSources" :key="source.side" class="file-path">{{ side(source.side) }} · {{ source.path }} · {{ source.exists ? source.strm_count + ' 个 STRM' : '目录未找到' }}</p>
+   <p v-if="emptyScan">检查容器的 STRM 目录挂载。整理生成的 STRM 落到上述目录后，刷新库存即可查看。</p>
+  </details>
   <el-alert v-if="!inventoryComplete" :title="`有 ${inventoryIssueCount} 条记录无法核实，统计可能不完整。`" type="warning" :closable="false" show-icon />
   <details v-if="!inventoryComplete && inventoryIssues.length"><summary>查看待核实记录</summary><p v-for="(issue, index) in inventoryIssues" :key="index" class="file-path">{{ side(issue.side) }} · {{ reason(issue.reason) }}：{{ issue.path || issue.id }}</p><el-button @click="openAuditFromMapping">前往核对并修复</el-button></details>
   <el-alert v-if="error" :title="error" type="error" :closable="false" />
@@ -600,17 +616,19 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize) })
    <section class="mapping-filters" aria-label="片库筛选">
     <div class="mapping-search-row">
      <el-input v-model="search" class="mapping-search" placeholder="搜索片名或 TMDB ID" clearable />
-     <el-button :loading="statusBusy" @click="compareAll">对照全部剧集</el-button>
+     <el-button :loading="statusBusy" :disabled="pageBusy || !comparableSeries.length" @click="comparePage">对照本页剧集</el-button>
     </div>
     <div class="mapping-filter-row"><span class="mapping-filter-label">类型</span><el-radio-group v-model="kindFilter"><el-radio-button value="all">全部</el-radio-button><el-radio-button value="tv">剧集</el-radio-button><el-radio-button value="movie">电影</el-radio-button></el-radio-group></div><div class="mapping-filter-row"><span class="mapping-filter-label">片库</span><el-radio-group v-model="scopeFilter"><el-radio-button value="all">全部</el-radio-button><el-radio-button value="cloud">网盘库</el-radio-button><el-radio-button value="share">分享库</el-radio-button><el-radio-button value="both">双库</el-radio-button></el-radio-group></div>
     <div class="mapping-category-row"><span class="mapping-filter-label">目录分类</span><div class="mapping-status-scroll" tabindex="0" aria-label="目录分类，横向滚动查看更多"><el-radio-group v-model="categoryFilter"><el-radio-button value="all">全部分类</el-radio-button><el-radio-button v-for="entry in allCategories" :key="entry.name" :value="entry.name">{{entry.name}}（{{entry.count}}）</el-radio-button></el-radio-group></div><span class="mapping-filter-hint">{{ categorySource === 'emby' ? '分类来自 Emby 媒体库（按 TMDB 号匹配）' : 'Emby 未连接或未匹配，暂按目录关键词分类' }}</span></div>
     <div class="mapping-status-scroll"><el-radio-group v-model="statusFilter"><el-radio-button value="all">全部状态</el-radio-button><el-radio-button value="missing">缺集</el-radio-button><el-radio-button value="complete">完整</el-radio-button><el-radio-button value="extra">超集</el-radio-button><el-radio-button value="ongoing">在更</el-radio-button><el-radio-button value="pending">待对照</el-radio-button><el-radio-button value="unmatched">未识别</el-radio-button></el-radio-group></div>
    </section>
+   <el-alert v-if="compareNotice" :title="compareNotice.text" :type="compareNotice.type" :closable="false" show-icon />
+   <p v-else-if="!pageBusy && visibleItems.length && !comparableSeries.length" class="muted">本页没有已识别的剧集可以对照。</p>
    <details class="inventory-help mapping-explanation"><summary>状态说明</summary><div class="mapping-legend"><span v-for="entry in STATUS_LEGEND" :key="entry.text" class="mapping-legend-item"><b>{{ entry.text }}</b>{{ entry.hint }}</span></div><p>扫描有问题的作品另标“库存待核实”。</p></details>
    <div class="mapping-result-bar"><div><strong>{{ pageBusy ? '加载中…' : mappingTotal + ' 部作品' }}</strong><span v-if="statusBusy" class="muted"> · 对照中 {{ statusProgress }}</span><span v-else-if="pageFallback" class="muted"> · 本地过滤</span></div><span v-if="!chosen.length && !batchMode" class="muted">点海报看详情 · <el-button link type="primary" size="small" @click="toggleBatchMode">多选清理</el-button></span></div>
    <div v-if="chosen.length || batchMode" class="mapping-selection-bar"><strong>{{ chosen.length ? '已选择 ' + chosen.length + ' 部' : '多选：横向滑过海报连续选择；从已选中的卡片起划是取消' }}</strong><div class="mapping-selection-actions"><el-button size="small" @click="selectPage">全选本页</el-button><el-button size="small" :disabled="!chosen.length" @click="unselectPage">取消本页</el-button><el-button size="small" :disabled="!chosen.length" @click="chosen = []">清空</el-button><el-button size="small" :loading="planBusy" :disabled="!chosen.length" @click="manualDelete(chosen,'cloud')">删除网盘库</el-button><el-button size="small" :loading="planBusy" :disabled="!chosen.length" @click="manualDelete(chosen,'share')">删除分享库</el-button><el-button size="small" type="danger" plain :loading="planBusy" :disabled="!chosen.length" @click="manualDelete(chosen,'both')">删除两库</el-button><el-button size="small" @click="toggleBatchMode">{{ batchMode ? '退出多选' : '多选清理' }}</el-button><span class="muted mapping-batch-limit">单次最多 100 部 / 10000 个文件</span></div></div>
    <el-skeleton v-if="busy && !visibleItems.length" :rows="6" animated />
-   <el-empty v-else-if="!visibleItems.length" description="没有符合条件的作品" />
+   <el-empty v-else-if="!visibleItems.length" :description="emptyScan ? '扫描目录中未找到 STRM' : '没有符合当前筛选的作品'" />
    <div v-else class="poster-wall" :class="{ 'swipe-select': batchMode }" @touchstart="wallTouchStart" @touchmove="wallTouchMove" @touchend="wallTouchEnd" @touchcancel="wallTouchEnd"><article v-for="item in visibleItems" :key="workKey(item)" class="poster-card" :class="{ 'batch-selected': picked(item) }" :data-work-key="workKey(item)" tabindex="0" role="button" :aria-label="`查看 ${item.title} 详情`" @click="inspect(item)" @keydown.enter.prevent="inspect(item)" @keydown.space.prevent="inspect(item)">
     <div class="poster-cover"><img loading="lazy" :src="item.unidentified ? `/api/v1/inventory/mapping/unidentified-poster/${item.id}` : `/api/v1/dashboard/tmdb-poster/${item.kind}/${item.tmdb_id}`" :alt="`${item.title} 海报`" @error="($event.target as HTMLImageElement).style.visibility='hidden'" /><span class="poster-type">{{ item.kind === 'tv' ? '剧集' : '电影' }}</span><span :class="['poster-status', cardStatus(item).tone]">{{ cardStatus(item).text }}</span><label v-if="!item.unidentified" class="poster-pick" @click.stop><input type="checkbox" :checked="picked(item)" :aria-label="`选择 ${item.title}`" @change="togglePicked(item, ($event.target as HTMLInputElement).checked)" /></label></div>
     <div class="poster-info"><strong :title="item.title">{{ item.title }}</strong><span>网盘 {{ item.cloud_files }} · 分享 {{ item.share_files }}</span></div>

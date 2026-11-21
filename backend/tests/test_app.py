@@ -75,6 +75,27 @@ def test_task_center_offline_attention_reads_older_active_and_review_records(app
     assert 'urls' not in summary['active']['items'][0]
 
 
+def test_mapping_page_reports_actual_strm_scan_roots(app, client):
+    app.state.store.set_many({'organize_config': {'archive_cid': '123', 'directory_labels': {'123': '115 网盘 / 测试媒体'}}})
+    root = app.state.strms
+    outsider = root / '另一个 Emby 目录' / '作品 (2024) {tmdb-16}' / '作品.strm'
+    outsider.parent.mkdir(parents=True)
+    outsider.write_text('https://example.invalid/stream')
+    path = '/api/v1/inventory/mapping/page?media=all&refresh=1'
+    first = client.get(path).json()
+    assert first['total'] == 0
+    assert first['scan_sources'] == [
+        {'side': 'cloud', 'path': str(root / '测试媒体'), 'exists': False, 'strm_count': 0},
+        {'side': 'share', 'path': str(root / '分享影视库'), 'exists': False, 'strm_count': 0},
+    ]
+    in_scope = root / '测试媒体' / '作品 (2024) {tmdb-17}' / '作品.strm'
+    in_scope.parent.mkdir(parents=True)
+    in_scope.write_text('https://example.invalid/stream')
+    result = client.get(path).json()
+    assert result['total'] == 1 and result['rows'][0]['tmdb_id'] == 17
+    assert result['scan_sources'][0]['exists'] and result['scan_sources'][0]['strm_count'] == 1
+
+
 def test_playback_cleanup_preserves_moved_legacy_strm(app, client):
     kept = sample(client)['id']
     app.state.store.db.execute(

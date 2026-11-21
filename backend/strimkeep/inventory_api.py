@@ -334,6 +334,14 @@ def install_inventory(app, store, admin):
         # 库存 = 目录里真实存在的 STRM；台账只用来挂上来源编号。
         rows = filesystem_rows(app.state.strms, roots, store.db)
         snapshot = project(rows, app.state.strms, settings.get('match_strategy', 'title_year'))
+        counts = dict.fromkeys(roots, 0)
+        for side, _, _ in rows:
+            counts[side] += 1
+        snapshot['scan_sources'] = [
+            {'side': side, 'path': str(app.state.strms / name), 'exists': (app.state.strms / name).is_dir(),
+             'strm_count': counts[side]}
+            for side, name in roots.items()
+        ]
         done = {row['key'] for row in store.db.execute("SELECT key FROM meta WHERE key LIKE 'inventory-manual-complete:tv:%' AND value='true'")}
         for item in snapshot['items']:
             item['manual_complete'] = f"inventory-manual-complete:tv:{item['tmdb_id']}" in done if item['kind'] == 'tv' else False
@@ -438,6 +446,7 @@ def install_inventory(app, store, admin):
             raise HTTPException(422, str(exc)) from None
         return JSONResponse({'status': 'success', 'inventory_complete': snapshot['complete'],
                              'issues': snapshot['issues'][:100], 'issue_count': len(snapshot['issues']),
+                             'scan_sources': snapshot['scan_sources'],
                              'category_source': 'emby' if (names or {}).get('by_tmdb') else 'path',
                              **mapping_meta(), **data}, headers=dict(NO_STORE))
 
