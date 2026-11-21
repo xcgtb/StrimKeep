@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from PIL import Image
 
 from strimkeep import commands
-from strimkeep.library_cover_image import SIZE
+from strimkeep.library_cover_image import COVER_LAYOUTS, SIZE, render_cover
 from strimkeep.library_covers import CoverSettings, LibraryCovers, install_library_covers
 from strimkeep.store import Store
 from strimkeep.worker import command_loop
@@ -163,6 +163,73 @@ def test_daily_refresh_uses_saved_schedule_and_skips_unchanged_cover(tmp_path):
             await refresh(23)
             assert len(emby.uploads) == 2 and emby.uploads[0][1] != emby.uploads[1][1]
             assert emby.searches == ['21', '21', '21']
+        store.close()
+
+    asyncio.run(run())
+
+
+def test_templates_produce_distinct_valid_covers():
+    posters = []
+    for color in ('#965572', '#30898a', '#719923', '#973a5c', '#c47a33', '#5f7db3', '#449657', '#7e4d92', '#507487'):
+        buffer = BytesIO()
+        Image.new('RGB', (175, 260), color).save(buffer, 'JPEG')
+        posters.append(buffer.getvalue())
+    images = [render_cover('A Media Library', 'Recently added', '#426bad', style, posters) for style in COVER_LAYOUTS]
+    assert len(images) == len(set(images)) == 8
+    for image in images:
+        with Image.open(BytesIO(image)) as photo:
+            assert photo.size == SIZE and photo.format == 'JPEG'
+    assert images[-1] == render_cover('A Media Library', 'Recently added', '#426bad', 'minimal', [])
+
+
+def test_batch_applies_only_selected_library_covers_and_keeps_saved_styles(tmp_path):
+    async def run():
+        store = make_store(tmp_path)
+        emby = Emby()
+        app = FastAPI()
+
+        async def admin():
+            pass
+
+        install_library_covers(app, store, admin)
+        async with (httpx.AsyncClient(transport=httpx.MockTransport(emby)) as upstream,
+                    httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://app') as client):
+            app.state.http = upstream
+            store.set_meta('worker_heartbeat', {'at': time.time()})
+            listing = (await client.get(ROOT)).json()
+            assert {style['id'] for style in listing['layouts']} == set(COVER_LAYOUTS)
+            scope = listing['scope']
+            covers = LibraryCovers(store, upstream)
+            covers.save(scope, '21', CoverSettings(layout='grid', title='My TV'))
+            data = {'scope': scope, 'library_ids': ['21', '76', '21'], 'layout': 'minimal'}
+            invalid = await client.post(ROOT + '/batch', json={**data, 'library_ids': ['21', '800']})
+            assert invalid.status_code == 409 and commands.running(store) is None
+            submitted = (await client.post(ROOT + '/batch', json=data)).json()['items']
+            assert [item['id'] for item in submitted] == ['21', '76']
+            assert all(item['state'] == 'queued' for item in submitted)
+            second_batch = (await client.post(ROOT + '/batch', json=data)).json()['items']
+            assert all(item['state'] == 'skipped' for item in second_batch)
+            ids = [item['command_id'] for item in submitted]
+            params = {'scope': scope, 'command_ids': ','.join(map(str, ids))}
+            waiting = (await client.get(ROOT + '/batch-status', params=params)).json()['items']
+            assert all(item['state'] == 'queued' for item in waiting)
+
+            stop = asyncio.Event()
+
+            def after_upload():
+                if len(emby.uploads) == 2:
+                    stop.set()
+
+            emby.on_upload = after_upload
+            await asyncio.wait_for(command_loop(store, SimpleNamespace(library_covers=covers),
+                                                stop, commands.COVER_OPERATIONS), timeout=8)
+            done = (await client.get(ROOT + '/batch-status', params=params)).json()['items']
+            assert {item['command_id'] for item in done} == set(ids)
+            assert all(item['state'] == 'done' and item['outcome'] == 'updated' for item in done)
+            assert [target for target, _ in emby.uploads] == ['/Items/21/Images/Primary', '/Items/76/Images/Primary']
+            assert not emby.searches
+            assert covers.settings(scope, '21').layout == 'grid'
+            assert covers.settings(scope, '21').title == 'My TV'
         store.close()
 
     asyncio.run(run())

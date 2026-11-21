@@ -7,7 +7,6 @@ import json
 import re
 import time
 from datetime import datetime
-from typing import Literal
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -16,7 +15,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import commands
 from .emby_connection import saved_base
-from .library_cover_image import MAX_IMAGE_BYTES, SIZE, normalize_upload, open_image, render_cover
+from .library_cover_image import (
+    COVER_LAYOUTS, MAX_IMAGE_BYTES, SIZE, CoverLayout, normalize_upload, open_image, render_cover,
+)
 from .network import emby_request
 
 
@@ -33,7 +34,7 @@ class CoverSettings(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
     title: str = Field('', max_length=48)
     subtitle: str = Field('', max_length=30)
-    layout: Literal['collage', 'grid'] = 'collage'
+    layout: CoverLayout = 'collage'
     color: str = Field('#287e9c', pattern=r'^#[0-9a-fA-F]{6}$')
     posters: int = Field(6, ge=3, le=9)
     enabled: bool = False
@@ -48,6 +49,13 @@ class CoverImage(BaseModel):
     model_config = ConfigDict(extra='forbid')
     scope: str
     image: str = Field(min_length=4, max_length=((MAX_IMAGE_BYTES + 2) // 3) * 4)
+
+
+class CoverBatch(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    scope: str
+    library_ids: list[str] = Field(min_length=1, max_length=100)
+    layout: CoverLayout | None = None
 
 
 def is_cover_image_request(path):
@@ -109,9 +117,23 @@ class LibraryCovers:
             "SELECT id,state,message,result FROM worker_commands WHERE kind=? "
             "AND json_extract(payload,'$.scope')=? AND json_extract(payload,'$.library_id')=? "
             "ORDER BY id DESC LIMIT 1", (commands.LIBRARY_COVER, scope, library_id)).fetchone()
-        return {'state': row['state'] if row else 'idle',
-                'message': (row['message'] or (json.loads(row['result'] or '{}') or {}).get('message', '')) if row else '',
-                'last': self.store.meta_json(self.key(scope, library_id), {})}
+        return {**self.command_status(row), 'last': self.store.meta_json(self.key(scope, library_id), {})}
+
+    @staticmethod
+    def command_status(row):
+        if not row:
+            return {'state': 'idle', 'message': ''}
+        result = json.loads(row['result'] or '{}') or {}
+        return {'state': row['state'], 'message': row['message'] or result.get('message', ''),
+                **({'outcome': result['outcome']} if 'outcome' in result else {})}
+
+    def batch_status(self, scope, ids):
+        rows = self.store.db.execute(
+            "SELECT id,state,message,result FROM worker_commands WHERE kind=? "
+            "AND json_extract(payload,'$.scope')=? "
+            "AND id IN (SELECT value FROM json_each(?))",
+            (commands.LIBRARY_COVER, scope, json.dumps(ids))).fetchall()
+        return [{'command_id': row['id'], **self.command_status(row)} for row in rows]
 
     @staticmethod
     def key(scope, library_id):
@@ -163,10 +185,13 @@ class LibraryCovers:
         return None
 
     async def poster_choices(self, pair, library, settings):
+        limit = min(settings.posters, COVER_LAYOUTS[settings.layout][1])
+        if not limit:
+            return []
         data = await self.json(pair, '/Items', {'ParentId': library['id'], 'Recursive': 'true',
             'IncludeItemTypes': 'Movie,Series', 'SortBy': 'DateCreated', 'SortOrder': 'Descending',
             'EnableImages': 'true', 'EnableImageTypes': 'Primary', 'ImageTypeLimit': 1,
-            'EnableUserData': 'false', 'Limit': settings.posters * 4})
+            'EnableUserData': 'false', 'Limit': limit * 4})
         if not isinstance(data, dict) or not isinstance(data.get('Items'), list):
             raise CoverError('Emby 作品列表格式无效。')
         choices = []
@@ -178,7 +203,7 @@ class LibraryCovers:
             tag = tags.get('Primary') if isinstance(tags, dict) else None
             if tag and LIBRARY_ID.fullmatch(item_id):
                 choices.append((item_id, tag))
-                if len(choices) >= settings.posters:
+                if len(choices) >= limit:
                     break
         return choices
 
@@ -192,11 +217,12 @@ class LibraryCovers:
             return None, signature, len(choices)
         # Fetch one small set of images concurrently, keeping order from DateCreated.
         sem = asyncio.Semaphore(3)
+        width = {'hero': 600, 'panorama': 1280}.get(settings.layout, 360)
 
         async def fetch(item_id, tag):
             async with sem:
                 try:
-                    image = await self.artwork(pair, item_id, width=360, tag=tag)
+                    image = await self.artwork(pair, item_id, width=width, tag=tag)
                     if image:
                         await asyncio.to_thread(open_image, image)
                     return image
@@ -217,18 +243,22 @@ class LibraryCovers:
         key = self.key(scope, library_id)
         previous = self.store.meta_json(key, {}) or {}
         signature = ''
-        if payload.get('automatic'):
+        generate = payload.get('automatic') or 'settings' in payload
+        if 'settings' in payload:
+            settings = CoverSettings.model_validate(payload['settings'])
+        elif payload.get('automatic'):
             settings = self.settings(scope, library_id)
             if not settings.enabled:
-                return {'message': '该库的定时更新已关闭。'}
+                return {'outcome': 'skipped', 'message': '该库的定时更新已关闭。'}
+        if generate:
             image, signature, _ = await self.generate(pair, library, settings, previous.get('signature', ''))
             if image is None:
-                return {'message': '入选海报和样式没有变化。'}
+                return {'outcome': 'unchanged', 'message': '入选海报和样式没有变化。'}
         else:
             image = decode_image(payload['image'])
         image_hash = hashlib.sha256(image).hexdigest()
         # A manual apply is explicit. Automatic refresh leaves a valid unchanged cover alone.
-        unchanged = payload.get('automatic') and previous.get('image_hash') == image_hash
+        unchanged = generate and previous.get('image_hash') == image_hash
         if not unchanged:
             self.connection(scope)
             result = await self.request(pair, 'POST', f'/Items/{library_id}/Images/Primary', upload=image)
@@ -236,7 +266,8 @@ class LibraryCovers:
                 raise CoverError(f'Emby 拒绝应用封面（HTTP {result.status_code}）。')
         self.store.set_meta(key, {'signature': signature, 'image_hash': image_hash,
                                   'applied_at': previous.get('applied_at') if unchanged else time.time()})
-        return {'message': '封面画面没有变化。' if unchanged else '媒体库封面已应用到 Emby。'}
+        return {'outcome': 'unchanged' if unchanged else 'updated',
+                'message': '封面画面没有变化。' if unchanged else '媒体库封面已应用到 Emby。'}
 
     def enqueue(self, scope, library_id, *, scheduled_day=None, **options):
         payload = {'scope': scope, 'library_id': library_id, **options}
@@ -303,8 +334,45 @@ def install_library_covers(app, store, admin):
             raise HTTPException(409, str(exc)) from exc
         scope = pair[2]
         return {'scope': scope, 'timezone': store.get('timezone') or 'Asia/Shanghai',
+                'layouts': [{'id': key, 'name': name, 'max_posters': limit}
+                            for key, (name, limit) in COVER_LAYOUTS.items()],
                 'items': [{**row, 'settings': service.settings(scope, key).model_dump(),
                            'status': service.status(scope, key)} for key, row in items.items()]}
+
+    @app.post(prefix + '/batch', dependencies=[Depends(admin)])
+    async def batch_covers(body: CoverBatch, service: LibraryCovers = Depends(covers)):
+        try:
+            pair = service.connection(body.scope)
+            libraries = await service.libraries(pair)
+        except CoverError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        library_ids = list(dict.fromkeys(body.library_ids))
+        if any(key not in libraries for key in library_ids):
+            raise HTTPException(409, '部分媒体库已变更，请刷新列表后重新选择。')
+        if not commands.worker_ready(store):
+            raise HTTPException(503, '后台 Worker 未就绪，请稍后重试。')
+
+        items = []
+        with store.transaction(immediate=True):
+            for key in library_ids:
+                settings = service.settings(body.scope, key)
+                if body.layout:
+                    settings.layout = body.layout
+                command_id = service.enqueue(body.scope, key, settings=settings.model_dump())
+                items.append({**libraries[key], 'command_id': command_id,
+                              'state': 'queued' if command_id else 'skipped',
+                              'message': '' if command_id else '已有封面任务在处理。'})
+        return {'items': items}
+
+    @app.get(prefix + '/batch-status', dependencies=[Depends(admin)])
+    async def batch_cover_status(scope: str, command_ids: str, service: LibraryCovers = Depends(covers)):
+        if not re.fullmatch(r'[0-9]{1,19}(?:,[0-9]{1,19}){0,99}', command_ids):
+            raise HTTPException(422, '封面任务编号无效。')
+        try:
+            service.connection(scope)
+        except CoverError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {'items': service.batch_status(scope, [int(item) for item in command_ids.split(',')])}
 
     @app.get(prefix + '/{library_id}/status', dependencies=[Depends(admin)])
     async def cover_status(library_id: str, scope: str, service: LibraryCovers = Depends(covers)):
