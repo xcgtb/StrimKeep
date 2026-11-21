@@ -3,15 +3,19 @@ from io import BytesIO
 from pathlib import Path
 from typing import Literal
 
-from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont, ImageOps
+from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont, ImageOps, ImageStat
 
 
 SIZE = (1280, 720)
 MAX_IMAGE_BYTES = 2 * 1024 * 1024
 RENDER_VERSION = 3
 CoverLayout = Literal['collage', 'grid', 'hero', 'filmstrip', 'stack', 'magazine', 'panorama', 'minimal',
-                      'gallery', 'arc', 'split', 'soft']
+                      'gallery', 'arc', 'split', 'soft', 'cinema-card', 'cinema-cut', 'cinema-wall']
+CINEMA_LAYOUTS = ('cinema-card', 'cinema-cut', 'cinema-wall')
 COVER_LAYOUTS = {
+    'cinema-card': ('影院叠卡', 1),
+    'cinema-cut': ('影院斜切', 1),
+    'cinema-wall': ('影院九宫格', 9),
     'collage': ('斜向拼贴', 9),
     'grid': ('整齐网格', 9),
     'hero': ('主海报', 1),
@@ -204,11 +208,59 @@ def _display_row(canvas, posters, *, curved=False):
               radius=12, angle=angle)
 
 
-def render_cover(title, subtitle, color, layout, posters, *, size=SIZE):
+def _cinema_background(photo, accent):
+    sample = ImageOps.fit(photo, (160, 90)).filter(ImageFilter.GaussianBlur(17))
+    ambient = tuple(round(value * .69 + tint * .17) for value, tint in zip(ImageStat.Stat(sample).mean, accent))
+    mist = sample.resize(SIZE, Image.Resampling.BICUBIC)
+    return Image.blend(Image.new('RGB', SIZE, ambient), mist, .33).convert('RGBA')
+
+
+def _cinema_cards(canvas, poster, accent):
+    thumb = ImageOps.fit(poster, (468, 468)).filter(ImageFilter.GaussianBlur(23))
+    for angle, offset in ((17, -17), (-12, 15)):
+        wash = Image.new('RGB', thumb.size, accent if offset < 0 else '#251d29')
+        layer = Image.blend(thumb, wash, .57)
+        _card(canvas, layer, (717 + offset, 133, 468, 468), radius=48, angle=angle)
+    _card(canvas, poster, (717, 126, 468, 468), radius=48)
+
+
+def _cinema_cut(canvas, image):
+    still = ImageOps.fit(image, SIZE, Image.Resampling.LANCZOS, centering=(.52, .34)).convert('RGBA')
+    mask = Image.new('L', SIZE)
+    ImageDraw.Draw(mask).polygon(((743, 0), (1280, 0), (1280, 720), (536, 720)), fill=255)
+    still.putalpha(mask)
+    canvas.alpha_composite(still)
+
+
+def _cinema_cover(title, subtitle, accent, layout, posters, scene):
+    if not posters:
+        canvas = _cover_background(accent, [])
+        _title(canvas, title, subtitle, accent, 640, 354, 1080, centered=True, middle=True, maximum=124)
+        return canvas
+
+    main = posters[0]
+    canvas = _cinema_background(scene or main, accent)
+    if layout == 'cinema-card':
+        _cinema_cards(canvas, main, accent)
+    elif layout == 'cinema-cut':
+        _cinema_cut(canvas, scene or main)
+    else:
+        wall = [posters[index % len(posters)] for index in range(9)]
+        _poster_wall(canvas, wall, angled=True)
+    _title_panel(canvas)
+    _title(canvas, title, subtitle, accent, 292, 357, 454, centered=True, middle=True, maximum=118)
+    return canvas
+
+
+def render_cover(title, subtitle, color, layout, posters, *, size=SIZE, scene=None):
     accent = ImageColor.getrgb(color)
     posters = [open_image(blob) for blob in posters[:COVER_LAYOUTS[layout][1]]]
-    canvas = _cover_background(accent, posters)
+    if layout in CINEMA_LAYOUTS:
+        canvas = _cinema_cover(title, subtitle, accent, layout, posters, open_image(scene) if scene else None)
+        image = canvas.convert('RGB')
+        return jpeg(image if size == SIZE else image.resize(size, Image.Resampling.LANCZOS))
 
+    canvas = _cover_background(accent, posters)
     if layout in ('collage', 'grid'):
         if len(posters) >= 4:
             _poster_wall(canvas, posters, angled=layout == 'collage')

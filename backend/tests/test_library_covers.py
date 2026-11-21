@@ -27,6 +27,9 @@ class Emby:
         self.tag = 'current-tag'
         self.poster_reads = 0
         self.poster = image_bytes((180, 270))
+        self.scene_reads = 0
+        self.scene_tag = 'scene-tag'
+        self.scene = image_bytes((640, 360), color='#438443')
         self.on_upload = None
 
     def __call__(self, request):
@@ -44,12 +47,16 @@ class Emby:
             assert parents['SortBy'] == 'DateCreated' and parents['SortOrder'] == 'Descending'
             assert parents['IncludeItemTypes'] == 'Movie,Series'
             return httpx.Response(200, json={'Items': [
-                {'Id': '800', 'ImageTags': {'Primary': self.tag}},
+                {'Id': '800', 'ImageTags': {'Primary': self.tag}, 'BackdropImageTags': [self.scene_tag]},
             ] if parents['ParentId'] == '21' else []})
         if path == '/Items/800/Images/Primary' and request.method == 'GET':
             assert request.url.params['Tag'] == self.tag
             self.poster_reads += 1
             return httpx.Response(200, content=self.poster)
+        if path == '/Items/800/Images/Backdrop' and request.method == 'GET':
+            assert request.url.params['Tag'] == self.scene_tag and request.url.params['Index'] == '0'
+            self.scene_reads += 1
+            return httpx.Response(200, content=self.scene)
         if path in ('/Items/21/Images/Primary', '/Items/76/Images/Primary'):
             assert request.method == 'POST'
             assert request.headers['content-type'] == 'image/jpeg'
@@ -62,9 +69,9 @@ class Emby:
         raise AssertionError(f'unexpected Emby request {request.method} {path}')
 
 
-def image_bytes(size, format='JPEG'):
+def image_bytes(size, format='JPEG', *, color='#bd6458'):
     buffer = BytesIO()
-    Image.new('RGB', size, '#bd6458').save(buffer, format)
+    Image.new('RGB', size, color).save(buffer, format)
     return buffer.getvalue()
 
 
@@ -98,10 +105,13 @@ def test_gallery_reuses_real_posters_and_single_library_write_routes_are_removed
             generated = (await client.post(ROOT + '/gallery', json=options)).json()
             assert generated['poster_count'] == 1
             assert [item['id'] for item in generated['items']] == list(COVER_LAYOUTS)
-            assert emby.searches == ['21'] and emby.poster_reads == 1
+            assert emby.searches == ['21'] and emby.poster_reads == emby.scene_reads == 1
             for item in generated['items']:
                 with Image.open(BytesIO(base64.b64decode(item['image']))) as image:
                     assert image.size == (640, 360)
+                    if item['id'] == 'cinema-cut':
+                        red, green, blue = image.getpixel((532, 160))
+                        assert green > red + 35 and green > blue + 35
             for route in ('/21/apply', '/21/upload-preview'):
                 assert (await client.post(ROOT + route, json={})).status_code == 404
             assert (await client.put(ROOT + '/21/settings', json={})).status_code == 404
@@ -159,7 +169,7 @@ def test_templates_produce_distinct_valid_covers():
         Image.new('RGB', (175, 260), color).save(buffer, 'JPEG')
         posters.append(buffer.getvalue())
     images = [render_cover('A Media Library', 'Recently added', '#426bad', style, posters) for style in COVER_LAYOUTS]
-    assert len(images) == len(set(images)) == 12
+    assert len(images) == len(set(images)) == 15
     for image in images:
         with Image.open(BytesIO(image)) as photo:
             assert photo.size == SIZE and photo.format == 'JPEG'
@@ -202,7 +212,7 @@ def test_batch_uses_one_style_for_selected_libraries_and_saves_it_for_the_schedu
             assert {style['id'] for style in listing['layouts']} == set(COVER_LAYOUTS)
             scope = listing['scope']
             covers = LibraryCovers(store, upstream)
-            data = {'scope': scope, 'library_ids': ['21', '76', '21'], 'layout': 'minimal',
+            data = {'scope': scope, 'library_ids': ['21', '76', '21'], 'layout': 'cinema-cut',
                     'color': '#446699', 'enabled': True, 'daily_at': '06:30'}
             invalid = await client.post(ROOT + '/batch', json={**data, 'library_ids': ['21', '800']})
             assert invalid.status_code == 409 and commands.running(store) is None
@@ -213,7 +223,7 @@ def test_batch_uses_one_style_for_selected_libraries_and_saves_it_for_the_schedu
             assert all(item['state'] == 'skipped' for item in second_batch)
             ids = [item['command_id'] for item in submitted]
             assert all(json.loads(commands.get(store, command_id)['payload'])['style'] ==
-                       {'layout': 'minimal', 'color': '#446699', 'posters': 6} for command_id in ids)
+                       {'layout': 'cinema-cut', 'color': '#446699', 'posters': 6} for command_id in ids)
             params = {'scope': scope, 'command_ids': ','.join(map(str, ids))}
             waiting = (await client.get(ROOT + '/batch-status', params=params)).json()['items']
             assert all(item['state'] == 'queued' for item in waiting)
@@ -231,10 +241,11 @@ def test_batch_uses_one_style_for_selected_libraries_and_saves_it_for_the_schedu
             assert {item['command_id'] for item in done} == set(ids)
             assert all(item['state'] == 'done' and item['outcome'] == 'updated' for item in done)
             assert [target for target, _ in emby.uploads] == ['/Items/21/Images/Primary', '/Items/76/Images/Primary']
-            assert not emby.searches
+            assert emby.searches == ['21', '76'] and emby.scene_reads == 1
             assert len({image for _, image in emby.uploads}) == 2
             saved = (await client.get(ROOT)).json()['settings']
-            assert (saved['layout'], saved['daily_at'], saved['library_ids']) == ('minimal', '06:30', ['21', '76'])
+            assert (saved['layout'], saved['daily_at'], saved['library_ids']) == (
+                'cinema-cut', '06:30', ['21', '76'])
         store.close()
 
     asyncio.run(run())

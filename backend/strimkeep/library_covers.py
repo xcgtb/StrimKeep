@@ -7,6 +7,7 @@ import json
 import re
 import time
 from datetime import datetime
+from typing import NamedTuple
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -28,6 +29,12 @@ LEGACY_SETTINGS_KEY = 'emby_library_covers'
 
 class CoverError(ValueError):
     pass
+
+
+class CoverArt(NamedTuple):
+    item_id: str
+    poster_tag: str
+    backdrop_tag: str = ''
 
 
 class CoverStyle(BaseModel):
@@ -169,21 +176,25 @@ class LibraryCovers:
             raise CoverError('Emby 中找不到这个媒体库，请刷新列表。')
         return item
 
-    async def artwork(self, pair, item_id, *, width, tag=None):
+    async def artwork(self, pair, item_id, *, width, tag=None, backdrop=False):
         params = {'MaxWidth': width, 'Format': 'jpg'}
         if tag:
             params['Tag'] = tag
-        response = await self.request(pair, 'GET', f'/Items/{item_id}/Images/Primary', params=params)
+        kind = 'Backdrop' if backdrop else 'Primary'
+        if backdrop:
+            params['Index'] = 0
+        response = await self.request(pair, 'GET', f'/Items/{item_id}/Images/{kind}', params=params)
         if response.is_success and 0 < len(response.content) <= MAX_IMAGE_BYTES:
             return response.content
         return None
 
-    async def poster_choices(self, pair, library, limit):
+    async def poster_choices(self, pair, library, limit, *, backdrop=False):
         if not limit:
             return []
         data = await self.json(pair, '/Items', {'ParentId': library['id'], 'Recursive': 'true',
             'IncludeItemTypes': 'Movie,Series', 'SortBy': 'DateCreated', 'SortOrder': 'Descending',
-            'EnableImages': 'true', 'EnableImageTypes': 'Primary', 'ImageTypeLimit': 1,
+            'EnableImages': 'true', 'EnableImageTypes': 'Primary,Backdrop' if backdrop else 'Primary',
+            'ImageTypeLimit': 1,
             'EnableUserData': 'false', 'Limit': limit * 4})
         if not isinstance(data, dict) or not isinstance(data.get('Items'), list):
             raise CoverError('Emby 作品列表格式无效。')
@@ -195,7 +206,9 @@ class LibraryCovers:
             tags = entry.get('ImageTags')
             tag = tags.get('Primary') if isinstance(tags, dict) else None
             if tag and LIBRARY_ID.fullmatch(item_id):
-                choices.append((item_id, tag))
+                scene_tags = entry.get('BackdropImageTags')
+                scene = scene_tags[0] if backdrop and isinstance(scene_tags, list) and scene_tags else ''
+                choices.append(CoverArt(item_id, tag, scene))
                 if len(choices) >= limit:
                     break
         return choices
@@ -213,10 +226,22 @@ class LibraryCovers:
                 except (CoverError, ValueError):
                     return None
 
-        posters = [image for image in await asyncio.gather(*(fetch(*item) for item in choices)) if image]
+        posters = [image for image in await asyncio.gather(*(
+            fetch(item.item_id, item.poster_tag) for item in choices)) if image]
         if choices and not posters:
             raise CoverError('没有读到可用的作品海报，请稍后重试。')
         return posters
+
+    async def fetch_backdrop(self, pair, choice):
+        if not choice or not choice.backdrop_tag:
+            return None
+        try:
+            image = await self.artwork(pair, choice.item_id, width=1280, tag=choice.backdrop_tag, backdrop=True)
+            if image:
+                await asyncio.to_thread(open_image, image)
+            return image
+        except (CoverError, ValueError):
+            return None
 
     @staticmethod
     def titles(library):
@@ -226,26 +251,38 @@ class LibraryCovers:
         title, subtitle = self.titles(library)
         if isinstance(settings, QueuedCoverSettings):
             title, subtitle = settings.title or title, settings.subtitle or subtitle
-        choices = await self.poster_choices(pair, library, min(settings.posters, COVER_LAYOUTS[settings.layout][1]))
-        signature = hashlib.sha256(json.dumps(
-            [RENDER_VERSION, title, subtitle, settings.color, settings.layout, choices], ensure_ascii=False).encode()).hexdigest()
+        wants_scene = settings.layout == 'cinema-cut'
+        choices = await self.poster_choices(
+            pair, library, min(settings.posters, COVER_LAYOUTS[settings.layout][1]), backdrop=wants_scene)
+        scene_source = choices[0] if wants_scene and choices else None
+        inputs = [RENDER_VERSION, title, subtitle, settings.color, settings.layout,
+                  [(item.item_id, item.poster_tag) for item in choices]]
+        if scene_source and scene_source.backdrop_tag:
+            inputs.append(scene_source.backdrop_tag)
+        signature = hashlib.sha256(json.dumps(inputs, ensure_ascii=False).encode()).hexdigest()
         if previous == signature:
             return None, signature, len(choices)
         width = 1280 if settings.layout == 'panorama' else 640 if len(choices) <= 3 else 360
-        posters = await self.fetch_posters(pair, choices, width)
-        image = await asyncio.to_thread(render_cover, title, subtitle, settings.color, settings.layout, posters)
-        return image, signature if len(choices) == len(posters) else '', len(posters)
+        posters, scene = await asyncio.gather(
+            self.fetch_posters(pair, choices, width), self.fetch_backdrop(pair, scene_source))
+        image = await asyncio.to_thread(render_cover, title, subtitle, settings.color, settings.layout, posters, scene=scene)
+        all_art = len(choices) == len(posters) and (not scene_source or not scene_source.backdrop_tag or scene)
+        return image, signature if all_art else '', len(posters)
 
     async def gallery(self, pair, library, options):
         layouts = list(dict.fromkeys(options.layouts))
         limit = min(options.posters, max(COVER_LAYOUTS[key][1] for key in layouts))
-        choices = await self.poster_choices(pair, library, limit)
-        posters = await self.fetch_posters(pair, choices, 640)
+        wants_scene = 'cinema-cut' in layouts
+        choices = await self.poster_choices(pair, library, limit, backdrop=wants_scene)
+        posters, scene = await asyncio.gather(
+            self.fetch_posters(pair, choices, 640),
+            self.fetch_backdrop(pair, choices[0] if wants_scene and choices else None))
         title, subtitle = self.titles(library)
 
         def render():
             return [{'id': key, 'image': base64.b64encode(
-                render_cover(title, subtitle, options.color, key, posters, size=(640, 360))).decode()}
+                render_cover(title, subtitle, options.color, key, posters, size=(640, 360),
+                             scene=scene if key == 'cinema-cut' else None)).decode()}
                     for key in layouts]
 
         return {'items': await asyncio.to_thread(render), 'poster_count': len(posters)}
