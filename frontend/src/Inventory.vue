@@ -99,7 +99,7 @@ function episodeList(values:any[], limit = 12) {
 }
 function capped(values:any[], limit:number) { return (values || []).slice(0, limit) }
 function ruleValue(value:any) { if (value == null) return '未知'; return typeof value === 'object' ? Object.values(value).filter(v => v != null && v !== '').join(' / ') || '未知' : String(value) }
-const rows = ref<any[]>([]), mappingTotal = ref(0), pageBusy = ref(false), pageFallback = ref(false)
+const rows = ref<any[]>([]), mappingTotal = ref(0), inventoryTotal = ref(0), pageBusy = ref(false), pageFallback = ref(false)
 let pageRequest = 0
 const inventoryComplete = ref(true), inventoryIssues = ref<any[]>([]), inventoryIssueCount = ref(0)
 type ScanSource = {side:string, path:string, exists:boolean, strm_count:number}
@@ -214,6 +214,7 @@ async function loadPage(refresh=false) {
     if (Array.isArray(data.all_categories)) allCategories.value = data.all_categories
     categorySource.value = data.category_source || 'path'
     mappingTotal.value = Number(data.total || 0)
+    inventoryTotal.value = Number(data.all_stats?.total ?? data.total ?? 0)
     inventoryComplete.value = data.inventory_complete !== false
     inventoryIssues.value = data.issues || []
     inventoryIssueCount.value = data.issue_count ?? inventoryIssues.value.length
@@ -238,6 +239,7 @@ async function loadPage(refresh=false) {
     allCategories.value = Object.keys(counts).map(name => ({name, count: counts[name]}))
     const list = localFilter(all)
     mappingTotal.value = list.length
+    inventoryTotal.value = all.length
     rows.value = list.slice((page.value - 1) * pageSize.value, page.value * pageSize.value)
   } finally { if (request === pageRequest) pageBusy.value = false }
   if (request !== pageRequest) return
@@ -261,8 +263,8 @@ function cardStatus(item:any) {
 const comparedOnce = new Set<string>()
 async function compareItems(list:any[], all=false) {
   const generation = statusGeneration
-  // 服务端已判「待对照」的卡片也要重新对照（缓存可能因库存变动失效），
-  // 同一会话只自动补一次，避免每次翻页都去问 TMDB。
+  // 自动补当前页；「同步全库」会传入全库剧集。
+  // 服务端已判「待对照」的卡片也要重新对照（缓存可能因库存变动失效）。
   const queue = list.filter(item => {
     if (item.kind !== 'tv' || item.unidentified) return false
     if (all) return true
@@ -507,7 +509,10 @@ async function executePlan() {
 function compareSummary(list:any[]) {
   const counts:Record<string, number> = {}
   const stuck:string[] = []
+  let movies = 0, unmatched = 0
   for (const item of list) {
+    if (item.unidentified) { unmatched++; continue }
+    if (item.kind === 'movie') { movies++; continue }
     const entry = statusById.value[workKey(item)]
     if (!entry || entry.loading) continue
     const status = inventoryCardStatus(item, entry)
@@ -519,21 +524,56 @@ function compareSummary(list:any[]) {
   }
   const parts = [['complete', '完整'], ['missing', '缺集'], ['extra', '超集'], ['ongoing', '在更']]
     .filter(([key]) => counts[key]).map(([key, label]) => `${label} ${counts[key]}`)
-  const text = parts.length ? '已对照 ' + parts.join(' · ') : '对照完成'
-  return stuck.length ? `${text}；仍待对照 ${stuck.length} 部：${stuck.slice(0, 2).join('、')}` : text
+  const text = parts.length ? '全库已对照 ' + parts.join(' · ') : '全库对照完成'
+  const notes = [movies ? `电影 ${movies} 部已入库` : '', unmatched ? `未识别 ${unmatched} 部` : ''].filter(Boolean)
+  const summary = notes.length ? `${text} · ${notes.join(' · ')}` : text
+  return stuck.length ? `${summary}；仍待对照 ${stuck.length} 部：${stuck.slice(0, 2).join('、')}` : summary
 }
-async function comparePage() {
-  const list = comparableSeries.value
-  if (!list.length || statusBusy.value || pageBusy.value) return
+async function allMappingRows() {
+  const all:any[] = []
+  const seen = new Set<string>()
+  let offset = 0
+  try {
+    for (;;) {
+      const query = new URLSearchParams({media:'all', status:'all', scope:'all', category:'all',
+        keyword:'', offset:String(offset), limit:'80', refresh:'0'})
+      const data = await props.api(`/inventory/mapping/page?${query}`)
+      const pageRows = (data.rows || []).map(withFiles)
+      for (const row of pageRows) {
+        const key = workKey(row)
+        if (seen.has(key)) continue
+        seen.add(key); all.push(row)
+      }
+      const total = Number(data.total || 0)
+      const next = Number(data.next_offset ?? offset + pageRows.length)
+      if (!pageRows.length || next <= offset || all.length >= total) break
+      offset = next
+    }
+    return all
+  } catch (original) {
+    // 老后端没有映射分页接口时退回整库快照，仍然对照全部而不是当前页。
+    const snap = snapshot.value || await props.api('/inventory').catch(() => null)
+    if (!snap) throw original
+    return (snap.items || []).map(withFiles)
+  }
+}
+async function compareAll() {
+  if (statusBusy.value || pageBusy.value) return
   const request = compareView
   compareNotice.value = null
+  statusBusy.value = true
+  statusProgress.value = '读取全部作品…'
   try {
-    await compareItems(list, true)
+    const list = await allMappingRows()
+    if (request !== compareView) return
+    const series = list.filter((item:any) => item.kind === 'tv' && !item.unidentified)
+    if (series.length) await compareItems(series, true)
     if (request !== compareView) return
     const summary = compareSummary(list)
     compareNotice.value = {text:summary, type:summary.includes('仍待对照') ? 'warning' : 'success'}
-    await loadPage()
+    if (series.length) await loadPage()
   } catch (e) { error.value = (e as Error).message; ElMessage.error((e as Error).message) }
+  finally { statusBusy.value = false }
 }
 function openWork(row:any) {
   // 治理行 → 片库映射详情：kind/tmdb_id 足以让详情抽屉自己把文件清单取回来。
@@ -618,16 +658,16 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize) })
    <section class="mapping-filters" aria-label="片库筛选">
     <div class="mapping-search-row">
      <el-input v-model="search" class="mapping-search" placeholder="搜索片名或 TMDB ID" clearable />
-     <el-button :loading="statusBusy" :disabled="pageBusy || !comparableSeries.length" @click="comparePage">对照本页剧集</el-button>
+     <el-button :loading="statusBusy" :disabled="pageBusy || statusBusy || !inventoryTotal" title="对照全部剧集和电影" @click="compareAll">同步全库</el-button>
     </div>
     <div class="mapping-filter-row"><span class="mapping-filter-label">类型</span><el-radio-group v-model="kindFilter"><el-radio-button value="all">全部</el-radio-button><el-radio-button value="tv">剧集</el-radio-button><el-radio-button value="movie">电影</el-radio-button></el-radio-group></div><div class="mapping-filter-row"><span class="mapping-filter-label">片库</span><el-radio-group v-model="scopeFilter"><el-radio-button value="all">全部</el-radio-button><el-radio-button value="cloud">网盘库</el-radio-button><el-radio-button value="share">分享库</el-radio-button><el-radio-button value="both">双库</el-radio-button></el-radio-group></div>
     <div class="mapping-category-row"><span class="mapping-filter-label">目录分类</span><div class="mapping-status-scroll" tabindex="0" aria-label="目录分类，横向滚动查看更多"><el-radio-group v-model="categoryFilter"><el-radio-button value="all">全部分类</el-radio-button><el-radio-button v-for="entry in allCategories" :key="entry.name" :value="entry.name">{{entry.name}}（{{entry.count}}）</el-radio-button></el-radio-group></div><span class="mapping-filter-hint">{{ categorySource === 'emby' ? '分类来自 Emby 媒体库（按 TMDB 号匹配）' : 'Emby 未连接或未匹配，暂按目录关键词分类' }}</span></div>
     <div class="mapping-status-scroll"><el-radio-group v-model="statusFilter"><el-radio-button value="all">全部状态</el-radio-button><el-radio-button value="missing">缺集</el-radio-button><el-radio-button value="complete">完整</el-radio-button><el-radio-button value="extra">超集</el-radio-button><el-radio-button value="ongoing">在更</el-radio-button><el-radio-button value="pending">待对照</el-radio-button><el-radio-button value="unmatched">未识别</el-radio-button></el-radio-group></div>
    </section>
    <el-alert v-if="compareNotice" :title="compareNotice.text" :type="compareNotice.type" :closable="false" show-icon />
-   <p v-else-if="!pageBusy && visibleItems.length && !comparableSeries.length" class="muted">本页没有已识别的剧集可以对照。</p>
+   <p v-else-if="!pageBusy && visibleItems.length && !comparableSeries.length" class="muted">本页没有已识别的剧集；点「同步全库」可对照全部剧集和电影。</p>
    <details class="inventory-help mapping-explanation"><summary>状态说明</summary><div class="mapping-legend"><span v-for="entry in STATUS_LEGEND" :key="entry.text" class="mapping-legend-item"><b>{{ entry.text }}</b>{{ entry.hint }}</span></div><p>扫描有问题的作品另标“库存待核实”。</p></details>
-   <div class="mapping-result-bar"><div><strong>{{ pageBusy ? '加载中…' : mappingTotal + ' 部作品' }}</strong><span v-if="statusBusy" class="muted"> · 对照中 {{ statusProgress }}</span><span v-else-if="pageFallback" class="muted"> · 本地过滤</span></div><span v-if="!chosen.length && !batchMode" class="muted">点海报看详情 · <el-button link type="primary" size="small" @click="toggleBatchMode">多选清理</el-button></span></div>
+   <div class="mapping-result-bar"><div><strong>{{ pageBusy ? '加载中…' : mappingTotal + ' 部作品' }}</strong><span v-if="statusBusy" class="muted"> · 全库对照中 {{ statusProgress }}</span><span v-else-if="pageFallback" class="muted"> · 本地过滤</span></div><span v-if="!chosen.length && !batchMode" class="muted">点海报看详情 · <el-button link type="primary" size="small" @click="toggleBatchMode">多选清理</el-button></span></div>
    <div v-if="chosen.length || batchMode" class="mapping-selection-bar"><strong>{{ chosen.length ? '已选择 ' + chosen.length + ' 部' : '多选：横向滑过海报连续选择；从已选中的卡片起划是取消' }}</strong><div class="mapping-selection-actions"><el-button size="small" @click="selectPage">全选本页</el-button><el-button size="small" :disabled="!chosen.length" @click="unselectPage">取消本页</el-button><el-button size="small" :disabled="!chosen.length" @click="chosen = []">清空</el-button><el-button size="small" :loading="planBusy" :disabled="!chosen.length" @click="manualDelete(chosen,'cloud')">删除网盘库</el-button><el-button size="small" :loading="planBusy" :disabled="!chosen.length" @click="manualDelete(chosen,'share')">删除分享库</el-button><el-button size="small" type="danger" plain :loading="planBusy" :disabled="!chosen.length" @click="manualDelete(chosen,'both')">删除两库</el-button><el-button size="small" @click="toggleBatchMode">{{ batchMode ? '退出多选' : '多选清理' }}</el-button><span class="muted mapping-batch-limit">单次最多 100 部 / 10000 个文件</span></div></div>
    <el-skeleton v-if="busy && !visibleItems.length" :rows="6" animated />
    <el-empty v-else-if="!visibleItems.length" :description="emptyScan ? '扫描目录中未找到 STRM' : '没有符合当前筛选的作品'" />
