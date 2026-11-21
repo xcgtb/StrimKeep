@@ -16,13 +16,13 @@ from test_organize import CONFIG, MEDIA, MOVIE, TV, MemoryCloud, setup, new_job
 from test_upgrade import upgraded_setup, policy
 
 @pytest.mark.parametrize('country,region',[('CN','国产'),('HK','国产'),('TW','国产'),('JP','日韩'),('KR','日韩'),('US','欧美'),('FR','欧美'),('IN','其他')])
-def test_animation_film_is_regional_movie(country,region):
+def test_animation_identity_distinguishes_movie_and_series(country,region):
     details={**MOVIE,'origin_country':[country],'genres':[{'id':16}]}
-    assert classify(details,'movie')==('电影',region)
+    assert classify(details,'movie')==('动画电影',region)
     assert classify(details,'tv')==('动漫',region)
 
-@pytest.mark.parametrize('country,region', [('US','欧美'), ('IN','其他')])
-def test_normal_organize_still_archives_animation_movie_in_regional_film_folder(tmp_path, country, region):
+@pytest.mark.parametrize('country', ['US', 'IN'])
+def test_normal_organize_archives_animation_in_movie_animation_folder(tmp_path, country):
     async def scenario():
         store, cloud, http, engine, _ = setup(tmp_path)
         cloud.add_video(name='测试电影 (2024).mkv')
@@ -36,15 +36,15 @@ def test_normal_organize_still_archives_animation_movie_in_regional_film_folder(
         assert engine.job(jid)['state'] == 'completed', dict(engine.job(jid))
         registered = engine.outputs.get('1','1000')
         path = engine.root / registered['relative_path']
-        assert path.parts[-4:-2] == ('电影', region+'电影')
+        assert path.parts[-4:-2] == ('电影', '动画电影')
         text = path.read_text()
         assert path.is_file() and text.startswith('https://play.example/play115/')
         # 身份段来自云端条目本身：pickcode/fid/sha1/size 都在地址里
         assert '/play115/pc1000/1000/hash1000/1000/' in text
         parent = cloud.nodes['1000']['parent_id']
-        assert cloud.nodes[cloud.nodes[parent]['parent_id']]['name'] == region+'电影'
-        regional = cloud.nodes[parent]['parent_id']
-        assert cloud.nodes[cloud.nodes[regional]['parent_id']]['name'] == '电影'
+        animation = cloud.nodes[cloud.nodes[parent]['parent_id']]
+        assert animation['name'] == '动画电影'
+        assert cloud.nodes[animation['parent_id']]['name'] == '电影'
         await http.aclose()
         store.close()
     asyncio.run(scenario())
