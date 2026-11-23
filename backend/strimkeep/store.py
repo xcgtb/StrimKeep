@@ -656,6 +656,9 @@ class Store:
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA busy_timeout=15000')
         conn.execute('PRAGMA synchronous=NORMAL')
+        conn.execute('PRAGMA temp_store=MEMORY')
+        conn.execute('PRAGMA cache_size=-64000')
+        conn.execute('PRAGMA wal_autocheckpoint=1000')
         with self._connections_lock:
             self._connections.append((threading.get_ident(), conn))
         return conn
@@ -689,6 +692,22 @@ class Store:
         """
         return await asyncio.to_thread(fn, *args, **kwargs)
 
+    def checkpoint(self):
+        """停机前合并 WAL；失败只记录，不阻断关闭。
+
+        Web 与 Worker 共用 state.db；进程退出前做一次 TRUNCATE 检查点，
+        下次启动不会从较大的 -wal 继续恢复。只使用当前线程连接，
+        不触碰其他线程正在使用的连接。
+        """
+        conn = getattr(self._local, 'conn', None)
+        if conn is None:
+            return
+        try:
+            if not conn.in_transaction:
+                conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        except sqlite3.Error:
+            pass
+
     def close(self):
         """关闭连接。
 
@@ -700,6 +719,7 @@ class Store:
         现在只关闭「本线程的连接」和「所属线程已经退出、没人再能用的连接」；活着的线程
         自己管自己的连接，线程结束时 `threading.local` 会在**它自己的线程里**释放，安全。
         """
+        self.checkpoint()
         current = threading.get_ident()
         alive = {thread.ident for thread in threading.enumerate()}
         with self._connections_lock:

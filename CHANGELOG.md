@@ -2,6 +2,11 @@
 
 每个版本的完整说明在 [`docs/releases/`](docs/releases/)。GitHub Release 使用同一份内容。
 
+## 3.6.91
+
+- 复核并发优化方案：WAL、DbWorker 双优先级池、任务恢复和一致性备份已存在，未重复引入第二套队列；
+- 停机时执行 WAL checkpoint，补充连接 PRAGMA，并新增关闭后 WAL 截断测试。
+
 ## 3.6.87
 
 - 网盘库和分享库优先将儿童动画剧集归入儿童节目。
