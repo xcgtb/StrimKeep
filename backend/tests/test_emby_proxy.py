@@ -207,11 +207,18 @@ def test_restart_moves_listener_to_the_new_port():
 
 
 
-def test_post_body_reaches_upstream_with_content_length():
+def test_proxy_preserves_request_body_framing():
     """实测教训：POST 体按分块转发时 Emby 的 AuthenticateByName 会 400，必须带上长度。"""
     seen = {}
 
     class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen[self.command] = self.headers.get('transfer-encoding')
+            self.send_response(204)
+            self.end_headers()
+
+        do_HEAD = do_GET
+
         def do_POST(self):
             length = int(self.headers.get('content-length') or 0)
             seen['length'] = self.headers.get('content-length')
@@ -240,6 +247,9 @@ def test_post_body_reaches_upstream_with_content_length():
             response = await client.post('http://127.0.0.1:19003/emby/Users/AuthenticateByName',
                                          json={'Username': 'x', 'Pw': 'y'})
             assert response.status_code == 200
+            for method in ('GET', 'HEAD'):
+                response = await client.request(method, 'http://127.0.0.1:19003/emby/System/Info/Public')
+                assert response.status_code == 204
         await server.stop()
 
     try:
@@ -248,6 +258,7 @@ def test_post_body_reaches_upstream_with_content_length():
         upstream.shutdown()
     assert seen['body'] == b'{"Username":"x","Pw":"y"}'
     assert seen['length'] == str(len(seen['body']))
+    assert seen['GET'] is None and seen['HEAD'] is None
 
 
 

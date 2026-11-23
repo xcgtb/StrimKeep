@@ -436,7 +436,10 @@ class ProxyServer:
         # 400 `Value cannot be null. (Parameter 'name')`，直连却是正常的 401。所以 API 请求体
         # 一律读全带上 Content-Length 再转发；只有超过 16MB 的大上传才退回流式。
         size = request.headers.get('content-length', '')
-        if request.method in ('GET', 'HEAD') or (size.isdigit() and int(size) > 16 * 1024 * 1024):
+        if request.method in ('GET', 'HEAD') and size in ('', '0') and not request.headers.get('transfer-encoding'):
+            # Do not turn an empty request into a chunked upload to Emby.
+            body = None
+        elif request.method in ('GET', 'HEAD') or (size.isdigit() and int(size) > 16 * 1024 * 1024):
             body = request.stream()
         else:
             body = await request.body()
