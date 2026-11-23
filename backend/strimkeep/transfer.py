@@ -64,7 +64,8 @@ class Transfer:
 
     async def run(self,jid,config):
         from .core import dumps,UncertainState
-        dest=config['target_cid'];await self.cloud.directory(dest)
+        dest = config['target_cid']
+        trail = await self.cloud.directory(dest)
         secret=self.store.get('transfer-secret:'+str(jid))
         if not secret:raise UncertainState('转存任务缺少分享信息。')
         state=config.get('receipt',{})
@@ -199,6 +200,11 @@ class Transfer:
         if config.get('origin')=='channel':
             # 频道转存不自动整理，但要把下一轮扫描提前，别让「空扫描退避」把新文件压一小时。
             self.engine.tasks.wake('organize')
+        if current and not state.get('organize_job') and trail and str(trail[-1]) == str(dest):
+            try:
+                self.engine.tasks.enqueue_transfer_sync(account, trail, config.get('target_label'))
+            except Exception as exc:
+                self.store.event('sync', f'转存任务 {jid} 已完成，补扫入队失败（{type(exc).__name__}）。')
         message=f'已转存到 {config.get("target_label","目标目录")}，共 {len(current)} 个文件或文件夹。'
         if state.get('organize_job'):message+=f'整理任务 #{state["organize_job"]} 已入队。'
         if config.get('origin') == 'channel':

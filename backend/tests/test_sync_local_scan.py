@@ -3,6 +3,9 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from unittest.mock import Mock
+
+from strimkeep.sync import stale_records
 
 from test_organize import new_job, setup
 from test_phase5 import sync_config
@@ -48,14 +51,152 @@ def test_stale_detection_only_marks_without_deleting(tmp_path):
         await engine.run_job(new_job(store, {**sync_config(), 'notify_emby': False}))
         target = local_strms(engine)[0]
         cloud.nodes.pop(video['id'])
-        jid = new_job(store, {**sync_config(), 'cleanup_missing': False, 'notify_emby': False})
+        jid = new_job(store, {**sync_config(), 'cleanup_missing': False, 'notify_emby': False, 'stale_detect': True})
         await engine.run_job(jid)
-        await engine.sync.stale_check(jid, {**sync_config(), 'stale_detect': True})
+        assert engine.job(jid)['state'] == 'completed', dict(engine.job(jid))
         assert target.exists(), '只标记不删除：stale_check 不应动文件'
         stale = json.loads(store.get('stale_strms') or '[]')
         assert any(item['file_id'] == video['id'] for item in stale)
         await http.aclose(); store.close()
     asyncio.run(run())
+
+
+def test_sync_shares_one_local_scan_across_cleanup_and_stale_detection(tmp_path):
+    async def run():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        kept = cloud.add_video('1001', 'Kept.mkv')
+        kept['sha1'] = 'A' * 40
+        cloud.add_video('1002', 'Gone.mkv')['sha1'] = 'B' * 40
+        config = {**sync_config(), 'notify_emby': False, 'stale_detect': True}
+        await engine.run_job(new_job(store, config))
+        gone = engine.root / '待整理' / 'Gone.strm'
+        assert gone.is_file()
+        del cloud.nodes['1002']
+        kept['name'] = 'Renamed.mkv'
+        scan_scope = Mock(wraps=engine.sync.scan_scope)
+        engine.sync.scan_scope = scan_scope
+        jid = new_job(store, config)
+        await engine.run_job(jid)
+
+        assert engine.job(jid)['state'] == 'completed', dict(engine.job(jid))
+        assert scan_scope.call_count == 1
+        assert [file.name for file in local_strms(engine)] == ['Renamed.strm']
+        assert stale_records(store) == []
+        await http.aclose()
+        store.close()
+    asyncio.run(run())
+
+
+def test_stale_results_preserve_other_directories_accounts_and_unchecked_files(tmp_path):
+    async def run():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        a = (await cloud.mkdir('0', '目录A'))['cid']
+        b = (await cloud.mkdir('0', '目录B'))['cid']
+        source_a = cloud.add_video('1001', 'A.mkv', a)
+        source_a['sha1'] = 'A' * 40
+        cloud.add_video('1002', 'A2.mkv', a)['sha1'] = 'B' * 40
+        cloud.add_video('1003', 'B.mkv', b)['sha1'] = 'C' * 40
+
+        async def sync(cid):
+            config = {**sync_config([cid]), 'notify_emby': False, 'cleanup_missing': False, 'stale_detect': True}
+            jid = new_job(store, config)
+            await engine.run_job(jid)
+            assert engine.job(jid)['state'] == 'completed', dict(engine.job(jid))
+
+        await sync(a)
+        await sync(b)
+        for fid in ('1001', '1002', '1003'):
+            del cloud.nodes[fid]
+        await sync(a)
+        await sync(b)
+        marked = stale_records(store)
+        assert {item['file_id'] for item in marked} == {'1001', '1002', '1003'}
+        other_account = {**next(item for item in marked if item['file_id'] == '1001'), 'account_id': '2'}
+        store.set_many({'stale_strms': json.dumps([*marked, other_account])})
+
+        engine.sync.MAX_CLOUD_PROBES = 1
+        await sync(a)
+        assert len(stale_records(store)) == 4
+        cloud.nodes['1001'] = source_a
+        await sync(a)
+        assert {(item['account_id'], item['file_id']) for item in stale_records(store)} == {
+            ('1', '1002'), ('1', '1003'), ('2', '1001'),
+        }
+        await http.aclose()
+        store.close()
+    asyncio.run(run())
+
+
+def test_cleanup_keeps_same_source_strm_edited_during_cloud_check(tmp_path):
+    async def run():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        cloud.add_video(name='Movie.mkv')['sha1'] = 'A' * 40
+        config = {**sync_config(), 'notify_emby': False}
+        await engine.run_job(new_job(store, config))
+        target = local_strms(engine)[0]
+        updated = target.read_text(encoding='utf-8') + '\n'
+        del cloud.nodes['1000']
+
+        async def live_file_exists(fid):
+            assert fid == '1000'
+            target.write_text(updated, encoding='utf-8')
+            return False
+
+        cloud.live_file_exists = live_file_exists
+        jid = new_job(store, config)
+        await engine.run_job(jid)
+        assert engine.job(jid)['state'] == 'partial', dict(engine.job(jid))
+        assert target.read_text(encoding='utf-8') == updated
+        await http.aclose()
+        store.close()
+    asyncio.run(run())
+
+
+def test_manual_stale_cleanup_preserves_newly_reported_items(tmp_path):
+    async def run():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        cloud.add_video(name='Movie.mkv')['sha1'] = 'A' * 40
+        config = {**sync_config(), 'notify_emby': False, 'cleanup_missing': False, 'stale_detect': True}
+        await engine.run_job(new_job(store, config))
+        del cloud.nodes['1000']
+        await engine.run_job(new_job(store, config))
+        original, = stale_records(store)
+        other = {'account_id': '1', 'file_id': '1001', 'relative_path': '另一目录/Other.strm'}
+
+        async def live_file_exists(fid):
+            assert fid == '1000'
+            store.set_many({'stale_strms': json.dumps([original, other])})
+            return False
+
+        cloud.live_file_exists = live_file_exists
+        cleaned, remaining = await engine.sync.stale_cleanup()
+        assert cleaned == [original['relative_path']]
+        assert not local_strms(engine)
+        assert remaining == stale_records(store) == [other]
+        await http.aclose()
+        store.close()
+    asyncio.run(run())
+
+
+def test_sync_api_uses_one_source_for_stale_results(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from strimkeep.phase5_api import install_phase5
+
+    store, cloud, http, engine, _ = setup(tmp_path)
+    row = {'account_id': '1', 'file_id': '1000', 'relative_path': '待整理/Movie.strm'}
+    store.set_many({'stale_strms': json.dumps([row]), 'sync_config': {'source_cids': ['100']}})
+    app = FastAPI()
+    app.state.organizer = engine
+    app.state.strms = engine.root
+    install_phase5(app, store, lambda: None, dict)
+
+    with TestClient(app) as client:
+        assert client.get('/api/v1/sync/config').json()['stale_strms'] == [row]
+        assert client.get('/api/v1/sync/state').json()['stale_count'] == 1
+        assert client.post('/api/v1/sync/incremental', json={'dry_run': True}).json()['stale_count'] == 1
+    asyncio.run(http.aclose())
+    store.close()
 
 
 def test_cleanup_keeps_files_it_cannot_identify(tmp_path):

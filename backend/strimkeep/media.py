@@ -1,6 +1,7 @@
 """Conservative identity, classification and naming. No filename fallback for failed probing."""
 import re
 import unicodedata
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -637,30 +638,74 @@ def title_candidates(hint, results):
     return ordered
 
 
-def classify(details, media_type, *, children_enabled=True):
+@dataclass(frozen=True)
+class Classification:
+    category: str
+    region: str
+    category_reason: str
+    region_reason: str
+
+
+def _category(details, media_type, options):
+    genres = {g['id'] for g in details.get('genres', [])}
+    default = '剧集' if media_type == 'tv' else '电影'
+    children = options.get('children_enabled', True)
+    family_animation = media_type == 'tv' and {16, 10751} <= genres
+    if children and media_type == 'tv' and (10762 in genres or family_animation):
+        reason = 'TMDB 标记为儿童（10762）' if 10762 in genres else 'TMDB 同时标记动画（16）与家庭（10751）'
+        return '儿童节目', reason + '，优先归入儿童节目。'
+    if 16 in genres:
+        if media_type == 'movie':
+            return ANIMATED_MOVIE, '媒体类型为电影，TMDB 标记为动画（16）。'
+        if not children and (10762 in genres or family_animation):
+            return '动漫', 'TMDB 标记为动画，儿童节目独立分类已关闭。'
+        return '动漫', 'TMDB 标记为动画（16），归入动漫。'
+    if media_type == 'movie' and 10402 in genres and options.get('concert_enabled', True):
+        title = ' '.join(str(details.get(k) or '') for k in ('title','name','original_title','original_name'))
+        if re.search(r'(?i)演唱会|演唱會|\bconcert\b|\blive\s+tour\b', title):
+            return '演唱会', 'TMDB 标记为音乐（10402），作品标题含演唱会关键词。'
+        raise NeedsReview('音乐类电影不能可靠自动判断是否演唱会，转待处理。')
+    if 10762 in genres:
+        if children:
+            return '儿童节目', 'TMDB 标记为儿童（10762），归入儿童节目。'
+        return default, '儿童节目独立分类已关闭，按媒体类型归档。'
+    if 99 in genres:
+        return '纪录片', 'TMDB 标记为纪录片（99）。'
+    if genres & {10764, 10767}:
+        return '综艺', 'TMDB 标记为真人秀或脱口秀，归入综艺。'
+    return default, '按 TMDB 识别的媒体类型归档。'
+
+
+def classification(details, media_type, options=None):
+    options = options or {}
+    if not options.get('classify_enabled', True):
+        return Classification('剧集' if media_type == 'tv' else '电影', '',
+                              '自动分类已关闭，按媒体类型归档。', '')
+    category, category_reason = _category(details, media_type, options)
     countries = [x['iso_3166_1'] for x in details.get('production_countries', []) if x.get('iso_3166_1')]
-    origins = list(dict.fromkeys(details.get('origin_country', []) or countries))
+    original = details.get('origin_country') or []
+    origins = list(dict.fromkeys(original or countries))
     # A known work may have multiple regions or none. Preserve its identity
     # and use the existing Other bucket instead of guessing a primary region.
     regions = {'国产' if c in ('CN', 'HK', 'MO', 'TW') else '日韩' if c in ('JP', 'KR') else '欧美' if c in WESTERN else '其他' for c in origins}
     region = next(iter(regions)) if len(regions) == 1 else '其他'
-    genres = {g['id'] for g in details.get('genres', [])}
-    # TMDB 有些儿童动画（如海绵宝宝）只标为动画和家庭。
-    if media_type == 'tv' and children_enabled and (10762 in genres or {16, 10751} <= genres):
-        return '儿童节目', region
-    if 16 in genres:
-        return (ANIMATED_MOVIE if media_type == 'movie' else '动漫'), region
-    category = ('儿童节目' if 10762 in genres else
-                '纪录片' if 99 in genres else '综艺' if genres & {10764, 10767} else
-                '剧集' if media_type == 'tv' else '电影')
-    if media_type == 'movie' and 10402 in genres:
-        # Music genre alone does not establish concert identity.
-        title = ' '.join(str(details.get(k) or '') for k in ('title','name','original_title','original_name'))
-        if re.search(r'(?i)演唱会|演唱會|\bconcert\b|\blive\s+tour\b', title):category = '演唱会'
-        else:raise NeedsReview('音乐类电影不能可靠自动判断是否演唱会，转待处理。')
-    if category == '儿童节目' and not children_enabled:
-        category = '剧集' if media_type == 'tv' else '电影'
-    return category, region
+    if category == ANIMATED_MOVIE:
+        region_reason = '动画电影统一归档，不设地区子目录。'
+    elif not options.get('region_enabled', True):
+        region_reason = '按地区分类已关闭。'
+    elif not origins:
+        region_reason = 'TMDB 未提供原产地或制片国家，归入其他。'
+    else:
+        source = '原产地' if original else '制片国家'
+        values = '、'.join(map(str, origins))
+        reason = '跨多个分类地区，归入其他' if len(regions) > 1 else f'归入{region}'
+        region_reason = f'TMDB {source}为 {values}，{reason}。'
+    return Classification(category, region, category_reason, region_reason)
+
+
+def classify(details, media_type, *, children_enabled=True):
+    result = classification(details, media_type, {'children_enabled': children_enabled})
+    return result.category, result.region
 
 
 def technical_name(media, source_name, policy=None):
@@ -705,15 +750,8 @@ def work_parts(hint, details, options=None):
     year = (details.get('release_date') or details.get('first_air_date') or '')[:4]
     if not title or not re.fullmatch(r'\d{4}', year):
         raise NeedsReview('TMDB 作品名称或首映年份缺失。')
-    if options.get('classify_enabled', True):
-        classified_details = details
-        if not options.get('concert_enabled', True):
-            classified_details = {**details, 'genres': [v for v in details.get('genres', []) if v.get('id') != 10402]}
-        category, region = classify(classified_details, hint['media_type'],
-                                    children_enabled=options.get('children_enabled', True))
-        if category == '演唱会' and not options.get('concert_enabled', True):category = '电影'
-    else:
-        category, region = ('剧集' if hint['media_type']=='tv' else '电影'), ''
+    result = classification(details, hint['media_type'], options)
+    category, region = result.category, result.region
     short_title = component(title, 100)
     series = f'{short_title} ({year}) {{tmdb-{details["id"]}}}'
     if category == ANIMATED_MOVIE:

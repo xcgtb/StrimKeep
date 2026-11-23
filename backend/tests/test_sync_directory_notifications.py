@@ -163,7 +163,7 @@ def test_summary_separates_created_updated_and_unchanged(tmp_path):
                                    (f'strm:{jid}:sync-summary',)).fetchone()[0]
         for text in ('方式：增量同步', 'STRM：新增 1 个 · 更新 1 个 · 未变化 1 个',
                      '附属文件：写入 1 个（新增 1、更新 0）',
-                     '扫描条目里含字幕/NFO/图片等非视频 1 个'):
+                     '扫描条目：5 个', '核对视频：4 个'):
             assert text in message
         await http.aclose(); store.close()
     asyncio.run(run())

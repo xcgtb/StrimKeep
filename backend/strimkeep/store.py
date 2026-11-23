@@ -98,6 +98,11 @@ class Store:
           original TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'discovered',plan TEXT NOT NULL DEFAULT '{}',
           step TEXT NOT NULL DEFAULT '发现文件',message TEXT NOT NULL DEFAULT '',
           UNIQUE(job_id,file_id));
+        CREATE TABLE IF NOT EXISTS recognition_aliases(
+          id INTEGER PRIMARY KEY AUTOINCREMENT, alias TEXT NOT NULL, alias_key TEXT NOT NULL,
+          media_type TEXT NOT NULL, source_year INTEGER NOT NULL, tmdb_id INTEGER NOT NULL,
+          title TEXT NOT NULL, target_year INTEGER NOT NULL, created REAL NOT NULL,
+          UNIQUE(media_type, alias_key, source_year));
         -- 0.9.55：organize_items 的唯一键是 (job_id,file_id)，所以 `WHERE file_id=?` 用不上
         -- 索引；生产库实测 25.36ms/次（补索引后 0.01ms，2351×）。分享产线在 per-file 循环里
         -- 查它，直接把事件循环堵成秒级（现场「事件循环被阻塞」中位 1.28 秒）。

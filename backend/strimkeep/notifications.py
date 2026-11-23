@@ -168,12 +168,15 @@ def strm_tree(paths, max_lines=20, max_units=3400):
 
 
 def sync_scope_lines(config):
-    """只有真的按规则挡掉了视频才提示。
-
-    附属文件/非视频本来就不生成 STRM，每天报「146 个」只是噪音。
-    """
+    """Summarize files deliberately skipped beyond normal sidecar processing."""
     skipped_videos = int(config.get('sync_filter_count') or 0)
-    return f'按生成规则跳过 {skipped_videos} 个视频（不生成 STRM）' if skipped_videos else ''
+    excluded = int(config.get('sync_path_excluded_count') or 0)
+    lines = []
+    if skipped_videos:
+        lines.append(f'按生成规则跳过 {skipped_videos} 个视频（不生成 STRM）')
+    if excluded:
+        lines.append(f'按路径排除词跳过 {excluded} 个文件')
+    return '\n'.join(lines)
 
 
 def strm_detail_paths(items):
@@ -756,6 +759,7 @@ class Notifications:
         if kind=='strm_sync' and state in ('completed','partial'):
             entries=self.store.db.execute('SELECT original,plan,state FROM organize_items WHERE job_id=?',(row['id'],)).fetchall()
             c=json.loads(row['config']); labels=c.get('directory_labels') or {}
+            metrics = c.get('sync_metrics') or {}
             stats=c.get('sync_directory_stats') or {}
             groups={}
             for entry in entries:
@@ -779,7 +783,7 @@ class Notifications:
                 label='扫描目录' if all(item.get('directories_exact',True) for item in stats.values()) else '文件路径涉及目录'
                 lines.append(f'📊 {label}：{dirs} 个 · 扫描条目：{files} 个')
                 seconds=sum(float(item.get('scan_seconds',0) or 0) for item in stats.values())
-                if seconds:lines.append(f'目录读取耗时：{seconds:.2f} 秒')
+                if seconds and not metrics:lines.append(f'目录读取耗时：{seconds:.2f} 秒')
             created = sum(bool(plan.get('sync_created')) for items in groups.values() for plan, _ in items)
             updated = sum(bool(plan.get('sync_updated')) for items in groups.values() for plan, _ in items)
             att_created = sum(bool(plan.get('sync_attachment_created')) for items in groups.values() for plan, _ in items)
@@ -806,13 +810,8 @@ class Notifications:
                 labels_by_type={'nfo':'NFO','image':'图片','subtitle':'字幕','json':'JSON','other':'其他'}
                 breakdown=[f'{labels_by_type[key]} {count}' for key,count in types.items() if count]
                 if breakdown:lines.append('新增类型：'+' · '.join(breakdown))
-            # 云盘条目里除了视频还有字幕/NFO/图片，也会被格式规则跳过一部分；
-            # 这行把差额说清楚，避免「扫描 960、核对 877」看起来像少扫了。
-            total = sum(int(item.get('files', 0) or 0) for item in (stats or {}).values())
-            if total and total > len(entries):
-                filtered = len(c.get('sync_filtered_ids') or [])
-                extra = f'，其中按规则跳过 {filtered} 个' if filtered else ''
-                lines.append(f'扫描条目里含字幕/NFO/图片等非视频 {total - len(entries)} 个{extra}')
+            if scope_notes := sync_scope_lines(c):
+                lines.append(scope_notes)
             if unfinished:lines.append(f'待处理：{unfinished} 个')
             if len(roots)>1:
                 lines.append('目录：')
@@ -823,7 +822,18 @@ class Notifications:
                     lines.append(f'· {name}：核对 {len(items)}，变化 {count}')
                 if len(roots)>5:lines.append(f'其余 {len(roots)-5} 个目录请查看任务详情')
             started = c.get('sync_execution_started_at')
-            if isinstance(started, (int, float)) and not isinstance(started, bool) and float(row['created']) <= started <= float(row['updated']):
+            if metrics:
+                lines.append(f'\n⏱ {"本次执行" if metrics["attempt"] > 1 else "执行耗时"}：{metrics["execution"]:.2f} 秒 · 排队 {metrics["queue"]:.2f} 秒')
+                timings = metrics['stages']
+                waiting = timings.get('scan_wait', 0) + timings.get('publish_wait', 0)
+                phases = [('115 枚举', timings.get('scan')), ('文件核对', timings.get('verify')),
+                          ('本地写入', timings.get('publish', 0)), ('本地扫描', timings.get('local_scan')),
+                          ('失效核对与清理', timings.get('local_cleanup')),
+                          ('通道等待', waiting if waiting >= .05 else None)]
+                lines.append(' · '.join(f'{label} {seconds:.2f} 秒' for label, seconds in phases if seconds is not None))
+                if requests := metrics.get('requests'):
+                    lines.append(f'115 请求：读 {requests.get("read",0)} 次 · 限流 {requests.get("blocked",0)} 次')
+            elif isinstance(started, (int, float)) and not isinstance(started, bool) and float(row['created']) <= started <= float(row['updated']):
                 elapsed = float(row['updated']) - started
                 lines.append(f'\n⏱ 执行耗时：{elapsed:.2f} 秒')
                 if duration - elapsed >= 1:

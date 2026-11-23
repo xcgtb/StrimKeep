@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import {ref} from 'vue'
+import {computed,ref,watch} from 'vue'
 import {ElMessage} from 'element-plus'
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>,jobId:number,item:any}>()
 const emit=defineEmits<{close:[],created:[job:any]}>()
@@ -14,6 +14,11 @@ const episode=ref<number|undefined>(1)
 const selected=ref<Result|null>(null)
 const results=ref<Result[]>([])
 const busy=ref(false),searching=ref(false),error=ref('')
+const remember=ref(false)
+const alias=props.item?.alias_candidate as {alias:string;media_type:Kind;source_year:number;season:number|null;episode:number|null}|null
+const canRemember=computed(()=>!!alias && mediaType.value===alias.media_type &&
+  (alias.media_type==='movie' || (season.value===alias.season && episode.value===alias.episode)))
+watch(canRemember, value=>{if(!value)remember.value=false})
 async function search(){
   const q=query.value.trim()
   if(!q){error.value='请输入作品名称。';return}
@@ -46,8 +51,9 @@ async function submit(){
       tmdb_id:tmdbId.value,media_type:mediaType.value,
       season:mediaType.value==='tv'?season.value:undefined,
       episode:mediaType.value==='tv'?episode.value:undefined,
+      remember_alias:canRemember.value && remember.value,
     })
-    ElMessage.success(`已创建手动匹配任务 #${result.job.id}`)
+    ElMessage.success(`已创建手动匹配任务 #${result.job.id}${result.saved_alias?'，已记住纠正':''}`)
     emit('created',result.job);emit('close')
   }catch(e){error.value=(e as Error).message}finally{busy.value=false}
 }
@@ -84,6 +90,10 @@ async function submit(){
     </template>
   </div>
   <p v-if="selected" class="hint">已选择：{{selected.title}}（{{selected.year||'年份未知'}}）· TMDB {{selected.id}}</p>
+  <div v-if="canRemember && alias" class="manual-alias">
+    <el-checkbox v-model="remember" :disabled="busy">记住这次识别纠正</el-checkbox>
+    <span>精确匹配 <strong>{{alias.alias}}</strong> · {{alias.media_type==='tv'?'剧集':'电影'}} · {{alias.source_year||'无识别年份'}}。季号和集号按各文件识别。</span>
+  </div>
   <template #footer>
     <el-button :disabled="busy" @click="emit('close')">取消</el-button>
     <el-button type="primary" :loading="busy" @click="submit">创建手动整理任务</el-button>
@@ -92,5 +102,7 @@ async function submit(){
 </template>
 
 <style scoped>
+.manual-alias{display:grid;gap:3px;align-items:start;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface-soft)}
+.manual-alias span{color:var(--muted);font-size:12px;line-height:1.6;overflow-wrap:anywhere}
 .manual-file{margin:0 0 12px;overflow-wrap:anywhere}.manual-search{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:16px 0}.manual-search :deep(.el-input){flex:1;min-width:220px}.manual-error{margin:12px 0}.manual-results{display:grid;gap:8px;max-height:260px;overflow:auto;padding:2px;margin:12px 0}.manual-result{display:flex;gap:9px;align-items:center;width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface-soft);color:var(--text);text-align:left;cursor:pointer}.manual-result:hover,.manual-result.selected{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 9%,var(--surface))}.manual-result strong{flex:1;min-width:0;overflow-wrap:anywhere}.manual-result code{color:var(--muted);font-size:12px}.manual-kind{padding:2px 7px;border-radius:5px;background:var(--surface);color:var(--muted);font-size:11px}.manual-form{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}.manual-form label{display:grid;gap:6px;font-size:12px;color:var(--muted)}.manual-form :deep(.el-input-number){width:150px}.manual-form :deep(.el-select){width:150px}@media(max-width:600px){.manual-search{align-items:stretch}.manual-search :deep(.el-button){width:100%}.manual-form label,.manual-form :deep(.el-input-number),.manual-form :deep(.el-select){width:100%}}
 </style>

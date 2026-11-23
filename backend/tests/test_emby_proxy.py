@@ -402,6 +402,54 @@ def test_proxy_can_resolve_its_own_strm_mapping(tmp_path, monkeypatch):
     assert proxy._local_strm('/secondary/library/../film.strm', config) == ''
 
 
+def test_strm_diagnosis_uses_saved_instance_and_selected_source(tmp_path, monkeypatch):
+    monkeypatch.setenv('STRIMKEEP_STRM_DIR', str(tmp_path))
+    (tmp_path / '片.strm').write_text(PLAYCODE_PATH, encoding='utf-8')
+    rule = {'id': 'secondary', 'upstream': 'http://secondary.test/service/emby',
+            'api_key': 'secondary-key', 'emby_strm_path': '/custom', 'enabled': False}
+    store = FakeStore({'emby_url': 'http://main.test', 'emby_key': 'main-key',
+                       'emby_proxy_servers': [rule]})
+    cloud = FakeCloud()
+    manager = EmbyProxyManager(store, cloud)
+    app = FastAPI()
+    install_emby_proxy(app, store, lambda: True, lambda: manager)
+    client_class = httpx.AsyncClient
+
+    def upstream(request):
+        assert str(request.url) == 'http://secondary.test/service/emby/Items/42/PlaybackInfo'
+        assert request.headers['X-Emby-Token'] == 'secondary-key'
+        return httpx.Response(200, json={'MediaSources': [
+            {'Id': 'first', 'Name': '主版本', 'Path': '/custom/片.strm'},
+            {'Id': 'second', 'Name': '另一版本', 'Path': '/media/片.strm'}]})
+
+    monkeypatch.setattr(httpx, 'AsyncClient',
+                        lambda: client_class(transport=httpx.MockTransport(upstream)))
+
+    async def run():
+        url = '/api/v1/emby-proxy/servers/secondary/verify-strm'
+        async with client_class(transport=httpx.ASGITransport(app=app), base_url='http://admin') as client:
+            choices = await client.post(url, json={'item_id': '42'})
+            assert [version['id'] for version in choices.json()['versions']] == ['first', 'second']
+            mismatch = await client.post(url, json={'item_id': '42', 'media_source_id': 'second'})
+            assert mismatch.json()['indexed'] and not mismatch.json()['ok']
+            assert 'local_path' not in mismatch.json()
+            assert not cloud.calls
+            valid = await client.post(url, json={'item_id': '42', 'media_source_id': 'first'},
+                                      headers={'User-Agent': 'Test Client'})
+            result = valid.json()
+            assert result['ok'] and not result['running']
+            assert result['emby_path'] == '/custom/片.strm'
+            assert result['local_path'] == str(tmp_path / '片.strm')
+            assert cloud.calls == [('pickcode', 'abcdefg', 'Test Client')]
+            assert not any(secret in valid.text for secret in ('secondary-key', PLAYCODE_PATH, cloud.link))
+            assert not store.events and not manager.servers
+
+    try:
+        asyncio.run(run())
+    finally:
+        store.db.close()
+
+
 def test_port_conflict_only_fails_that_one_server():
     """端口被占用时只能这一台起不来：uvicorn 的 SystemExit 以前会把整个事件循环带崩。"""
     rule = {'id': 'r1', 'name': 'Emby-1', 'upstream': 'http://127.0.0.1:9',

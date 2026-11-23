@@ -5,7 +5,7 @@ import re
 import time
 from .quality import public_policy
 from .organize_options import library_root, options
-from .strm_options import effective
+from .strm_options import effective, sync_metadata_overrides
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from croniter import croniter
@@ -69,21 +69,61 @@ class Tasks:
         config = self.config('strm_sync', roots, incremental=incremental)
         config['sync_profile_id'] = profile['id']
         config['sync_profile_name'] = profile['name']
+        config['sync_exclude_keywords'] = profile.get('exclude_keywords') or []
         config['metadata_mode'] = profile.get('metadata_mode') or 'inherit'
-        if config['metadata_mode'] == 'source':
-            config['generate_nfo'] = False
-            config['generate_images'] = False
-            # Keep user-selected subtitles/sidecars and add common pre-existing metadata.
-            extras = {'.nfo', '.jpg', '.jpeg', '.png', '.webp'} - set(config['video_extensions'])
-            config['metadata_extensions'] = sorted(set(config['metadata_extensions']) | extras)
-        elif config['metadata_mode'] == 'technical':
-            config.update(generate_nfo=False, generate_images=False, emby_media_info=False,
-                          metadata_extensions=[], notify_emby=False)
+        config.update(sync_metadata_overrides(config, config['metadata_mode']))
+        target_id = profile.get('emby_target') or 'main'
+        if target_id == 'off':
+            config.update(emby_target='off', notify_emby=False, emby_media_info=False)
+        elif target_id != 'main':
+            from .emby_proxy import delivery_target
+            target = delivery_target(self.store, target_id)
+            config.update(emby_target=target_id, notify_emby=True, emby_media_info=False,
+                          emby_target_binding=target.binding if target else '',
+                          emby_target_mount=target.mount if target else '',
+                          emby_target_name=target.name if target else '所选 Emby')
         labels = profile.get('source_labels') or {profile['source_cid']:profile.get('source_label', profile['source_cid'])}
         config['directory_labels'] = {**config.get('directory_labels', {}), **labels}
         if not incremental:
             config.update({'full_scan': True, '_force_full': True, 'trust_scan': True, 'mode': 'full'})
         return config
+
+    @staticmethod
+    def transfer_profile_roots(profile):
+        if profile.get('mode') != 'incremental' or not profile.get('after_transfer'):
+            return set()
+        return set(profile.get('source_cids') or [profile.get('source_cid')]) - {None, '', '0'}
+
+    def transfer_sync_roots(self, profile_id):
+        profile = next((p for p in self.store.get('sync_profiles', []) if p['id'] == profile_id), {})
+        return self.transfer_profile_roots(profile)
+
+    def enqueue_transfer_sync(self, account, trail, label):
+        """Use the confirmed transfer destination, constrained by the user's profile roots."""
+        if not trail or str(trail[-1]) == '0':
+            return
+        dest = str(trail[-1])
+        ancestors = {str(cid) for cid in trail}
+        for profile in self.store.get('sync_profiles', []):
+            if not self.transfer_profile_roots(profile).intersection(ancestors):
+                continue
+            try:
+                config = self.sync_profile_config({**profile, 'source_cids': [dest],
+                                                   'source_labels': {dest: label or dest}})
+            except ValueError as exc:
+                self.store.event('sync', '转存补扫暂未入队：' + str(exc))
+                continue
+            if config['account_id'] != account:
+                continue
+            config.update(sync_trigger='transfer', cleanup_missing=False, stale_detect=False)
+            self.enqueue(config, scheduled=True)
+
+    @staticmethod
+    def schedule_identity(config):
+        return (config.get('job_kind', 'organize'), tuple(sorted(config.get('source_cids', []))),
+                *(config.get(key) for key in ('account_id', 'sync_profile_id', 'mode', 'sync_trigger',
+                                             'emby_target', 'emby_target_binding')),
+                frozenset(word.casefold() for word in config.get('sync_exclude_keywords', [])))
 
     @staticmethod
     def sync_profile_next(profile, now):
@@ -197,9 +237,10 @@ class Tasks:
         if scheduled:
             # waiting_login 也算「已有一份在等」：登录失效期间每轮都入队，
             # 恢复后就会被重放成一批重复的空扫描。
+            identity = self.schedule_identity(config)
             for row in self.store.db.execute("SELECT id,config FROM organize_jobs WHERE state IN ('queued','waiting_login') ORDER BY id"):
                 old = json.loads(row['config'])
-                if old.get('scheduled') and (old.get('job_kind','organize'),old.get('account_id'),sorted(old.get('source_cids',[])),old.get('sync_profile_id'),old.get('mode')) == (config['job_kind'],config['account_id'],sorted(config.get('source_cids',[])),config.get('sync_profile_id'),config.get('mode')):
+                if old.get('scheduled') and self.schedule_identity(old) == identity:
                     return row['id'], True
         config = {**config, 'scheduled': scheduled}
         job_id = self.store.jobs.create(config)

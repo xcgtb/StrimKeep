@@ -4,7 +4,7 @@
 """
 from urllib.parse import urlsplit
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from .emby_connection import strm_mount_path
@@ -19,6 +19,12 @@ class ProxyInput(BaseModel):
     emby_strm_path: str | None = Field(default=None, max_length=1000)
     port: int | None = Field(default=None, ge=1, le=65535)
     enabled: bool | None = None
+
+
+class VerifyStrmInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    item_id: str = Field(pattern=r'^[A-Za-z0-9]{1,64}$')
+    media_source_id: str = Field(default='', pattern=r'^[A-Za-z0-9_-]{0,128}$')
 
 
 def _clean_url(value):
@@ -132,6 +138,11 @@ def install_emby_proxy(app, store, admin, get_manager):
         if result is None:
             raise HTTPException(404, '反代服务器不存在，可能已被删除。')
         return result
+
+    @app.post('/api/v1/emby-proxy/servers/{rule_id}/verify-strm', dependencies=[Depends(admin)])
+    async def proxy_verify_strm(rule_id: str, body: VerifyStrmInput, request: Request):
+        return await manager().verify_strm(pick(rule_id), body.item_id, body.media_source_id,
+                                           request.headers.get('user-agent', ''))
 
     @app.get('/api/v1/emby-proxy/servers/{rule_id}/plays', dependencies=[Depends(admin)])
     async def proxy_plays(rule_id: str, limit: int = 50):

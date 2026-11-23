@@ -16,8 +16,10 @@ import re
 import socket
 import time
 import uuid
+from dataclasses import dataclass
 from urllib.parse import urlsplit
-from .emby_connection import strm_mount_path
+from .emby_connection import error_message, saved_base, strm_mount_path
+from .store import digest
 
 import httpx
 import uvicorn
@@ -232,6 +234,33 @@ class Config:
         return self.upstream + path
 
 
+@dataclass(frozen=True)
+class ProxyDeliveryTarget:
+    name: str
+    mount: str
+    connection: tuple[str, str]
+
+    @property
+    def binding(self):
+        return digest(json.dumps([*self.connection, self.mount], ensure_ascii=False))
+
+
+def delivery_target(store, rule_id):
+    """Resolve the persisted upstream for jobs in either process."""
+    rules = store.get(STORAGE_KEY, [])
+    rule = next((rule for rule in rules if rule.get('id') == rule_id), None) if isinstance(rules, list) else None
+    if not rule:
+        return None
+    config = Config(store, rule)
+    if not (config.upstream and config.api_key and config.strm_path):
+        return None
+    connection = None
+    if not rule.get('upstream') and not rule.get('api_key'):
+        connection = saved_base(store)
+    return ProxyDeliveryTarget(rule.get('name') or 'Emby', config.strm_path,
+                               connection or (config.upstream_url('/emby'), config.api_key))
+
+
 class ProxyServer:
     """一台反代服务器：独立端口、独立连接池、独立开关。"""
 
@@ -296,7 +325,7 @@ class ProxyServer:
     def _read_strm(self, path):
         """读 STRM 内容（只读开头几 KB）：里面就是 play115 地址。"""
         try:
-            if os.path.getsize(path) > 64 * 1024:
+            if not os.path.isfile(path) or os.path.getsize(path) > 64 * 1024:
                 return ''
             with open(path, 'rb') as handle:
                 return handle.read(4096).decode('utf-8', 'replace').strip().splitlines()[0].strip()
@@ -309,6 +338,23 @@ class ProxyServer:
                 timeout=httpx.Timeout(connect=5.0, read=60.0, write=60.0, pool=30.0),
                 limits=httpx.Limits(max_connections=200, max_keepalive_connections=50))
         return self.client
+
+    async def _playback_sources(self, client, item, config, headers, params=None):
+        response = await client.post(
+            config.upstream_url('/emby/Items/' + item + '/PlaybackInfo'),
+            headers=headers, params=params, json={'EnableDirectPlay': True, 'EnableDirectStream': True},
+            timeout=8.0)
+        response.raise_for_status()
+        payload = response.json()
+        sources = payload.get('MediaSources') if isinstance(payload, dict) else None
+        return [source for source in sources if isinstance(source, dict)] if isinstance(sources, list) else []
+
+    def _stream_source(self, path, config):
+        identity = play_identity(path)
+        if identity:
+            return '', identity
+        local = self._local_strm(path, config)
+        return local, play_identity(self._read_strm(local)) if local else None
 
     async def _upstream_path(self, item, request, config):
         """问上游 Emby 这部片的 Path。
@@ -328,17 +374,8 @@ class ProxyServer:
             return ''
         headers['content-type'] = 'application/json'
         params = {k: v for k, v in request.query_params.items() if k.lower() in ('api_key', 'apikey', 'x-emby-token', 'userid', 'mediasourceid')}
-        body = json.dumps({'EnableDirectPlay': True, 'EnableDirectStream': True})
         try:
-            response = await self._ensure_client().post(
-                config.upstream_url('/emby/Items/' + item + '/PlaybackInfo'),
-                params=params, headers=headers, content=body, timeout=8.0)
-            response.raise_for_status()
-            payload = response.json()
-            sources = payload.get('MediaSources') if isinstance(payload, dict) else None
-            if not isinstance(sources, list):
-                return ''
-            sources = [source for source in sources if isinstance(source, dict)]
+            sources = await self._playback_sources(self._ensure_client(), item, config, headers, params)
             source_id = query.get('mediasourceid')
             if source_id:
                 sources = [source for source in sources if str(source.get('Id') or '') == source_id]
@@ -361,12 +398,7 @@ class ProxyServer:
                            % request.url.path[:80], throttle=30.0)
             return None
         path = await self._upstream_path(match.group('id'), request, config)
-        identity = play_identity(path) if path else None
-        if not identity and path:
-            # Emby 的 Path 是库里的 .strm 文件（/media/...），真正的 play115 地址在文件内容里。
-            local = self._local_strm(path, config)
-            if local:
-                identity = play_identity(self._read_strm(local))
+        _, identity = self._stream_source(path, config)
         ua = request.headers.get('user-agent', '')
         if not identity:
             # 不是我们的内容（本地/其它来源）：只能转发，但绝不占用视频通道的是我们的片。
@@ -830,6 +862,58 @@ class EmbyProxyManager:
                     'message': '连接正常：%s %s' % (data.get('ServerName', ''), data.get('Version', ''))}
         except (httpx.HTTPError, ValueError) as exc:
             return {'ok': False, 'message': '连不上 Emby：%s' % type(exc).__name__}
+
+    async def verify_strm(self, rule, item_id, media_source_id='', user_agent=''):
+        """从指定 Emby 条目的实际媒体源核对映射和 115 取链。"""
+        server = self.servers.get(rule['id'])
+        running = bool(server and server.running())
+        server = ProxyServer(rule, self.store, self.cloud)
+        config = server.config()
+        result = {'ok': False, 'running': running, 'emby_root': config.strm_path}
+        if not config.upstream or not config.api_key:
+            return {**result, 'message': '请先保存此实例的 Emby 地址和 API Key。'}
+        try:
+            async with httpx.AsyncClient() as client:
+                sources = await server._playback_sources(client, item_id, config, {'X-Emby-Token': config.api_key})
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return {**result, 'message': '此实例的 PlaybackInfo 未找到该条目，请核对 Emby 链接和入库状态。'}
+            return {**result, 'message': error_message(exc)}
+        except (httpx.HTTPError, ValueError) as exc:
+            return {**result, 'message': error_message(exc)}
+        if media_source_id:
+            sources = [source for source in sources if str(source.get('Id') or '') == media_source_id]
+        if not sources:
+            return {**result, 'message': 'Emby 未返回匹配的可播放媒体源，请核对条目和媒体版本。'}
+        result['indexed'] = True
+        if len(sources) != 1:
+            versions = {}
+            for source in sources:
+                source_id = str(source.get('Id') or '')
+                if re.fullmatch(r'[A-Za-z0-9_-]{1,128}', source_id):
+                    versions[source_id] = str(source.get('Name') or '')[:120]
+            return {**result, 'versions': [{'id': sid, 'name': name} for sid, name in versions.items()],
+                    'message': '此条目有多个媒体版本，请选择要核对的版本。' if versions else '此条目有多个媒体版本，Emby 未返回可区分的版本 ID。'}
+        path = str(sources[0].get('Path') or '')
+        if path.startswith('/') and path.lower().endswith('.strm'):
+            result['emby_path'] = path
+        local, identity = server._stream_source(path, config)
+        if local:
+            result['local_path'] = local
+            if not os.path.isfile(local):
+                return {**result, 'message': '映射后的本地 STRM 不存在或无法访问，请检查目录挂载。'}
+        if not identity:
+            message = '本地 STRM 未找到有效的 StrimKeep 播放地址。' if local else '媒体源未匹配到此实例的 STRM 路径或 StrimKeep 播放地址。'
+            return {**result, 'message': message}
+        try:
+            async with asyncio.timeout(RESOLVE_TOTAL_TIMEOUT):
+                direct, reason = await resolve_direct(identity, user_agent, self.cloud, self.store)
+        except TimeoutError:
+            direct, reason = None, 'timeout'
+        if not direct:
+            return {**result, 'message': '115 取链失败。', 'reason': reason}
+        message = '当前媒体源可用于 302 直链。' if running else '115 取链成功，启用此反代后可用于 302 播放。'
+        return {**result, 'ok': True, 'message': message}
 
     def record_play(self, server, request, filled, outcome, reason=''):
         """按反代实例记录取链结果，只保存诊断需要的字段。"""

@@ -16,6 +16,10 @@ type Server = {
 type Payload = { servers: Server[]; emby_url: string; emby_strm_path: string; id?: string }
 type Draft = { name: string; port?: number; source: 'main' | 'custom'; upstream: string; key: string; path: string }
 type Probe = { ok: boolean; message: string; latency_ms?: number }
+type StrmCheck = Probe & {
+  running: boolean; indexed?: boolean; emby_root: string; emby_path?: string; local_path?: string
+  reason?: string; versions?: { id: string; name: string }[]
+}
 type Play = { id: number; at: number; user_agent: string; target: string; filled: number; outcome: string; reason: string }
 
 const props = defineProps<{ api: (path: string, method?: string, body?: unknown) => Promise<any>; revision: number }>()
@@ -32,6 +36,14 @@ const result = ref<Probe>()
 const playsOpen = ref(false)
 const playsFor = ref('')
 const plays = ref<Play[]>([])
+const checkOpen = ref(false)
+const checkFor = ref<Server>()
+const checkItem = ref('')
+const checkVersion = ref('')
+const checkVersions = ref<NonNullable<StrmCheck['versions']>>([])
+const checkBusy = ref(false)
+const checkError = ref('')
+const checkResult = ref<StrmCheck>()
 
 const serverPath = (s: Server) => '/emby-proxy/servers/' + s.id
 const custom = (s: Server) => !!(s.upstream_override || s.api_key_override_configured)
@@ -161,6 +173,49 @@ async function showPlays(server: Server) {
   })
 }
 
+function showCheck(server: Server) {
+  checkFor.value = server
+  checkItem.value = ''
+  checkOpen.value = true
+}
+
+function embyItemId(value: string) {
+  if (/^[A-Za-z0-9]{1,64}$/.test(value)) return value
+  try {
+    const url = new URL(value)
+    const fragment = new URLSearchParams(url.hash.split('?')[1] || '')
+    return fragment.get('id') || url.searchParams.get('id') || url.pathname.match(/\/Items\/([A-Za-z0-9]+)\/?$/i)?.[1] || ''
+  } catch { return '' }
+}
+
+async function checkStrm() {
+  if (!checkFor.value || checkBusy.value) return
+  const itemId = embyItemId(checkItem.value.trim())
+  checkResult.value = undefined
+  checkError.value = ''
+  if (!/^[A-Za-z0-9]{1,64}$/.test(itemId)) {
+    checkError.value = '请输入 Emby 条目 ID，或复制该条目的网页链接。'
+    return
+  }
+  checkBusy.value = true
+  try {
+    const data: StrmCheck = await props.api(serverPath(checkFor.value) + '/verify-strm', 'POST',
+      { item_id: itemId, media_source_id: checkVersion.value })
+    checkResult.value = data
+    if (data.versions) checkVersions.value = data.versions
+  } catch (e) {
+    checkError.value = (e as Error).message
+  } finally {
+    checkBusy.value = false
+  }
+}
+
+watch(checkItem, () => {
+  checkVersion.value = ''
+  checkVersions.value = []
+  checkResult.value = undefined
+  checkError.value = ''
+})
 watch(draft, () => { result.value = undefined }, { deep: true })
 watch(() => props.revision, load)
 onMounted(load)
@@ -190,6 +245,7 @@ onMounted(load)
         <div class="proxy-upstream" :title="server.upstream">{{ server.upstream || '请配置 Emby 地址' }}</div>
       </div>
       <div class="proxy-actions">
+        <el-button :disabled="!!busy || checkBusy" @click="showCheck(server)">STRM 诊断</el-button>
         <el-button :disabled="!!busy" @click="showPlays(server)">取链记录</el-button>
         <el-button :loading="busy === server.id" :disabled="!!busy && busy !== server.id" @click="toggle(server)">{{ server.enabled ? '停用' : '启用' }}</el-button>
         <el-button type="primary" plain :disabled="!!busy" @click="edit(server)">配置</el-button>
@@ -242,6 +298,34 @@ onMounted(load)
     </template>
   </el-dialog>
 
+  <el-dialog v-model="checkOpen" :title="'STRM 诊断 · ' + (checkFor?.name || 'Emby')" width="min(600px, 94vw)" append-to-body>
+    <el-form label-position="top" :disabled="checkBusy" @submit.prevent="checkStrm">
+      <el-form-item label="Emby 条目链接或 ID">
+        <el-input v-model="checkItem" placeholder="从此 Emby 的影片或单集详情复制链接" maxlength="2000" />
+      </el-form-item>
+      <el-form-item v-if="checkVersions.length" label="媒体版本">
+        <el-select v-model="checkVersion" placeholder="选择媒体版本" @change="checkResult = undefined">
+          <el-option v-for="version in checkVersions" :key="version.id" :label="version.name || version.id" :value="version.id" />
+        </el-select>
+      </el-form-item>
+      <el-button type="primary" native-type="submit" :loading="checkBusy" :disabled="!!checkVersions.length && !checkVersion">开始诊断</el-button>
+    </el-form>
+    <div v-if="checkError || checkResult" class="proxy-check-result" aria-live="polite">
+      <el-alert v-if="checkError" type="error" :title="checkError" :closable="false" />
+      <template v-else-if="checkResult">
+        <el-alert :type="checkResult.ok && checkResult.running ? 'success' : 'warning'" :closable="false"
+          :title="checkResult.message" :description="checkResult.reason && reasonText(checkResult.reason)" />
+        <dl class="proxy-check-paths">
+          <dt>反代监听</dt><dd>{{ checkResult.running ? '运行中' : '未监听' }}</dd>
+          <template v-if="checkResult.indexed"><dt>Emby 入库</dt><dd>已找到条目</dd></template>
+          <dt>Emby 映射目录</dt><dd>{{ checkResult.emby_root || '未配置' }}</dd>
+          <template v-if="checkResult.emby_path"><dt>Emby 媒体路径</dt><dd>{{ checkResult.emby_path }}</dd></template>
+          <template v-if="checkResult.local_path"><dt>本地 STRM</dt><dd>{{ checkResult.local_path }}</dd></template>
+        </dl>
+      </template>
+    </div>
+  </el-dialog>
+
   <el-dialog v-model="playsOpen" :title="'取链记录 · ' + playsFor" width="min(700px, 94vw)">
     <el-empty v-if="!plays.length" :image-size="55" description="暂无取链记录" />
     <div v-else class="proxy-plays">
@@ -259,6 +343,10 @@ onMounted(load)
 </template>
 
 <style scoped>
+.proxy-check-result{margin-top:16px}
+.proxy-check-paths{display:grid;grid-template-columns:auto minmax(0,1fr);gap:9px 12px;margin:14px 0 0}
+.proxy-check-paths dt{color:var(--muted)}
+.proxy-check-paths dd{margin:0;overflow-wrap:anywhere;color:var(--text)}
 .proxy-head,.proxy-row,.proxy-name,.proxy-actions,.proxy-dialog-actions,.proxy-play-head{display:flex;align-items:center;gap:10px}
 .proxy-head,.proxy-row,.proxy-dialog-actions{justify-content:space-between}
 .proxy-head{margin-bottom:14px}

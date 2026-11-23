@@ -7,6 +7,7 @@ import secrets
 import time
 import hmac
 from io import BytesIO
+from typing import Annotated
 import zipfile
 from croniter import croniter
 from pathlib import Path
@@ -14,14 +15,23 @@ from zoneinfo import ZoneInfo
 from datetime import datetime
 from fastapi import Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from .emby_connection import strm_mount_path
+from .emby_proxy import delivery_target
+from .sync import stale_records
 
 
 class Input(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
 
-from .strm_options import StrmOptions, effective, shared_settings
+from .strm_options import (StrmOptions, effective, shared_settings, skip_reason,
+                           sync_metadata_overrides, sync_path_keyword, sync_path_skip_reason)
+
+SyncPathKeywords = Annotated[
+    list[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]],
+    Field(max_length=20),
+]
 
 
 class SyncConfig(StrmOptions, Input):
@@ -52,6 +62,9 @@ class SyncProfileInput(Input):
     source_labels: dict[str,str] = Field(default_factory=dict, max_length=20)
     mode: str = Field(pattern='^(incremental|full)$')
     metadata_mode: str | None = Field(default=None, pattern='^(inherit|source|technical)$')
+    exclude_keywords: SyncPathKeywords | None = None
+    after_transfer: bool | None = None
+    emby_target: str | None = Field(default=None, pattern=r'^[A-Za-z0-9_-]{1,80}$')
     enabled: bool = False
     frequency: str = Field(default='daily', pattern='^(daily|weekly|interval|cron)$')
     interval_minutes: int = Field(default=60, ge=5, le=43200)
@@ -59,6 +72,14 @@ class SyncProfileInput(Input):
     timezone: str = Field(default='Asia/Shanghai', max_length=100)
     weekday: int = Field(default=1, ge=0, le=6)
     time: str = Field(default='03:00', pattern=r'^([01]\d|2[0-3]):[0-5]\d$')
+
+
+class SyncPathInput(Input):
+    source_cid: str = Field(pattern=r'^[1-9]\d{0,23}$')
+    file_id: str = Field(pattern=r'^[1-9]\d{0,23}$')
+    emby_target: str = Field(default='main', pattern=r'^[A-Za-z0-9_-]{1,80}$')
+    exclude_keywords: SyncPathKeywords = Field(default_factory=list)
+    metadata_mode: str = Field(default='inherit', pattern='^(inherit|source|technical)$')
 
 
 class ScheduleConfig(Input):
@@ -122,7 +143,7 @@ def install_phase5(app,store,admin,job_public):
 
     @app.get('/api/v1/sync/config',dependencies=[Depends(admin)])
     async def sync_config(): return {'config':{**SyncConfig().model_dump(),**store.get('sync_config',{}), **effective(store), 'full_scan': True}, 'effective_shared': shared_settings(store), 'output_root': str(app.state.strms),
-        'stale_strms': json.loads(store.get('stale_strms') or '[]')}
+        'stale_strms': stale_records(store)}
 
     @app.get('/api/v1/strm/audit',dependencies=[Depends(admin)])
     async def strm_audit(limit:int=Query(20,ge=1,le=200)):
@@ -297,6 +318,50 @@ def install_phase5(app,store,admin,job_public):
         states = {row['kind']:dict(row) for row in store.db.execute("SELECT * FROM task_schedules WHERE kind LIKE 'sync_profile:%'")}
         return {'items':[{**profile, 'next_due':states.get('sync_profile:' + profile['id'], {}).get('next_due')} for profile in profiles]}
 
+    @app.post('/api/v1/sync/profiles/preview-path', dependencies=[Depends(admin)])
+    async def preview_sync_path(body: SyncPathInput):
+        cloud = app.state.cloud
+        source = await cloud.file(body.file_id)
+        trail = await cloud.path_info(source['parent_id'])
+        if body.source_cid not in {part['id'] for part in trail}:
+            raise HTTPException(409, '文件已不在选中的同步目录内，请重新选择。')
+        cloud_path = '/' + '/'.join([part['name'] for part in trail if part['id'] != '0'] + [source['name']])
+        try:
+            options = effective(store)
+            options.update(sync_metadata_overrides(options, body.metadata_mode))
+            scoped_source = {**source, '_path': trail, '_root': body.source_cid}
+            sidecar = Path(source['name']).suffix.lower() in options['metadata_extensions']
+            reason = '' if sidecar else skip_reason(source, options)
+            if not reason:
+                keyword = sync_path_keyword(scoped_source, body.exclude_keywords)
+                if keyword:
+                    reason = sync_path_skip_reason(keyword)
+            if reason:
+                return {'cloud_path': cloud_path, 'skip_reason': reason}
+            if sidecar:
+                return {'cloud_path': cloud_path, 'sidecar': True}
+            relative = Path(engine().sync.relative(scoped_source, options))
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        result = {'cloud_path': cloud_path, 'local_path': str(engine().root / relative)}
+        if body.emby_target == 'off':
+            return {**result, 'emby_target_name': '', 'emby_path': None}
+        if body.emby_target == 'main':
+            mount, name = strm_mount_path(store).rstrip('/'), '主 Emby'
+        else:
+            target = delivery_target(store, body.emby_target)
+            if not target:
+                return {**result, 'emby_error': '所选 Emby 实例已移除或配置不完整。'}
+            mount, name = target.mount, target.name
+        return {**result, 'emby_target_name': name,
+                'emby_path': mount + '/' + relative.as_posix() if mount else None}
+
+    def checked_emby_target(target, previous='main'):
+        value = target or previous
+        if value != previous and value not in ('main', 'off') and not delivery_target(store, value):
+            raise HTTPException(422, '请选用已配置地址、API Key 和 STRM 映射的 Emby 实例。')
+        return value
+
     def validate_profile_schedule(body: SyncProfileInput):
         try:
             zone = ZoneInfo(body.timezone)
@@ -316,6 +381,9 @@ def install_phase5(app,store,admin,job_public):
         profiles = store.get('sync_profiles', [])
         if len(profiles) >= 30: raise HTTPException(422, '最多创建 30 个同步任务。')
         profile = {'id': secrets.token_hex(8), **body.model_dump(), 'metadata_mode':body.metadata_mode or 'inherit', 'source_cids':roots, 'source_labels':labels, 'source_cid':roots[0], 'source_label':labels[roots[0]]}
+        profile['after_transfer'] = bool(body.after_transfer and body.mode == 'incremental')
+        profile['emby_target'] = checked_emby_target(body.emby_target)
+        profile['exclude_keywords'] = body.exclude_keywords or []
         store.set_many({'sync_profiles': [*profiles, profile]})
         engine().tasks.tick_sync_profiles(time.time())
         return profile
@@ -331,6 +399,10 @@ def install_phase5(app,store,admin,job_public):
         if not any(p['id'] == profile_id for p in profiles): raise HTTPException(404, '同步任务不存在。')
         existing = next(p for p in profiles if p['id'] == profile_id)
         profile = {'id': profile_id, **body.model_dump(), 'metadata_mode':body.metadata_mode or existing.get('metadata_mode') or 'inherit', 'source_cids':roots, 'source_labels':labels, 'source_cid':roots[0], 'source_label':labels[roots[0]]}
+        after_transfer = existing.get('after_transfer') if body.after_transfer is None else body.after_transfer
+        profile['after_transfer'] = bool(after_transfer and body.mode == 'incremental')
+        profile['emby_target'] = checked_emby_target(body.emby_target, existing.get('emby_target') or 'main')
+        profile['exclude_keywords'] = existing.get('exclude_keywords', []) if body.exclude_keywords is None else body.exclude_keywords
         store.set_many({'sync_profiles': [profile if p['id'] == profile_id else p for p in profiles]})
         with store.db: store.db.execute('DELETE FROM task_schedules WHERE kind=?', ('sync_profile:' + profile_id,))
         engine().tasks.tick_sync_profiles(time.time())
@@ -390,7 +462,7 @@ def install_phase5(app,store,admin,job_public):
                 "AND json_extract(config,'$.job_kind')='strm_sync'").fetchone()[0]
             return {'mode': 'incremental', 'since': since, 'dry_run': True,
                     'changed': int(changed or 0), 'running': int(running or 0),
-                    'stale_count': len(store.meta_json('stale_strms', []) or [])}
+                    'stale_count': len(stale_records(store))}
         jid, _ = engine().tasks.enqueue(config)
         return {**job_public(engine().job(jid)), 'mode': 'incremental', 'since': since}
 
@@ -418,7 +490,7 @@ def install_phase5(app,store,admin,job_public):
         running = store.db.execute(
             "SELECT count(*) FROM organize_jobs WHERE state IN ('queued','running') "
             "AND json_extract(config,'$.job_kind')='strm_sync'").fetchone()[0]
-        stale = store.meta_json('stale_strms', []) or []
+        stale = stale_records(store)
         return {'watermark': watermark, 'last_job': dict(last) if last else None,
                 'running': int(running or 0), 'stale_count': len(stale)}
 

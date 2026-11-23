@@ -37,6 +37,7 @@ from .share_check import check_alive, _verified_share_strm
 from .share_cleanup import (pending_count, validate_play_token, refresh_share_address,
                             prune_empty_pending)
 from .share_recognition import episode_range_of, is_share_category as _is_share_category, quality_rank
+from .recognition_aliases import apply_alias
 
 PENDING_NAME = '分享STRM待整理'
 UNIDENT_NAME = '分享STRM未识别'
@@ -63,7 +64,7 @@ def share_recognition_hint(row):
             if (context and not _is_share_category(context.get('title'))
                     and (context.get('year') or context.get('tmdb_id'))):
                 folder = candidate
-    hint = require_work_identity(require_single_episode(parse_name(stem, folder), name))
+    hint = require_work_identity(require_single_episode(parse_name(name, folder), name))
     if folder and not hint.get('tmdb_id'):
         hint['identity_source'] = 'ancestor_directory'
     return hint
@@ -431,8 +432,10 @@ async def run_organize(engine, job_id, config):
         hints, seen = [], set()
         for row in rows:
             try:
-                hint = share_recognition_hint(row)
+                hint = apply_alias(store, share_recognition_hint(row))
             except NeedsReview:
+                continue
+            if hint.get('tmdb_id'):
                 continue
             key = (hint['media_type'], hint['query'], hint['year'] or 0)
             if key not in seen:
@@ -466,7 +469,7 @@ async def run_organize(engine, job_id, config):
     groups, membership, sent = {}, {}, set()
     for candidate in rows:
         try:
-            h = share_recognition_hint(candidate)
+            h = apply_alias(store, share_recognition_hint(candidate))
             title = normal(h.get('query') or '')
             key = ('tv',title,h.get('year'),h['season']) if h['media_type']=='tv' and title else ('file',candidate['id'])
         except NeedsReview:
@@ -582,7 +585,7 @@ async def run_organize(engine, job_id, config):
                             # collision no longer blocks this item.
                             if not saved.get('deferred_layout') and target != natural and not (natural.exists() or natural.is_symlink()):
                                 raise ValueError('original name is available')
-                        signature = _share_hold_signature(row, pending_file, target, settings, store.get('tmdb_key'))
+                        signature = _share_hold_signature(store, row, pending_file, target, settings)
                         if signature and saved.get('signature') == signature and time.time() - saved.get('at', 0) < 21600:
                             if item:
                                 engine.update_item(item['id'], state='skipped', step='同名未识别文件等待处理',
@@ -593,7 +596,7 @@ async def run_organize(engine, job_id, config):
                         pass
             stem = Path(row['name']).stem
             try:
-                hint = share_recognition_hint(row)
+                hint = apply_alias(store, share_recognition_hint(row))
                 identity_key = (hint['media_type'], normal(hint['query']), hint.get('year'),
                                 hint.get('season'), hint.get('tmdb_id'))
                 cached_identity = identity_cache.get(identity_key)
@@ -892,13 +895,19 @@ def verdict_reason(verdict, target_stem):
     return ''
 
 
-def _share_hold_signature(row, pending_file, target, settings, tmdb_key):
+def _share_hold_signature(store, row, pending_file, target, settings):
     try:
         source_stat, target_stat = pending_file.stat(), target.stat()
     except OSError:
         return None
     evidence = [row['id'], row['name'], row['strm_path'], source_stat.st_size, source_stat.st_mtime_ns,
-                target_stat.st_size, target_stat.st_mtime_ns, settings, tmdb_key or '', 'v1']
+                target_stat.st_size, target_stat.st_mtime_ns, settings, store.get('tmdb_key') or '', 'v1']
+    try:
+        correction = apply_alias(store, share_recognition_hint(row)).get('recognition_alias')
+    except NeedsReview:
+        correction = None
+    if correction:
+        evidence.append([correction['id'], correction['tmdb_id']])
     return hashlib.sha256(json.dumps(evidence, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
 
 
@@ -1011,7 +1020,7 @@ async def _to_unident(engine, job_id, row, item, reason, deterministic=False, se
     except OSError as exc:
         detail = '待确认目录已有同名文件，原文件已保留' if isinstance(exc, FileExistsError) else '移动待确认目录失败，原文件已保留'
         if isinstance(exc, FileExistsError) and deterministic:
-            signature = _share_hold_signature(row, pending_file, target_dir, settings or {}, store.get('tmdb_key'))
+            signature = _share_hold_signature(store, row, pending_file, target_dir, settings or {})
             if signature:
                 with store.db:
                     store.db.execute('INSERT OR REPLACE INTO meta VALUES(?,?)',

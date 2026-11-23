@@ -26,6 +26,7 @@ from .offline_api import OfflinePostProcess
 from .organize_options import file_title, filter_files, library_root, options, title_options
 from .strm_options import StrmOptions, skip_reason, copy_cloud_metadata
 from .archive import ArchiveIndex
+from .recognition_aliases import scan_hint
 from .media import (METADATA, SUBTITLES, VIDEOS, NeedsReview, choose_match, title_candidates, numeral_variants,
                     pick_best, scored_candidates, match_threshold, has_cjk,
                     title_relation,
@@ -1375,7 +1376,7 @@ class Organizer:
                 if re.fullmatch(r'\d{4}', year):
                     hint['year'] = int(year)
         else:
-            hint = require_single_episode(parse_name(original['name'], original.get('folder')), original['name'])
+            hint = scan_hint(self.store, original['name'], original.get('folder'))
             kind = hint['media_type']
             with _prepare_measure(diagnostics, '作品识别', self.cloud):
                 details = await self.identify(hint)
@@ -1559,6 +1560,7 @@ class Organizer:
                 'tmdb_id': (details or {}).get('id') or hint.get('tmdb_id'),
                 'title': ((details or {}).get('title') or (details or {}).get('name')),
                 'identity_source': hint.get('identity_source') or 'filename',
+                **({'recognition_alias': hint['recognition_alias']} if hint.get('recognition_alias') else {}),
                 'siblings': original.get('siblings') or [],
                 'tmdb_attempt': attempts}
 
@@ -1622,7 +1624,9 @@ class Organizer:
                 except (TypeError, ValueError):
                     pass
             try:
-                hints.append(require_single_episode(parse_name(original['name'], original.get('folder')), original['name']))
+                hint = scan_hint(self.store, original['name'], original.get('folder'))
+                if not hint.get('tmdb_id'):
+                    hints.append(hint)
             except NeedsReview:
                 continue
         if len(hints) < 2:
@@ -2658,12 +2662,12 @@ class Organizer:
                 self.update_job(job_id, state='cancelled', stage='历史分类迁移已停用',
                     message='历史分类迁移功能已移除；保留已有步骤，不再自动移动文件。旧分类可手动移回转存后重新整理。')
                 return
+            if config.get('job_kind') == 'strm_sync':
+                await self.sync.run(job_id, config)
+                return
             await self.cloud.status()
             if config.get('job_kind') == 'transfer':
                 await self.transfer.run(job_id, config)
-                return
-            if config.get('job_kind') == 'strm_sync':
-                await self.sync.run(job_id, config)
                 return
             if config.get('cleanup_only'):
                 self.sync.invalidate(self.index.account(config))
@@ -2721,7 +2725,7 @@ class Organizer:
             for item in all_rows:
                 source = json.loads(item['original'])
                 try:
-                    hint = require_single_episode(parse_name(source['name'], source.get('folder')), source['name'])
+                    hint = scan_hint(self.store, source['name'], source.get('folder'))
                     title = normal(hint.get('query') or '')
                     key = ('tv', title, hint.get('year'), hint['season']) if hint['media_type'] == 'tv' and title else ('file', item['id'])
                 except NeedsReview:
@@ -2839,12 +2843,12 @@ class Organizer:
                 if queue is not None and membership[row['id']][0] == 'tv':
                     source = json.loads(row['original'])
                     try:
-                        hint = require_single_episode(parse_name(source['name'], source.get('folder')), source['name'])
+                        hint = scan_hint(self.store, source['name'], source.get('folder'))
                         for previous in rows[:position]:
                             if membership[previous['id']] != membership[row['id']]:
                                 continue
                             old = json.loads(previous['original'])
-                            old_hint = require_single_episode(parse_name(old['name'], old.get('folder')), old['name'])
+                            old_hint = scan_hint(self.store, old['name'], old.get('folder'))
                             if (old_hint.get('episode'), old_hint.get('end_episode')) == (hint.get('episode'), hint.get('end_episode')):
                                 enqueue_archived(membership[row['id']])
                                 await drain_publications()

@@ -16,6 +16,9 @@ def sync_task_context(config):
     mode={'incremental':'增量同步','full':'全量同步','sweep':'本地巡检'}.get(
         config.get('mode') or config.get('sync_mode'))
     if mode: lines.append('方式：'+mode)
+    if config.get('sync_trigger') == 'transfer': lines.append('触发：转存完成 · 补扫目标目录')
+    if name := config.get('emby_target_name'): lines.append('Emby：'+name)
+    elif config.get('emby_target') == 'off': lines.append('Emby 入库通知：已关闭')
     return '\n'.join(lines)+'\n' if lines else ''
 
 

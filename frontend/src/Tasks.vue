@@ -18,6 +18,20 @@ type OfflineSection={total:number,items:OfflineRecord[]}
 const offlinePending=ref<OfflineSection>({total:0,items:[]})
 const offlineReview=ref<OfflineSection>({total:0,items:[]})
 const offlineStatusError=ref('')
+const syncStageLabels = {
+  connection:'115 连接检查', scan_wait:'等待扫描通道', scan:'115 目录枚举',
+  verify:'文件核对', publish_wait:'等待发布通道', publish:'本地写入',
+  local_scan:'本地扫描', local_cleanup:'失效核对与清理',
+  sidecars:'附属文件', technical:'技术媒体信息', emby:'Emby 通知提交',
+} as const
+const syncListings: Record<string, string> = {bulk:'批量目录树',recursive:'递归文件列表',directory:'逐目录读取'}
+const seconds = (value: number) => value.toFixed(2) + ' 秒'
+const syncMetrics = computed(() => detail.value?.job.sync_metrics)
+const syncStages = computed(() => Object.entries(syncStageLabels)
+  .flatMap(([key,label]) => {
+    const value=syncMetrics.value?.stages?.[key]
+    return typeof value==='number' ? [{key,label,value}] : []
+  }))
 let stream:EventSource|undefined,timer:ReturnType<typeof setInterval>|undefined,polling=false,visible=false
 const inProgress=(job:any)=>['queued','running','paused','waiting_login'].includes(job.state)
 const taskSource=taskSourceLabel
@@ -145,7 +159,7 @@ usePageActivity(()=>{visible=true;connect();void run(()=>load());timer=setInterv
     <p v-if="taskPresentation(job).summary" class="wrap">{{taskPresentation(job).summary}}</p>
     <p v-for="note in taskPresentation(job).notes" :key="note" class="wrap">{{note}}</p>
     <div class="button-row">
-      <el-button v-if="job.total||job.state!=='completed'" :disabled="busy" @click="show(job.id)">查看处理结果</el-button>
+      <el-button v-if="job.total||job.sync_metrics||job.state!=='completed'" :disabled="busy" @click="show(job.id)">查看处理结果</el-button>
       <el-button v-if="job.state==='needs_review'" :disabled="busy" @click="control(job,'resume')">核查并继续</el-button>
       <el-button v-if="job.state==='needs_review'" type="danger" plain :disabled="busy" @click="control(job,'cancel')">归档这条失败任务</el-button>
       <el-button v-if="['partial','cancelled'].includes(job.state)" plain :disabled="busy" @click="control(job,'close')">结项</el-button>
@@ -168,8 +182,25 @@ usePageActivity(()=>{visible=true;connect();void run(()=>load());timer=setInterv
   <template v-if="detail">
     <h3>{{taskPresentation(detail.job).title}}</h3>
     <p class="wrap">当前阶段：{{detail.job.stage}}</p>
+    <p v-if="detail.job.emby_target_name" class="wrap">Emby 入库通知 · {{detail.job.emby_target_name}}</p>
     <p v-if="taskPresentation(detail.job).summary" class="wrap">{{taskPresentation(detail.job).summary}}</p>
     <p v-for="note in taskPresentation(detail.job).notes" :key="note" class="wrap">{{note}}</p>
+    <section v-if="syncMetrics" class="sync-timing">
+      <h4>同步耗时</h4>
+      <p>{{syncMetrics.mode==='full'?'全量同步':'增量同步'}}<template v-if="detail.job.sync_trigger==='transfer'"> · 转存后补扫目标目录</template></p>
+      <p v-if="syncMetrics.scan">
+        {{syncListings[syncMetrics.scan.listing] || '目录读取'}} · {{syncMetrics.scan.directories}}
+        个{{syncMetrics.scan.directories_exact ? '目录' : '涉及目录'}} · {{syncMetrics.scan.files}} 个条目
+      </p>
+      <p>核对 {{syncMetrics.videos}} 个 · 复用 {{syncMetrics.reused}} 个 · STRM 新增 {{syncMetrics.created}} 个 / 更新 {{syncMetrics.updated}} 个</p>
+      <p v-if="syncMetrics.requests">115 读取 {{syncMetrics.requests.read}} 次 · 限流 {{syncMetrics.requests.blocked}} 次</p>
+      <dl>
+        <div><dt>{{syncMetrics.attempt>1?'首次排队':'排队'}}</dt><dd>{{seconds(syncMetrics.queue)}}</dd></div>
+        <div><dt>{{syncMetrics.attempt>1?'本次执行':'执行'}}</dt><dd>{{seconds(syncMetrics.execution)}}</dd></div>
+        <div v-if="syncMetrics.attempt>1"><dt>任务总耗时</dt><dd>{{seconds(syncMetrics.total)}}</dd></div>
+        <div v-for="stage in syncStages" :key="stage.key"><dt>{{stage.label}}</dt><dd>{{seconds(stage.value)}}</dd></div>
+      </dl>
+    </section>
     <details v-if="detail.job.message" class="task-extra"><summary>技术详情</summary><p class="wrap">{{detail.job.message}}</p></details>
     <div class="button-row">
       <el-radio-group v-model="itemFilter" size="small" aria-label="处理结果筛选">
@@ -196,6 +227,7 @@ usePageActivity(()=>{visible=true;connect();void run(()=>load());timer=setInterv
         <p>文件 ID {{item.file_id}}</p>
         <p v-if="item.cloud_parts?.length">115 归档：{{item.cloud_parts.join(' / ')}}</p>
         <p v-if="item.tmdb_id">TMDB {{item.tmdb_id}} · {{item.media?.width}} × {{item.media?.height}} · {{item.media?.codec}}</p>
+        <p v-if="item.recognition_alias" class="wrap">命中识别纠正 · {{item.recognition_alias.alias}} → TMDB {{item.recognition_alias.tmdb_id}}</p>
         <p v-if="item.upgrade?.decision">洗版决定：{{({replace:'更优替换',discard:'回收新副本',archive:'归档或共存',skip:'原位置跳过'} as Record<string,string>)[item.upgrade.decision]||item.upgrade.decision}}</p>
         <div v-for="check in item.upgrade?.comparisons||[]" :key="check.file_id"><p>比较旧文件 {{check.file_id}}：{{check.result==='identical'?'内容相同':check.result==='coexist'?'分组共存':check.result>0?'新版更优':check.result<0?'旧版更优':'同分'}}</p><p v-for="rule in check.rules" :key="rule.rule">{{rule.label}}：新 {{JSON.stringify(rule.new)}} / 旧 {{JSON.stringify(rule.old)}}</p></div>
         <p v-for="action in item.recycle||[]" :key="action.file_id">回收文件 {{action.file_id}}：{{action.state==='confirmed'?'已核实':'意图已保存，待核实'}}</p>
@@ -208,6 +240,13 @@ usePageActivity(()=>{visible=true;connect();void run(()=>load());timer=setInterv
 </template>
 
 <style scoped>
+.sync-timing{margin:14px 0;padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--surface-soft)}
+.sync-timing h4{margin:0 0 8px;font-size:14px}
+.sync-timing p{margin:5px 0;color:var(--muted);font-size:12px}
+.sync-timing dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,130px),1fr));gap:8px;margin:12px 0 0}
+.sync-timing dl>div{display:flex;flex-direction:column;gap:4px;padding:7px 8px;border-radius:5px;background:var(--surface)}
+.sync-timing dt{font-size:12px;color:var(--muted)}
+.sync-timing dd{margin:0;font-weight:600}
 .tasks-panel > h2:first-of-type { margin-top: 10px; padding-top: 0; border-top: 0; }
 @media (max-width: 600px) {
   .task-sections { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }

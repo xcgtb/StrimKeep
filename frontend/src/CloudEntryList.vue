@@ -1,5 +1,5 @@
 <script setup lang="ts">
-defineProps<{items:any[];loading?:boolean;emptyText?:string}>()
+defineProps<{items:any[];loading?:boolean;emptyText?:string;selectFiles?:boolean}>()
 const emit=defineEmits<{open:[item:any]}>()
 function size(bytes:number){if(!Number.isFinite(bytes))return '';if(bytes<1024)return bytes+' B';const units=['KB','MB','GB','TB'];let value=bytes/1024,index=0;while(value>=1024&&index<units.length-1){value/=1024;index++}return value.toFixed(value<10?1:0)+' '+units[index]}
 </script>
@@ -12,6 +12,10 @@ function size(bytes:number){if(!Number.isFinite(bytes))return '';if(bytes<1024)r
         <svg class="cloud-entry-icon folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3Z"/></svg>
         <span class="cloud-entry-name">{{item.name}}</span>
         <svg class="cloud-entry-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
+      </button>
+      <button v-else-if="selectFiles" class="cloud-entry" type="button" :disabled="loading" @click="emit('open',item)">
+        <svg class="cloud-entry-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M14 3H5v18h14V8Z"/><path d="M14 3v5h5"/></svg>
+        <span class="cloud-entry-name">{{item.name}}</span><span class="cloud-entry-size">{{size(item.size)}}</span>
       </button>
       <div v-else class="cloud-entry cloud-file-entry">
         <svg class="cloud-entry-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M14 3H5v18h14V8Z"/><path d="M14 3v5h5"/></svg>

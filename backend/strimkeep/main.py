@@ -11,6 +11,7 @@ import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -31,11 +32,13 @@ from .probe import probe
 from .store import Store, digest
 from .quality import (UpgradePolicy, public_policy, KEYS as RULE_KEYS, LABELS as RULE_LABELS,
                       CHOICES as RULE_CHOICES, OPTIONS as RULE_OPTIONS, SUGGESTED_ORDER)
+from . import recognition_aliases
 from .organizer import dumps
 from .web_organizer import WebOrganizer
-from .media import NeedsReview, PROBE_UA, episode_label, naming
-from .organize_options import OrganizeOptions, library_root
+from .media import NeedsReview, PROBE_UA, classification, episode_label, naming
+from .organize_options import OrganizeOptions, library_root, title_options
 from .strm_options import effective as effective_strm
+from .strm_options import share_effective_settings
 from .phase5_api import install_phase5
 from .metrics import Metrics, install_metrics, is_streaming
 from .db_worker import DbWorker
@@ -113,6 +116,7 @@ class ManualMatch(Input):
     media_type: str = Field(pattern=r'^(movie|tv)$')
     season: int | None = Field(default=None, ge=0, le=1000)
     episode: int | None = Field(default=None, ge=1, le=100000)
+    remember_alias: bool = False
 
 
 def base_url(value: str, allow_path=False) -> str:
@@ -602,6 +606,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
 
     def job_public(row, counts_map=None, emby_map=None, stats=None):
         result = {key: row[key] for key in ('id','state','created','updated','stage','message','manifest','notify_state')}
+        job_config = json.loads(row['config'])
         delivery = (emby_map or {}).get(row['id']) if emby_map is not None else app.state.organizer.emby.row(row['id'])
         # 归档的历史投递（超过 7 天仍未确认）不再当成当前状态展示，否则任务中心会一直挂红点。
         if delivery and delivery['state'] != 'archived':
@@ -619,8 +624,13 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
                 confirmed = sum(1 for t in fallback if isinstance(t, dict) and t.get('confirmed'))
             result['emby'] = {'state': delivery['state'], 'attempts': delivery['attempts'],
                               'total': total, 'confirmed': confirmed, 'message': delivery['message']}
-        result['sync_mode'] = json.loads(row['config']).get('sync_mode', '')
-        result['scan_filter'] = json.loads(row['config']).get('scan_filter', {})
+        result['sync_mode'] = job_config.get('sync_mode', '')
+        result['scan_filter'] = job_config.get('scan_filter', {})
+        if job_config.get('job_kind') == 'strm_sync':
+            result['sync_metrics'] = job_config.get('sync_metrics')
+            result['sync_trigger'] = job_config.get('sync_trigger', '')
+            result['emby_target_name'] = job_config.get('emby_target_name') or (
+                '已关闭' if job_config.get('emby_target') == 'off' else '')
         if counts_map is not None:
             counts = counts_map.get(row['id'], {})
         else:
@@ -648,11 +658,11 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         result['filtered_items'] = filtered_items
         result['filtered'] = filtered_items + int(
             (result.get('scan_filter') or {}).get('excluded') or 0)
-        result['config'] = {k: v for k, v in json.loads(row['config']).items() if k in ('job_kind','source_cids','archive_cid','pending_cid','directory_labels','scheduled','notify_emby','upgrade_policy','retries','retry_interval','strm_delay','target_cid','target_label','origin','transfer_parent','organize_options') or k in OrganizeOptions.model_fields}
+        result['config'] = {k: v for k, v in job_config.items() if k in ('job_kind','source_cids','archive_cid','pending_cid','directory_labels','scheduled','notify_emby','upgrade_policy','retries','retry_interval','strm_delay','target_cid','target_label','origin','transfer_parent','organize_options') or k in OrganizeOptions.model_fields}
         states_ok = all(state in ('done', 'pending', 'skipped', 'recycled') for state in counts)
         result['can_retry_cleanup'] = bool(app.state.organizer.cleanup.retryable(row) and row['manifest'] and states_ok)
         # 已结束的任务也能重查目录残留（cleanup 会重新列目录，并核实扫描时记录的未匹配字幕）。
-        cleanup_state = json.loads(row['config']).get('empty_cleanup')
+        cleanup_state = job_config.get('empty_cleanup')
         result['can_recheck_cleanup'] = bool(
             row['state'] in ('completed', 'partial') and row['manifest'] and states_ok
             and isinstance(cleanup_state, dict) and cleanup_state.get('entries'))
@@ -777,20 +787,36 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         row = app.state.organizer.job(job_id)
         if not row:
             raise HTTPException(404, '任务不存在。')
+        is_organize = json.loads(row['config']).get('job_kind', 'organize') == 'organize'
         items = []
         for item in store.db.execute(
                 f'SELECT *, ({UNRECOGNIZED_ITEM}) AS unidentified FROM organize_items '
                 'WHERE job_id=? AND id>? ORDER BY id LIMIT 100', (job_id, after)):
             original, plan = json.loads(item['original']), json.loads(item['plan'])
+            alias = recognition_aliases.candidate(original) if is_organize and item['unidentified'] else None
             items.append({k: item[k] for k in ('id','file_id','state','step','message')} |
                          {'unidentified': bool(item['unidentified']), 'original_name': original.get('name') or item['file_id'], 'source_cid': original.get('parent_id') or '',
                           'target_name': plan.get('target_name', ''), 'cloud_parts': plan.get('parts', []),
                           'relative_path': plan.get('relative_path', ''), 'media': plan.get('media'),
                           'tmdb_id': plan.get('details', {}).get('id'), 'warnings': plan.get('warnings', []),
+                          'alias_candidate': alias, 'recognition_alias': (plan.get('hint') or {}).get('recognition_alias'),
                           'upgrade': {key: plan.get('wash', {}).get(key) for key in ('decision','reason','group','rule_version','comparisons')},
                           'recycle': [{'file_id': fid, 'state': action['state'], 'rid': action.get('rid', '')}
                                       for fid, action in plan.get('wash', {}).get('actions', {}).items()]})
         return {'job': job_public(row), 'items': items, 'has_more': len(items) == 100}
+
+    @app.get('/api/v1/organize/recognition-aliases', dependencies=[Depends(admin)])
+    async def list_recognition_aliases():
+        return {'items': [dict(rule) for rule in store.db.execute(
+            f'SELECT {recognition_aliases.PUBLIC_COLUMNS} FROM recognition_aliases ORDER BY id DESC')]}
+
+    @app.delete('/api/v1/organize/recognition-aliases/{rule_id}', dependencies=[Depends(admin)])
+    async def remove_recognition_alias(rule_id: int):
+        with store.transaction(immediate=True):
+            removed = store.db.execute('DELETE FROM recognition_aliases WHERE id=?', (rule_id,)).rowcount
+        if removed:
+            store.event('organize', f'已移除识别纠正规则 #{rule_id}。')
+        return {'removed': bool(removed)}
 
     @app.post('/api/v1/organize/jobs/{job_id}/items/{item_id}/manual-match', dependencies=[Depends(admin)])
     async def manual_match(job_id: int, item_id: int, body: ManualMatch):
@@ -812,6 +838,11 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         if body.media_type == 'tv' and (body.season is None or body.episode is None):
             raise HTTPException(422, '剧集手动匹配需要填写季号和集号。')
         original = json.loads(item['original'] or '{}')
+        alias = recognition_aliases.candidate(original) if body.remember_alias else None
+        if body.remember_alias and (not alias or alias['media_type'] != body.media_type
+                                    or (body.media_type == 'tv' and
+                                        (alias['season'], alias['episode']) != (body.season, body.episode))):
+            raise HTTPException(422, '此文件的原片名、类型或季集不足以保存自动纠正规则。可取消勾选后单独手动匹配。')
         try:
             current = await app.state.organizer.cloud.file(original['id'])
         except CloudError as exc:
@@ -837,6 +868,13 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         year = (details.get('release_date') or details.get('first_air_date') or '')[:4]
         if not title or not re.fullmatch(r'\d{4}', year):
             raise HTTPException(409, 'TMDB 作品缺少名称或首映年份，不能生成规范目录。')
+        if alias and body.media_type == 'tv':
+            try:
+                episode = await app.state.organizer.tmdb_episode(body.tmdb_id, body.season, body.episode)
+            except CloudError as exc:
+                raise HTTPException(409, f'TMDB 季集查询失败：{exc}') from exc
+            if not episode or (episode.get('season_number'), episode.get('episode_number')) != (body.season, body.episode):
+                raise HTTPException(409, 'TMDB 尚未核实该季集。可取消勾选后单独手动匹配。')
         hint = {
             'query': title, 'year': int(year), 'media_type': body.media_type,
             'season': body.season if body.media_type == 'tv' else None,
@@ -867,6 +905,11 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
                 (item_id, job_id, item['original'], job_id)).fetchone()
             if not eligible:
                 raise HTTPException(409, '该条目已变更，请刷新任务详情。')
+            if alias:
+                try:
+                    recognition_aliases.remember(store, alias, hint)
+                except ValueError as exc:
+                    raise HTTPException(409, str(exc)) from None
             new_job_id = store.jobs.create(config)
             store.jobs.insert_item(new_job_id, original['id'], current, state='discovered')
             store.jobs.set_manifest(new_job_id, 1)
@@ -875,7 +918,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
                 message=f'已创建手动匹配任务 #{new_job_id}：TMDB {body.tmdb_id}。原任务记录保留。')
         store.event('organize', f'任务 {job_id} 条目 {item_id}：已创建手动匹配任务 #{new_job_id}。')
         return {'job': job_public(app.state.organizer.job(new_job_id)),
-                'source_job': job_id, 'source_item': item_id}
+                'source_job': job_id, 'source_item': item_id, 'saved_alias': bool(alias)}
 
     @app.post('/api/v1/organize/jobs/{job_id}/dismiss-unrecognized', dependencies=[Depends(admin)])
     async def dismiss_unrecognized(job_id: int, body: DismissUnrecognized):
@@ -1080,6 +1123,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         folder: str | None = Field(default=None, max_length=800)
         tmdb_id: int | None = None
         use_tmdb: bool = True
+        library: Literal['cloud', 'share'] = 'cloud'
 
     @app.post('/api/v1/strm/rebuild', dependencies=[Depends(admin)])
     async def rebuild_outputs(dry_run: int = Query(0, ge=0, le=1)):
@@ -1143,11 +1187,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
 
     @app.post('/api/v1/organize/preview', dependencies=[Depends(admin)])
     async def preview_organize(body: Preview):
-        """识别测试：只做解析和命名预览，不读云盘、不改任何文件。
-
-        对齐  的「识别测试」：给一个文件名，看它会被认成什么、叫什么名字，
-        用来核对规则，而不是拿真实任务试错。
-        """
+        """用所选库的当前规则预览作品识别和分类。"""
         from .media import media_from_filename, parse_name, require_single_episode, technical_name
         name = body.name.strip()
         try:
@@ -1155,10 +1195,11 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
             if body.tmdb_id:
                 hint['tmdb_id'] = int(body.tmdb_id)
             require_single_episode(hint, name)
+            recognition_aliases.apply_alias(store, hint)
         except NeedsReview as exc:
-            return {'name': name, 'ok': False, 'reason': str(exc), 'stage': 'parse'}
+            return {'name': name, 'ok': False, 'reason': str(exc), 'stage': 'parse', 'library': body.library}
         media = media_from_filename(name)
-        result = {'name': name, 'ok': True, 'stage': 'parsed', 'hint': hint,
+        result = {'name': name, 'ok': True, 'stage': 'parsed', 'hint': hint, 'library': body.library,
                   'technical': technical_name(media, name), 'source': 'filename',
                   'media': {k: media.get(k) for k in ('width', 'height', 'codec', 'dynamic_range',
                                                       'bit_depth', 'fps', 'dolby_vision_profile')},
@@ -1166,16 +1207,27 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         if not body.use_tmdb:
             return result
         try:
-            details = await app.state.organizer.identify(hint)
+            organizer = app.state.organizer
+            details = await organizer.identify(hint)
+            kind = hint['media_type']
             episodes = []
-            if hint['media_type'] == 'tv':
+            if kind == 'tv':
+                season = hint['season']
                 for number in range(hint['episode'], hint['end_episode'] + 1):
-                    episode = await app.state.organizer.tmdb(
-                        f'tv/{details["id"]}/season/{hint["season"]}/episode/{number}')
-                    if episode.get('episode_number') == number:
+                    if body.library == 'share':
+                        episode = await organizer.tmdb(f'tv/{details["id"]}/season/{season}/episode/{number}')
+                    else:
+                        episode = await organizer.tmdb_episode(details['id'], season, number)
+                    if episode is not None:
+                        if episode.get('season_number') != season or episode.get('episode_number') != number:
+                            raise NeedsReview('TMDB 季集映射不匹配。')
                         episodes.append(episode)
-            config = {**OrganizeConfig().model_dump(), **store.get('organize_config', {})}
-            policy = public_policy(store.get('upgrade_policy'))
+            if body.library == 'share':
+                settings = share_effective_settings(store)
+                config, policy = settings['organize'], settings['upgrade_policy']
+            else:
+                config, policy = store.get('organize_config', {}), public_policy(store.get('upgrade_policy'))
+            config = await title_options(organizer, hint, details, config)
             try:
                 parts, target_name, category, region = naming(
                     hint, details, episodes, media, name, policy, config)
@@ -1192,14 +1244,19 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         except NeedsReview as exc:
             result.update({'ok': False, 'stage': 'tmdb', 'reason': str(exc)})
             return result
+        decision = classification(details, kind, config)
+        label = episode_label(hint) if kind == 'tv' else ''
         result.update({
             'stage': 'named', 'target_name': target_name, 'parts': parts,
             'category': category, 'region': region,
-            'episode_label': episode_label(hint),
+            'classification': {'category_reason': decision.category_reason, 'region_reason': decision.region_reason,
+                               'genres': [{'id': g['id'], 'name': g.get('name') or ''}
+                                          for g in details.get('genres', []) if 'id' in g]},
+            'episode_label': label,
             'work': {'id': details.get('id'), 'title': details.get('title') or details.get('name'),
                      'year': (details.get('release_date') or details.get('first_air_date') or '')[:4]},
             'episode_title': (episodes[0].get('name') if len(episodes) == 1 else '') or '',
-            'target_episode': episode_label(hint),
+            'target_episode': label,
         })
         return result
 

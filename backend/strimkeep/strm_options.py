@@ -45,6 +45,30 @@ def skip_reason(source,config):
     return ''
 
 
+def sync_path_keyword(source, keywords):
+    """Match a literal keyword against the complete 115 path."""
+    if not keywords:
+        return ''
+    parts = [part['name'] for part in source['_path'] if str(part['id']) != '0']
+    path = ('/' + '/'.join([*parts, source['name']])).casefold()
+    return next((word for word in keywords if word.casefold() in path), '')
+
+
+def sync_path_skip_reason(keyword):
+    return f'命中同步路径排除词「{keyword}」'
+
+
+def sync_metadata_overrides(config, mode):
+    if mode == 'source':
+        extras = {'.nfo', '.jpg', '.jpeg', '.png', '.webp'} - set(config['video_extensions'])
+        return {'generate_nfo': False, 'generate_images': False,
+                'metadata_extensions': sorted(set(config['metadata_extensions']) | extras)}
+    if mode == 'technical':
+        return {'generate_nfo': False, 'generate_images': False, 'emby_media_info': False,
+                'metadata_extensions': [], 'notify_emby': False}
+    return {}
+
+
 def shared_settings(store):
     organize=options(store.get('organize_config',{}));strm=effective(store)
     quality=public_policy(store.get('upgrade_policy'))

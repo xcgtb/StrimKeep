@@ -4,18 +4,48 @@ import hashlib
 import json
 import secrets
 import time
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 
 import httpx
 from .cloud115 import CloudError, FATAL_CODES
-from .media import SUBTITLES, component, bind_subtitles, subtitle_suffix
-from .strm_options import StrmOptions, skip_reason, write_new
+from .media import SUBTITLES, VIDEOS, component, bind_subtitles, subtitle_suffix
+from .strm_options import StrmOptions, skip_reason, sync_path_keyword, sync_path_skip_reason, write_new
 from .organize_options import library_root
 from .playaddr import candidates, identity_of, play115_candidates, play115_url, play_url
 from .store import digest
 from .sync_hash_worker import HashWorker, HashWorkerError
 from .message_templates import sync_task_context
 from .local_scan import fid_of, scan, identity_of_file
+
+
+def stale_records(store):
+    """Both the UI and the sync worker read the same persisted result."""
+    value = store.get('stale_strms') or []
+    return json.loads(value) if isinstance(value, str) else value
+
+
+def stale_path_key(relative):
+    return str(relative).replace('\\', '/')
+
+
+@contextmanager
+def measure(timings, stage):
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        timings[stage] = timings.get(stage, 0.0) + (time.perf_counter() - start)
+
+
+@asynccontextmanager
+async def timed_gate(lock, timings, stage):
+    with measure(timings, stage):
+        await lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 class Sync:
@@ -61,7 +91,11 @@ class Sync:
                                   ('sync_revision:'+account, secrets.token_hex(16)))
 
     def scope(self, config):
-        return hashlib.sha256(json.dumps([sorted(config['source_cids']),config.get('archive_cid'), {k:config.get(k) for k in StrmOptions.model_fields}],sort_keys=True).encode()).hexdigest()
+        options = {key: config.get(key) for key in StrmOptions.model_fields}
+        if config.get('sync_exclude_keywords'):
+            options['sync_exclude_keywords'] = sorted({word.casefold() for word in config['sync_exclude_keywords']})
+        return hashlib.sha256(json.dumps([sorted(config['source_cids']), config.get('archive_cid'), options],
+                                         sort_keys=True).encode()).hexdigest()
 
     async def unchanged(self, source, config):
         """本地即事实：磁盘上有、内容对，才算「没变」。
@@ -239,18 +273,25 @@ class Sync:
         revision_at_start = self.store.meta('sync_revision:'+self.engine.index.account(config))
         manifest_started_at = time.time()
         paths = {cid: await self.cloud.path_info(cid) for cid in roots}
+        if config.get('sync_trigger') == 'transfer':
+            allowed = self.engine.tasks.transfer_sync_roots(config['sync_profile_id'])
+            if any(not allowed.intersection(part['id'] for part in trail) for trail in paths.values()):
+                raise UncertainState('转存目录已不在启用变更补扫的同步范围内，未发布同步清单。')
         # Pick the outermost selected root, independent of selection order.
         effective = [cid for cid in roots if not any(other != cid and other in [x['id'] for x in paths[cid]] for other in roots)]
         batched = getattr(self.cloud, 'download_tree', None)
         fast = getattr(self.cloud, 'recursive_files_verified', None)
         completed_fast = False
+        listing = 'directory'
         if callable(batched) or callable(fast):
             try:
                 if callable(batched):
                     seen, files, stats = await self.download_manifest(jid, config, effective, paths)
+                    listing = 'bulk'
                     self.store.event('sync', '已通过递归目录、文件及批量详情完成清单。')
                 else:
                     seen, files, stats = await self.recursive_manifest(jid, config, effective, paths)
+                    listing = 'recursive'
                     self.store.event('sync', '递归文件清单和目录路径核实完成。')
                 completed_fast = True
             except CloudError as exc:
@@ -291,29 +332,54 @@ class Sync:
                         stats[root]['files']+=1
                 self.engine.update_job(jid, stage=f'同步扫描：{len(seen)} 个目录，{len(files)} 个文件')
         rules = {**StrmOptions().model_dump(), **config}
-        selected = [v for v in files.values() if not skip_reason(v, rules)]
-        subtitles = [v for v in files.values() if Path(v['name']).suffix.lower() in SUBTITLES & set(rules['metadata_extensions'])]
-        # Subtitle matching uses the same selected video set without creating STRM for subtitles.
-        videos = bind_subtitles(selected + subtitles, rules['video_extensions'], SUBTITLES & set(rules['metadata_extensions']))
-        config['sync_filtered_ids'] = [v['id'] for v in files.values() if skip_reason(v, rules)]
+        metadata_extensions = set(rules['metadata_extensions'])
+        video_extensions = VIDEOS | set(rules['video_extensions'])
+        subtitle_extensions = SUBTITLES & metadata_extensions
+        selected, sidecars, subtitles, filtered, examples = [], [], [], [], []
+        skipped_count = excluded_count = 0
+        keywords = config.get('sync_exclude_keywords') or []
+        for source in files.values():
+            suffix = Path(source['name']).suffix.lower()
+            is_sidecar = suffix in metadata_extensions
+            reason = '' if is_sidecar else skip_reason(source, rules)
+            keyword = sync_path_keyword(source, keywords) if is_sidecar or not reason else ''
+            if not reason and not keyword and not is_sidecar:
+                selected.append(source)
+                continue
+            # All entries were present in the verified listing, including excluded paths.
+            filtered.append(source['id'])
+            if keyword:
+                excluded_count += 1
+                if len(examples) < 10:
+                    examples.append({'name': source['name'], 'reason': sync_path_skip_reason(keyword)})
+            elif is_sidecar:
+                sidecars.append(source)
+                if suffix in subtitle_extensions:
+                    subtitles.append(source)
+            elif suffix in video_extensions:
+                skipped_count += 1
+                if len(examples) < 10:
+                    examples.append({'name': source['name'], 'reason': reason})
+        videos = bind_subtitles(selected + subtitles, rules['video_extensions'], subtitle_extensions)
         bound_subtitles = {sub['id'] for video in videos for sub in video.get('subtitles', [])}
-        config['sync_metadata'] = [v for v in files.values() if Path(v['name']).suffix.lower() in set(rules['metadata_extensions']) and v['id'] not in bound_subtitles]
-        config['sync_filter_count'] = len([v for v in files.values() if Path(v['name']).suffix.lower() not in set(rules['metadata_extensions']) and skip_reason(v,rules)])
-        # 把"按生成规则跳过"的文件名与原因都记下来：只给数字看不出是哪个文件、为什么跳过。
-        skipped = [v for v in files.values()
-                   if Path(v['name']).suffix.lower() not in set(rules['metadata_extensions'])
-                   and skip_reason(v, rules)]
-        config['sync_filter_names'] = [{'id': v['id'], 'name': v['name'],
-                                        'size': v.get('size'), 'parent_id': v.get('parent_id'),
-                                        'reason': skip_reason(v, rules)}
-                                       for v in skipped[:10]]
+        manifest_details = {
+            'sync_filtered_ids': filtered,
+            'sync_metadata': [source for source in sidecars if source['id'] not in bound_subtitles],
+            'sync_filter_count': skipped_count,
+            'sync_path_excluded_count': excluded_count,
+            'sync_filter_names': examples,
+        }
+        config.update(manifest_details)
         self.store.jobs.replace_manifest(jid, [(v['id'], dumps(v)) for v in videos])
         with self.store.db:
             account = self.engine.index.account(config)
             self.store.db.execute('INSERT OR REPLACE INTO sync_snapshots VALUES(?,?,?,?,?,?)',
                 (account,self.scope(config),jid,time.time(),revision_at_start,dumps(paths)))
-        current = json.loads(self.engine.job(jid)['config']);current.update({k:config[k] for k in ('sync_filtered_ids','sync_metadata','sync_filter_count')});current['sync_mode']='full'
+        current = json.loads(self.engine.job(jid)['config'])
+        current.update(manifest_details)
+        current['sync_mode'] = 'full'
         current['sync_directory_stats']=stats
+        current['sync_listing']=listing
         current['sync_effective_roots']=effective
         current['manifest_at']=time.time()
         current['manifest_started_at']=manifest_started_at
@@ -333,10 +399,12 @@ class Sync:
     def mark_changed(self, jid):
         from .core import dumps
         config = json.loads(self.engine.job(jid)['config'])
+        if config.get('output_changed'):
+            return
         config['output_changed'] = True
         self.engine.update_job(jid, config=dumps(config))
 
-    async def process(self, jid, row, config):
+    async def process(self, jid, row, config, timings):
         """把一份云端文件落成本地 STRM（+ 字幕）。
 
         同步以本轮清单和本地文件为准，来源证据用于后续归属核验。
@@ -359,31 +427,32 @@ class Sync:
                            and self.engine.measurements.fingerprint(source)
                            and trail and trail[-1].get('id') == source.get('parent_id')
                            and source.get('_root') in [node.get('id') for node in trail])
-        if trusted:
-            actual = {'id': source['id'], 'name': source['name'], 'parent_id': source['parent_id'],
-                      'size': source.get('size'), 'sha1': source.get('sha1', ''),
-                      'pickcode': source.get('pickcode', '')}
-            current_path = source['_path']
-        else:
-            actual = await self.cloud.file(source['id'])
-            self.engine.check_source(source, actual, source['name'], source['parent_id'])
-            current_path = await self.cloud.path_info(source['parent_id'])
-        if source['_root'] not in [p['id'] for p in current_path]:
-            raise UncertainState('文件已移出本次同步目录，本文件暂不生成输出。')
-        if current_path != source['_path']:
-            source['_path'] = current_path
-            self.engine.update_item(row['id'], original=dumps(source))
-            plan['relative_path'] = self.relative(source, config)
-        identity = identity_of(actual) or identity_of(source)
-        if identity is None:
-            # 身份不全就只能回查一次；还缺就明确停下来，不写半成品地址。
-            actual = await self.cloud.file(source['id'])
-            self.engine.check_source(source, actual, source['name'], source['parent_id'])
-            identity = identity_of(actual)
-        if identity is None:
-            self.engine.update_item(row['id'], plan=plan, state='review', step='缺少播放身份',
-                                    message='文件缺少 pickcode / sha1 / 大小，无法生成播放地址。')
-            return
+        with measure(timings, 'verify'):
+            if trusted:
+                actual = {'id': source['id'], 'name': source['name'], 'parent_id': source['parent_id'],
+                          'size': source.get('size'), 'sha1': source.get('sha1', ''),
+                          'pickcode': source.get('pickcode', '')}
+                current_path = source['_path']
+            else:
+                actual = await self.cloud.file(source['id'])
+                self.engine.check_source(source, actual, source['name'], source['parent_id'])
+                current_path = await self.cloud.path_info(source['parent_id'])
+            if source['_root'] not in [p['id'] for p in current_path]:
+                raise UncertainState('文件已移出本次同步目录，本文件暂不生成输出。')
+            if current_path != source['_path']:
+                source['_path'] = current_path
+                self.engine.update_item(row['id'], original=dumps(source))
+                plan['relative_path'] = self.relative(source, config)
+            identity = identity_of(actual) or identity_of(source)
+            if identity is None:
+                # 身份不全就只能回查一次；还缺就明确停下来，不写半成品地址。
+                actual = await self.cloud.file(source['id'])
+                self.engine.check_source(source, actual, source['name'], source['parent_id'])
+                identity = identity_of(actual)
+            if identity is None:
+                self.engine.update_item(row['id'], plan=plan, state='review', step='缺少播放身份',
+                                        message='文件缺少 pickcode / sha1 / 大小，无法生成播放地址。')
+                return
         url = play115_url(config['playback_base'], *identity,
                           actual.get('name') or source['name']).encode()
         content = {plan['relative_path']: url}
@@ -392,80 +461,83 @@ class Sync:
         if source.get('subtitle_warning'):
             warnings.append('同主体多个视频的字幕归属不明，已保留原文件。')
 
-        subtitle_suffixes = [subtitle_suffix(source['name'], sub['name']) for sub in source['subtitles']]
-        counts = {}
-        for suffix in subtitle_suffixes:
-            counts[suffix.casefold()] = counts.get(suffix.casefold(), 0) + 1
-        for sub, suffix in zip(source['subtitles'], subtitle_suffixes):
-            self.engine.boundary(jid)
-            if counts[suffix.casefold()] > 1:
-                warnings.append('多个字幕目标名称相同，保留旧输出并跳过冲突字幕。')
-                continue
-            relative = str(Path(plan['relative_path']).with_suffix('')) + suffix
-            local = self.engine.outputs.path(relative)
-            target_size, target_sha1 = sub.get('size'), str(sub.get('sha1') or '').upper()
-            data = None
-            # 本地已有且与清单摘要一致 → 直接用，不下载、不查库。
-            if local.is_file() and local.stat().st_size <= 20 * 1024 * 1024:
-                cached = local.read_bytes()
-                if target_sha1 and len(cached) == target_size and hashlib.sha1(cached).hexdigest().upper() == target_sha1:
-                    data = cached
-            try:
-                if data is None:
-                    fresh = (bool(sub.get('_scan_at')) and time.time() - sub['_scan_at'] < 900
-                             and identity_of(sub) is not None)
-                    pickcode = sub.get('pickcode') if fresh else ''
-                    if not pickcode:
-                        checked = await self.cloud.file(sub['id'])
-                        self.engine.check_source(sub, checked, sub['name'], sub['parent_id'])
-                        pickcode = checked.get('pickcode') or ''
-                    link, headers = await self.cloud.url(pickcode, 'StrimKeep/0.5 Subtitle')
-                    data = await self.engine.download(link, {**headers, 'User-Agent': 'StrimKeep/0.5 Subtitle'},
-                                                      20 * 1024 * 1024)
-                    if target_sha1 and (len(data) != target_size
-                                        or hashlib.sha1(data).hexdigest().upper() != target_sha1):
-                        self.store.event('sync', '字幕内容与清单摘要不一致，已按云端现状写入：' + sub['name'])
-                subtitle_cache.append({k: sub[k] for k in ('id','name','parent_id','size','sha1') if k in sub})
-                content[relative] = data
-            except (httpx.HTTPError, ValueError, CloudError) as exc:
-                if isinstance(exc, CloudError) and exc.code in ('LOGIN_REQUIRED', 'LOGIN_INVALID'):
-                    raise
-                warnings.append('外挂字幕下载失败，本文件下次同步会重试。')
-        if not trusted:
-            self.engine.check_source(source, await self.cloud.file(source['id']),
-                                     source['name'], source['parent_id'])
-        for relative, data in content.items():
-            self.engine.boundary(jid)
-            target = self.engine.outputs.path(relative)
-            if relative.lower().endswith('.strm'):
-                try:
-                    checksum = hashlib.sha256(data).hexdigest()
-                    self.engine.outputs.guard(self.engine.index.account(config), source['id'], relative,
-                                              {relative: checksum})
-                except UncertainState as exc:
-                    self.update_item(row['id'], plan=plan, state='review', step='同名文件已存在',
-                                     message=str(exc))
-                    return
-            checksum = hashlib.sha256(data).hexdigest()
-            if (not relative.lower().endswith('.strm') and target.exists()
-                    and (target.is_symlink() or not target.is_file()
-                         or hashlib.sha256(target.read_bytes()).hexdigest() != checksum)):
-                old = self.engine.outputs.get(self.engine.index.account(config), source['id'])
-                try:
-                    recorded = json.loads(old['files'] or '{}').get(relative) if old else None
-                except (ValueError, TypeError, AttributeError):
-                    recorded = None
-                owner = self.store.db.execute(
-                    'SELECT account_id,file_id,digest FROM owned_outputs WHERE relative_path=?',
-                    (relative,)).fetchone()
-                if (target.is_symlink() or not target.is_file() or not recorded or not owner
-                        or (owner['account_id'], str(owner['file_id']), owner['digest'])
-                        != (str(self.engine.index.account(config)), str(source['id']), recorded)
-                        or hashlib.sha256(target.read_bytes()).hexdigest() != recorded):
-                    warnings.append('本地字幕已修改或归属不明，已保留：' + relative)
-                    plan['local_files'].pop(relative, None)
+        with measure(timings, 'sidecars'):
+            subtitle_suffixes = [subtitle_suffix(source['name'], sub['name']) for sub in source['subtitles']]
+            counts = {}
+            for suffix in subtitle_suffixes:
+                counts[suffix.casefold()] = counts.get(suffix.casefold(), 0) + 1
+            for sub, suffix in zip(source['subtitles'], subtitle_suffixes):
+                self.engine.boundary(jid)
+                if counts[suffix.casefold()] > 1:
+                    warnings.append('多个字幕目标名称相同，保留旧输出并跳过冲突字幕。')
                     continue
-            if not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest() != checksum:
+                relative = str(Path(plan['relative_path']).with_suffix('')) + suffix
+                local = self.engine.outputs.path(relative)
+                target_size, target_sha1 = sub.get('size'), str(sub.get('sha1') or '').upper()
+                data = None
+                # 本地已有且与清单摘要一致 → 直接用，不下载、不查库。
+                if local.is_file() and local.stat().st_size <= 20 * 1024 * 1024:
+                    cached = local.read_bytes()
+                    if target_sha1 and len(cached) == target_size and hashlib.sha1(cached).hexdigest().upper() == target_sha1:
+                        data = cached
+                try:
+                    if data is None:
+                        fresh = (bool(sub.get('_scan_at')) and time.time() - sub['_scan_at'] < 900
+                                 and identity_of(sub) is not None)
+                        pickcode = sub.get('pickcode') if fresh else ''
+                        if not pickcode:
+                            checked = await self.cloud.file(sub['id'])
+                            self.engine.check_source(sub, checked, sub['name'], sub['parent_id'])
+                            pickcode = checked.get('pickcode') or ''
+                        link, headers = await self.cloud.url(pickcode, 'StrimKeep/0.5 Subtitle')
+                        data = await self.engine.download(link, {**headers, 'User-Agent': 'StrimKeep/0.5 Subtitle'},
+                                                          20 * 1024 * 1024)
+                        if target_sha1 and (len(data) != target_size
+                                            or hashlib.sha1(data).hexdigest().upper() != target_sha1):
+                            self.store.event('sync', '字幕内容与清单摘要不一致，已按云端现状写入：' + sub['name'])
+                    subtitle_cache.append({k: sub[k] for k in ('id','name','parent_id','size','sha1') if k in sub})
+                    content[relative] = data
+                except (httpx.HTTPError, ValueError, CloudError) as exc:
+                    if isinstance(exc, CloudError) and exc.code in ('LOGIN_REQUIRED', 'LOGIN_INVALID'):
+                        raise
+                    warnings.append('外挂字幕下载失败，本文件下次同步会重试。')
+        if not trusted:
+            with measure(timings, 'verify'):
+                self.engine.check_source(source, await self.cloud.file(source['id']),
+                                         source['name'], source['parent_id'])
+        for relative, data in content.items():
+            with measure(timings, 'verify'):
+                self.engine.boundary(jid)
+                target = self.engine.outputs.path(relative)
+                checksum = hashlib.sha256(data).hexdigest()
+                if relative.lower().endswith('.strm'):
+                    try:
+                        self.engine.outputs.guard(self.engine.index.account(config), source['id'], relative,
+                                                  {relative: checksum})
+                    except UncertainState as exc:
+                        self.update_item(row['id'], plan=plan, state='review', step='同名文件已存在',
+                                         message=str(exc))
+                        return
+                if (not relative.lower().endswith('.strm') and target.exists()
+                        and (target.is_symlink() or not target.is_file()
+                             or hashlib.sha256(target.read_bytes()).hexdigest() != checksum)):
+                    old = self.engine.outputs.get(self.engine.index.account(config), source['id'])
+                    try:
+                        recorded = json.loads(old['files'] or '{}').get(relative) if old else None
+                    except (ValueError, TypeError, AttributeError):
+                        recorded = None
+                    owner = self.store.db.execute(
+                        'SELECT account_id,file_id,digest FROM owned_outputs WHERE relative_path=?',
+                        (relative,)).fetchone()
+                    if (target.is_symlink() or not target.is_file() or not recorded or not owner
+                            or (owner['account_id'], str(owner['file_id']), owner['digest'])
+                            != (str(self.engine.index.account(config)), str(source['id']), recorded)
+                            or hashlib.sha256(target.read_bytes()).hexdigest() != recorded):
+                        warnings.append('本地字幕已修改或归属不明，已保留：' + relative)
+                        plan['local_files'].pop(relative, None)
+                        continue
+                should_write = not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest() != checksum
+            if should_write:
                 existed = target.is_file()
                 plan['local_files'][relative] = checksum
                 self.mark_changed(jid)
@@ -475,10 +547,11 @@ class Sync:
                     plan['sync_created' if not existed else 'sync_updated'] = True
                 else:
                     plan['sync_attachment_created' if not existed else 'sync_attachment_updated'] = True
-                atomic_write(target, data, self.engine.root)
-                # 刚落盘的文件要立刻能被「按 fid 找本地文件」看到（只更新这一条）。
-                self.engine.outputs.note(self.engine.index.account(config), relative, target,
-                                         identity_of_file(target)[0])
+                with measure(timings, 'publish'):
+                    atomic_write(target, data, self.engine.root)
+                    # 刚落盘的文件要立刻能被「按 fid 找本地文件」看到（只更新这一条）。
+                    self.engine.outputs.note(self.engine.index.account(config), relative, target,
+                                             identity_of_file(target)[0])
             plan['local_files'][relative] = checksum
         account = self.engine.index.account(config)
         old = self.engine.outputs.get(account, source['id'])
@@ -488,6 +561,8 @@ class Sync:
             {**plan, 'playback_id': old['playback_id'] if old else '',
              'token_cipher': old['token_cipher'] if old else ''})
         plan['warnings'] = warnings
+        if not plan.get('sync_created') and not plan.get('sync_updated'):
+            plan['sync_unchanged'] = True
         with self.store.db:
             # 整理登记只更新路径（按文件身份，不再按播放身份）。
             self.store.db.execute('UPDATE organized_files SET relative_path=? WHERE file_id=?',
@@ -685,15 +760,15 @@ class Sync:
             self.flush_batch()
             self._batch = []
 
-    async def tidy_moved(self, jid, config):
+    async def tidy_moved(self, jid, config, local_files):
         """同一文件号出现在两个本地路径时，保留本轮清单算出来的那个，删掉另一个。"""
         expected = {}
         for row in self.store.db.execute('SELECT file_id, plan FROM organize_items WHERE job_id=?', (jid,)):
             plan_row = json.loads(row['plan'] or '{}')
             if plan_row.get('relative_path'):
                 expected[str(row['file_id'])] = plan_row['relative_path']
-        removed = 0
-        for relative, identity in (await asyncio.to_thread(self.scan_scope, jid, config)).items():
+        removed = set()
+        for relative, identity in local_files.items():
             if identity.get('kind') != 'netdisk':
                 continue
             fid = str(identity['file_id'])
@@ -717,13 +792,14 @@ class Sync:
                         (relative, str(self.engine.index.account(config)), fid))
                     self.store.db.execute('INSERT OR IGNORE INTO strm_changes VALUES(?,?,?)',
                                           (jid, 'removed', relative))
-                removed += 1
+                removed.add(relative)
                 self.mark_changed(jid)
             except Exception as exc:
                 self.store.event('sync', '旧位置清理失败（%s）：%s' % (relative, str(exc)[:60]))
         if removed:
             self.engine.outputs.invalidate()
-        return removed
+            self.forget_removed(config, local_files, removed)
+        return len(removed)
 
     def scan_prefixes(self, jid, config):
         """Return only the complete local roots proven by this job's manifest."""
@@ -749,7 +825,10 @@ class Sync:
 
     def scan_scope(self, jid, config):
         found = {}
-        for prefix in self.scan_prefixes(jid, config):
+        prefixes = {Path(prefix) for prefix in self.scan_prefixes(jid, config)}
+        for prefix in sorted(prefixes):
+            if any(parent in prefixes for parent in prefix.parents):
+                continue
             base = self.engine.root / prefix
             if not base.is_dir():
                 continue
@@ -764,127 +843,202 @@ class Sync:
         present |= {str(x) for x in config.get('sync_filtered_ids', [])}
         return present
 
-    async def stale_check(self, jid, config):
+    def merge_stale_observations(self, account, observations):
+        """Replace only paths actually verified by this run for this account."""
+        if not observations:
+            return False
+        with self.store.transaction(immediate=True):
+            previous = stale_records(self.store)
+            pending = dict(observations)
+            current = []
+            for item in previous:
+                key = stale_path_key(item.get('relative_path', ''))
+                if str(item.get('account_id') or '') == str(account) and key in observations:
+                    item = pending.pop(key, None)
+                if item is not None:
+                    current.append(item)
+            current.extend(item for item in pending.values() if item is not None)
+            if current != previous:
+                self.store.set_many({'stale_strms': json.dumps(current, ensure_ascii=False)})
+                return True
+        return False
+
+    def forget_removed(self, config, local_files, removed):
+        if not removed:
+            return
+        for relative in removed:
+            local_files.pop(relative, None)
+        self.merge_stale_observations(self.engine.index.account(config),
+                                      {stale_path_key(relative): None for relative in removed})
+
+    @staticmethod
+    def netdisk_digest(path, fid):
+        verified, fingerprint = identity_of_file(path)
+        if (not path.is_symlink() and verified and verified['kind'] == 'netdisk'
+                and str(verified['file_id']) == fid):
+            return fingerprint
+        return None
+
+    async def stale_check(self, jid, config, local_files):
         """失效差集：本地有、清单没有、云端也确实没了 → 只标记不删除。"""
         if not config.get('stale_detect'):
             return []
         account = self.engine.index.account(config)
         present = self.present_ids(jid, config)
-        missing = []
+        tracked = {stale_path_key(item.get('relative_path', '')) for item in stale_records(self.store)
+                   if str(item.get('account_id') or '') == str(account)}
+        observations = {}
         probes = 0
-        for relative, identity in (await asyncio.to_thread(self.scan_scope, jid, config)).items():
+        capped = False
+        for relative, identity in local_files.items():
             if identity.get('kind') != 'netdisk':
                 continue
             fid = str(identity['file_id'])
+            key = stale_path_key(relative)
             if fid in present:
-                continue
-            local = self.engine.outputs.path(relative)
-            verified, _ = identity_of_file(local)
-            if local.is_symlink() or not verified or verified.get('kind') != 'netdisk' or str(verified.get('file_id')) != fid:
+                if key in tracked and self.netdisk_digest(self.engine.outputs.path(relative), fid):
+                    observations[key] = None
                 continue
             if probes >= self.MAX_CLOUD_PROBES:
-                self.store.event('strm_sync', '失效检测达到单轮上限（%d），其余候选下次再看。' % self.MAX_CLOUD_PROBES)
-                break
-            probes += 1
-            if await self.cloud.live_file_exists(fid):
+                capped = True
                 continue
-            missing.append({'account_id': account, 'file_id': fid, 'relative_path': relative})
-        previous = self.store.get('stale_strms') or '[]'
-        current = json.dumps(missing, ensure_ascii=False)
-        if current != previous:
-            self.store.set_many({'stale_strms': current})
-            if missing:
-                self.store.event('strm_sync', '失效 STRM 检测：发现 %d 条本地 strm 的网盘源文件已消失（只标记未删除）。'
-                                 % len(missing))
+            local = self.engine.outputs.path(relative)
+            fingerprint = self.netdisk_digest(local, fid)
+            if not fingerprint:
+                continue
+            self.engine.boundary(jid)
+            probes += 1
+            exists = await self.cloud.live_file_exists(fid)
+            if self.netdisk_digest(local, fid) == fingerprint:
+                observations[key] = None if exists else {'account_id': account, 'file_id': fid, 'relative_path': relative}
+        if capped:
+            self.store.event('strm_sync', '失效检测达到单轮上限（%d），已保留其余候选的原记录。' % self.MAX_CLOUD_PROBES)
+        missing = [item for item in observations.values() if item is not None]
+        if self.merge_stale_observations(account, observations) and missing:
+            self.store.event('strm_sync', '失效 STRM 检测：本轮确认 %d 条本地 STRM 的网盘源文件已消失。' % len(missing))
         return missing
 
     async def stale_cleanup(self):
         """删除失效 STRM：只删「身份写在文件里、云端确实没了」的那一份。"""
-        stale = json.loads(self.store.get('stale_strms') or '[]')
+        stale = stale_records(self.store)
         account = self.engine.index.account({})
-        cleaned, rest = [], []
+        cleaned, results = [], {}
+
+        def key(item):
+            return (str(item.get('account_id') or ''), stale_path_key(item.get('relative_path', '')), str(item.get('file_id', '')))
+
         for item in stale:
             relative, fid = item.get('relative_path', ''), str(item.get('file_id', ''))
+            error = ''
             try:
-                if not fid or (item.get('account_id') and item['account_id'] != account):
-                    rest.append({**item, 'error': '账号或文件身份不匹配，已保留。'}); continue
-                local = self.engine.outputs.path(relative)
-                verified, _ = identity_of_file(local)
-                if local.is_symlink() or not verified or verified.get('kind') != 'netdisk' or str(verified.get('file_id')) != fid:
-                    rest.append({**item, 'error': '本地文件身份对不上，已保留。'}); continue
-                if await self.cloud.live_file_exists(fid):
-                    rest.append({**item, 'error': '网盘源文件仍存在，已保留。'}); continue
-                local.unlink()
-                with self.store.db:
-                    self.store.db.execute(
-                        'DELETE FROM owned_outputs WHERE relative_path=? AND account_id=? AND file_id=?',
-                        (relative, str(account), fid))
-                cleaned.append(relative)
+                if not fid or (item.get('account_id') and str(item['account_id']) != str(account)):
+                    error = '账号或文件身份不匹配，已保留。'
+                else:
+                    local = self.engine.outputs.path(relative)
+                    fingerprint = self.netdisk_digest(local, fid)
+                    if not fingerprint:
+                        error = '本地文件身份对不上，已保留。'
+                    elif await self.cloud.live_file_exists(fid):
+                        error = '网盘源文件仍存在，已保留。'
+                    elif self.netdisk_digest(self.engine.outputs.path(relative), fid) != fingerprint:
+                        error = '本地文件身份已变化，已保留。'
+                    else:
+                        local.unlink()
+                        with self.store.db:
+                            self.store.db.execute(
+                                'DELETE FROM owned_outputs WHERE relative_path=? AND account_id=? AND file_id=?',
+                                (relative, str(account), fid))
+                        cleaned.append(relative)
             except Exception as exc:
-                rest.append({**item, 'error': str(exc)[:80]})
-        self.store.set_many({'stale_strms': json.dumps(rest, ensure_ascii=False)})
+                error = str(exc)[:80] or '清理未完成，已保留记录。'
+            results[key(item)] = (item, {**item, 'error': error} if error else None)
+        if cleaned:
+            self.engine.outputs.invalidate()
+        with self.store.transaction(immediate=True):
+            latest = stale_records(self.store)
+            rest = []
+            for item in latest:
+                before, after = results.get(key(item), (None, item))
+                if before != item:
+                    after = item
+                if after is not None:
+                    rest.append(after)
+            if rest != latest:
+                self.store.set_many({'stale_strms': json.dumps(rest, ensure_ascii=False)})
         return cleaned, rest
 
-    async def cleanup(self, jid, config, after=None):
+    async def cleanup(self, jid, config, local_files, *, after):
         """清理：本地 STRM 的身份不在本轮清单里、云端也没了 → 删掉。"""
         if config.get('cleanup_missing', True) is False:
             return 0, []
         present = self.present_ids(jid, config)
-        expected = {}
-        for row in self.store.db.execute('SELECT file_id, plan FROM organize_items WHERE job_id=?', (jid,)):
-            plan_row = json.loads(row['plan'] or '{}')
-            if plan_row.get('relative_path'):
-                expected[str(row['file_id'])] = plan_row['relative_path']
-        removed, warnings = 0, []
+        account = str(self.engine.index.account(config))
+        removed, warnings = set(), []
         probes = 0
-        for relative, identity in (await asyncio.to_thread(self.scan_scope, jid, config)).items():
+        for relative, identity in local_files.items():
             if identity.get('kind') != 'netdisk':
                 continue
             fid = str(identity['file_id'])
-            want = expected.get(fid)
             if fid in present:
                 continue
             if probes >= self.MAX_CLOUD_PROBES:
                 warnings.append('清理达到单轮上限（%d 个候选），其余下次再看。' % self.MAX_CLOUD_PROBES)
                 break
-            probes += 1
             self.engine.boundary(jid)
             try:
+                local = self.engine.outputs.path(relative)
+                fingerprint = self.netdisk_digest(local, fid)
+                if not fingerprint:
+                    warnings.append('已保留身份变化的本地文件：' + relative)
+                    continue
+                probes += 1
                 if await self.cloud.live_file_exists(fid):
                     continue
-                local = self.engine.outputs.path(relative)
-                verified, _ = identity_of_file(local)
-                if local.is_symlink() or not verified or verified.get('kind') != 'netdisk' or str(verified.get('file_id')) != fid:
-                    warnings.append('已保留身份变化的本地文件：' + relative); continue
+                recent = self.store.db.execute(
+                    'SELECT 1 FROM output_registry WHERE account_id=? AND file_id=? AND relative_path=? AND updated>? AND active=1',
+                    (account, fid, relative, after)).fetchone()
+                if recent or self.netdisk_digest(self.engine.outputs.path(relative), fid) != fingerprint:
+                    warnings.append('已保留扫描期间更新的本地文件：' + relative)
+                    continue
                 local.unlink()
+                removed.add(relative)
                 with self.store.db:
                     self.store.db.execute(
                         'DELETE FROM owned_outputs WHERE relative_path=? AND account_id=? AND file_id=?',
-                        (relative, str(self.engine.index.account(config)), fid))
+                        (relative, account, fid))
                     self.store.db.execute('INSERT OR IGNORE INTO strm_changes VALUES(?,?,?)',
                                           (jid, 'removed', relative))
-                removed += 1
                 self.mark_changed(jid)
             except Exception as exc:
                 warnings.append('清理失败（%s）：%s' % (relative, str(exc)[:60]))
-        state = json.loads(self.engine.job(jid)['config']); state['sync_removed'] = removed
+        self.forget_removed(config, local_files, removed)
+        if removed:
+            self.engine.outputs.invalidate()
+        state = json.loads(self.engine.job(jid)['config']); state['sync_removed'] = len(removed)
         self.engine.update_job(jid, config=json.dumps(state, ensure_ascii=False))
-        return removed, warnings
+        return len(removed), warnings
 
     async def run(self, jid, config):
         if hasattr(self.cloud, 'use_scope'):
             self.cloud.use_scope(self.engine.current_account(), jid)
         if hasattr(self.cloud, 'reset_ledger'):
             self.cloud.reset_ledger()
-        started = time.time()
-        saved = json.loads(self.engine.job(jid)['config'])
+        started, clock = time.time(), time.perf_counter()
+        job = self.engine.job(jid)
+        saved = json.loads(job['config'])
+        previous = saved.pop('sync_metrics', {})
+        queue = previous.get('queue', max(0, (saved.get('sync_execution_started_at') or started) - job['created']))
+        attempt = previous.get('attempt', 0) + 1
+        timings = {}
         saved['sync_execution_started_at'] = started
         self.engine.update_job(jid, config=json.dumps(saved, ensure_ascii=False))
         try:
-            await self._run(jid, config)
+            with measure(timings, 'connection'):
+                await self.cloud.status()
+            await self._run(jid, config, timings)
             # 这个时间点只在本次真正跑完之后才更新，而且记的是**开始**时刻：
             # 扫描期间发生的改动下一轮还会被看到，不会漏。
-            if str(self.engine.job(jid)['state'] or '') in ('completed', 'partial'):
+            if not config.get('sync_trigger') and self.engine.job(jid)['state'] in ('completed', 'partial'):
                 # 除了全局时间，还按同步目录各记一份：多根同步时，某个根没跑过就
                 # 不能拿另一个根的时间去跳过它。
                 previous = self.store.meta_json('sync_watermark', {}) or {}
@@ -896,14 +1050,36 @@ class Sync:
                     'mode': 'incremental' if config.get('incremental_since') else 'full',
                     'roots': roots_map})
         finally:
+            execution = time.perf_counter() - clock
             if hasattr(self.cloud, 'use_scope'):
                 self.cloud.use_scope(self.engine.current_account(), jid)
             ledger = self.cloud.ledger_summary() if hasattr(self.cloud, 'ledger_summary') else None
+            saved = json.loads(self.engine.job(jid)['config'])
+            counts = self.store.db.execute(
+                """SELECT COUNT(*), COALESCE(SUM(json_extract(plan,'$.sync_unchanged')=1),0),
+                          COALESCE(SUM(json_extract(plan,'$.sync_created')=1),0),
+                          COALESCE(SUM(json_extract(plan,'$.sync_updated')=1),0)
+                   FROM organize_items WHERE job_id=?""", (jid,)).fetchone()
+            saved['sync_metrics'] = {
+                'queue': round(queue, 3), 'attempt': attempt,
+                'mode': 'full' if config.get('_force_full') else 'incremental',
+                'execution': round(execution, 3), 'total': round(max(0, time.time() - job['created']), 3),
+                'stages': {key: round(value, 3) for key, value in timings.items()},
+                'videos': counts[0], 'reused': counts[1], 'created': counts[2], 'updated': counts[3],
+            }
+            if 'scan' in timings and self.engine.job(jid)['manifest']:
+                scopes = list((saved.get('sync_directory_stats') or {}).values())
+                saved['sync_metrics']['scan'] = {
+                    'listing': saved.get('sync_listing'),
+                    'directories': sum(scope.get('directories', 0) for scope in scopes),
+                    'directories_exact': all(scope.get('directories_exact', True) for scope in scopes),
+                    'files': sum(scope.get('files', 0) for scope in scopes),
+                }
             if ledger:
-                saved = json.loads(self.engine.job(jid)['config'])
                 saved['request_ledger'] = ledger
-                self.engine.update_job(jid, config=json.dumps(saved, ensure_ascii=False))
+                saved['sync_metrics']['requests'] = {key: ledger[key] for key in ('read', 'write', 'blocked') if key in ledger}
                 self.store.event('strm_sync', f'📊 同步请求账本：{ledger["text"]}')
+            self.engine.update_job(jid, config=json.dumps(saved, ensure_ascii=False))
             await self.hash_worker.close()
 
     def plain_token(self, cipher):
@@ -1072,7 +1248,7 @@ class Sync:
         verdict, detail = await self.inspect_output(row, config)
         return detail if verdict == 'ok' else None
 
-    async def _run(self, jid, config):
+    async def _run(self, jid, config, timings):
         from .core import UncertainState
         self.engine.boundary(jid)
         job = self.engine.job(jid)
@@ -1105,30 +1281,30 @@ class Sync:
             # Let publish persist its outbox record before a result can refer
             # to it, without waiting for Telegram network delivery.
             await asyncio.sleep(0)
-            # 手动和定时同步都必须发现网盘新增、改名与移动；仅在整理后
-            # 的目标目录增量任务缩小范围，普通同步不使用旧快照或本地巡检。
-            if self.engine.scan_receive_gate.locked():
-                self.engine.update_job(jid, stage='等待目录扫描或转存核对')
-            async with self.engine.scan_receive_gate:
-                await self.manifest(jid, config)
         else:
             # 续跑的清单可能已经是几小时前的：期间库里新增/移动过的文件不在其中，
             # 拿它去授权清理会被正确拦下（也等于永远做不完）。过期即重建。
             saved = json.loads(job['config'])
             stamp = saved.get('manifest_at') or job['updated']
-            if saved.get('sync_mode') == 'cached' or time.time() - float(stamp or 0) > self.FULL_SCAN_SECONDS:
+            if config.get('sync_trigger') or saved.get('sync_mode') == 'cached' or time.time() - float(stamp or 0) > self.FULL_SCAN_SECONDS:
                 self.engine.update_job(jid, manifest=0, stage='清单已过期，重新读取云端目录')
-                if self.engine.scan_receive_gate.locked():
-                    self.engine.update_job(jid, stage='等待目录扫描或转存核对')
-                async with self.engine.scan_receive_gate:
+        if not self.engine.job(jid)['manifest']:
+            if self.engine.scan_receive_gate.locked():
+                self.engine.update_job(jid, stage='等待目录扫描或转存核对')
+            async with timed_gate(self.engine.scan_receive_gate, timings, 'scan_wait'):
+                with measure(timings, 'scan'):
                     await self.manifest(jid, config)
         saved_config = json.loads(self.engine.job(jid)['config'])
         config.update({k:saved_config[k] for k in ('sync_filtered_ids','sync_metadata','sync_filter_count',
+                                                'sync_path_excluded_count','sync_filter_names',
                                                 'sync_directory_stats','sync_effective_roots') if k in saved_config})
         cached = saved_config.get('sync_mode') == 'cached'
         # Network downloads run outside the publication gate; only the final
         # verified local write needs to exclude concurrent publishers.
-        await self.download_metadata(jid, config)
+        with measure(timings, 'sidecars'):
+            await self.download_metadata(jid, config)
+        timings.setdefault('verify', 0.0)
+        timings.setdefault('publish', 0.0)
         next_progress = 0.0
         for row in self.store.db.execute("SELECT * FROM organize_items WHERE job_id=? AND state NOT IN ('done','skipped') ORDER BY id",(jid,)).fetchall():
             self.engine.boundary(jid)
@@ -1136,8 +1312,9 @@ class Sync:
             if now >= next_progress:
                 self.engine.update_job(jid,stage='同步：'+json.loads(row['original'])['name'])
                 next_progress = now + 1.0
-            async with self.engine.publication_gate:
-                plan = None if config.get('_force_full') else await self.unchanged(json.loads(row['original']), config)
+            async with timed_gate(self.engine.publication_gate, timings, 'publish_wait'):
+                with measure(timings, 'verify'):
+                    plan = None if config.get('_force_full') else await self.unchanged(json.loads(row['original']), config)
                 self.engine.boundary(jid)
                 if plan:
                     repair = plan.pop('_sync_trail_repair', None)
@@ -1154,48 +1331,58 @@ class Sync:
                                  self.engine.index.account(config), row['file_id'], repair['old'], started))
                     self.update_item(row['id'],plan=plan,state='done',step='输出未变更，已复用核对结果')
             if plan:
-                await self.backfill_sidecars(jid, row, config)
+                with measure(timings, 'sidecars'):
+                    await self.backfill_sidecars(jid, row, config)
                 continue
             elif cached:
                 # The local file changed after cache preflight. Do not mutate from
                 # an old listing: resume will rebuild a fresh cloud manifest.
                 self.invalidate(self.engine.index.account(config))
                 self.engine.update_job(jid,manifest=0)
-                await self._run(jid, config)
+                await self._run(jid, config, timings)
                 return
             else:
                 try:
-                    async with self.engine.publication_gate:
-                        await self.process(jid,row,config)
+                    async with timed_gate(self.engine.publication_gate, timings, 'publish_wait'):
+                        await self.process(jid, row, config, timings)
                 except CloudError as exc:
                     if exc.code in ('LOGIN_REQUIRED','LOGIN_INVALID'):
                         raise
                     self.update_item(row['id'],state='review',step='本文件同步未完成',message=str(exc))
                 except UncertainState as exc:
                     self.update_item(row['id'],state='review',step='本文件同步未完成',message=str(exc))
-                await self.backfill_sidecars(jid, row, config)
+                with measure(timings, 'sidecars'):
+                    await self.backfill_sidecars(jid, row, config)
         # 发布时已逐项记录必要证据；结束时只使磁盘扫描缓存失效。
         try:
             await asyncio.to_thread(self.engine.outputs.reindex, self.engine.index.account(config))
         except Exception as exc:                    # 索引只是缓存，失败不影响本次同步
             self.store.event('sync', '本地索引重建未完成：%s' % str(exc)[:60])
         self.engine.boundary(jid)
-        # 同一份文件换过目录：新位置写好之后，旧位置那份副本要收掉（与「清理缺失」开关无关）。
-        try:
-            await self.tidy_moved(jid, config)
-        except Exception as exc:
-            self.store.event('sync', '旧副本清理跳过：%s' % str(exc)[:60])
-        # Each source is verified immediately before its output is published.
-        # Only missing registered outputs need a live-namespace check in cleanup.
         warnings = []
+        local_files = {}
+        if not config.get('sync_trigger') or config.get('stale_detect'):
+            try:
+                with measure(timings, 'local_scan'):
+                    local_files = await asyncio.to_thread(self.scan_scope, jid, config)
+            except OSError as exc:
+                warnings.append('本地 STRM 扫描未完成：%s' % str(exc)[:60])
+        if local_files and not config.get('sync_trigger'):
+            try:
+                # 旧位置的副本在新位置写好后收尾，与「清理缺失」开关无关。
+                async with timed_gate(self.engine.publication_gate, timings, 'publish_wait'):
+                    with measure(timings, 'local_cleanup'):
+                        await self.tidy_moved(jid, config, local_files)
+            except Exception as exc:
+                self.store.event('sync', '旧副本清理跳过：%s' % str(exc)[:60])
         for row in self.store.db.execute('SELECT plan FROM organize_items WHERE job_id=?',(jid,)):
             warnings.extend(json.loads(row['plan']).get('warnings',[]))
         reviews = self.store.db.execute("SELECT count(*) FROM organize_items WHERE job_id=? AND state='review'", (jid,)).fetchone()[0]
         if reviews:
             warnings.append(f'{reviews} 个文件同步未完成，保留旧输出；可重试未完成文件。')
         removed = 0
-        if not warnings and not cached and config.get('cleanup_missing',True):
-            async with self.engine.publication_gate:
+        if not warnings and not cached and not config.get('sync_trigger') and config.get('cleanup_missing',True):
+            async with timed_gate(self.engine.publication_gate, timings, 'publish_wait'):
                 async with self.engine.cleanup_gate:
                     saved = json.loads(self.engine.job(jid)['config'])
                     revision = self.store.meta('sync_revision:'+self.engine.index.account(config))
@@ -1213,24 +1400,43 @@ class Sync:
                         warnings.append('缺少本次扫描起始时间，已跳过失效清理；请重新同步。')
                     else:
                         try:
-                            cleanup_removed, cleanup_warnings = await self.cleanup(jid,config,after=started)
+                            with measure(timings, 'local_cleanup'):
+                                cleanup_removed, cleanup_warnings = await self.cleanup(jid, config, local_files, after=started)
                         except Exception as exc:
                             cleanup_removed, cleanup_warnings = 0, ['失效清理未能完成：%s' % str(exc)[:60]]
                         removed += cleanup_removed; warnings.extend(cleanup_warnings)
         if config.get('stale_detect'):
             # The task is not complete until this configured check finishes.
-            await self.stale_check(jid, config)
-        technical = await self.extract_technical(jid) if config.get('metadata_mode') == 'technical' else {}
+            with measure(timings, 'local_cleanup'):
+                await self.stale_check(jid, config, local_files)
+        technical = {}
+        if config.get('metadata_mode') == 'technical':
+            with measure(timings, 'technical'):
+                technical = await self.extract_technical(jid)
         if json.loads(self.engine.job(jid)['config']).get('output_changed') and config.get('notify_emby',True):
-            await self.engine.notify_emby(jid)
+            with measure(timings, 'emby'):
+                await self.engine.notify_emby(jid)
         self.engine.boundary(jid)
         partial = bool(warnings or technical.get('failed')) or self.engine.job(jid)['notify_state'] in ('failed','unknown')
         if technical:
             warnings.append(technical['summary'])
-        if not partial and self.store.get('sync_full_due'):
+        if not partial and not config.get('sync_trigger') and self.store.get('sync_full_due'):
             self.store.set_many({'sync_full_due': 0})
-        self.engine.update_job(jid,state='partial' if partial else 'completed',stage='STRM 同步结束',
-            message=('复用近期已核对清单；本次未扫描全部云端目录，也不执行失效清理。' if cached else f'完整清单已核实；清理失效受管文件 {removed} 个。')+('；'.join(warnings) if warnings else '云端文件未修改。')+(f' 按生成规则跳过 {config.get("sync_filter_count",0)} 个文件'+('（'+'、'.join('%s：%s' % (item['name'], item.get('reason') or '不符合规则') for item in (config.get('sync_filter_names') or [])[:3])+'）' if config.get('sync_filter_names') else '')+'。' if config.get('sync_filter_count') else ''))
+        summary = f'完整清单已核实；清理失效受管文件 {removed} 个。'
+        if cached:
+            summary = '复用近期已核对清单；本次未扫描全部云端目录，也不执行失效清理。'
+        elif config.get('sync_trigger') == 'transfer':
+            summary = '已核实转存目录并补齐输出，失效清理交由常规同步。'
+        messages = [summary, '；'.join(warnings) if warnings else '云端文件未修改。']
+        if config.get('sync_filter_count'):
+            messages.append(f'按生成规则跳过 {config["sync_filter_count"]} 个文件。')
+        if config.get('sync_path_excluded_count'):
+            messages.append(f'按路径排除词跳过 {config["sync_path_excluded_count"]} 个文件。')
+        if config.get('sync_filter_names'):
+            examples = [f'{item["name"]}（{item["reason"]}）' for item in config['sync_filter_names'][:3]]
+            messages.append('、'.join(examples) + '。')
+        self.engine.update_job(jid, state='partial' if partial else 'completed', stage='STRM 同步结束',
+                               message=' '.join(messages))
 
 
     async def download_metadata(self, jid, config):

@@ -12,10 +12,11 @@ from pathlib import PurePosixPath
 from urllib.parse import urlsplit
 
 import httpx
+from .identity import parse_url
 from .playaddr import parse_play_path
 from .store import digest
 from .network import emby_request
-from .emby_connection import strm_mount_path
+from .emby_connection import fingerprint, strm_mount_path
 from .native_media_info import NativeMediaInfo
 
 
@@ -25,6 +26,8 @@ class EmbyDelivery:
     FIRST_CHECK_SECONDS = 3
     DEADLINE_SECONDS = 1800
     LIBRARY_SECONDS = 600
+    PATH_CHECK_BATCH = 20
+    PATH_CHECK_CONCURRENCY = 4
     # Emby 自带的 LibraryMonitor 通常先响应新增路径；只有在核对窗口里一直
     # 没收录时才补一次目标库刷新，避免每批都扫库。
     SCAN_AFTER_SECONDS = 120
@@ -61,9 +64,24 @@ class EmbyDelivery:
         from .emby_connection import saved_base
         return saved_base(self.store)
 
+    def delivery_connection(self, payload):
+        """An explicit target is bound to its saved upstream and mount for this job."""
+        binding = payload.get('connection')
+        if target_id := payload.get('target_id'):
+            from .emby_proxy import delivery_target
+            target = delivery_target(self.store, target_id)
+            if target and target.binding == binding:
+                return target.connection, ''
+            return None, '所选 Emby 实例已移除，或连接、密钥、路径映射已变更。请核对目标实例及媒体库。'
+        connection = self.connection()
+        if connection and binding and digest('|'.join(connection)) != binding:
+            return None, 'Emby 配置已改变，请检查新服务并手动扫描。'
+        return connection, ''
+
     async def library_folders(self, url, key):
         """Emby 媒体库根路径，10 分钟缓存。取不到时返回 None，表示本次不做预检。"""
-        cached = self.libraries.get(url)
+        cache_key = fingerprint(url, key)
+        cached = self.libraries.get(cache_key)
         now = time.time()
         if cached and now - cached[0] < self.LIBRARY_SECONDS:
             return cached[1]
@@ -88,14 +106,15 @@ class EmbyDelivery:
                                 'locations': [x.rstrip('/') for x in locations],
                                 'id': str(item.get('ItemId') or ''),
                                 'type': str(item.get('CollectionType') or options.get('ContentType') or '')})
-        self.libraries[url] = (now, folders)
+        self.libraries[cache_key] = (now, folders)
         return folders
 
     async def library_sizes(self, url, key, ids):
         """每个库的条目数，10 分钟缓存。只用来在等价库之间挑选更轻的目标。"""
         now = time.time()
         cached = getattr(self, '_sizes', None)
-        if cached and cached[0] == url and now - cached[1] < self.LIBRARY_SECONDS:
+        cache_key = fingerprint(url, key)
+        if cached and cached[0] == cache_key and now - cached[1] < self.LIBRARY_SECONDS:
             sizes = dict(cached[2])
         else:
             sizes = {}
@@ -112,7 +131,7 @@ class EmbyDelivery:
                     sizes[lib_id] = int(total) if isinstance(total, int) else None
                 except Exception:
                     sizes[lib_id] = None
-        self._sizes = (url, now, sizes)
+        self._sizes = (cache_key, now, sizes)
         return sizes
 
     @staticmethod
@@ -208,7 +227,7 @@ class EmbyDelivery:
 
     async def coverage_problem(self, jid, payload):
         """核对不通过时，判断目标路径是否根本不在任何媒体库下。"""
-        connection = self.connection()
+        connection, _ = self.delivery_connection(payload)
         if not connection:
             return ''
         url, key = connection
@@ -247,9 +266,9 @@ class EmbyDelivery:
         只有全部待入库路径都由同一个库、且覆盖它们的库根完全一致、类型一致时
         才返回该库；其余情况返回原因，宁可不扫也不猜。
         """
-        connection = self.connection()
+        connection, reason = self.delivery_connection(payload)
         if not connection:
-            return None, '未配置 Emby 连接'
+            return None, reason or '未配置 Emby 连接'
         url, key = connection
         folders = await self.library_folders(url, key)
         if folders is None:
@@ -283,11 +302,11 @@ class EmbyDelivery:
             return None, '未入库路径分属多个媒体库：' + '、'.join(sorted(f['name'] for f in selected.values()))
         return next(iter(selected.values())), ''
 
-    async def request_scan(self, jid, library, now):
+    async def request_scan(self, jid, library, now, payload):
         """刷新单个媒体库。返回 (是否被接受, 失败原因)。"""
-        connection = self.connection()
+        connection, reason = self.delivery_connection(payload)
         if not connection:
-            return False, '未配置 Emby 连接'
+            return False, reason or '未配置 Emby 连接'
         url, key = connection
         try:
             response = await emby_request(self.http, 'POST', url + f'/Items/{library["id"]}/Refresh',
@@ -299,7 +318,7 @@ class EmbyDelivery:
         except httpx.HTTPError as exc:
             detail = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else type(exc).__name__
             return False, str(detail)
-        self.scan_windows[library['id']] = now
+        self.scan_windows[(url, library['id'])] = now
         return True, ''
 
     async def maybe_scan(self, jid, payload, now):
@@ -320,14 +339,17 @@ class EmbyDelivery:
                 self.store.event('emby', f'任务 {jid}：未请求媒体库刷新——{reason}。')
             return False
         pending = sum(1 for t in payload.get('targets', []) if not t.get('confirmed'))
-        last = self.scan_windows.get(library['id'], 0)
+        connection, _ = self.delivery_connection(payload)
+        if not connection:
+            return False
+        last = self.scan_windows.get((connection[0], library['id']), 0)
         if now - last < self.SCAN_COOLDOWN_SECONDS:
             if payload.get('scan_reason') != 'cooling':
                 payload['scan_reason'] = 'cooling'
                 self.save(jid, payload=json.dumps(payload, ensure_ascii=False))
                 self.store.event('emby', f'任务 {jid}：媒体库「{library["name"]}」刚刷新过（{int(now - last)} 秒前），本次不重复请求。')
             return False
-        ok, detail = await self.request_scan(jid, library, now)
+        ok, detail = await self.request_scan(jid, library, now, payload)
         payload = json.loads(self.row(jid)['payload'])
         payload['scan_attempt_at'] = now
         if not ok:
@@ -353,6 +375,9 @@ class EmbyDelivery:
         # 0.8.20：任务配置在循环外取一次。以前每个目标都要查一次 organize_jobs
         # 再解析一遍 config JSON（一季 24 集就是 24 次多余的查询）。
         job_config = json.loads(self.engine.job(jid)['config'])
+        mapping = job_config.get('emby_target_mount', strm_mount_path(self.store))
+        if not mapping:
+            return result
         # 分享 STRM 在 Emby 里以 share/<share_id> 作为播放身份；任务里只有 115
         # 文件 ID，两边永远对不上，整批就会被判「入库未确认」。
         shares = self.share_pids()
@@ -384,7 +409,7 @@ class EmbyDelivery:
             folder = PurePosixPath(relative).parent.name
             if folder.startswith('Season '): folder = PurePosixPath(relative).parent.parent.name
             title = details.get('title') or details.get('name') or re.split(r'\s*\(\d{4}\)|\s*\{tmdb-', folder)[0]
-            emby_path=str(PurePosixPath(strm_mount_path(self.store))/relative)
+            emby_path = str(PurePosixPath(mapping) / relative.replace('\\', '/'))
             pid = 'share/' + shares[relative] if relative in shares else row['file_id']
             result.append({'emby_path':emby_path,'update_type':update_type,'relative':relative, 'pid':pid, 'kind':hint.get('media_type'),
                            'tmdb':details.get('id') or hint.get('tmdb_id'), 'title':title, 'confirmed':False})
@@ -415,13 +440,17 @@ class EmbyDelivery:
             self.store.db.execute('UPDATE emby_deliveries SET '+','.join(k+'=?' for k in values)+' WHERE job_id=?', (*values.values(), jid))
 
     def updates(self, jid, payload):
-        mapping = strm_mount_path(self.store)
-        changed={t.get('emby_path',str(PurePosixPath(mapping)/t['relative'])):t.get('update_type','Created') for t in payload['targets']}
         config=json.loads(self.engine.job(jid)['config'])
+        mapping = config.get('emby_target_mount', strm_mount_path(self.store))
+        if not mapping:
+            return []
+        def mapped(relative):
+            return str(PurePosixPath(mapping) / relative.replace('\\', '/'))
+        changed={t.get('emby_path') or mapped(t['relative']):t.get('update_type','Created') for t in payload['targets']}
         for relative in config.get('emby_deleted_paths',[]):
-            changed.setdefault(str(PurePosixPath(mapping)/relative),'Deleted')
+            changed.setdefault(mapped(relative),'Deleted')
         for entry in self.store.db.execute("SELECT path FROM strm_changes WHERE job_id=? AND action='removed'",(jid,)):
-            changed.setdefault(str(PurePosixPath(mapping)/entry['path']),'Deleted')
+            changed.setdefault(mapped(entry['path']),'Deleted')
         return [{'Path':p,'UpdateType':kind} for p,kind in sorted(changed.items())]
 
     def enqueue(self, jid):
@@ -458,17 +487,26 @@ class EmbyDelivery:
             row = self.row(jid)
             item_ids = {r['id'] for r in self.store.db.execute("SELECT id FROM organize_items WHERE job_id=? AND state IN ('done','recycled')", (jid,))}
             if not row:
-                targets = self.targets(jid)
                 job_row = self.engine.job(jid)
-                is_share = json.loads(job_row['config']).get('job_kind') == 'share_organize'
+                config = json.loads(job_row['config'])
+                target_id = config.get('emby_target')
+                if target_id == 'off':
+                    self.engine.update_job(jid, notify_state='not_needed')
+                    return
+                is_share = config.get('job_kind') == 'share_organize'
                 if job_row['notify_state'] not in ('not_started', 'retrying', 'not_needed') and not (is_share and job_row['notify_state'] == 'accepted'):
                     return
-                connection = self.connection()
-                payload = {'targets': targets, 'connection': digest('|'.join(connection)) if connection else '', 'ready_at': now}
+                payload = {'targets': self.targets(jid), 'ready_at': now}
+                if target_id and target_id != 'main':
+                    payload.update(target_id=target_id, target_name=config.get('emby_target_name') or '所选 Emby',
+                                   connection=config.get('emby_target_binding') or '')
+                else:
+                    connection = self.connection()
+                    payload['connection'] = digest('|'.join(connection)) if connection else ''
                 payload['updates'] = self.updates(jid, payload)
                 payload['handled_deletions'] = sorted(u['Path'] for u in payload['updates'] if u['UpdateType']=='Deleted')
                 payload['handled_items'] = sorted(item_ids)
-                if not payload['updates']:
+                if not payload['updates'] and not payload.get('target_id'):
                     self.engine.update_job(jid, notify_state='not_needed')
                     return
                 with self.store.db:
@@ -515,16 +553,16 @@ class EmbyDelivery:
     async def deliver(self, jid, now):
         row = self.row(jid)
         payload = json.loads(row['payload'])
-        connection = self.connection()
+        connection, reason = self.delivery_connection(payload)
+        if reason:
+            return await self.finish(jid, 'unconfirmed', reason)
         if not connection:
             self.save(jid, state='retrying', next_due=now+self.CHECK_SECONDS, message='等待配置 Emby，稍后自动重试。')
             self.engine.update_job(jid, notify_state='retrying')
             return
         url, key = connection
-        fingerprint = digest('|'.join(connection))
-        if payload['connection'] and payload['connection'] != fingerprint:
-            return await self.finish(jid, 'unconfirmed', 'Emby 配置已改变，请检查新服务并手动扫描。')
-        payload['connection'] = fingerprint
+        if not payload.get('target_id'):
+            payload['connection'] = digest('|'.join(connection))
         updates=payload.setdefault('updates',self.updates(jid,payload))
         if updates:
             self.store.event('emby', f'📡 任务 {jid}：Emby 入库刷新：{len(updates)} 条路径变更')
@@ -548,6 +586,10 @@ class EmbyDelivery:
         await self.library_folders(url, key)
         try:
             for start in range(0,len(updates),200):
+                if payload.get('target_id'):
+                    _, reason = self.delivery_connection(payload)
+                    if reason:
+                        return await self.finish(jid, 'unconfirmed', reason)
                 response=await emby_request(self.http,'POST',url+'/Library/Media/Updated',headers={'X-Emby-Token':key},json={'Updates':updates[start:start+200]},timeout=15)
                 if response.status_code in (400,404,405):
                     return await self.finish(jid,'unconfirmed',f'Emby 路径通知返回 HTTP {response.status_code}，请检查版本与路径映射；未回退全库扫描。')
@@ -575,7 +617,7 @@ class EmbyDelivery:
         self.store.event('emby',f'任务 {jid}：Emby 侧路径示例：'+ '；'.join(u['Path'] for u in updates[:3])+('；其余路径已合并提交。' if len(updates)>3 else ''))
 
     @staticmethod
-    def play_ids(item):
+    def play_ids(item, *, include_netdisk=False):
         """一条 Emby 条目里出现的全部播放入口 ID（`/play/<id>` 与 `/play/share/<sid>`）。
 
         0.8.21：从 `matches()` 里抽出来。`matches()` 原本对每个目标都重新解析一遍
@@ -600,18 +642,28 @@ class EmbyDelivery:
             item_id, _ = parse_play_path(parsed.path)
             if item_id:
                 ids.add(item_id)
+            elif include_netdisk:
+                identity = parse_url(path)
+                if identity and identity['kind'] == 'netdisk':
+                    ids.add(identity['file_id'])
         return ids
 
     @classmethod
-    def matches(cls, item, target):
+    def matches(cls, item, target, *, strict_mount=False):
         paths = [item.get('Path')] + [source.get('Path') for source in item.get('MediaSources', [])
                                       if isinstance(source, dict)]
         # Emby 核对按播放身份判断（B02）：只要条目带有播放入口地址，
         # 就只认入口 ID 是否一致；旧格式 /play/{id} 与可读格式
         # /play/{id}/{slug} 等价，绝不因为文件路径相同就放行另一入口。
-        playback_items = cls.play_ids(item)
+        if strict_mount:
+            local = {p.replace('\\', '/') for p in paths if isinstance(p, str) and p.startswith('/') and p.lower().endswith('.strm')}
+            if local and target['emby_path'] not in local:
+                return False
+        playback_items = cls.play_ids(item, include_netdisk=strict_mount)
         if playback_items:
             return target['pid'] in playback_items
+        if strict_mount:
+            return target['emby_path'] in local
         expected = target['relative'].replace('\\', '/').strip('/')
         for path in paths:
             if not isinstance(path, str):
@@ -643,6 +695,45 @@ class EmbyDelivery:
                 return result
         raise ValueError('Emby 条目超过本次枚举上限，未发布不完整结果')
 
+    async def verify_paths(self, jid, payload, url, headers):
+        """Query mapped paths directly for libraries organized outside StrimKeep."""
+        targets = payload['targets']
+        pending = [target for target in targets if not target.get('confirmed') and not target.get('library_missing')]
+        cursor = payload.get('cursor', 0) % max(len(pending), 1)
+
+        async def lookup(target):
+            try:
+                response = await emby_request(
+                    self.http, 'GET', url + '/Items', headers=headers,
+                    params={'Path': target['emby_path'], 'Recursive': 'true', 'Limit': 8,
+                            'Fields': 'Path,MediaSources'}, timeout=8)
+                response.raise_for_status()
+                data = response.json()
+                items = data.get('Items') if isinstance(data, dict) else None
+                if not isinstance(items, list):
+                    return None
+                return any(isinstance(item, dict) and self.matches(item, target, strict_mount=True) for item in items)
+            except (httpx.HTTPError, ValueError, TypeError):
+                return None
+
+        checked = False
+        window = (pending[cursor:] + pending[:cursor])[:self.PATH_CHECK_BATCH]
+        try:
+            for start in range(0, len(window), self.PATH_CHECK_CONCURRENCY):
+                batch = window[start:start + self.PATH_CHECK_CONCURRENCY]
+                payload['cursor'] = cursor + start + len(batch)
+                results = await asyncio.gather(*(lookup(target) for target in batch))
+                for target, matched in zip(batch, results):
+                    if matched is not None:
+                        target['confirmed'] = matched
+                        checked = True
+        finally:
+            if pending:
+                self.save(jid, payload=json.dumps(payload, ensure_ascii=False))
+        if pending and not checked:
+            return None
+        return {'total': len(targets), 'confirmed': sum(bool(target.get('confirmed')) for target in targets)}
+
     async def verify(self, jid):
         row = self.row(jid); payload = json.loads(row['payload'])
         # 旧投递按 115 文件 ID 建的目标在这里就地纠正，不必等重建任务。
@@ -656,10 +747,14 @@ class EmbyDelivery:
                 repaired = True
         if repaired:
             self.save(jid, payload=json.dumps(payload, ensure_ascii=False))
-        connection = self.connection()
-        if not connection or digest('|'.join(connection)) != payload['connection']:
+        connection, _ = self.delivery_connection(payload)
+        if not connection or not payload.get('connection'):
             return None
-        url, key = connection; headers = {'X-Emby-Token':key}; groups = {}
+        url, key = connection
+        headers = {'X-Emby-Token':key}
+        if payload.get('target_id'):
+            return await self.verify_paths(jid, payload, url, headers)
+        groups = {}
         for target in payload['targets']:
             # 不在任何媒体库下的目标不会被收录，留给结论里说明，不去比对。
             if target['confirmed'] or target.get('library_missing'): continue
@@ -718,6 +813,8 @@ class EmbyDelivery:
 
     async def finish(self, jid, state, message, progress=None):
         payload=json.loads(self.row(jid)['payload'])
+        if name := payload.get('target_name'):
+            message = name + ' · ' + message
         if progress:
             payload['progress']={'total':progress['total'],'confirmed':progress['confirmed']}
             if progress['total'] and state != 'verified':
@@ -805,10 +902,9 @@ class EmbyDelivery:
             row = self.store.db.execute("SELECT * FROM emby_deliveries WHERE state IN ('pending','retrying','accepted','inflight','checking') AND next_due<=? ORDER BY next_due,job_id LIMIT 1", (now,)).fetchone()
             if not row: return
             jid = row['job_id']
-            connection = self.connection()
-            fingerprint = json.loads(row['payload']).get('connection')
-            if connection and fingerprint and digest('|'.join(connection)) != fingerprint:
-                return await self.finish(jid, 'unconfirmed', 'Emby 配置已改变，请检查新服务并手动扫描。')
+            _, reason = self.delivery_connection(json.loads(row['payload']))
+            if reason:
+                return await self.finish(jid, 'unconfirmed', reason)
             progress = None
             if row['attempts']:
                 try:
@@ -816,10 +912,15 @@ class EmbyDelivery:
                         progress = await self.verify(jid)
                 except (httpx.HTTPError, ValueError, TypeError, TimeoutError):
                     progress = None
+                payload = json.loads(self.row(jid)['payload'])
+                if payload.get('target_id'):
+                    _, reason = self.delivery_connection(payload)
+                    if reason:
+                        return await self.finish(jid, 'unconfirmed', reason)
                 if progress and progress['total'] and progress['confirmed'] == progress['total']:
                     return await self.finish(jid, 'verified', '本批 STRM 已在 Emby 中找到；实际播放仍以播放器测试为准。', progress)
                 if progress and progress['total'] and progress['confirmed'] < progress['total']:
-                    current = json.loads(self.row(jid)['payload'])
+                    current = payload
                     if not current.get('coverage_checked'):
                         current['coverage_checked'] = True
                         self.save(jid, payload=json.dumps(current, ensure_ascii=False))
