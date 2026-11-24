@@ -19,12 +19,32 @@ const attention=computed(()=>[
 ])
 const healthy=computed(()=>data.value?.checks.filter(check=>check.status==='ok')||[])
 const checkedAt=computed(()=>data.value ? new Date(data.value.generated_at*1000) : null)
+const setupOrder=[
+  {key:'cloud115',title:'登录 115',action:'account'},
+  {key:'emby',title:'连接 Emby',action:'embyproxy'},
+  {key:'tmdb',title:'配置 TMDB',action:'settings'},
+  {key:'worker',title:'启动后台 Worker',action:'logs'},
+  {key:'disk_data',title:'检查数据目录',action:'settings'},
+  {key:'backup',title:'准备备份',action:'settings'},
+]
+const setupSteps=computed(()=>{
+  const checks=new Map((data.value?.checks||[]).map(check=>[check.key,check]))
+  return setupOrder.flatMap(step=>{
+    const check=checks.get(step.key)
+    if(!check||check.status==='ok')return []
+    return [{key:step.key,title:step.title,action:check.action||step.action,message:check.message,detail:check.detail}]
+  })
+})
 </script>
 <template>
 <PageHeader title="系统健康">
   <template #actions><el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button></template>
 </PageHeader>
 <el-alert v-if="error" :title="error" type="error" :closable="false" class="global-error"/>
+<section v-if="setupSteps.length" class="panel setup-panel">
+  <div class="setup-heading"><div><h2>首次配置检查</h2><p>按顺序处理，完成后这里会自动消失。</p></div><el-tag type="warning">{{setupSteps.length}} 项待处理</el-tag></div>
+  <ol class="setup-list"><li v-for="step in setupSteps" :key="step.key"><div><strong>{{step.title}}</strong><p>{{step.message}}</p><small v-if="step.detail">{{step.detail}}</small></div><el-button v-if="step.action" size="small" @click="emit('navigate',step.action)">去处理</el-button></li></ol>
+</section>
 <el-skeleton v-if="!data&&loading" :rows="2" animated/>
 <section v-if="data" class="panel health-panel" :aria-busy="loading">
   <div class="health-summary">
@@ -59,6 +79,12 @@ const checkedAt=computed(()=>data.value ? new Date(data.value.generated_at*1000)
 </section>
 </template>
 <style scoped>
+.setup-panel{margin-bottom:14px;padding:16px 18px}
+.setup-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.setup-heading h2{margin:0;font-size:16px}.setup-heading p{margin:5px 0 0;color:var(--muted);font-size:12px}
+.setup-list{display:grid;gap:8px;margin:14px 0 0;padding:0;list-style:none}
+.setup-list li{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface-soft)}
+.setup-list li>div{min-width:0}.setup-list strong{font-size:13px}.setup-list p{margin:3px 0 0;font-size:12px;overflow-wrap:anywhere}.setup-list small{display:block;margin-top:3px;color:var(--muted);font-size:11px;overflow-wrap:anywhere}
 .health-panel{padding:0 18px}
 .health-summary,.health-details summary{display:flex;align-items:center;justify-content:space-between;gap:8px 16px}
 .health-summary{flex-wrap:wrap;padding:16px 0}

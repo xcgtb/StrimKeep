@@ -20,7 +20,7 @@ const blankFeed=()=>({name:'',url:'',enabled:true,interval:300,target_cid:'',inc
 const feed=ref<any>(blankFeed())
 const busy=ref(false),loading=ref(false),error=ref('')
 const STATUS:Record<string,string>={pending:'待处理',queued:'已入队',duplicate:'重复',needs_review:'待核查',failed:'失败',skipped:'已跳过'}
-const SOURCE:Record<string,string>={manual:'手动',rss:'RSS',webhook:'Webhook'}
+const SOURCE:Record<string,string>={manual:'手动',rss:'RSS',webhook:'Webhook',telegram:'Telegram'}
 const statusType=(s:string):'success'|'danger'|'warning'|'info'=>s==='queued'?'success':s==='failed'?'danger':s==='needs_review'?'warning':'info'
 const webhookUrl=computed(()=>webhookToken.value?`${location.origin}/api/v1/resources/webhook/${webhookToken.value}`:'')
 const feedHealth=computed(()=>feeds.value.reduce((acc:any,row:any)=>{if(row.error||row.failures)acc.bad++;else acc.ok++;return acc},{ok:0,bad:0}))
@@ -118,7 +118,7 @@ async function removeFeed(row:any){try{await ElMessageBox.confirm(`删除 RSS �
  <section class="panel resource-settings">
   <div class="resource-compose-head"><div><h2>频道监控</h2><p class="hint">Telegram 频道仍由频道监控处理；这里只显示健康状态，避免再建一套来源。</p></div><el-tag type="info">{{channels.length}} 个频道</el-tag></div>
   <el-empty v-if="!channels.length" description="还没有频道监控配置"/>
-  <div v-else class="resource-feed-list"><div v-for="row in channels" :key="row.name" class="resource-feed-row"><div><strong>{{row.title||row.name}}</strong><p class="hint">状态 {{row.state||'new'}} · 最近检查 {{fmtTime(row.checked)}} · 已处理 {{row.posts||0}} 条<span v-if="row.error"> · {{row.error}}</span></p></div><el-tag :type="row.error?'danger':'success'">{{row.error?'异常':'正常'}}</el-tag></div></div>
+  <div v-else class="resource-feed-list"><div v-for="row in channels" :key="row.name" class="resource-feed-row"><div><strong>{{row.title||row.name}}</strong><p class="hint">状态 {{row.state||'new'}} · 最近检查 {{fmtTime(row.checked)}} · 失败 {{row.failures||0}} 次 · 上次成功 {{fmtTime(row.last_success)}} · 已处理 {{row.posts||0}} 条<span v-if="row.error"> · {{row.error}}</span></p></div><el-tag :type="row.error?'danger':'success'">{{row.error?'异常':'正常'}}</el-tag></div></div>
  </section>
 </el-tab-pane>
 </el-tabs>

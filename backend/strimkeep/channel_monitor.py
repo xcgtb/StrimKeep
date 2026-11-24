@@ -43,7 +43,8 @@ MAX_TEXT = 4000
 RULE_DEFAULTS = {'enabled': True, 'share_mode': '', 'share_cid': '', 'share_label': '',
                  'offline_cid': '', 'offline_label': '', 'magnet_cid': None, 'magnet_label': None,
                  'ed2k_cid': None, 'ed2k_label': None, 'include': '', 'exclude': '', 'routes': [],
-                 'organize_after': False, 'media_spoiler': False, 'source': 'preview', 'history_pages': 1}
+                 'organize_after': False, 'media_spoiler': False, 'inbox_mode': False,
+                 'source': 'preview', 'history_pages': 1}
 OFFLINE_PREFIX = ('magnet:', 'ed2k://')
 
 
@@ -104,6 +105,7 @@ def normalize_rule(raw):
             rule[kind+'_label'] = str(rule.get(kind+'_label') or '')
     rule['organize_after'] = bool(rule.get('organize_after'))
     rule['media_spoiler'] = bool(rule.get('media_spoiler'))
+    rule['inbox_mode'] = bool(rule.get('inbox_mode'))
     # 来源：preview=公开预览页（游客可看）；session=用户会话（可读私密频道）
     rule['source'] = 'session' if str(rule.get('source') or '') == 'session' else 'preview'
     try:
@@ -219,6 +221,11 @@ class ChannelMonitor:
             self.store.db.execute('''CREATE TABLE IF NOT EXISTS channel_backfill(
                 name TEXT PRIMARY KEY, cursor INTEGER NOT NULL, before_id INTEGER NOT NULL,
                 title TEXT NOT NULL, messages TEXT NOT NULL)''')
+            columns = {row[1] for row in self.store.db.execute('PRAGMA table_info(channel_state)')}
+            for name, ddl in (('failures', ' INTEGER NOT NULL DEFAULT 0'),
+                              ('last_success', ' REAL NOT NULL DEFAULT 0')):
+                if name not in columns:
+                    self.store.db.execute('ALTER TABLE channel_state ADD COLUMN %s%s' % (name, ddl))
         # STRM jobs and their share claims are committed together. On restart,
         # replay posts beyond the durable cursor; already queued shares deduplicate.
         # Offline submissions may have reached 115, so never replay those here.
@@ -370,7 +377,16 @@ class ChannelMonitor:
         return dict(row) if row else None
 
     def _remember(self, name, **values):
-        values['checked'] = time.time()
+        now = time.time()
+        state = values.get('state')
+        current = self._state(name) or {}
+        if state == 'error':
+            values['failures'] = int(current.get('failures') or 0) + 1
+        elif state in ('ready', 'backfill', 'new'):
+            values['failures'] = 0
+        if state == 'ready':
+            values['last_success'] = now
+        values['checked'] = now
         with self.store.db:
             self.store.db.execute('UPDATE channel_state SET ' + ','.join(k + '=?' for k in values) + ' WHERE name=?',
                                   (*values.values(), name))
@@ -520,6 +536,8 @@ class ChannelMonitor:
         text = message['text'] + '\n' + '\n'.join(message['links'])
         if not self.matches(rule, text):
             return 0
+        if rule['inbox_mode'] and rule['share_mode'] == 'transfer':
+            return await self._inbox(name, title, message, rule, text)
         # 磁力 / 电驴与 115 分享分开处理：一条帖子可以两者都有。
         handled = 0
         urls = []
@@ -571,6 +589,37 @@ class ChannelMonitor:
                 return handled
             return handled + await self._transfer(name, title, message, rule, found)
         return handled + await self._strm(name, title, message, rule, found)
+
+    async def _inbox(self, name, title, message, rule, text):
+        """Queue channel links through the shared resource inbox.
+
+        Channel-specific destinations are preserved, but dedupe/retry/status
+        live in one place instead of a second channel-only pipeline.
+        """
+        from .resource_inbox import candidates
+        route_cid, route_label = route_target(
+            {'routes': rule['routes'], 'target_cid': '', 'target_label': ''}, text)
+        queued = 0
+        for key, url, kind in candidates(text):
+            if kind == 'share':
+                target = route_cid or rule['share_cid']
+            elif kind == 'direct':
+                target = route_cid or rule['offline_cid']
+            else:
+                target = route_cid or rule[kind + '_cid']
+            if not target:
+                continue
+            try:
+                result = self.engine.resources.add_many(
+                    url, 'telegram', '%s:%s:%s' % (name, message['id'], key),
+                    title, target, bool(rule['organize_after']))
+            except ValueError:
+                continue
+            queued += result['accepted'] + result['requeued']
+        if queued:
+            self.store.event('channel', '频道 %s：%d 条资源进入收件箱。'
+                             % (title or name, queued))
+        return queued
 
     async def _offline(self, name, title, message, rule, urls):
         """提交磁力或 ED2K，并将当时的原帖信息和离线记录一起保存。"""

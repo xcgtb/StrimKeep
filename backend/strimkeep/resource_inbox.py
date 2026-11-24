@@ -23,7 +23,7 @@ from .cloud115 import CloudError
 from .offline_api import directory_config, organize_flag_for
 from .transfer import shares
 
-SOURCES = ('manual', 'rss', 'webhook')
+SOURCES = ('manual', 'rss', 'webhook', 'telegram')
 STATUSES = ('pending', 'queued', 'duplicate', 'needs_review', 'failed', 'skipped')
 URL_RE = re.compile(r'(?i)(?:magnet:\?[^\s<>"\']+|ed2k://[^\s<>"\']+|(?:https?|ftp)://[^\s<>"\']+)')
 MAGNET_HASH = re.compile(r'(?i)btih:([A-Za-z0-9]+)')
@@ -591,7 +591,9 @@ def install_resources(app, store, admin):
         return {'feeds': [dict(row) for row in feeds],
                 'channels': [{'name': row.get('name', ''), 'title': row.get('title', ''),
                               'state': row.get('state', ''), 'error': row.get('error', ''),
-                              'checked': row.get('checked', 0), 'posts': row.get('posts', 0)}
+                              'checked': row.get('checked', 0), 'posts': row.get('posts', 0),
+                              'failures': row.get('failures', 0),
+                              'last_success': row.get('last_success', 0)}
                              for row in channels],
                 'webhook_configured': bool(store.meta_json('resource_webhook_token', ''))}
 
