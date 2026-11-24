@@ -182,6 +182,15 @@ class ResourceInbox:
         self.task = None
         self.next_feed = 0.0
         self._pruned_at = 0.0
+        # Old databases predate the feed health columns. The table exists here,
+        # unlike the minimal fixture used by schema_migrations tests.
+        columns = {row[1] for row in self.store.db.execute('PRAGMA table_info(resource_feeds)')}
+        for name, ddl in (('failures', ' INTEGER NOT NULL DEFAULT 0'),
+                          ('last_success', ' REAL NOT NULL DEFAULT 0'),
+                          ('last_count', ' INTEGER NOT NULL DEFAULT 0')):
+            if name not in columns:
+                self.store.db.execute('ALTER TABLE resource_feeds ADD COLUMN %s%s' % (name, ddl))
+        self.store.db.commit()
 
     def config(self):
         return {**ResourceConfig().model_dump(), **(self.store.get('resource_config', {}) or {})}

@@ -67,11 +67,6 @@ COLUMN_PATCHES = {
         ('stalled_at', ' REAL'),
         ('notice_context', " TEXT NOT NULL DEFAULT '{}'"),
     ],
-    'resource_feeds': [
-        ('failures', ' INTEGER NOT NULL DEFAULT 0'),
-        ('last_success', ' REAL NOT NULL DEFAULT 0'),
-        ('last_count', ' INTEGER NOT NULL DEFAULT 0'),
-    ],
 }
 
 
@@ -99,7 +94,11 @@ def apply(db):
             db.execute(sql)
         done.append(number)
     # 列补丁独立于编号执行（幂等，且新库天然有列）。
+    # 迁移测试会先建一个只含部分表的库；表不存在时跳过，不能对不存在的表 ALTER。
+    tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     for table, columns in COLUMN_PATCHES.items():
+        if table not in tables:
+            continue
         existing = {row[1] for row in db.execute('PRAGMA table_info(%s)' % table)}
         for name, ddl in columns:
             if name not in existing:
