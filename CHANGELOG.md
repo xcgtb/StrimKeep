@@ -2,6 +2,11 @@
 
 每个版本的完整说明在 [`docs/releases/`](docs/releases/)。GitHub Release 使用同一份内容。
 
+## 3.6.98
+
+- 自动来源支持粘贴 RSS XML 导入，解决 re0 等 Cloudflare 拦截的程序端 403；
+- 导入内容照常去重、进收件箱，不绕过验证也不保存 Cookie。
+
 ## 3.6.97
 
 - 频道规则新增「进入资源收件箱」，Telegram 来源统一去重/重试；频道健康增加失败次数和上次成功；

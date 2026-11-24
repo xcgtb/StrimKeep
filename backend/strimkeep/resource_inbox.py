@@ -173,6 +173,13 @@ class FeedInput(BaseModel):
     auto_organize: bool = False
 
 
+class FeedImport(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    xml: str = Field(min_length=1, max_length=2_000_000)
+    target_cid: str = Field(default='', max_length=24)
+    auto_organize: bool = False
+
+
 class ResourceInbox:
     """Worker-side queue. Web requests only insert rows; they never wait on 115."""
     INTERVAL = 3
@@ -596,6 +603,31 @@ def install_resources(app, store, admin):
                               'last_success': row.get('last_success', 0)}
                              for row in channels],
                 'webhook_configured': bool(store.meta_json('resource_webhook_token', ''))}
+
+    @app.post('/api/v1/resources/feeds/import', dependencies=[Depends(admin)])
+    async def import_feed(body: FeedImport):
+        cfg = service().config()
+        target = body.target_cid or cfg.get('target_cid', '')
+        if not target:
+            raise HTTPException(422, '请先选择 RSS 落点，或在自动来源设置默认落点。')
+        if not target.isdigit() or int(target) <= 0:
+            raise HTTPException(422, '请选择一个非根目录。')
+        await app.state.cloud.directory(target)
+        try:
+            items = feed_items(body.xml)
+        except Exception:
+            raise HTTPException(422, 'RSS XML 解析失败，请确认粘贴的是完整 RSS/Atom 内容。') from None
+        accepted = duplicates = 0
+        for item in items:
+            try:
+                result = service().add_many(
+                    item['text'], 'rss', item['guid'], item['title'], target,
+                    bool(body.auto_organize))
+            except ValueError:
+                continue
+            accepted += result['accepted'] + result['requeued']
+            duplicates += result['duplicates']
+        return {'accepted': accepted, 'duplicates': duplicates, 'items': len(items)}
 
     @app.get('/api/v1/resources/feeds', dependencies=[Depends(admin)])
     async def feeds():

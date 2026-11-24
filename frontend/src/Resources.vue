@@ -18,6 +18,7 @@ const inbox=ref<any[]>([]),counts=ref<Record<string,number>>({}),status=ref('all
 const feeds=ref<any[]>([]),channels=ref<any[]>([]),editing=ref(0)
 const blankFeed=()=>({name:'',url:'',enabled:true,interval:300,target_cid:'',include:'',exclude:'',auto_organize:false})
 const feed=ref<any>(blankFeed())
+const rssXml=ref(''),importing=ref(false)
 const busy=ref(false),loading=ref(false),error=ref('')
 const STATUS:Record<string,string>={pending:'待处理',queued:'已入队',duplicate:'重复',needs_review:'待核查',failed:'失败',skipped:'已跳过'}
 const SOURCE:Record<string,string>={manual:'手动',rss:'RSS',webhook:'Webhook',telegram:'Telegram'}
@@ -61,6 +62,7 @@ async function saveFeed(){busy.value=true;try{const body={...feed.value};if(edit
 function editFeed(row:any){editing.value=row.id;feed.value={name:row.name,url:row.url,enabled:!!row.enabled,interval:row.interval,target_cid:row.target_cid,include:row.include,exclude:row.exclude,auto_organize:!!row.auto_organize}}
 function cancelFeed(){editing.value=0;feed.value=blankFeed()}
 async function runFeed(row:any){busy.value=true;try{await props.api(`/resources/feeds/${row.id}/run`,'POST');await loadFeeds();ElMessage.success('已安排本轮拉取')}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
+async function importRssXml(){if(!rssXml.value.trim()){ElMessage.warning('先粘贴 RSS XML 内容');return}importing.value=true;error.value='';try{const target=feed.value.target_cid||config.value.target_cid;const r=await props.api('/resources/feeds/import','POST',{xml:rssXml.value,target_cid:target,auto_organize:!!feed.value.auto_organize});ElMessage.success(`已解析 ${r.items||0} 条，接收 ${r.accepted||0} 条${r.duplicates?`，重复 ${r.duplicates} 条`:''}`);rssXml.value='';await loadInbox()}catch(e){error.value=(e as Error).message}finally{importing.value=false}}
 async function removeFeed(row:any){try{await ElMessageBox.confirm(`删除 RSS 源「${row.name||row.url}」？`,'删除 RSS 源',{confirmButtonText:'删除',cancelButtonText:'取消',type:'warning'})}catch{return}busy.value=true;try{await props.api(`/resources/feeds/${row.id}`,'DELETE');await loadFeeds()}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
 </script>
 <template>
@@ -113,6 +115,7 @@ async function removeFeed(row:any){try{await ElMessageBox.confirm(`删除 RSS �
   </el-form>
   <el-empty v-if="!feeds.length" description="还没有 RSS 源"/>
   <div v-else class="resource-feed-list"><div v-for="row in feeds" :key="row.id" class="resource-feed-row"><div><strong>{{row.name||row.url}}</strong><p class="hint">{{row.url}} · 每 {{row.interval}} 秒 · {{row.enabled?'启用':'停用'}} · 失败 {{row.failures||0}} 次 · 上次成功 {{fmtTime(row.last_success)}} · 下次 {{fmtTime(row.next_run)}}<span v-if="row.error"> · {{row.error}}</span></p></div><div class="button-row"><el-button size="small" :disabled="busy" @click="runFeed(row)">立即拉取</el-button><el-button size="small" :disabled="busy" @click="editFeed(row)">编辑</el-button><el-button size="small" text type="danger" :disabled="busy" @click="removeFeed(row)">删除</el-button></div></div></div>
+  <details class="resource-feed-import"><summary>Cloudflare 拦截？粘贴 RSS 内容导入</summary><p class="hint">浏览器能打开 RSS 后，Ctrl+A 复制全部 XML 粘贴到这里；用于 re0 这类程序端被 Cloudflare 拦截的源。</p><el-input v-model="rssXml" type="textarea" :rows="4" maxlength="2000000" placeholder="粘贴 &lt;rss&gt;…&lt;/rss&gt; 或 &lt;feed&gt;…&lt;/feed&gt;"/><div class="button-row"><el-button :loading="importing" :disabled="!rssXml.trim()" @click="importRssXml">导入粘贴的 RSS</el-button></div></details>
  </section>
 
  <section class="panel resource-settings">
@@ -147,6 +150,9 @@ async function removeFeed(row:any){try{await ElMessageBox.confirm(`删除 RSS �
 .resource-feed-form{margin-top:8px}
 .resource-feed-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 14px}
 .resource-feed-list{display:grid;gap:8px;margin-top:12px}
+.resource-feed-import{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+.resource-feed-import summary{cursor:pointer;color:var(--accent);font-size:13px;font-weight:600}
+.resource-feed-import .el-input{margin:10px 0}
 .resource-feed-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface-soft)}
 .resource-feed-row strong,.resource-feed-row p{overflow-wrap:anywhere}
 @media(max-width:760px){.resource-row{flex-direction:column}.resource-row-actions{width:100%}.resource-feed-grid{grid-template-columns:1fr}.resource-feed-row{flex-direction:column;align-items:flex-start}.resource-compose-head,.resource-toolbar{align-items:stretch}}

@@ -45,3 +45,13 @@ def test_webhook_enters_the_inbox(tmp_path, monkeypatch):
         sources = client.get('/api/v1/resources/sources').json()
         assert sources['feeds'][0]['name'] == 'Disabled feed'
         assert sources['webhook_configured'] is True
+        async def fake_directory(cid):
+            return {}
+        app.state.cloud.directory = fake_directory
+        imported = client.post('/api/v1/resources/feeds/import', json={
+            'xml': '<rss version="2.0"><channel><item><title>Imported</title>'
+                   '<guid>import-1</guid><description>https://115.com/s/abcd1234?password=efgh'
+                   '</description></item></channel></rss>',
+            'target_cid': '123'})
+        assert imported.status_code == 200, imported.text
+        assert imported.json()['accepted'] == 1
