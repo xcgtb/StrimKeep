@@ -248,15 +248,17 @@ class ResourceInbox:
     async def process_row(self, row):
         target = str(row['target_cid'] or '').strip() or self.config().get('target_cid', '')
         auto = bool(row['auto_organize'])
-        if not target:
-            self._set(row['id'], 'needs_review', '还没有设置默认转存/离线目录。')
-            return
         text = str(row['text'] or '')
         try:
             share_links = shares(text)
         except ValueError:
             share_links = []
         if share_links:
+            # Share rows can fall back to the normal Web transfer directory.
+            target = target or str((self.store.get('transfer_config', {}) or {}).get('target_cid', ''))
+            if not target:
+                self._set(row['id'], 'needs_review', '还没有设置 115 分享转存目录。')
+                return
             try:
                 ids = await self.engine.transfer.enqueue(text, target, auto, 'inbox')
             except (ValueError, CloudError) as exc:
@@ -277,7 +279,7 @@ class ResourceInbox:
         low = url.lower()
         kind = 'magnet' if low.startswith('magnet:') else ('ed2k' if low.startswith('ed2k://') else 'direct')
         cfg = directory_config(self.store.get('offline_config', {}) or {})
-        if not str(row['target_cid'] or '').strip():
+        if not str(row['target_cid'] or '').strip() and not self.config().get('target_cid'):
             if kind == 'magnet':
                 target = cfg.get('magnet_cid') or cfg.get('target_cid') or target
             elif kind == 'ed2k':

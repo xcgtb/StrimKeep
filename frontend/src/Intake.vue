@@ -7,6 +7,7 @@ import {Operation,Connection} from '@element-plus/icons-vue'
 import {useRoute} from 'vue-router'
 import TransferDirectories from './TransferDirectories.vue'
 import DirectoryPicker from './DirectoryPicker.vue'
+import ResourceInboxPanel from './Resources.vue'
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>()
 const emit=defineEmits<{navigate:[page:string]}>()
 const route=useRoute()
@@ -110,12 +111,13 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
 useVisiblePolling(async()=>{if(!busy.value)await refresh()},5000)
 </script>
 <template>
-<PageHeader title="资源入库" description="粘贴 115 分享、磁力、ED2K 或直链。"/>
+<PageHeader title="资源入库与收件箱" description="RSS/Webhook 自动进收件箱；手动链接用下方立即提交。"/>
 <el-alert v-if="error" :title="error" type="error" show-icon class="global-error"/>
+<ResourceInboxPanel :api="api" embedded/>
 
 <section class="panel intake-entry">
- <div class="section-title"><h2>提交链接</h2></div>
- <el-input v-model="intakeText" type="textarea" :rows="5" :disabled="busy" placeholder="粘贴链接，可以混合多种类型" aria-label="入库链接"/><p class="hint">115 分享走转存，其余链接走对应的离线目录。</p><div class="button-row"><el-button type="primary" :disabled="busy||!ready||!intakeText.trim()" @click="submitAll">提交</el-button></div></section>
+ <div class="section-title"><h2>立即提交（手动链接）</h2></div>
+ <el-input v-model="intakeText" type="textarea" :rows="5" :disabled="busy" placeholder="粘贴链接，可以混合多种类型" aria-label="入库链接"/><p class="hint">115 分享走转存，其余链接走对应的离线目录；需要去重、重试或自动来源时用上方收件箱。</p><div class="button-row"><el-button type="primary" :disabled="busy||!ready||!intakeText.trim()" @click="submitAll">提交</el-button></div></section>
 
 
 <TransferDirectories ref="directoryEditor" :api="api" :disabled="dirty||busy||!ready" :hide-channel="true" @saved="destinationsSaved" @navigate="page=>emit('navigate',page)"/>

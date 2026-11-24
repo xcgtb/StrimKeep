@@ -2,7 +2,7 @@
 import {computed,nextTick,onMounted,onUnmounted,ref,watch,shallowRef} from 'vue'
 import {useRoute,useRouter} from 'vue-router'
 import {createApi} from './api/client'
-import {Monitor,FirstAidKit,House,Cloudy,FolderOpened,Refresh,Document,Setting,Menu,Sunny,Moon,SwitchButton,List,Link,Download,Film,Promotion,MagicStick,Search,Share} from '@element-plus/icons-vue'
+import {Monitor,FirstAidKit,House,Cloudy,FolderOpened,Refresh,Document,Setting,Menu,Sunny,Moon,SwitchButton,List,Link,Film,Promotion,MagicStick,Search,Share} from '@element-plus/icons-vue'
 const route=useRoute(),router=useRouter()
 const ready=ref(false),logged=ref(false),csrf=ref(''),username=ref(''),busy=ref(false),error=ref(''),mobile=ref(false),version=ref('—')
 const closeNavigation=ref<HTMLButtonElement>()
@@ -28,7 +28,6 @@ const menu=[
  {id:'inventory',title:'库存管理',icon:List,group:'media'},
  {id:'account',title:'115 网盘',icon:Cloudy,group:'media'},
  {id:'transfer',title:'资源入库',icon:Link,group:'media'},
- {id:'resources',title:'资源接入',icon:Download,group:'media'},
  {id:'sharestrm',title:'分享 STRM',icon:Share,group:'media'},
  {id:'channels',title:'频道监控',icon:Promotion,group:'media'},
  {id:'organize',title:'影视整理',icon:FolderOpened,group:'media'},

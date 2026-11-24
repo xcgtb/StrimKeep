@@ -5,7 +5,7 @@ import {useVisiblePolling} from './pageActivity'
 import {ref,computed,onMounted} from 'vue'
 import {ElMessage,ElMessageBox} from 'element-plus'
 import {copyText} from './clipboard'
-const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>()
+const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>;embedded?:boolean}>()
 const emit=defineEmits<{navigate:[page:string]}>()
 
 const tab=ref<'inbox'|'sources'>('inbox')
@@ -60,14 +60,15 @@ async function runFeed(row:any){busy.value=true;try{await props.api(`/resources/
 async function removeFeed(row:any){try{await ElMessageBox.confirm(`删除 RSS 源「${row.name||row.url}」？`,'删除 RSS 源',{confirmButtonText:'删除',cancelButtonText:'取消',type:'warning'})}catch{return}busy.value=true;try{await props.api(`/resources/feeds/${row.id}`,'DELETE');await loadFeeds()}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
 </script>
 <template>
-<PageHeader title="资源接入" description="手动、RSS、Webhook 先进入收件箱，去重后复用现有转存/离线/整理链路。">
+<PageHeader v-if="!props.embedded" title="资源接入" description="手动、RSS、Webhook 先进入收件箱，去重后复用现有转存/离线/整理链路。">
   <template #actions><div class="button-row"><el-button :loading="loading" @click="load">刷新</el-button><el-button type="primary" @click="emit('navigate','transfer')">资源入库 →</el-button></div></template>
 </PageHeader>
 <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="resource-alert"/>
 
 <el-tabs v-model="tab" class="workspace-tabs">
 <el-tab-pane label="收件箱" name="inbox">
- <section class="panel resource-compose">
+ <p v-if="props.embedded" class="hint resource-embedded-hint">RSS / Webhook 自动进入这里；手动链接请用下方「立即提交」，避免两套输入框。</p>
+ <section v-if="!props.embedded" class="panel resource-compose">
   <div class="resource-compose-head"><div><h2>粘贴资源</h2><p class="hint">支持一次粘贴多个 115 分享、磁力、ED2K、直链；相同资源自动去重。</p></div><el-tag type="info">待处理 {{counts.pending||0}} · 已入队 {{counts.queued||0}}</el-tag></div>
   <el-input v-model="text" type="textarea" :rows="4" maxlength="16000" show-word-limit placeholder="https://115.com/s/... 或 magnet:?xt=urn:btih:...&#10;可一次粘贴多行"/>
   <div class="resource-form-row"><el-input v-model="title" placeholder="备注标题（可选）" maxlength="300"/><el-button @click="openPicker('manual')">{{target.label||'选择本次落点'}}</el-button><el-switch v-model="auto" active-text="落盘后整理"/><el-button type="primary" :loading="busy" :disabled="!text.trim()" @click="submit">加入收件箱</el-button></div>
@@ -89,7 +90,7 @@ async function removeFeed(row:any){try{await ElMessageBox.confirm(`删除 RSS �
 
 <el-tab-pane label="来源与设置" name="sources">
  <section class="panel resource-settings">
-  <div class="resource-compose-head"><div><h2>默认落点</h2><p class="hint">手动和 Webhook 未指定目录时使用；RSS 可以在每条源里单独覆盖。</p></div><el-button @click="openPicker('config')">{{config.target_label||'选择默认目录'}}</el-button></div>
+  <div class="resource-compose-head"><div><h2>默认落点</h2><p class="hint">RSS/Webhook 未指定目录时使用；手动链接用下方「保存目录」。</p></div><el-button @click="openPicker('config')">{{config.target_label||'选择默认目录'}}</el-button></div>
   <div class="resource-form-row"><el-switch v-model="config.auto_organize" active-text="落盘后自动整理"/><el-button type="primary" :loading="busy" @click="saveConfig">保存默认设置</el-button></div>
  </section>
 
@@ -117,6 +118,7 @@ async function removeFeed(row:any){try{await ElMessageBox.confirm(`删除 RSS �
 
 <style scoped>
 .resource-alert{margin-bottom:14px}
+.resource-embedded-hint{margin:0 0 12px}
 .resource-compose,.resource-inbox,.resource-settings{margin-bottom:16px}
 .resource-compose-head,.resource-toolbar{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
 .resource-compose-head h2{font-size:16px;margin:0}

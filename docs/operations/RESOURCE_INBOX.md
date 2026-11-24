@@ -11,9 +11,9 @@ StrimKeep 的资源接入分成两段：
 
 | 来源 | 入口 | 说明 |
 |---|---|---|
-| 手动 | 资源接入 → 粘贴资源 | 支持 115 分享、磁力、ED2K、HTTP/HTTPS/FTP 直链 |
-| RSS | 资源接入 → RSS 订阅 | RSS 2.0 / Atom，定时拉取 |
-| Webhook | 资源接入 → Webhook 收件 | 给 Prowlarr、下载器或自建脚本推送 |
+| 手动 | 资源入库与收件箱 → 收件箱 → 粘贴资源 | 支持 115 分享、磁力、ED2K、HTTP/HTTPS/FTP 直链 |
+| RSS | 资源入库与收件箱 → 来源与设置 → RSS 订阅 | RSS 2.0 / Atom，定时拉取 |
+| Webhook | 资源入库与收件箱 → 来源与设置 → Webhook 收件 | 给 Prowlarr、下载器或自建脚本推送 |
 | Telegram | 频道监控 / Telegram 机器人 | 保留原有独立链路，不经过收件箱 |
 
 ## 去重规则
@@ -51,7 +51,7 @@ RSS 条目会读取标题、正文、`enclosure` 和正文里的链接。普通�
 
 ## Webhook
 
-在“资源接入 → 来源与设置”生成令牌后，地址形如：
+在“资源入库与收件箱 → 来源与设置”生成令牌后，地址形如：
 
 ```text
 https://你的地址/api/v1/resources/webhook/<token>
