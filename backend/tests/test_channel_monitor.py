@@ -355,7 +355,7 @@ def test_legacy_string_channels_get_rule_defaults(tmp_path, monkeypatch):
                         'share_cid': '', 'share_label': '', 'offline_cid': '', 'offline_label': '',
                         'magnet_cid': '', 'magnet_label': '', 'ed2k_cid': '', 'ed2k_label': '',
                         'include': '', 'exclude': '', 'organize_after': False, 'source': 'preview',
-                        'history_pages': 1, 'media_spoiler': False}
+                        'history_pages': 1, 'media_spoiler': False, 'inbox_mode': False}
         store.close()
     asyncio.run(run())
 
