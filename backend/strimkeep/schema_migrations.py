@@ -67,6 +67,11 @@ COLUMN_PATCHES = {
         ('stalled_at', ' REAL'),
         ('notice_context', " TEXT NOT NULL DEFAULT '{}'"),
     ],
+    'resource_feeds': [
+        ('failures', ' INTEGER NOT NULL DEFAULT 0'),
+        ('last_success', ' REAL NOT NULL DEFAULT 0'),
+        ('last_count', ' INTEGER NOT NULL DEFAULT 0'),
+    ],
 }
 
 

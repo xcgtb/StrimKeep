@@ -87,6 +87,7 @@ https://你的地址/api/v1/resources/webhook/<token>
 - `POST /api/v1/resources/inbox/{id}/retry`
 - `POST /api/v1/resources/inbox/{id}/skip`
 - `DELETE /api/v1/resources/inbox/{id}`
+- `GET /api/v1/resources/sources`
 - `GET/POST /api/v1/resources/feeds`
 - `PUT/DELETE /api/v1/resources/feeds/{id}`
 - `POST /api/v1/resources/feeds/{id}/run`

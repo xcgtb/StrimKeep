@@ -181,6 +181,7 @@ class ResourceInbox:
         self.engine, self.store, self.http = engine, engine.store, engine.http
         self.task = None
         self.next_feed = 0.0
+        self._pruned_at = 0.0
 
     def config(self):
         return {**ResourceConfig().model_dump(), **(self.store.get('resource_config', {}) or {})}
@@ -372,7 +373,8 @@ class ResourceInbox:
                     continue
                 accepted += result['accepted'] + result['requeued']
                 duplicates += result['duplicates']
-            self._feed_done(row, now, state='ok', etag=response.headers.get('etag', ''),
+            self._feed_done(row, now, state='ok', accepted=accepted,
+                            etag=response.headers.get('etag', ''),
                             last_modified=response.headers.get('last-modified', ''))
             if accepted:
                 self.store.event('resource', 'RSS「%s」新增 %d 条资源，重复 %d 条。'
@@ -382,19 +384,59 @@ class ResourceInbox:
         except Exception as exc:
             self._feed_done(row, now, state='error', error=(str(exc) or type(exc).__name__)[:300])
 
-    def _feed_done(self, row, now, *, state, error='', etag=None, last_modified=None):
-        values = [state, error, now, now + max(60, int(row['interval'] or 300)), row['id']]
-        sql = 'UPDATE resource_feeds SET state=?,error=?,last_run=?,next_run=? WHERE id=?'
-        if etag is not None:
+    def _feed_done(self, row, now, *, state, error='', accepted=0, etag=None,
+                   last_modified=None):
+        interval = max(60, int(row['interval'] or 300))
+        failures = int(row['failures'] or 0)
+        if state == 'ok':
+            failures = 0
+            next_run = now + interval
+        else:
+            failures += 1
+            # Exponential backoff, capped at six hours. A broken feed must not
+            # be retried every interval forever.
+            next_run = now + min(6 * 3600, interval * (2 ** min(failures, 6)))
+        values = [state, error, now, next_run, failures, row['id']]
+        sql = ('UPDATE resource_feeds SET state=?,error=?,last_run=?,next_run=?,'
+               'failures=? WHERE id=?')
+        if state == 'ok':
             sql = ('UPDATE resource_feeds SET state=?,error=?,last_run=?,next_run=?,'
-                   'etag=?,last_modified=? WHERE id=?')
-            values = [state, error, now, now + max(60, int(row['interval'] or 300)),
-                      etag or '', last_modified or '', row['id']]
+                   'failures=?,last_success=?,last_count=? WHERE id=?')
+            values = [state, error, now, next_run, failures, now, int(accepted or 0),
+                      row['id']]
+        if etag is not None:
+            sql = sql.replace(' WHERE id=?', ',etag=?,last_modified=? WHERE id=?')
+            values = values[:-1] + [etag or '', last_modified or '', row['id']]
         with self.store.db:
             self.store.db.execute(sql, values)
 
+    def prune(self, keep_days=90, keep_rows=5000):
+        """Drop old terminal inbox rows; never touch pending/queued/review."""
+        now = _now()
+        cutoff = now - max(1, int(keep_days)) * 86400
+        with self.store.db:
+            by_age = self.store.db.execute(
+                "DELETE FROM resource_inbox WHERE status IN ('duplicate','skipped','failed')"
+                " AND updated<?", (cutoff,)).rowcount
+            total = self.store.db.execute(
+                "SELECT count(*) FROM resource_inbox WHERE status IN"
+                " ('duplicate','skipped','failed')").fetchone()[0]
+            by_count = max(0, total - max(1, int(keep_rows)))
+            if by_count:
+                self.store.db.execute(
+                    "DELETE FROM resource_inbox WHERE id IN (SELECT id FROM resource_inbox"
+                    " WHERE status IN ('duplicate','skipped','failed')"
+                    " ORDER BY id ASC LIMIT ?)", (by_count,))
+        return {'by_age': by_age, 'by_count': by_count}
+
     async def loop(self):
         while not getattr(self.engine, 'closing', False):
+            try:
+                if _now() - self._pruned_at >= 3600:
+                    self._pruned_at = _now()
+                    self.prune()
+            except Exception as exc:
+                self.store.event('resource', '收件箱清理异常：%s' % type(exc).__name__)
             try:
                 await self.process_pending()
             except asyncio.CancelledError:
@@ -529,6 +571,20 @@ def install_resources(app, store, admin):
             store.db.execute('DELETE FROM resource_inbox WHERE id=?', (row_id,))
         return {'ok': True}
 
+
+    @app.get('/api/v1/resources/sources', dependencies=[Depends(admin)])
+    async def sources():
+        feeds = store.db.execute('SELECT * FROM resource_feeds ORDER BY id DESC').fetchall()
+        try:
+            channels = service().engine.channels.sources()
+        except Exception:
+            channels = []
+        return {'feeds': [dict(row) for row in feeds],
+                'channels': [{'name': row.get('name', ''), 'title': row.get('title', ''),
+                              'state': row.get('state', ''), 'error': row.get('error', ''),
+                              'checked': row.get('checked', 0), 'posts': row.get('posts', 0)}
+                             for row in channels],
+                'webhook_configured': bool(store.meta_json('resource_webhook_token', ''))}
 
     @app.get('/api/v1/resources/feeds', dependencies=[Depends(admin)])
     async def feeds():

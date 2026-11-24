@@ -238,6 +238,8 @@ class Store:
           last_run REAL NOT NULL DEFAULT 0,next_run REAL NOT NULL DEFAULT 0,
           state TEXT NOT NULL DEFAULT 'idle',error TEXT NOT NULL DEFAULT '',
           etag TEXT NOT NULL DEFAULT '',last_modified TEXT NOT NULL DEFAULT '',
+          failures INTEGER NOT NULL DEFAULT 0,last_success REAL NOT NULL DEFAULT 0,
+          last_count INTEGER NOT NULL DEFAULT 0,
           created REAL NOT NULL,updated REAL NOT NULL);
         CREATE INDEX IF NOT EXISTS resource_feeds_due ON resource_feeds(enabled,next_run);
         CREATE INDEX IF NOT EXISTS events_by_time ON events(at);

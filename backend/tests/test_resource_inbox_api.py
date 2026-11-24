@@ -42,3 +42,6 @@ def test_webhook_enters_the_inbox(tmp_path, monkeypatch):
         assert feed.status_code == 200, feed.text
         feeds = client.get('/api/v1/resources/feeds').json()['items']
         assert feeds[0]['name'] == 'Disabled feed'
+        sources = client.get('/api/v1/resources/sources').json()
+        assert sources['feeds'][0]['name'] == 'Disabled feed'
+        assert sources['webhook_configured'] is True

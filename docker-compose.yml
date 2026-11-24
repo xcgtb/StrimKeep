@@ -14,6 +14,11 @@ services:
     container_name: strimkeep
     # 用宿主机网络：9000 端口直接对外，反代、播放器、Emby 回调都能连上
     network_mode: host
+    # 备选：端口冲突或需要独立网络时，注释掉上面的 network_mode，取消下面两行注释
+    # ports:
+    #   - "9000:9000"
+    # NAS 权限：当前镜像不读取 PUID/PGID，请让 ./data 和 ./strm 的属主与容器运行用户一致；
+    # 群晖/威联通/飞牛如果出现 Permission denied，先 chown 这两个目录，不要只加无效环境变量。
     init: true
     restart: unless-stopped
     stop_grace_period: 30s

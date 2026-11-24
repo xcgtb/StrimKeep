@@ -15,7 +15,7 @@ const webhookToken=ref('')
 const text=ref(''),title=ref(''),auto=ref(false)
 const target=ref({cid:'',label:''}),picker=ref<''|'manual'|'config'|'feed'>('')
 const inbox=ref<any[]>([]),counts=ref<Record<string,number>>({}),status=ref('all'),source=ref('')
-const feeds=ref<any[]>([]),editing=ref(0)
+const feeds=ref<any[]>([]),channels=ref<any[]>([]),editing=ref(0)
 const blankFeed=()=>({name:'',url:'',enabled:true,interval:300,target_cid:'',include:'',exclude:'',auto_organize:false})
 const feed=ref<any>(blankFeed())
 const busy=ref(false),loading=ref(false),error=ref('')
@@ -23,11 +23,14 @@ const STATUS:Record<string,string>={pending:'待处理',queued:'已入队',dupli
 const SOURCE:Record<string,string>={manual:'手动',rss:'RSS',webhook:'Webhook'}
 const statusType=(s:string):'success'|'danger'|'warning'|'info'=>s==='queued'?'success':s==='failed'?'danger':s==='needs_review'?'warning':'info'
 const webhookUrl=computed(()=>webhookToken.value?`${location.origin}/api/v1/resources/webhook/${webhookToken.value}`:'')
+const feedHealth=computed(()=>feeds.value.reduce((acc:any,row:any)=>{if(row.error||row.failures)acc.bad++;else acc.ok++;return acc},{ok:0,bad:0}))
+function fmtTime(ts:number){return ts?new Date(ts*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'—'}
 
 async function loadConfig(){try{const r=await props.api('/resources/config');config.value=r.config||config.value;webhookToken.value=r.webhook_token||''}catch(e){error.value=(e as Error).message}}
 async function loadInbox(){try{const params=new URLSearchParams({status:status.value,limit:'100'});if(source.value)params.set('source',source.value);const r=await props.api('/resources/inbox?'+params.toString());inbox.value=r.items||[];counts.value=r.counts||{}}catch(e){error.value=(e as Error).message}}
 async function loadFeeds(){try{feeds.value=(await props.api('/resources/feeds')).items||[]}catch(e){error.value=(e as Error).message}}
-async function load(){loading.value=true;error.value='';try{await Promise.all([loadConfig(),loadInbox(),loadFeeds()])}finally{loading.value=false}}
+async function loadSources(){try{const r=await props.api('/resources/sources');channels.value=r.channels||[];if(r.feeds)feeds.value=r.feeds}catch(e){error.value=(e as Error).message}}
+async function load(){loading.value=true;error.value='';try{await Promise.all([loadConfig(),loadInbox(),loadFeeds(),loadSources()])}finally{loading.value=false}}
 onMounted(load)
 useVisiblePolling(loadInbox,5000)
 function openPicker(where:'manual'|'config'|'feed'){picker.value=where}
@@ -102,14 +105,20 @@ async function removeFeed(row:any){try{await ElMessageBox.confirm(`删除 RSS �
  </section>
 
  <section class="panel resource-settings">
-  <div class="resource-compose-head"><div><h2>RSS 订阅</h2><p class="hint">支持 RSS 2.0 / Atom；标题和正文里的 115 分享、磁力、ED2K、直链会进入收件箱。</p></div><el-tag type="info">{{feeds.length}} 条源</el-tag></div>
+  <div class="resource-compose-head"><div><h2>RSS 订阅</h2><p class="hint">支持 RSS 2.0 / Atom；标题和正文里的 115 分享、磁力、ED2K、直链会进入收件箱。</p></div><div class="button-row"><el-tag type="success">正常 {{feedHealth.ok}}</el-tag><el-tag v-if="feedHealth.bad" type="warning">异常 {{feedHealth.bad}}</el-tag></div></div>
   <el-form label-position="top" class="resource-feed-form">
    <div class="resource-feed-grid"><el-form-item label="名称"><el-input v-model="feed.name" placeholder="例如：Prowlarr 电影"/></el-form-item><el-form-item label="RSS 地址"><el-input v-model="feed.url" placeholder="https://.../rss"/></el-form-item></div>
    <div class="resource-feed-grid"><el-form-item label="间隔（秒）"><el-input-number v-model="feed.interval" :min="60" :max="86400" :step="60"/></el-form-item><el-form-item label="落点"><el-button @click="openPicker('feed')">{{feed.target_cid?'目录 '+feed.target_cid:'跟随默认目录'}}</el-button></el-form-item><el-form-item label="包含关键词"><el-input v-model="feed.include" placeholder="留空不筛选"/></el-form-item><el-form-item label="排除关键词"><el-input v-model="feed.exclude" placeholder="留空不排除"/></el-form-item></div>
    <div class="resource-form-row"><el-switch v-model="feed.enabled" active-text="启用"/><el-switch v-model="feed.auto_organize" active-text="落盘后整理"/><el-button type="primary" :loading="busy" :disabled="!feed.url.trim()" @click="saveFeed">{{editing?'保存修改':'添加 RSS'}}</el-button><el-button v-if="editing" @click="cancelFeed">取消编辑</el-button></div>
   </el-form>
   <el-empty v-if="!feeds.length" description="还没有 RSS 源"/>
-  <div v-else class="resource-feed-list"><div v-for="row in feeds" :key="row.id" class="resource-feed-row"><div><strong>{{row.name||row.url}}</strong><p class="hint">{{row.url}} · 每 {{row.interval}} 秒 · {{row.enabled?'启用':'停用'}}<span v-if="row.error"> · {{row.error}}</span></p></div><div class="button-row"><el-button size="small" :disabled="busy" @click="runFeed(row)">立即拉取</el-button><el-button size="small" :disabled="busy" @click="editFeed(row)">编辑</el-button><el-button size="small" text type="danger" :disabled="busy" @click="removeFeed(row)">删除</el-button></div></div></div>
+  <div v-else class="resource-feed-list"><div v-for="row in feeds" :key="row.id" class="resource-feed-row"><div><strong>{{row.name||row.url}}</strong><p class="hint">{{row.url}} · 每 {{row.interval}} 秒 · {{row.enabled?'启用':'停用'}} · 失败 {{row.failures||0}} 次 · 上次成功 {{fmtTime(row.last_success)}} · 下次 {{fmtTime(row.next_run)}}<span v-if="row.error"> · {{row.error}}</span></p></div><div class="button-row"><el-button size="small" :disabled="busy" @click="runFeed(row)">立即拉取</el-button><el-button size="small" :disabled="busy" @click="editFeed(row)">编辑</el-button><el-button size="small" text type="danger" :disabled="busy" @click="removeFeed(row)">删除</el-button></div></div></div>
+ </section>
+
+ <section class="panel resource-settings">
+  <div class="resource-compose-head"><div><h2>频道监控</h2><p class="hint">Telegram 频道仍由频道监控处理；这里只显示健康状态，避免再建一套来源。</p></div><el-tag type="info">{{channels.length}} 个频道</el-tag></div>
+  <el-empty v-if="!channels.length" description="还没有频道监控配置"/>
+  <div v-else class="resource-feed-list"><div v-for="row in channels" :key="row.name" class="resource-feed-row"><div><strong>{{row.title||row.name}}</strong><p class="hint">状态 {{row.state||'new'}} · 最近检查 {{fmtTime(row.checked)}} · 已处理 {{row.posts||0}} 条<span v-if="row.error"> · {{row.error}}</span></p></div><el-tag :type="row.error?'danger':'success'">{{row.error?'异常':'正常'}}</el-tag></div></div>
  </section>
 </el-tab-pane>
 </el-tabs>
