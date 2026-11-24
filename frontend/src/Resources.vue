@@ -2,13 +2,14 @@
 import PageHeader from './PageHeader.vue'
 import DirectoryPicker from './DirectoryPicker.vue'
 import {useVisiblePolling} from './pageActivity'
-import {ref,computed,onMounted} from 'vue'
+import {ref,computed,onMounted,watch} from 'vue'
 import {ElMessage,ElMessageBox} from 'element-plus'
 import {copyText} from './clipboard'
-const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>;embedded?:boolean}>()
+const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>;embedded?:boolean;view?:'inbox'|'sources'}>()
 const emit=defineEmits<{navigate:[page:string]}>()
 
-const tab=ref<'inbox'|'sources'>('inbox')
+const tab=ref<'inbox'|'sources'>(props.view||'inbox')
+watch(()=>props.view,value=>{if(value)tab.value=value})
 const config=ref<any>({target_cid:'',target_label:'',auto_organize:false})
 const webhookToken=ref('')
 const text=ref(''),title=ref(''),auto=ref(false)
@@ -65,7 +66,7 @@ async function removeFeed(row:any){try{await ElMessageBox.confirm(`删除 RSS �
 </PageHeader>
 <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="resource-alert"/>
 
-<el-tabs v-model="tab" class="workspace-tabs">
+<el-tabs v-model="tab" class="workspace-tabs" :class="{'embedded-tabs':props.embedded}">
 <el-tab-pane label="收件箱" name="inbox">
  <p v-if="props.embedded" class="hint resource-embedded-hint">RSS / Webhook 自动进入这里；手动链接请用下方「立即提交」，避免两套输入框。</p>
  <section v-if="!props.embedded" class="panel resource-compose">
@@ -119,6 +120,8 @@ async function removeFeed(row:any){try{await ElMessageBox.confirm(`删除 RSS �
 <style scoped>
 .resource-alert{margin-bottom:14px}
 .resource-embedded-hint{margin:0 0 12px}
+.embedded-tabs :deep(.el-tabs__header){display:none}
+.embedded-tabs :deep(.el-tabs__content){padding-top:0}
 .resource-compose,.resource-inbox,.resource-settings{margin-bottom:16px}
 .resource-compose-head,.resource-toolbar{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
 .resource-compose-head h2{font-size:16px;margin:0}

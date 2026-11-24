@@ -1,6 +1,6 @@
 {
   "name": "strimkeep-frontend",
-  "version": "3.6.94",
+  "version": "3.6.95",
   "private": true,
   "type": "module",
   "scripts": {

@@ -12,7 +12,7 @@ const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise
 const emit=defineEmits<{navigate:[page:string]}>()
 const route=useRoute()
 
-const tab=ref<'share'|'offline'>('share')
+const pageTab=ref<'manual'|'inbox'|'sources'>('manual')
 const transfer=ref<any>({target_cid:'',target_label:'',auto_organize:false,bot_auto_organize:false,bot_enabled:false,allowed_user_id:''})
 const transferBase=ref(''),jobs=ref<any[]>([]),directoryEditor=ref<any>(null)
 const settingsOpen=ref(false)
@@ -111,13 +111,20 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
 useVisiblePolling(async()=>{if(!busy.value)await refresh()},5000)
 </script>
 <template>
-<PageHeader title="资源入库与收件箱" description="RSS/Webhook 自动进收件箱；手动链接用下方立即提交。"/>
+<PageHeader title="资源入库" description="手动链接、RSS、Webhook 统一入口。"/>
 <el-alert v-if="error" :title="error" type="error" show-icon class="global-error"/>
-<ResourceInboxPanel :api="api" embedded/>
+<div class="intake-tabs" role="tablist">
+ <button :class="{active:pageTab==='manual'}" @click="pageTab='manual'">手动入库</button>
+ <button :class="{active:pageTab==='inbox'}" @click="pageTab='inbox'">收件箱</button>
+ <button :class="{active:pageTab==='sources'}" @click="pageTab='sources'">自动来源</button>
+</div>
+<ResourceInboxPanel v-if="pageTab==='inbox'" :api="api" embedded view="inbox"/>
+<ResourceInboxPanel v-else-if="pageTab==='sources'" :api="api" embedded view="sources"/>
+<template v-else>
 
 <section class="panel intake-entry">
- <div class="section-title"><h2>立即提交（手动链接）</h2></div>
- <el-input v-model="intakeText" type="textarea" :rows="5" :disabled="busy" placeholder="粘贴链接，可以混合多种类型" aria-label="入库链接"/><p class="hint">115 分享走转存，其余链接走对应的离线目录；需要去重、重试或自动来源时用上方收件箱。</p><div class="button-row"><el-button type="primary" :disabled="busy||!ready||!intakeText.trim()" @click="submitAll">提交</el-button></div></section>
+ <div class="section-title"><h2>提交链接</h2></div>
+ <el-input v-model="intakeText" type="textarea" :rows="5" :disabled="busy" placeholder="粘贴链接，可以混合多种类型" aria-label="入库链接"/><p class="hint">115 分享走转存，其余链接走对应的离线目录。</p><div class="button-row"><el-button type="primary" :disabled="busy||!ready||!intakeText.trim()" @click="submitAll">提交</el-button></div></section>
 
 
 <TransferDirectories ref="directoryEditor" :api="api" :disabled="dirty||busy||!ready" :hide-channel="true" @saved="destinationsSaved" @navigate="page=>emit('navigate',page)"/>
@@ -157,6 +164,7 @@ useVisiblePolling(async()=>{if(!busy.value)await refresh()},5000)
 </section>
 
 <DirectoryPicker v-if="pickerKind" :api="api" @select="onPicked" @close="pickerKind='';routePick=null"/>
+</template>
 </template>
 
 <style scoped>
