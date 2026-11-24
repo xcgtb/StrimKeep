@@ -144,6 +144,8 @@ class Organizer:
         self.telegram = TelegramSession(self.store)
         self.notifications.channel_photo = self.telegram.notification_photo
         self.channels = ChannelMonitor(self)
+        from .resource_inbox import ResourceInbox
+        self.resources = ResourceInbox(self)
 
     def start(self):
         # Interrupted requests are rechecked in process_item(), not rerun from scratch.
@@ -158,6 +160,7 @@ class Organizer:
         self.extra_workers = [asyncio.create_task(self.supervise_lane('transfer')), asyncio.create_task(self.supervise_lane('sync'))]
         self.clock = asyncio.create_task(self.schedule_loop())
         self.channels.start()
+        self.resources.start()
         self.bot.start()
         self.emby.task = asyncio.create_task(self.emby.loop())
         self.emby.media_info.task = asyncio.create_task(self.emby.media_info.loop())
@@ -179,6 +182,7 @@ class Organizer:
     async def close(self):
         self.closing = True
         await self.channels.close()
+        await self.resources.close()
         await self.bot.close()
         if self.emby.task:
             self.emby.task.cancel()

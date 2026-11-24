@@ -221,6 +221,25 @@ class Store:
           account_id TEXT NOT NULL,scope TEXT NOT NULL,job_id INTEGER NOT NULL,
           checked REAL NOT NULL,revision TEXT NOT NULL,paths TEXT NOT NULL,
           PRIMARY KEY(account_id,scope));
+        CREATE TABLE IF NOT EXISTS resource_inbox(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,source TEXT NOT NULL,
+          external_id TEXT NOT NULL DEFAULT '',dedupe_key TEXT NOT NULL UNIQUE,
+          title TEXT NOT NULL DEFAULT '',text TEXT NOT NULL,target_cid TEXT NOT NULL DEFAULT '',
+          auto_organize INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'pending',
+          message TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,
+          job_ids TEXT NOT NULL DEFAULT '[]',created REAL NOT NULL,updated REAL NOT NULL);
+        CREATE INDEX IF NOT EXISTS resource_inbox_status ON resource_inbox(status,id);
+        CREATE INDEX IF NOT EXISTS resource_inbox_source ON resource_inbox(source,id);
+        CREATE TABLE IF NOT EXISTS resource_feeds(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL DEFAULT '',url TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,interval INTEGER NOT NULL DEFAULT 300,
+          target_cid TEXT NOT NULL DEFAULT '',include TEXT NOT NULL DEFAULT '',
+          exclude TEXT NOT NULL DEFAULT '',auto_organize INTEGER NOT NULL DEFAULT 0,
+          last_run REAL NOT NULL DEFAULT 0,next_run REAL NOT NULL DEFAULT 0,
+          state TEXT NOT NULL DEFAULT 'idle',error TEXT NOT NULL DEFAULT '',
+          etag TEXT NOT NULL DEFAULT '',last_modified TEXT NOT NULL DEFAULT '',
+          created REAL NOT NULL,updated REAL NOT NULL);
+        CREATE INDEX IF NOT EXISTS resource_feeds_due ON resource_feeds(enabled,next_run);
         CREATE INDEX IF NOT EXISTS events_by_time ON events(at);
         CREATE INDEX IF NOT EXISTS events_by_kind_id ON events(kind,id);
         CREATE INDEX IF NOT EXISTS notifications_by_time ON notifications(at);

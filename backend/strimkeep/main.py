@@ -700,6 +700,8 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
     install_transfer(app, store, admin, job_public)
     from .offline_api import install_offline
     install_offline(app, store, admin)
+    from .resource_inbox import install_resources
+    install_resources(app, store, admin)
     from .explore_api import install_explore
     install_explore(app, store, admin)
     from .inventory_api import install_inventory

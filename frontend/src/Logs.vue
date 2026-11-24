@@ -20,7 +20,7 @@ media.addEventListener('change',onMedia)
 onUnmounted(()=>media.removeEventListener('change',onMedia))
 const height=computed(()=>narrow.value?92:58)
 
-const KINDS:Record<string,string>={progress:'进度',organize:'整理',queue:'队列',schedule:'调度',emby:'Emby','115':'115',cloud:'风控',system:'系统',error:'异常',channel:'频道',share:'分享',share_organize:'分享整理',play:'播放',output:'输出',bot:'机器人',transfer:'转存',settings:'设置',token:'令牌'}
+const KINDS:Record<string,string>={progress:'进度',organize:'整理',queue:'队列',schedule:'调度',emby:'Emby','115':'115',cloud:'风控',system:'系统',error:'异常',channel:'频道',share:'分享',share_organize:'分享整理',resource:'资源',play:'播放',output:'输出',bot:'机器人',transfer:'转存',settings:'设置',token:'令牌'}
 const kindLabel=(value:string)=>KINDS[value]||value
 const kindOptions=computed(()=>{const seen=new Set<string>(rows.value.map(r=>String(r.kind)));if(kind.value)seen.add(kind.value);return [...seen].sort((a,b)=>kindLabel(a).localeCompare(kindLabel(b),'zh-CN'))})
 

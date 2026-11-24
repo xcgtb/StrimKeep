@@ -2,6 +2,11 @@
 
 每个版本的完整说明在 [`docs/releases/`](docs/releases/)。GitHub Release 使用同一份内容。
 
+## 3.6.93
+
+- 新增资源接入收件箱：手动、RSS、Webhook 统一去重入队，Worker 复用现有转存/离线/整理链路；
+- 支持 RSS 定时拉取、签名 Webhook、失败重试和待核查状态，不抓取资源站 HTML。
+
 ## 3.6.92
 
 - 实时日志支持 `Last-Event-ID` 续传、突发分批追赶和暂停缓存，重连不重放、不丢中间日志；

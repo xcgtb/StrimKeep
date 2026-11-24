@@ -28,6 +28,7 @@ const menu=[
  {id:'inventory',title:'库存管理',icon:List,group:'media'},
  {id:'account',title:'115 网盘',icon:Cloudy,group:'media'},
  {id:'transfer',title:'资源入库',icon:Link,group:'media'},
+ {id:'resources',title:'资源接入',icon:Download,group:'media'},
  {id:'sharestrm',title:'分享 STRM',icon:Share,group:'media'},
  {id:'channels',title:'频道监控',icon:Promotion,group:'media'},
  {id:'organize',title:'影视整理',icon:FolderOpened,group:'media'},
