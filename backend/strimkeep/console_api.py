@@ -49,6 +49,20 @@ def activity_time(value):
         return 0
 
 
+def _log_cursor(after, last_event):
+    """实时日志的续传游标：查询参数和 EventSource 的 Last-Event-ID 取较大值。"""
+    try:
+        last_event = int(last_event or 0)
+    except (TypeError, ValueError):
+        last_event = 0
+    return max(0, int(after or 0), last_event)
+
+
+def _read_logs(store, cursor, limit=200):
+    return store.db.execute(
+        'SELECT * FROM events WHERE id>? ORDER BY id LIMIT ?', (cursor, limit)).fetchall()
+
+
 def install_console(app,store,admin):
     @app.get('/api/v1/console/config',dependencies=[Depends(admin)])
     async def config():
@@ -99,16 +113,31 @@ def install_console(app,store,admin):
                         headers={'Content-Disposition': f'attachment; filename="{name}"'})
     @app.get('/api/v1/logs/events',dependencies=[Depends(admin)])
     async def live(request:Request,after:int=0):
+        # 浏览器 EventSource 重连时会带 Last-Event-ID；优先用它，避免按旧 URL
+        # 游标把已经看过的日志重新推一遍。
+        cursor0=_log_cursor(after,request.headers.get('last-event-id'))
+        token=request.cookies.get('strimkeep_session','')
         async def events():
-            cursor=after
+            cursor=cursor0;checked=None
             while not await request.is_disconnected():
-                if not store.session(request.cookies.get('strimkeep_session','')):break
-                rows=await asyncio.to_thread(lambda: store.db.execute('SELECT * FROM events WHERE id>? ORDER BY id LIMIT 200',(cursor,)).fetchall())
-                if rows:
-                    cursor=rows[-1]['id'];yield 'event: logs\ndata: '+json.dumps({'items':[dict(r) for r in rows]},ensure_ascii=False)+'\n\n'
-                else:yield ': heartbeat\n\n'
+                # 会话校验不必每秒都做；放到工作线程，避免数据库忙等时卡住事件循环。
+                now=time.monotonic()
+                if checked is None or now-checked>=30:
+                    if not await asyncio.to_thread(store.session,token):break
+                    checked=now
+                # 一次事件最多带 5 页（1000 条）。突发日志超过一页时继续追赶，
+                # 而不是只取前 200 条后把游标跳到末尾，导致中间日志永久丢失。
+                rows=[]
+                for _ in range(5):
+                    batch=await asyncio.to_thread(_read_logs,store,cursor)
+                    if not batch:break
+                    rows=batch;cursor=batch[-1]['id']
+                    yield 'id: %d\nevent: logs\ndata: %s\n\n' % (
+                        cursor,json.dumps({'items':[dict(r) for r in batch]},ensure_ascii=False))
+                    if len(batch)<200:break
+                if not rows:yield ': heartbeat\n\n'
                 await asyncio.sleep(1)
-        return StreamingResponse(events(),media_type='text/event-stream',headers={'X-Accel-Buffering':'no','Cache-Control':'no-cache'})
+        return StreamingResponse(events(),media_type='text/event-stream',headers={'X-Accel-Buffering':'no','Cache-Control':'no-cache, no-transform'})
     @app.get('/api/v1/dashboard',dependencies=[Depends(admin)])
     async def dashboard():
         engine=app.state.organizer

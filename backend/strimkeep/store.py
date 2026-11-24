@@ -222,6 +222,7 @@ class Store:
           checked REAL NOT NULL,revision TEXT NOT NULL,paths TEXT NOT NULL,
           PRIMARY KEY(account_id,scope));
         CREATE INDEX IF NOT EXISTS events_by_time ON events(at);
+        CREATE INDEX IF NOT EXISTS events_by_kind_id ON events(kind,id);
         CREATE INDEX IF NOT EXISTS notifications_by_time ON notifications(at);
         CREATE INDEX IF NOT EXISTS notifications_job_event ON notifications(job_id,event_key);
         CREATE INDEX IF NOT EXISTS deep_delete_batch ON deep_delete_queue(batch,state);

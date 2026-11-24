@@ -7,9 +7,10 @@ import {ElMessage} from 'element-plus'
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>()
 const emit=defineEmits<{navigate:[page:string]}>()
 
-const rows=shallowRef<any[]>([]),live=ref(false),paused=ref(false)
+const rows=shallowRef<any[]>([]),live=ref(false),paused=ref(false),buffered=ref(0)
 const level=ref('all'),kind=ref(''),search=ref(''),term=ref(''),selected=shallowRef<any>(null)
 const scrollTop=ref(0),viewport=ref<HTMLElement>(),loading=ref(false),older=ref(true),showProgress=ref(true)
+const PAUSE_BUFFER=2000
 let stream:EventSource|undefined,visible=false,frame=0,pending:any[]=[],queryTimer:ReturnType<typeof setTimeout>|undefined
 // 手机上正文一行装不下，改成两行；行高跟着变，虚拟滚动才不串位。
 const media=window.matchMedia('(max-width:760px)')
@@ -21,7 +22,7 @@ const height=computed(()=>narrow.value?92:58)
 
 const KINDS:Record<string,string>={progress:'进度',organize:'整理',queue:'队列',schedule:'调度',emby:'Emby','115':'115',cloud:'风控',system:'系统',error:'异常',channel:'频道',share:'分享',share_organize:'分享整理',play:'播放',output:'输出',bot:'机器人',transfer:'转存',settings:'设置',token:'令牌'}
 const kindLabel=(value:string)=>KINDS[value]||value
-const kindOptions=computed(()=>{const seen=new Set<string>(rows.value.map(r=>String(r.kind)));return [...seen].sort((a,b)=>kindLabel(a).localeCompare(kindLabel(b),'zh-CN'))})
+const kindOptions=computed(()=>{const seen=new Set<string>(rows.value.map(r=>String(r.kind)));if(kind.value)seen.add(kind.value);return [...seen].sort((a,b)=>kindLabel(a).localeCompare(kindLabel(b),'zh-CN'))})
 
 function jobOf(message:string){const m=/^任务\s*(\d+)\s*[：:]\s*/.exec(String(message||''));return m?m[1]:''}
 function bodyOf(message:string){return String(message||'').replace(/^任务\s*\d+\s*[：:]\s*/,'')}
@@ -44,9 +45,20 @@ const shown=computed(()=>filtered.value.slice(start.value,start.value+24))
 const counts=computed(()=>{let warn=0,error=0;for(const row of rows.value){const l=levelOf(row);if(l==='error')error++;else if(l==='warn')warn++}return {warn,error}})
 
 function merge(items:any[]){const ids=new Set(items.map(r=>r.id));rows.value=[...items,...rows.value.filter(r=>!ids.has(r.id))].sort((a,b)=>b.id-a.id).slice(0,5000)}
-function flush(){frame=0;if(!paused.value&&pending.length){merge(pending);pending=[]}}
-function disconnect(){stream?.close();stream=undefined;live.value=false;if(frame)cancelAnimationFrame(frame);frame=0;pending=[]}
-function connect(){disconnect();if(!visible)return;stream=new EventSource('/api/v1/logs/events?after='+(rows.value[0]?.id||0));stream.onopen=()=>live.value=true;stream.addEventListener('logs',e=>{if(paused.value)return;try{pending.push(...JSON.parse((e as MessageEvent).data).items);if(!frame)frame=requestAnimationFrame(flush)}catch{live.value=false}});stream.onerror=()=>live.value=false}
+function flush(){frame=0;if(!paused.value&&pending.length){merge(pending);pending=[];buffered.value=0}}
+function receive(items:any[]){
+  if(!items.length)return
+  pending.push(...items)
+  if(paused.value){
+    // 暂停只冻结画面，不丢日志；超过上限时保留最新的一批，避免长时间暂停吃内存。
+    if(pending.length>PAUSE_BUFFER)pending.splice(0,pending.length-PAUSE_BUFFER)
+    buffered.value=pending.length
+    return
+  }
+  if(!frame)frame=requestAnimationFrame(flush)
+}
+function disconnect(){stream?.close();stream=undefined;live.value=false;if(frame)cancelAnimationFrame(frame);frame=0;pending=[];buffered.value=0}
+function connect(){disconnect();if(!visible)return;stream=new EventSource('/api/v1/logs/events?after='+(rows.value[0]?.id||0));stream.onopen=()=>live.value=true;stream.addEventListener('logs',e=>{try{receive(JSON.parse((e as MessageEvent).data).items)}catch{live.value=false}});stream.onerror=()=>live.value=false}
 async function load(before=false){if(loading.value)return;loading.value=true;try{const suffix=before?'&before='+rows.value.at(-1)?.id:'';const items=(await props.api('/logs?limit=200'+suffix)).items;merge(items);if(before)older.value=items.length===200;if(!before)connect()}catch(e){ElMessage.error('日志读取失败：'+(e as Error).message)}finally{loading.value=false}}
 async function download(){
   const params=new URLSearchParams({limit:'5000'})
@@ -63,7 +75,7 @@ async function download(){
 }
 watch(search,value=>{if(queryTimer)clearTimeout(queryTimer);queryTimer=setTimeout(()=>term.value=value.toLowerCase(),180)})
 watch([term,kind,level,showProgress],async()=>{scrollTop.value=0;await nextTick();if(viewport.value)viewport.value.scrollTop=0})
-watch(paused,value=>{if(!value)void load()})
+watch(paused,value=>{if(value){buffered.value=pending.length;return}if(pending.length){merge(pending);pending=[];buffered.value=0}void load()})
 usePageActivity(()=>{visible=true;void load()},()=>{visible=false;disconnect();if(queryTimer)clearTimeout(queryTimer)})
 </script>
 <template>
@@ -79,9 +91,10 @@ usePageActivity(()=>{visible=true;void load()},()=>{visible=false;disconnect();i
    <el-option v-for="k in kindOptions" :key="k" :value="k" :label="kindLabel(k)"/>
   </el-select>
   <el-input v-model="search" clearable placeholder="搜索内容，例如频道名、文件名" aria-label="搜索日志" class="log-search"/>
-  
+
   <div class="log-actions">
-  <el-button @click="paused=!paused">{{paused?'继续显示':'暂停'}}</el-button>
+  <el-button @click="paused=!paused">{{paused?'继续显示':'暂停显示'}}</el-button>
+  <span v-if="paused" class="hint" style="margin:0">已缓存 {{buffered}} 条</span>
   <el-button :loading="loading" @click="load(false)">刷新</el-button>
   <el-button :disabled="!rows.length" @click="download">下载日志</el-button>
   </div>
