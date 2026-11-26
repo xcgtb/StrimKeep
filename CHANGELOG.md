@@ -2,6 +2,11 @@
 
 每个版本的完整说明在 [`docs/releases/`](docs/releases/)。GitHub Release 使用同一份内容。
 
+## 3.6.100
+
+- 影视探索可直接添加 Telegram 搜索频道，支持公开频道用户名、链接，以及从已登录会话选择已加入的频道。
+- 移除 Torznab 搜索来源及其旧配置，保留已设的 PanSou 和 Telegram 搜索来源。
+
 ## 3.6.99
 
 - 影视探索并行搜索配置的 PanSou、Torznab 和 Telegram 频道，合并重复链接并显示来源。

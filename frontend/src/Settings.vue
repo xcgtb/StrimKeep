@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import PageHeader from './PageHeader.vue'
 import SettingCard from './SettingCard.vue'
-import {onMounted,ref,watch} from 'vue'
+import {computed,onMounted,ref,watch} from 'vue'
 import {ElMessage} from 'element-plus'
 import {useRoute} from 'vue-router'
 const route=useRoute()
@@ -75,21 +75,29 @@ async function testTg(){await run(async()=>{ElMessage((await props.api('/notific
 async function saveAppearance(){await run(async()=>{requireLoaded('appearance');const c=(await props.api('/console/config')).config;appearance.value=(await props.api('/console/config','PUT',{...c,theme:appearance.value.theme,background_url:appearance.value.background_url,background_opacity:appearance.value.background_opacity})).config;emit('appearance',appearance.value);ElMessage.success('外观已保存')})}
 async function saveThrottle(){await run(async()=>{requireLoaded('services');mask.value=await props.api('/settings','PUT',{cloud_throttle:throttle.value});ElMessage.success('请求节奏已保存')})}
 async function saveNetwork(){await run(async()=>{requireLoaded('network');networkMask.value=await props.api('/network/config','PUT',network.value);network.value.proxy_url='';ElMessage.success('网络代理已保存并生效')})}
-type ResourceSite = { kind: 'pansou' | 'torznab'; name: string; base_url: string; enabled: boolean; api_key: string }
+type ResourceSite = { name: string; base_url: string; enabled: boolean }
 type ResourceChannel = { name: string; title: string }
+type TelegramDialog = { id: string; username: string; title: string; kind: string }
 const resource = ref<{ sites: ResourceSite[]; telegram_channels: string[] }>({sites: [], telegram_channels: []})
-const savedSiteKeys = ref<string[]>([])
 const resourceChannels = ref<ResourceChannel[]>([])
+const joinedResourceChannels = ref<ResourceChannel[]>([])
+const loadingResourceChannels = ref(false)
 const resourceTelegramConnected = ref(false)
+const resourceChannelOptions = computed(() => {
+  const options = new Map<string, ResourceChannel>()
+  for (const channel of [...resourceChannels.value, ...joinedResourceChannels.value]) {
+    options.set(channel.name, channel)
+  }
+  return [...options.values()]
+})
 function updateResource(data: any) {
   const sites = data.sites || []
   resource.value = {
     sites: sites.map((site: ResourceSite) => ({
-      kind: site.kind || 'pansou', name: site.name, base_url: site.base_url, enabled: site.enabled, api_key: ''
+      name: site.name, base_url: site.base_url, enabled: site.enabled
     })),
     telegram_channels: data.telegram_channels || [],
   }
-  savedSiteKeys.value = sites.filter((site: any) => site.api_key_configured).map((site: ResourceSite) => site.base_url)
   resourceChannels.value = data.channels || []
   resourceTelegramConnected.value = !!data.telegram_logged_in
 }
@@ -102,6 +110,18 @@ async function loadResource() {
     error.value = (e as Error).message
   }
 }
+async function loadJoinedResourceChannels() {
+  loadingResourceChannels.value = true
+  try {
+    const {items} = await props.api('/telegram/session/dialogs') as {items: TelegramDialog[]}
+    joinedResourceChannels.value = items.filter(channel => channel.kind === 'channel')
+      .map(channel => ({name: channel.username || channel.id, title: channel.title || channel.username || channel.id}))
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  } finally {
+    loadingResourceChannels.value = false
+  }
+}
 async function saveResource() {
   await run(async () => {
     requireLoaded('resource')
@@ -110,7 +130,7 @@ async function saveResource() {
   })
 }
 function addResourceSite() {
-  resource.value.sites.push({kind: 'pansou', name: '', base_url: '', enabled: true, api_key: ''})
+  resource.value.sites.push({name: '', base_url: '', enabled: true})
 }
 watch(tab,value=>{if(value==='resource'&&!loaded.value.resource)void loadResource();if(value==='telegram'){if(!transferBotAll.value)void loadTransferBot();if(!loaded.value.commands)void loadBotCommands()}})
 watch(()=>route.query.section,value=>{if(value==='resource'||value==='telegram'||value==='emby')tab.value=value})
@@ -134,31 +154,24 @@ onMounted(()=>{if(tab.value==='resource')void loadResource();run(async()=>{
   <h2>资源来源</h2>
   <el-form label-position="top" :disabled="busy || !loaded.resource">
     <el-form-item label="Telegram 搜索频道">
-      <el-select v-model="resource.telegram_channels" multiple filterable clearable :multiple-limit="8"
-        :placeholder="resourceChannels.length ? '选择要搜索的频道' : '请先在频道监控添加频道'" style="width:100%">
-        <el-option v-for="channel in resourceChannels" :key="channel.name"
+      <el-button v-if="resourceTelegramConnected" :loading="loadingResourceChannels" @click="loadJoinedResourceChannels">
+        读取已加入的频道
+      </el-button>
+      <el-select v-model="resource.telegram_channels" multiple filterable allow-create default-first-option
+        clearable :multiple-limit="8" placeholder="选择频道，或输入用户名或链接" style="width:100%">
+        <el-option v-for="channel in resourceChannelOptions" :key="channel.name"
           :label="channel.title" :value="channel.name"/>
       </el-select>
     </el-form-item>
     <p v-if="!resourceTelegramConnected" class="hint">Telegram 搜索需要先在「频道监控」登录用户会话。</p>
-    <h3>搜索站点</h3>
+    <h3>PanSou</h3>
     <template v-for="(site, index) in resource.sites" :key="index">
       <div>
-        <el-form-item label="类型">
-          <el-select v-model="site.kind" @change="site.api_key=''">
-            <el-option label="PanSou" value="pansou"/>
-            <el-option label="Torznab" value="torznab"/>
-          </el-select>
-        </el-form-item>
         <el-form-item label="站点名称">
           <el-input v-model="site.name" maxlength="60"/>
         </el-form-item>
-        <el-form-item :label="site.kind==='torznab' ? 'Torznab API 地址' : 'PanSou 服务地址'">
+        <el-form-item label="PanSou 服务地址">
           <el-input v-model="site.base_url" maxlength="300"/>
-        </el-form-item>
-        <el-form-item v-if="site.kind==='torznab'" label="API Key">
-          <el-input v-model="site.api_key" type="password" autocomplete="new-password" maxlength="1024"
-            :placeholder="savedSiteKeys.includes(site.base_url) ? '已保存，留空保留' : '按站点要求填写'"/>
         </el-form-item>
         <div class="button-row">
           <el-switch v-model="site.enabled" active-text="启用" :aria-label="site.name || '启用站点'"/>
@@ -167,7 +180,7 @@ onMounted(()=>{if(tab.value==='resource')void loadResource();run(async()=>{
       </div>
     </template>
     <div class="button-row">
-      <el-button :disabled="resource.sites.length>=8" @click="addResourceSite">添加站点</el-button>
+      <el-button :disabled="resource.sites.length>=8" @click="addResourceSite">添加 PanSou</el-button>
     </div>
     <el-button type="primary" :loading="busy" @click="saveResource">保存资源来源</el-button>
   </el-form>

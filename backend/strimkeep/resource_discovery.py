@@ -4,7 +4,6 @@ import base64
 import ipaddress
 import json
 import re
-import xml.etree.ElementTree as ET
 from itertools import zip_longest
 from typing import Literal
 from urllib.parse import urlsplit
@@ -28,7 +27,7 @@ PAN_TYPES = {'115': 'share', 'magnet': 'magnet', 'ed2k': 'ed2k'}
 LABELS = {'share': '115 网盘', 'magnet': '磁力', 'ed2k': 'ED2K'}
 
 
-def validate_base(value, *, allow_path=False):
+def validate_base(value):
     value = value.strip().rstrip('/')
     if not value or re.search(r'[\s\\]', value):
         raise ValueError('请输入有效的服务地址。')
@@ -39,7 +38,7 @@ def validate_base(value, *, allow_path=False):
         raise ValueError('服务地址无效。') from None
     if (parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username is not None
             or parsed.password is not None or parsed.query or parsed.fragment
-            or (parsed.path and not allow_path) or (port is not None and not 1 <= port <= 65535)):
+            or parsed.path or (port is not None and not 1 <= port <= 65535)):
         raise ValueError('请填写不含路径和凭据的 HTTP(S) 服务地址。')
     host = parsed.hostname.lower()
     try:
@@ -60,17 +59,14 @@ def validate_base(value, *, allow_path=False):
 
 class SearchSite(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
-    kind: Literal['pansou', 'torznab'] = 'pansou'
+    kind: Literal['pansou'] = 'pansou'
     name: str = Field(min_length=1, max_length=60)
     base_url: str = Field(min_length=1, max_length=300)
     enabled: bool = True
-    api_key: str = Field(default='', max_length=1024)
 
     @model_validator(mode='after')
     def validate_site(self):
-        self.base_url = validate_base(self.base_url, allow_path=self.kind == 'torznab')
-        if self.kind == 'pansou' and self.api_key:
-            raise ValueError('PanSou 来源使用可直接访问的搜索接口。')
+        self.base_url = validate_base(self.base_url)
         return self
 
 
@@ -83,7 +79,7 @@ class DiscoveryConfig(BaseModel):
     def unique_sources(self):
         self.telegram_channels = list(dict.fromkeys(
             normalize_channel(channel, strict=True) for channel in self.telegram_channels))
-        if (len({(site.kind, site.base_url) for site in self.sites}) != len(self.sites)
+        if (len({site.base_url for site in self.sites}) != len(self.sites)
                 or len({site.name.casefold() for site in self.sites}) != len(self.sites)):
             raise ValueError('站点名称和服务地址都不能重复。')
         return self
@@ -166,37 +162,6 @@ async def search_pansou(http, site, title):
     return items
 
 
-async def search_torznab(http, site, query):
-    params = {'t': 'search', 'q': query.title, 'limit': MAX_RESULTS}
-    if site.api_key:
-        params['apikey'] = site.api_key
-    body = await read_response(http, 'GET', site.base_url, params=params)
-    if re.search(br'<!\s*(?:DOCTYPE|ENTITY)\b', body.replace(b'\0', b''), re.I):
-        raise SourceError('Torznab 结果包含不支持的 XML 声明。')
-    root = ET.fromstring(body)
-    if root.tag == 'error':
-        raise SourceError('Torznab 搜索失败，请检查 API Key 和索引权限。')
-    channel = root.find('channel') if root.tag == 'rss' else None
-    if channel is None:
-        raise SourceError('站点未返回 Torznab RSS 搜索结果。')
-    items = []
-    for entry in channel.findall('item')[:MAX_RESULTS]:
-        # Only explicitly supplied magnet links can be submitted to 115. A
-        # private tracker download URL can contain account credentials.
-        magnet = next((attr.get('value', '') for attr in entry.findall('{*}attr')
-                       if attr.get('name') == 'magneturl'), '')
-        enclosure = entry.find('enclosure')
-        links = (magnet, entry.findtext('link') or '',
-                 enclosure.get('url', '') if enclosure is not None else '')
-        for link in dict.fromkeys(links):
-            if link.lower().startswith('magnet:?'):
-                items.extend(resource_items(link, entry.findtext('title') or query.title,
-                                            site.name, kind='magnet',
-                                            published_at=entry.findtext('pubDate') or ''))
-                break
-    return items
-
-
 async def search_channel(telegram, channel, source, title):
     messages = await telegram.search_channel(channel, title)
     items = []
@@ -220,7 +185,7 @@ async def search_source(name, search):
         error = str(exc)
     except SessionError as exc:
         error = str(exc)
-    except (ValueError, ET.ParseError, httpx.HTTPError):
+    except (ValueError, httpx.HTTPError):
         error = '站点连接失败或返回了无法读取的结果。'
     return {'name': name, 'error': error}, []
 
@@ -246,8 +211,12 @@ def merge_results(groups):
 def install_resource_discovery(app, store, admin):
     store.forget(('resource_discovery_base', 'resource_discovery_token'))
     saved = store.get(SETTING, {})
-    if 're0' in saved:
-        del saved['re0']
+    old_sites = saved.get('sites', [])
+    sites = [{key: value for key, value in site.items() if key != 'api_key'}
+             for site in old_sites if site.get('kind') != 'torznab']
+    if 're0' in saved or sites != old_sites:
+        saved.pop('re0', None)
+        saved['sites'] = sites
         store.set_many({SETTING: saved})
 
     def load():
@@ -266,20 +235,11 @@ def install_resource_discovery(app, store, admin):
         return {
             'telegram_channels': cfg.telegram_channels, 'channels': channel_options(),
             'telegram_logged_in': app.state.organizer.telegram.status()['logged_in'],
-            'sites': [{**site.model_dump(exclude={'api_key'}), 'api_key_configured': bool(site.api_key)}
-                      for site in cfg.sites],
+            'sites': [site.model_dump() for site in cfg.sites],
         }
 
     @app.put('/api/v1/explore/resource-config', dependencies=[Depends(admin)])
     async def save(body: DiscoveryConfig):
-        known = {channel['name'] for channel in channel_options()}
-        if any(channel not in known for channel in body.telegram_channels):
-            raise HTTPException(422, '请从频道监控中选择要搜索的 Telegram 频道。')
-        current = load()
-        saved_keys = {(site.kind, site.base_url): site.api_key for site in current.sites}
-        for site in body.sites:
-            if not site.api_key:
-                site.api_key = saved_keys.get((site.kind, site.base_url), '')
         store.set_many({SETTING: body.model_dump()})
         return await config()
 
@@ -288,13 +248,12 @@ def install_resource_discovery(app, store, admin):
         cfg = load()
         channels = {option['name']: option['title'] for option in channel_options()}
         http = app.state.http
-        searches = [search_source(site.name, search_torznab(http, site, body)
-                                  if site.kind == 'torznab' else search_pansou(http, site, body.title))
+        searches = [search_source(site.name, search_pansou(http, site, body.title))
                     for site in cfg.sites if site.enabled]
         telegram = app.state.organizer.telegram
-        searches.extend(search_source(channels[channel],
-                                      search_channel(telegram, channel, channels[channel], body.title))
-                        for channel in cfg.telegram_channels if channel in channels)
+        for channel in cfg.telegram_channels:
+            label = channels.get(channel, channel)
+            searches.append(search_source(label, search_channel(telegram, channel, label, body.title)))
         if not searches:
             raise HTTPException(409, '请在「系统设置 → 资源来源」添加站点或选择要搜索的 Telegram 频道。')
         results = await asyncio.gather(*searches)

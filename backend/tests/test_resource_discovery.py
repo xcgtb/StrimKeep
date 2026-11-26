@@ -54,7 +54,8 @@ def test_aggregation_and_legacy_token_removal(tmp_path, monkeypatch):
         }}})
 
     async def tg_search(name, title):
-        assert (name, title) == ('movies_example', '示例片名')
+        assert name in ('movies_example', '-1001234567')
+        assert title == '示例片名'
         return [{'text': '示例片名\n1080p 版本', 'links': ['https://115.com/s/example'],
                  'published_at': '2026-11-26T10:00:00+00:00'}]
 
@@ -68,17 +69,22 @@ def test_aggregation_and_legacy_token_removal(tmp_path, monkeypatch):
         assert client.post(search, json=body).status_code == 409
         assert app.state.store.get('resource_discovery_token', None) is None
         assert app.state.store.get('resource_discovery_base', None) is None
-        app.state.store.set_many({'channel_monitor': {'channels': [{'name': 'movies_example'}]}})
+        monitor = {'channels': [{'name': 'monitored_channel', 'enabled': False}]}
+        app.state.store.set_many({'channel_monitor': monitor})
         monkeypatch.setattr(app.state.organizer.telegram, 'search_channel', tg_search)
-        assert client.put(settings, json={'telegram_channels': ['unknown_channel']}).status_code == 422
+        assert client.put(settings, json={'telegram_channels': ['https://t.me/+invite']}).status_code == 422
         sites = [
             {'name': '盘搜', 'base_url': 'https://search.example'},
             {'name': '不可用', 'base_url': 'https://broken.example'},
             {'name': '已停用', 'base_url': 'https://disabled.example', 'enabled': False},
         ]
-        config = client.put(settings, json={'sites': sites, 'telegram_channels': ['movies_example']})
+        config = client.put(settings, json={
+            'sites': sites, 'telegram_channels': ['https://t.me/movies_example', '-1001234567'],
+        })
         assert config.status_code == 200
         assert 'legacy' not in config.text
+        assert config.json()['telegram_channels'] == ['movies_example', '-1001234567']
+        assert app.state.store.get('channel_monitor') == monitor
         assert config.json()['sites'][2]['enabled'] is False
         assert client.put(settings, json={'sites': [sites[0], {**sites[0], 'name': '不同名称'}]}).status_code == 422
         original_http = app.state.http
@@ -88,7 +94,7 @@ def test_aggregation_and_legacy_token_removal(tmp_path, monkeypatch):
             response = client.post(search, json=body)
             assert response.status_code == 200
             result = response.json()
-            assert result['items'][0]['source_names'] == ['盘搜', 'movies_example']
+            assert result['items'][0]['source_names'] == ['盘搜', 'movies_example', '-1001234567']
             assert result['items'][0]['link'] == 'https://115.com/s/example?password=abcd'
             assert result['items'][1]['link_type'] == 'magnet'
             assert 'HTTP 302' in result['sources'][1]['error']
@@ -100,61 +106,31 @@ def test_aggregation_and_legacy_token_removal(tmp_path, monkeypatch):
 
 
 
-def test_removed_site_credentials_are_cleaned_without_losing_torznab(tmp_path, monkeypatch):
+def test_retired_search_sources_are_removed_without_losing_active_sources(tmp_path, monkeypatch):
     monkeypatch.setenv('ADMIN_USERNAME', 'admin')
     monkeypatch.setenv('ADMIN_PASSWORD', 'test-password-1234')
     data = tmp_path / 'data'
-    site = {'kind': 'torznab', 'name': 'Tracker', 'base_url': 'https://tracker.example/1/api'}
+    retired = {'kind': 'torznab', 'name': 'Tracker', 'base_url': 'https://tracker.example/1/api',
+               'api_key': 'tracker-key'}
+    site = {'kind': 'pansou', 'name': '盘搜', 'base_url': 'http://127.0.0.1:8888', 'enabled': True}
+    channels = ['movies_example']
     previous = Store(data, 'admin', 'test-password-1234')
     previous.set_many({'resource_search_sources': {
-        'sites': [{**site, 'api_key': 'tracker-key'}],
+        'sites': [retired, {**site, 'api_key': ''}],
+        'telegram_channels': channels,
         're0': {'enabled': True, 'client_id': 'retired-app', 'app_secret': 'retired-secret',
                 'access_token': 'retired-token', 'refresh_token': 'retired-refresh'},
     }})
     previous.close()
     app = create_app(data, tmp_path / 'strm', FakeCloud)
-    seen = []
-    magnet = 'magnet:?xt=urn:btih:' + 'a' * 40
-
-    def handler(request):
-        seen.append((request.method, request.url.host, request.url.path))
-        assert request.url.params['apikey'] == 'tracker-key'
-        assert request.url.params['q'] == 'Example'
-        assert request.url.params['t'] == 'search'
-        assert 'authorization' not in request.headers
-        xml = f"""<rss xmlns:torznab="http://torznab.com/schemas/2015/feed">
-          <channel>
-            <item><title>Torrent with magnet</title>
-              <torznab:attr name="magneturl" value="{magnet}"/>
-            </item>
-            <item><title>Torrent without magnet</title>
-              <enclosure url="https://tracker.example/dl?secret=private" type="application/x-bittorrent"/>
-            </item>
-          </channel>
-        </rss>"""
-        return httpx.Response(200, text=xml)
-
     with TestClient(app) as client:
         login = client.post('/api/v1/auth/login', json={'username': 'admin', 'password': 'test-password-1234'})
         client.headers['X-CSRF-Token'] = login.json()['csrf']
         settings = '/api/v1/explore/resource-config'
-        assert 're0' not in app.state.store.get('resource_search_sources')
+        assert app.state.store.get('resource_search_sources') == {'sites': [site], 'telegram_channels': channels}
         config = client.get(settings)
-        assert config.json()['sites'][0]['api_key_configured'] is True
-        assert 're0' not in config.json() and 'tracker-key' not in config.text
-        assert client.put(settings, json={'sites': [site]}).status_code == 200
+        assert config.status_code == 200
+        assert config.json()['sites'] == [site]
+        assert config.json()['telegram_channels'] == channels
+        assert client.put(settings, json={'sites': [retired]}).status_code == 422
         assert client.post('/api/v1/explore/re0/authorize', json={}).status_code in (404, 405)
-        original_http = app.state.http
-        mock_http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        app.state.http = mock_http
-        try:
-            response = client.post('/api/v1/explore/resources',
-                                   json={'title': 'Example', 'tmdb_id': 42, 'media_type': 'tv'})
-        finally:
-            app.state.http = original_http
-            client.portal.call(mock_http.aclose)
-        assert response.status_code == 200
-        [torrent] = response.json()['items']
-        assert torrent['link'] == magnet
-        assert 'private' not in response.text
-        assert seen == [('GET', 'tracker.example', '/1/api')]
