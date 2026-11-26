@@ -12,7 +12,7 @@
 import asyncio
 
 from telethon import TelegramClient, errors
-from telethon.tl.types import MessageEntityTextUrl, MessageEntityUrl
+from telethon.tl.types import Channel, MessageEntityTextUrl, MessageEntityUrl
 from telethon.sessions import StringSession
 
 SESSION_KEY = 'telegram_session'
@@ -23,6 +23,31 @@ FETCH_LIMIT = 20
 
 class SessionError(RuntimeError):
     """会话不可用（未登录、被登出、网络不可达）。"""
+
+
+def message_row(entity, message):
+    text = message.message or ''
+    links = []
+    for link_entity in (message.entities or []):
+        if isinstance(link_entity, MessageEntityTextUrl) and link_entity.url:
+            links.append(link_entity.url)
+        elif isinstance(link_entity, MessageEntityUrl):
+            raw_text = text.encode('utf-16-le')
+            start = link_entity.offset * 2
+            end = start + link_entity.length * 2
+            links.append(raw_text[start:end].decode('utf-16-le', errors='ignore'))
+    markup = getattr(message, 'reply_markup', None)
+    for markup_row in (getattr(markup, 'rows', None) or []):
+        for button in (getattr(markup_row, 'buttons', None) or []):
+            if url := getattr(button, 'url', None):
+                links.append(url)
+    row = {'id': message.id, 'text': text, 'links': list(dict.fromkeys(links))}
+    if getattr(entity, 'noforwards', False) or getattr(message, 'noforwards', False):
+        row['protected'] = True
+    elif getattr(message, 'photo', None):
+        row['session_photo'] = True
+        row['media_spoiler'] = bool(getattr(getattr(message, 'media', None), 'spoiler', False))
+    return row
 
 
 class TelegramSession:
@@ -60,7 +85,7 @@ class TelegramSession:
                     await client.connect()
                     if not await client.is_user_authorized():
                         raise SessionError('Telegram 会话已失效，请重新登录')
-                except SessionError:
+                except (SessionError, asyncio.CancelledError):
                     await client.disconnect()
                     raise
                 except Exception as exc:
@@ -216,6 +241,30 @@ class TelegramSession:
         contents = await client.download_media(message, file=bytes)
         return contents if isinstance(contents, bytes) and 0 < len(contents) <= limit else None
 
+    async def search_channel(self, name, query):
+        """Search one configured channel via the signed-in user's Telegram API."""
+        try:
+            client = await self.client()
+            if client is None:
+                raise SessionError('请先在频道监控登录 Telegram 用户会话。')
+            entity = await self._entity(client, name)
+            if not isinstance(entity, Channel) or entity.noforwards:
+                raise SessionError('该频道不可用于资源搜索。')
+            messages = await client.get_messages(entity, search=query, limit=FETCH_LIMIT)
+        except SessionError:
+            raise SessionError('Telegram 会话或频道不可用，请在频道监控检查。') from None
+        except errors.FloodWaitError:
+            raise SessionError('Telegram 请求受限，请稍后再搜索。') from None
+        except (errors.RPCError, OSError, ValueError):
+            raise SessionError('Telegram 无法搜索该频道。') from None
+        rows = []
+        for message in messages:
+            if not getattr(message, 'noforwards', False):
+                row = message_row(entity, message)
+                date = getattr(message, 'date', None)
+                rows.append({**row, 'published_at': date.isoformat() if date else ''})
+        return rows
+
     async def fetch(self, name, before=None):
         """读一个频道的最新消息，产出与预览页相同的结构。"""
         client = await self.client()
@@ -231,36 +280,8 @@ class TelegramSession:
             raise SessionError('读取频道 %s 失败：%s' % (name, str(exc)[:120])) from None
         has_more = len(messages) > FETCH_LIMIT
         messages = list(reversed(messages[:FETCH_LIMIT]))
-        rows = []
-        for message in messages:
-            text = message.message or ''
-            # 超链接（显示文字 + 隐藏 URL）不在 text 里，要从 entities 取
-            links = []
-            for link_entity in (message.entities or []):
-                if isinstance(link_entity, MessageEntityTextUrl) and link_entity.url:
-                    links.append(link_entity.url)
-                elif isinstance(link_entity, MessageEntityUrl):
-                    raw_text = text.encode('utf-16-le')
-                    start = link_entity.offset * 2
-                    end = start + link_entity.length * 2
-                    links.append(raw_text[start:end].decode('utf-16-le', errors='ignore'))
-            # 机器人基本把链接放在内联按钮里，正文是空的 —— 只取 entities 会一条都抓不到。
-            markup = getattr(message, 'reply_markup', None)
-            for markup_row in (getattr(markup, 'rows', None) or []):
-                for button in (getattr(markup_row, 'buttons', None) or []):
-                    url = getattr(button, 'url', None)
-                    if url:
-                        links.append(url)
-            links = list(dict.fromkeys(links))      # 正文和按钮可能指向同一个链接
-            if not text and not links:
-                continue
-            row = {'id': message.id, 'text': text, 'links': links}
-            if getattr(entity, 'noforwards', False) or getattr(message, 'noforwards', False):
-                row['protected'] = True
-            elif getattr(message, 'photo', None):
-                row['session_photo'] = True
-                row['media_spoiler'] = bool(getattr(getattr(message, 'media', None), 'spoiler', False))
-            rows.append(row)
+        rows = [row for message in messages
+                if (row := message_row(entity, message))['text'] or row['links']]
         # 拿不到真实名字时回空，不要回退成 -100 开头的 ID：
         # 那个 ID 会被当成频道名存起来，后面再也换不回真名。
         title = (getattr(entity, 'title', '') or

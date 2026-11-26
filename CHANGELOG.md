@@ -2,6 +2,12 @@
 
 每个版本的完整说明在 [`docs/releases/`](docs/releases/)。GitHub Release 使用同一份内容。
 
+## 3.6.99
+
+- 影视探索并行搜索配置的 PanSou、Torznab 和 Telegram 频道，合并重复链接并显示来源。
+- 115 分享继续使用现有转存和分享 STRM 流程，磁力和 ED2K 可提交离线下载。
+- 移除旧 TTD 搜索与取链配置，升级时清理旧地址和令牌。
+
 ## 3.6.98
 
 - 自动来源支持粘贴 RSS XML 导入，解决 re0 等 Cloudflare 拦截的程序端 403；

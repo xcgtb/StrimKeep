@@ -4,10 +4,12 @@
 `message.entities` 会一条都抓不到 —— 用户加了机器人，结果什么都不来。
 """
 import asyncio
+from datetime import datetime, timezone
 
-from telethon.tl.types import MessageEntityTextUrl
+import pytest
+from telethon.tl.types import Channel, ChatPhotoEmpty, MessageEntityTextUrl
 
-from strimkeep.telegram_session import TelegramSession
+from strimkeep.telegram_session import SessionError, TelegramSession
 
 
 class FakeEntity:
@@ -50,7 +52,8 @@ class FakeClient:
     async def get_entity(self, target):
         return self.entity
 
-    async def get_messages(self, entity, limit=20, max_id=0):
+    async def get_messages(self, entity, limit=20, max_id=0, search=None):
+        self.last_search = search
         return list(self.messages)
 
     async def iter_dialogs(self):
@@ -97,6 +100,27 @@ def test_message_without_text_or_links_is_still_skipped():
         engine = session_with(FakeClient([message], entity=FakeEntity(title='频道')))
         parsed = await engine.fetch('123456789')
         assert parsed['messages'] == []
+    asyncio.run(run())
+
+
+def test_search_uses_the_selected_channel_and_respects_protection():
+    async def run():
+        posted = datetime(2026, 11, 26, tzinfo=timezone.utc)
+        channel = Channel(id=1, title='频道', photo=ChatPhotoEmpty(), date=posted, broadcast=True)
+        message = FakeMessage(1, text='示例片名', reply_markup=FakeMarkup(
+            FakeRow(FakeButton('https://115.com/s/test'))))
+        message.date = posted
+        protected = FakeMessage(2, '受保护的内容')
+        protected.noforwards = True
+        client = FakeClient([message, protected], entity=channel)
+        session = session_with(client)
+        rows = await session.search_channel('channel_name', '示例片名')
+        assert client.last_search == '示例片名'
+        assert [(row['id'], row['links'], row['published_at']) for row in rows] == [
+            (1, ['https://115.com/s/test'], posted.isoformat())]
+        channel.noforwards = True
+        with pytest.raises(SessionError):
+            await session.search_channel('channel_name', '示例片名')
     asyncio.run(run())
 
 

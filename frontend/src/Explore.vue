@@ -4,6 +4,7 @@ import {ref,onMounted,computed,watch} from 'vue'
 import {Film, Search, Setting, Refresh} from '@element-plus/icons-vue'
 import {ElMessage,ElMessageBox} from 'element-plus'
 import {useRouter,useRoute} from 'vue-router'
+import {ApiError} from './api/client'
 const router=useRouter(),route=useRoute()
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>()
 const kind=ref<'movie'|'tv'>('movie'),sort=ref('popular'),genre=ref<number|undefined>(),year=ref<number|undefined>(),region=ref(''),page=ref(1)
@@ -76,119 +77,159 @@ const sortOptions=computed(()=>{
   else base.push({v:'on_the_air',t:'正在播出'},{v:'airing_today',t:'今日播出'})
   return base
 })
-const resourceDialog=ref(false), selected=ref<any>(null)
-const resourceItems=ref<any[]>([]), resourceError=ref(''), resourceBusy=ref(false), resourcePartial=ref(false), resourceTruncated=ref(false)
-const resourceStates=new Map<string,any>()
-function resourceKey(item:any){const identity=item.slug||item.share_url;return identity?`${item.source}|${item.provider}|${identity}`:''}
-function rememberResource(item:any){const key=resourceKey(item);if(key)resourceStates.set(key,{share_url:item.share_url,resolveUncertain:item.resolveUncertain,transferUncertain:item.transferUncertain,transferSubmitted:item.transferSubmitted,shareUncertain:item.shareUncertain,shareSubmitted:item.shareSubmitted})}
-function restoreResource(item:any){const state=resourceStates.get(resourceKey(item));if(!state)return item;return {...item,...state,share_url:state.share_url||item.share_url}}
-const resourceSource=ref('re0'), resourceMessage=ref('')
-let resourceRequestVersion=0
-const transferTarget=ref<any>(null), targetError=ref('')
-const resourceFilter=ref('all')
-const visibleResources=computed(()=>resourceItems.value.filter((item:any)=>resourceFilter.value==='all'||(resourceFilter.value==='115'&&item.provider==='115')||(resourceFilter.value==='ready'&&!!item.share_url)))
-function sourceLabel(value:string){return ({re0:'RE0',guanying:'观影',seedhub:'SeedHub'} as Record<string,string>)[value]||value||'来源未知'}
-function resourceTags(item:any){return [...new Set([item.resolution,item.quality,...(item.resource_spec_tags||[]),...(item.technical_tags||[]),...(item.subtitle_languages||[])].filter(Boolean))].slice(0,7)}
-// 备注是发布者写的版本说明（字幕、修复哪些集、片源），资源卡必须显示，
-// 不然只看标题和体积无法判断这个版本能不能用。
-function resourceRemark(item:any){return String(item.remark||item.message_text||item.message_body||'').trim()}
-function resourceDetails(item:any){
-  const rows:[string,string][]=[]
-  const push=(label:string,value:any)=>{const text=Array.isArray(value)?value.filter(Boolean).join('、'):String(value??'').trim();if(text)rows.push([label,text])}
-  push('发布者',item.sharer)
-  push('发布时间',item.published_at)
-  push('规格',item.resource_specification)
-  push('字幕',[...(item.subtitle_types||[]),...(item.subtitle_languages||[])])
-  push('片源',item.source_tags)
-  push('校验',[item.validation_label,item.validate_message])
-  if(item.unlocked_users_known)push('已解锁',`${item.unlocked_users_count??0} 人`)
-  const ep=item.episode||{}
-  push('分集',[ep.season_num?`S${ep.season_num}`:'',ep.episode_num?`E${ep.episode_num}`:'',ep.end_episode_num?`-E${ep.end_episode_num}`:''].join(''))
-  push('频道',item.channel_title)
-  push('官方',item.is_official?'官方频道':'')
-  push('链接',item.link_type==='share'?'分享链接':item.link_type)
-  return rows
+type ResourceItem = {
+  key: string
+  link: string
+  link_type: 'share' | 'magnet' | 'ed2k'
+  title: string
+  source_names: string[]
+  provider_label: string
+  remark: string
+  published_at: string
 }
-async function findResources(item:any){
-  selected.value=item;resourceDialog.value=true;resourceItems.value=[];resourceError.value='';resourceMessage.value='';resourcePartial.value=false;resourceFilter.value='all'
-  await Promise.all([loadTransferTarget(),searchResources()])
+type ResourceSource = { name: string; found?: number; error?: string }
+type ResourceAction = 'transfer' | 'share' | 'offline'
+
+const resourceDialog = ref(false), selected = ref<any>(null)
+const resourceItems = ref<ResourceItem[]>([]), resourceSources = ref<ResourceSource[]>([])
+const resourceError = ref(''), resourceMessage = ref(''), resourceBusy = ref(false)
+const submittingResource = ref(false), resourceTruncated = ref(false)
+const resourceSubmissions = ref<Record<string, 'submitted' | 'uncertain'>>({})
+const transferTarget = ref<any>(null), targetError = ref('')
+const resourceFilter = ref<'all' | 'share' | 'offline'>('all')
+let resourceRequestVersion = 0
+let targetRequestVersion = 0
+const resourceFailures = computed(() => resourceSources.value.filter(source => source.error))
+const visibleResources = computed(() => resourceItems.value.filter(item =>
+  resourceFilter.value === 'all' || (resourceFilter.value === 'share') === (item.link_type === 'share')))
+
+async function findResources(item: any) {
+  selected.value = item
+  resourceDialog.value = true
+  resourceMessage.value = ''
+  resourceFilter.value = 'all'
+  transferTarget.value = null
+  targetError.value = ''
+  await Promise.all([loadTransferTarget(), searchResources()])
 }
-async function loadTransferTarget(){
-  try{const data=await props.api('/transfer/config');const cfg=data.config||{};transferTarget.value={...cfg,target_cid:cfg.explore_cid||cfg.target_cid||'',target_label:cfg.explore_label||cfg.target_label||''};targetError.value='';return transferTarget.value}
-  catch(e){transferTarget.value=null;targetError.value=(e as Error).message;return null}
-}
-function canTransfer(item:any){return item.provider==='115'&&(!!item.share_url||(item.source==='re0'&&item.link_type==='share'&&!!item.slug))}
-async function searchResources(){
-  if(!selected.value)return
-  const version=++resourceRequestVersion
-  resourceBusy.value=true;resourceError.value='';resourceItems.value=[];resourcePartial.value=false;resourceTruncated.value=false
-  try{const r=await props.api('/explore/resources','POST',{title:selected.value.title,tmdb_id:selected.value.id,media_type:selected.value.kind,year:String(selected.value.year||''),sources:[resourceSource.value]});if(version===resourceRequestVersion){resourceItems.value=(r.items||[]).map(restoreResource);resourcePartial.value=!!r.partial;resourceTruncated.value=!!r.truncated}}
-  catch(e){if(version===resourceRequestVersion)resourceError.value=(e as Error).message}finally{if(version===resourceRequestVersion)resourceBusy.value=false}
-}
-function pointNotice(item:any){
-  return item.share_url?'分享链接已就绪，不需要再次获取。':item.is_unlocked?'资源显示为已解锁，实际状态以资源服务返回为准。':item.unlock_points!=null?`预计消耗 ${item.unlock_points} 积分，实际费用以资源服务返回为准。`:'积分费用未知，请先在资源服务中确认。'
-}
-async function readResourceLink(item:any){
-  const r=await props.api('/explore/resources/resolve','POST',{source:'re0',provider:'115',slug:item.slug})
-  item.share_url=r.share_url;rememberResource(item)
-  return r.share_url as string
-}
-async function transferResource(item:any){
-  if(resourceBusy.value||item.resolveUncertain||item.transferUncertain||item.transferSubmitted)return
-  resourceBusy.value=true;resourceError.value=''
-  const target=await loadTransferTarget()
-  if(!target?.target_cid){resourceBusy.value=false;resourceError.value='请先在「资源入库 → 保存目录」给影视探索设置 115 转存目录。';return}
-  const label=target.target_label||`目录 ID ${target.target_cid}`
-  const follow=target.auto_organize?'转存核实后自动进入整理。':'转存后需要手动整理或由定时扫描跟进。'
-  try{await ElMessageBox.confirm(`${pointNotice(item)}\n目标：${label}（ID ${target.target_cid}）。${follow}\n确认后将获取链接并提交转存。`, '转存到 115', {confirmButtonText:'确认转存',cancelButtonText:'取消',type:'warning'})}catch{resourceBusy.value=false;return}
-  resourceError.value='';resourceMessage.value=''
-  let stage='resolve'
-  try{
-    const link=item.share_url||await readResourceLink(item)
-    stage='enqueue'
-    const result=await props.api('/transfer/jobs','POST',{text:link,target_cid:String(target.target_cid)})
-    item.transferSubmitted=true;rememberResource(item)
-    const id=result.items?.[0]?.id
-    resourceMessage.value=id?`转存任务 #${id} 已入队，目标：${label}。请在任务中心查看进度。`:`转存任务已入队，目标：${label}。请在任务中心查看进度。`
-  }catch(e){
-    if(stage==='resolve'){item.resolveUncertain=true;rememberResource(item);resourceError.value=(e as Error).message}
-    else {item.transferUncertain=true;rememberResource(item);resourceError.value='提交结果未确认，请先在任务中心核查，避免重复转存。 '+(e as Error).message}
-  }finally{resourceBusy.value=false}
-}
-async function shareStrmResource(item:any){
-  if(resourceBusy.value||item.resolveUncertain||item.shareUncertain||item.shareSubmitted)return
-  // 第二条入库路径：分享直接生成 STRM，播放走分享下载通道，不占自己 115 的空间。
-  try{await ElMessageBox.confirm(`${pointNotice(item)}\n会把该分享直接接入本项目的分享库并生成 STRM（不转存到你的网盘，不占空间），整理后进入媒体库。\n确认入库？`, '分享入库（免转存）', {confirmButtonText:'确认入库',cancelButtonText:'取消',type:'warning'})}catch{return}
-  resourceBusy.value=true;resourceError.value='';resourceMessage.value=''
-  let stage='resolve'
-  try{
-    const link=item.share_url||await readResourceLink(item)
-    stage='ingest'
-    const r=await props.api('/share/ingest','POST',{text:link})
-    item.shareSubmitted=true;rememberResource(item)
-    resourceMessage.value=`已接入分享库 ${r.video_count} 个文件：新建 ${r.count} 个 STRM`+
-      (r.skip_count?`，跳过 ${r.skip_count} 个已存在`:'')+
-      (r.job_id?`；整理任务 #${r.job_id} 已入队，可在任务中心查看进度`:'；请到「分享 STRM」点击整理')+'。'
-    if(r.organize_error)resourceError.value=r.organize_error
-  }catch(e){
-    if(stage==='resolve'){item.resolveUncertain=true;rememberResource(item);resourceError.value=(e as Error).message}
-    else {item.shareUncertain=true;rememberResource(item);resourceError.value='分享入库结果未确认，请先到分享 STRM 和任务中心核查，避免重复提交。 '+(e as Error).message}
-  }finally{resourceBusy.value=false}
-}
-async function copyResource(item:any){
-  if(resourceBusy.value||item.resolveUncertain)return
-  resourceBusy.value=true
-  if(!item.share_url){
-    try{await ElMessageBox.confirm(`${pointNotice(item)}\n获取链接可能触发解锁，是否继续？`, '获取分享链接', {confirmButtonText:'确认获取',cancelButtonText:'取消',type:'warning'})}catch{resourceBusy.value=false;return}
+async function loadTransferTarget() {
+  const version = ++targetRequestVersion
+  try {
+    const data = await props.api('/transfer/config')
+    const cfg = data.config || {}
+    const target = {...cfg, target_cid: cfg.explore_cid || cfg.target_cid || '',
+      target_label: cfg.explore_label || cfg.target_label || ''}
+    if (version === targetRequestVersion) {
+      transferTarget.value = target
+      targetError.value = ''
+    }
+    return target
+  } catch (e) {
+    if (version === targetRequestVersion) {
+      transferTarget.value = null
+      targetError.value = (e as Error).message
+    }
+    return null
   }
-  resourceError.value='';resourceMessage.value=''
-  try{
-    let link=item.share_url
-    if(!link){try{link=await readResourceLink(item)}catch(e){item.resolveUncertain=true;rememberResource(item);throw e}}
-    if(navigator.clipboard&&window.isSecureContext)await navigator.clipboard.writeText(link)
-    else {const input=document.createElement('textarea');input.value=link;input.style.position='fixed';input.style.opacity='0';document.body.appendChild(input);input.select();const ok=document.execCommand('copy');input.remove();if(!ok)throw new Error('浏览器不支持复制，请在安全连接下重试。')}
-    resourceMessage.value='分享链接已复制。'
-  }catch(e){resourceError.value=(e as Error).message}finally{resourceBusy.value=false}
+}
+async function searchResources() {
+  const movie = selected.value
+  if (!movie) return
+  const version = ++resourceRequestVersion
+  resourceBusy.value = true
+  resourceError.value = ''
+  resourceItems.value = []
+  resourceSources.value = []
+  resourceTruncated.value = false
+  try {
+    const result = await props.api('/explore/resources', 'POST', {
+      title: movie.title, tmdb_id: movie.id, media_type: movie.kind, year: String(movie.year || '')
+    })
+    if (version === resourceRequestVersion) {
+      resourceItems.value = result.items || []
+      resourceSources.value = result.sources || []
+      resourceTruncated.value = !!result.truncated
+    }
+  } catch (e) {
+    if (version === resourceRequestVersion) resourceError.value = (e as Error).message
+  } finally {
+    if (version === resourceRequestVersion) resourceBusy.value = false
+  }
+}
+async function submitResource(item: ResourceItem, action: ResourceAction) {
+  if (searchOrSubmitBusy() || resourceSubmissions.value[item.key]) return
+  submittingResource.value = true
+  const searchVersion = resourceRequestVersion
+  const actions = {
+    transfer: { label: '转存到 115', path: '/transfer/jobs', description: '' },
+    share: { label: '分享入库', path: '/share/ingest', description: '为该 115 分享生成 STRM，并提交整理。' },
+    offline: { label: '离线下载', path: '/offline/jobs', description: '使用资源入库中已设置的离线下载目录和整理规则。' },
+  }
+  const operation = actions[action]
+  const body: { text: string; target_cid?: string } = { text: item.link }
+  try {
+    if (action === 'transfer') {
+      const target = await loadTransferTarget()
+      if (!target?.target_cid) {
+        if (searchVersion === resourceRequestVersion) {
+          resourceError.value = targetError.value || '请在「资源入库 → 保存目录」设置 115 转存目录。'
+        }
+        return
+      }
+      const label = target.target_label || '所选 115 目录'
+      operation.description = `保存至「${label}」。${target.auto_organize ? '转存核实后自动整理。' : '转存后由手动整理或定时扫描跟进。'}`
+      body.target_cid = String(target.target_cid)
+    }
+    if (searchVersion !== resourceRequestVersion || !resourceDialog.value) return
+    try {
+      await ElMessageBox.confirm(operation.description, operation.label,
+        { confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning' })
+    } catch { return }
+    if (searchVersion !== resourceRequestVersion || !resourceDialog.value) return
+    resourceError.value = ''
+    resourceMessage.value = ''
+    try {
+      const result = await props.api(operation.path, 'POST', body)
+      resourceSubmissions.value[item.key] = 'submitted'
+      if (searchVersion !== resourceRequestVersion) return
+      if (action === 'share') {
+        resourceMessage.value = `分享库新建 ${result.count} 个 STRM。` +
+          (result.job_id ? `整理任务 #${result.job_id} 已入队。` : '')
+        if (result.organize_error) resourceError.value = result.organize_error
+      } else {
+        resourceMessage.value = action === 'offline'
+          ? `离线下载已提交，记录 #${result.submission_id}。`
+          : `转存任务${result.items?.[0]?.id ? ' #' + result.items[0].id : ''}已入队。`
+      }
+    } catch (e) {
+      const rejected = e instanceof ApiError && e.status >= 400 && e.status < 500
+      if (!rejected) resourceSubmissions.value[item.key] = 'uncertain'
+      if (searchVersion === resourceRequestVersion) {
+        resourceError.value = rejected ? e.message
+          : `${operation.label}结果未确认，请先在任务中心核查。${(e as Error).message}`
+      }
+    }
+  } finally {
+    submittingResource.value = false
+  }
+}
+const searchOrSubmitBusy = () => resourceBusy.value || submittingResource.value
+async function copyResource(item: ResourceItem) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(item.link)
+    else {
+      const input = document.createElement('textarea')
+      input.value = item.link
+      input.style.position = 'fixed'
+      input.style.opacity = '0'
+      document.body.appendChild(input)
+      input.select()
+      try {
+        if (!document.execCommand('copy')) throw new Error('浏览器不支持复制，请在安全连接下重试。')
+      } finally { input.remove() }
+    }
+    ElMessage.success('链接已复制')
+  } catch (e) { ElMessage.error((e as Error).message) }
 }
 const perPage=window.innerWidth<640?30:45
 const poster=(p:string)=>p?`https://image.tmdb.org/t/p/w500${p}`:''
@@ -270,23 +311,63 @@ onMounted(async()=>{await loadGenres();await load()})
 
 <el-dialog v-model="resourceDialog" class="discovery-dialog" width="min(880px, 96vw)" :show-close="true">
 <template #header><div class="resource-heading"><h2>{{selected?.title}}</h2><p>{{selected?.kind==='tv'?'剧集':'电影'}} · {{selected?.year||'年份未知'}} · {{selected?.badge||'状态未知'}}</p></div></template>
-<div class="resource-toolbar"><div class="resource-source"><span>资源来源</span><el-select v-model="resourceSource" style="width:140px" :disabled="resourceBusy" @change="searchResources"><el-option label="RE0" value="re0"/><el-option label="观影" value="guanying"/><el-option label="SeedHub" value="seedhub"/></el-select></div><div class="resource-toolbar-actions"><el-button :icon="Refresh" :loading="resourceBusy" @click="searchResources">刷新</el-button><el-button :icon="Setting" @click="resourceDialog=false;router.push({name:'settings',query:{section:'resource'}})">系统设置</el-button></div></div>
+<div class="resource-toolbar">
+  <span class="hint">{{ resourceBusy ? '正在搜索已启用的来源…' : resourceSources.length ? `已搜索 ${resourceSources.length} 个来源` : '聚合搜索' }}</span>
+  <div class="resource-toolbar-actions">
+    <el-button :icon="Refresh" :loading="resourceBusy" :disabled="submittingResource" @click="searchResources">刷新</el-button>
+    <el-button :icon="Setting" @click="resourceDialog=false;router.push({name:'settings',query:{section:'resource'}})">资源来源</el-button>
+  </div>
+</div>
 <el-alert v-if="resourceError" :title="resourceError" type="error" show-icon :closable="false"/>
-<el-alert v-if="resourceTruncated" title="结果较多，仅显示前 100 条；可尝试其他来源或搜索条件。" type="info" show-icon :closable="false"/>
-<el-alert v-if="resourcePartial" title="部分来源查询失败，结果可能不完整。" type="warning" show-icon :closable="false"/>
+<el-alert v-if="resourceTruncated" title="结果较多，仅显示前 100 条。" type="info" show-icon :closable="false"/>
+<el-alert v-if="resourceFailures.length" :title="resourceFailures.map(source => source.name + ' · ' + source.error).join('；')" type="warning" show-icon :closable="false"/>
 <el-alert v-if="resourceMessage" :title="resourceMessage" type="success" show-icon :closable="false"/>
-<div class="target-summary"><div><span class="target-caption">STRIMKEEP 转存目标</span><strong>{{transferTarget?.target_label|| (transferTarget?.target_cid ? '115 目录' : '未设置目标目录')}}</strong><small v-if="transferTarget?.target_cid">ID {{transferTarget.target_cid}} · {{transferTarget.auto_organize?'转存后自动整理':'需手动整理或定时扫描'}}</small><small v-else>{{targetError||'请先在链接转存中选择 115 目录'}}</small></div><el-button v-if="!transferTarget?.target_cid" size="small" @click="resourceDialog=false;router.push('/transfer')">去设置</el-button></div>
-<div class="resource-summary"><div><strong>{{resourceItems.length}}</strong><span> 个候选资源</span></div><div class="resource-filters"><button :class="{active:resourceFilter==='all'}" @click="resourceFilter='all'">全部</button><button :class="{active:resourceFilter==='115'}" @click="resourceFilter='115'">115 网盘</button><button :class="{active:resourceFilter==='ready'}" @click="resourceFilter='ready'">链接就绪</button></div></div>
-<el-skeleton v-if="resourceBusy&&!resourceItems.length" :rows="4" animated/>
-<el-empty v-else-if="!visibleResources.length&&!resourceError" :description="resourceItems.length?'当前筛选下没有资源':'暂未找到资源，试试其他来源'"/>
-<div v-else class="resource-list"><article v-for="(item,index) in visibleResources" :key="item.slug||index" class="resource-card"><div class="resource-card-top"><div class="resource-labels"><span class="source-badge">{{sourceLabel(item.source)}}</span><span class="provider-badge">{{item.provider_label||item.provider||'网盘未知'}}</span><span v-if="item.validate_status==='valid'" class="valid-badge">有效</span></div><span class="resource-cost" :class="{'is-ready':item.share_url}">{{item.share_url?'链接就绪':item.is_unlocked?'已解锁':item.unlock_points!=null?'预计 '+item.unlock_points+' 积分':'费用未知'}}</span></div><h3>{{item.title||selected?.title||'未命名资源'}}</h3><p v-if="resourceRemark(item)" class="resource-remark" :title="resourceRemark(item)">{{resourceRemark(item)}}</p><div class="resource-meta"><span class="publisher-badge">发布者：{{item.sharer||'未知'}}</span><span v-if="item.size">{{item.size}}</span><span v-if="item.release_group">发布组：{{item.release_group}}</span></div><div class="resource-tags"><span v-for="tag in resourceTags(item)" :key="String(tag)">{{tag}}</span></div><details v-if="resourceDetails(item).length" class="resource-detail"><summary>资源详情</summary><dl><template v-for="row in resourceDetails(item)" :key="row[0]"><dt>{{row[0]}}</dt><dd>{{row[1]}}</dd></template></dl></details><div class="resource-card-actions"><span v-if="item.resolveUncertain" class="resource-note">解锁结果待核查</span><span v-else-if="item.transferUncertain" class="resource-note">转存结果待核查</span><span v-else-if="item.shareUncertain" class="resource-note">分享入库结果待核查</span><span v-else-if="item.transferSubmitted" class="resource-note">已入队，查看任务中心</span><span v-else-if="item.shareSubmitted" class="resource-note">已入分享库，查看任务中心</span><span v-else-if="item.provider!=='115'" class="resource-note">当前仅支持 115 转存</span><span v-else-if="!canTransfer(item)" class="resource-note">请到来源获取链接</span><span v-else class="resource-note">{{item.share_url?'链接就绪':'转存前确认积分'}}</span><div class="resource-buttons" v-if="canTransfer(item)"><el-button size="small" :disabled="resourceBusy||item.resolveUncertain" @click="copyResource(item)">复制链接</el-button><el-button size="small" :disabled="resourceBusy||item.resolveUncertain||item.shareUncertain||item.shareSubmitted||item.transferSubmitted" @click="shareStrmResource(item)">分享入库</el-button><el-button type="primary" size="small" :disabled="resourceBusy||!transferTarget?.target_cid||item.resolveUncertain||item.transferUncertain||item.transferSubmitted" @click="transferResource(item)">转存到 115</el-button></div></div></article></div>
-<p class="resource-footnote">获取链接可能消耗积分；转存和整理状态可在任务中心查看。</p>
+<div class="target-summary">
+  <div><span class="target-caption">115 转存目录</span><strong>{{ transferTarget?.target_label || (transferTarget?.target_cid ? '已设置' : '未设置') }}</strong>
+    <small v-if="transferTarget?.target_cid">{{ transferTarget.auto_organize ? '转存后自动整理' : '手动整理或定时扫描' }}</small>
+    <small v-else-if="targetError">{{ targetError }}</small>
+  </div>
+  <el-button v-if="!transferTarget?.target_cid" size="small" @click="resourceDialog=false;router.push('/transfer')">去设置</el-button>
+</div>
+<div class="resource-summary">
+  <div><strong>{{ resourceItems.length }}</strong><span> 个资源</span></div>
+  <div class="resource-filters">
+    <button :class="{active:resourceFilter==='all'}" @click="resourceFilter='all'">全部</button>
+    <button :class="{active:resourceFilter==='share'}" @click="resourceFilter='share'">115 分享</button>
+    <button :class="{active:resourceFilter==='offline'}" @click="resourceFilter='offline'">磁力 / ED2K</button>
+  </div>
+</div>
+<el-skeleton v-if="resourceBusy" :rows="4" animated/>
+<el-empty v-else-if="!visibleResources.length && !resourceError"
+  :description="resourceItems.length ? '当前筛选下没有资源' : resourceFailures.length === resourceSources.length && resourceFailures.length ? '所有来源查询失败' : '暂未找到资源'"/>
+<div v-else class="resource-list">
+  <article v-for="item in visibleResources" :key="item.key" class="resource-card">
+    <div class="resource-labels">
+      <span v-for="name in item.source_names" :key="name" class="source-badge">{{ name }}</span>
+      <span>{{ item.provider_label }}</span>
+    </div>
+    <h3>{{ item.title }}</h3>
+    <p v-if="item.remark && item.remark !== item.title" class="resource-remark" :title="item.remark">{{ item.remark }}</p>
+    <span v-if="item.published_at" class="resource-meta">{{ item.published_at }}</span>
+    <div class="resource-card-actions">
+      <span v-if="resourceSubmissions[item.key]" class="resource-note">{{ resourceSubmissions[item.key] === 'submitted' ? '已提交 · 查看任务中心' : '结果需核查' }}</span>
+      <div class="resource-buttons">
+        <el-button size="small" @click="copyResource(item)">复制链接</el-button>
+        <template v-if="item.link_type === 'share'">
+          <el-button size="small" :disabled="searchOrSubmitBusy() || !!resourceSubmissions[item.key]" @click="submitResource(item, 'share')">分享入库</el-button>
+          <el-button type="primary" size="small" :disabled="searchOrSubmitBusy() || !transferTarget?.target_cid || !!resourceSubmissions[item.key]" @click="submitResource(item, 'transfer')">转存到 115</el-button>
+        </template>
+        <el-button v-else type="primary" size="small" :disabled="searchOrSubmitBusy() || !!resourceSubmissions[item.key]" @click="submitResource(item, 'offline')">离线下载</el-button>
+      </div>
+    </div>
+  </article>
+</div>
 </el-dialog>
 </template>
 <style scoped>
 :global(.discovery-dialog){margin:4vh auto !important;max-height:92vh;display:flex;flex-direction:column}:global(.discovery-dialog .el-dialog__body){min-height:0;overflow:auto}
 
-.target-summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 13px;border:1px solid var(--el-border-color-lighter);background:var(--el-fill-color-light);border-radius:10px}.target-summary>div{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 10px}.target-caption{font-size:10px;letter-spacing:.06em;color:var(--el-color-primary);font-weight:700}.target-summary strong{font-size:13px}.target-summary small{font-size:12px;color:var(--el-text-color-secondary)}.publisher-badge{color:var(--el-color-primary);font-weight:600}.resource-buttons{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.resource-buttons :deep(.el-button + .el-button){margin-left:0}.resource-heading{padding-right:32px}.resource-heading h2{font-size:22px;margin:5px 0 4px;line-height:1.3}.resource-heading p{margin:0;color:var(--el-text-color-secondary);font-size:13px}.resource-toolbar,.resource-summary,.resource-card-top,.resource-card-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}.resource-toolbar{padding:4px 0 18px}.resource-source,.resource-toolbar-actions{display:flex;align-items:center;gap:10px}.resource-source>span{font-size:13px;color:var(--el-text-color-secondary)}.resource-summary{padding:17px 0 12px;border-top:1px solid var(--el-border-color-lighter);font-size:13px;color:var(--el-text-color-secondary)}.resource-summary strong{font-size:20px;color:var(--el-text-color-primary)}.resource-filters{display:flex;gap:4px;background:var(--el-fill-color-light);padding:3px;border-radius:9px}.resource-filters button{border:0;background:transparent;color:var(--el-text-color-secondary);font-size:12px;padding:6px 9px;border-radius:7px;cursor:pointer}.resource-filters button.active{background:var(--el-bg-color);color:var(--el-color-primary);box-shadow:0 1px 4px #0002}.resource-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;max-height:52vh;overflow:auto;padding:1px 4px 4px 1px}.resource-card{border:1px solid var(--el-border-color-lighter);background:var(--el-fill-color-blank);border-radius:12px;padding:14px;min-width:0;display:flex;flex-direction:column;gap:10px}.resource-card h3{font-size:14px;line-height:1.5;margin:0;overflow-wrap:anywhere}.resource-labels,.resource-tags,.resource-meta{display:flex;flex-wrap:wrap;gap:6px}.resource-labels span,.resource-tags span{font-size:11px;padding:3px 7px;border-radius:5px;background:var(--el-fill-color-light);color:var(--el-text-color-regular)}.resource-labels .source-badge{color:var(--el-color-primary);background:var(--el-color-primary-light-9);font-weight:700}.resource-labels .valid-badge{color:var(--el-color-success)}.resource-cost{white-space:nowrap;font-size:12px;color:var(--el-color-warning)}.resource-cost.is-ready{color:var(--el-color-success)}.resource-meta{font-size:12px;color:var(--el-text-color-secondary)}.resource-card-actions{margin-top:auto;padding-top:10px;border-top:1px solid var(--el-border-color-lighter)}.resource-note,.resource-footnote{font-size:12px;color:var(--el-text-color-secondary);line-height:1.5}.resource-footnote{margin:14px 0 0}.resource-remark{margin:0;font-size:12px;line-height:1.6;color:var(--el-text-color-regular);overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.resource-detail{font-size:12px;color:var(--el-text-color-secondary)}.resource-detail summary{cursor:pointer;color:var(--el-color-primary);font-weight:600;font-size:12px}.resource-detail dl{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;margin:8px 0 0}.resource-detail dt{color:var(--el-text-color-secondary);white-space:nowrap}.resource-detail dd{margin:0;color:var(--el-text-color-regular);overflow-wrap:anywhere}.badge-unknown{background:rgba(130,108,48,.9)}
+.target-summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 13px;border:1px solid var(--el-border-color-lighter);background:var(--el-fill-color-light);border-radius:10px}.target-summary>div{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 10px}.target-caption{font-size:10px;letter-spacing:.06em;color:var(--el-color-primary);font-weight:700}.target-summary strong{font-size:13px}.target-summary small{font-size:12px;color:var(--el-text-color-secondary)}.resource-buttons{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.resource-buttons :deep(.el-button + .el-button){margin-left:0}.resource-heading{padding-right:32px}.resource-heading h2{font-size:22px;margin:5px 0 4px;line-height:1.3}.resource-heading p{margin:0;color:var(--el-text-color-secondary);font-size:13px}.resource-toolbar,.resource-summary,.resource-card-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}.resource-toolbar{padding:4px 0 18px}.resource-toolbar-actions{display:flex;align-items:center;gap:10px}.resource-summary{padding:17px 0 12px;border-top:1px solid var(--el-border-color-lighter);font-size:13px;color:var(--el-text-color-secondary)}.resource-summary strong{font-size:20px;color:var(--el-text-color-primary)}.resource-filters{display:flex;gap:4px;background:var(--el-fill-color-light);padding:3px;border-radius:9px}.resource-filters button{border:0;background:transparent;color:var(--el-text-color-secondary);font-size:12px;padding:6px 9px;border-radius:7px;cursor:pointer}.resource-filters button.active{background:var(--el-bg-color);color:var(--el-color-primary);box-shadow:0 1px 4px #0002}.resource-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;max-height:52vh;overflow:auto;padding:1px 4px 4px 1px}.resource-card{border:1px solid var(--el-border-color-lighter);background:var(--el-fill-color-blank);border-radius:12px;padding:14px;min-width:0;display:flex;flex-direction:column;gap:10px}.resource-card h3{font-size:14px;line-height:1.5;margin:0;overflow-wrap:anywhere}.resource-labels,.resource-meta{display:flex;flex-wrap:wrap;gap:6px}.resource-labels span{font-size:11px;padding:3px 7px;border-radius:5px;background:var(--el-fill-color-light);color:var(--el-text-color-regular)}.resource-labels .source-badge{color:var(--el-color-primary);background:var(--el-color-primary-light-9);font-weight:700}.resource-meta{font-size:12px;color:var(--el-text-color-secondary)}.resource-card-actions{margin-top:auto;padding-top:10px;border-top:1px solid var(--el-border-color-lighter)}.resource-note{font-size:12px;color:var(--el-text-color-secondary)}.resource-remark{margin:0;font-size:12px;line-height:1.6;color:var(--el-text-color-regular);overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.badge-unknown{background:rgba(130,108,48,.9)}
 @media(max-width:640px){.resource-list{grid-template-columns:1fr;max-height:48vh}.resource-toolbar,.resource-summary,.resource-card-actions{align-items:flex-start;flex-wrap:wrap}.resource-heading h2{font-size:19px}.resource-filters{margin-left:auto}}
 .kind-switch{display:flex;gap:0;border:1px solid var(--el-border-color,#dcdfe6);border-radius:8px;overflow:hidden}
 .kind-switch button{border:0;background:none;padding:8px 20px;cursor:pointer;font-size:14px;color:var(--el-text-color-regular)}
@@ -343,7 +424,7 @@ onMounted(async()=>{await loadGenres();await load()})
 .page-heading{align-items:center}.page-heading h1{font-size:25px}.kind-switch{border-radius:9px}.kind-switch button{border-radius:6px}
 .search-input{border-radius:8px}.search-row :deep(.el-button){border-radius:8px}.filter-block{border-radius:10px;padding:15px 18px;gap:11px}.frow{align-items:center}.flabel{padding-top:0}.chip{border-radius:7px;padding:6px 11px}.chip:hover:not(.active){background:color-mix(in srgb,var(--accent) 9%,var(--surface));border-color:transparent}
 .explore-grid{gap:14px}.explore-card{border-radius:9px;transition:transform .16s,box-shadow .16s}.poster-image{border-radius:8px 8px 0 0}.explore-info{padding:10px}.explore-info h3{line-height:1.45}.explore-info :deep(.el-button){height:30px;margin-top:9px;border-radius:6px}
-.resource-heading h2{letter-spacing:-.35px}.target-summary{border-radius:8px;background:color-mix(in srgb,var(--accent) 5%,var(--surface));border-color:var(--line)}.resource-card{border-color:var(--line);border-radius:9px;padding:16px;box-shadow:0 3px 12px rgba(32,55,85,.025)}.resource-card h3{font-size:15px}.publisher-badge{padding:3px 7px;background:var(--el-color-primary-light-9);border-radius:5px}.resource-card-actions{gap:8px}.resource-buttons :deep(.el-button){border-radius:7px}
+.resource-heading h2{letter-spacing:-.35px}.target-summary{border-radius:8px;background:color-mix(in srgb,var(--accent) 5%,var(--surface));border-color:var(--line)}.resource-card{border-color:var(--line);border-radius:9px;padding:16px;box-shadow:0 3px 12px rgba(32,55,85,.025)}.resource-card h3{font-size:15px}.resource-card-actions{gap:8px}.resource-buttons :deep(.el-button){border-radius:7px}
 @media(max-width:640px){.page-heading h1{font-size:23px}.filter-block{padding:13px;gap:12px}.frow{align-items:flex-start}.chip{padding:6px 9px}.explore-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.explore-info{padding:8px 7px}.explore-info h3{font-size:12px}.resource-card{padding:13px}.resource-toolbar-actions{flex-wrap:wrap}.resource-buttons{width:100%;justify-content:stretch}.resource-buttons :deep(.el-button){flex:1;min-width:0}}
 /* Keep a single scrolling surface in the resource dialog. */
 .resource-list{max-height:none;overflow:visible;padding:1px}

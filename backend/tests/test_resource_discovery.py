@@ -1,99 +1,160 @@
+import json
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+
 from strimkeep.main import create_app
-from strimkeep.resource_discovery import clean_item, validate_base
+from strimkeep.resource_discovery import merge_results, resource_items, validate_base
+from strimkeep.store import Store
 from test_app import FakeCloud
 
 
-def test_base_url_and_direct_link_safety():
-    assert validate_base('http://192.0.2.10:12366/') == 'http://192.0.2.10:12366'
-    for value in ('http://example.org', 'http://u:p@192.0.2.10', 'https://example.org/path', 'file:///tmp/x'):
-        with pytest.raises(ValueError): validate_base(value)
-    locked=clean_item({'title':'locked','is_unlocked':False,'points_known':False,'unlock_points':0,'sharer':'COKEMV'})
-    assert locked['sharer']=='COKEMV'
-    assert locked['share_url'] == '' and locked['unlock_points'] is None
-    assert clean_item({'provider':'115','message_text':'https://115.com/s/abc123 提取码: abcd'})['share_url'] == 'https://115.com/s/abc123?password=abcd'
-    assert clean_item({'provider':'115','message_text':'https://115.com/s/one https://115.com/s/two'})['share_url'] == ''
-    assert clean_item({'provider':'123','message_text':'https://115.com/s/abc123'})['share_url'] == ''
+def test_search_normalizes_links_and_keeps_their_origins():
+    assert validate_base('http://192.168.1.10:8888/') == 'http://192.168.1.10:8888'
+    for value in ('', 'http://example.org', 'http://u:p@192.168.1.10', 'https://example.org/path',
+                  'https://example.org\\@192.168.1.10', 'http://169.254.169.254', 'file:///tmp/x'):
+        with pytest.raises(ValueError):
+            validate_base(value)
+    tg = resource_items(
+        'https://115cdn.com/s/abc123 提取码：abcd\nhttps://example.org/details\nmagnet:?dn=movie',
+        '示例片名', 'TG')
+    site = resource_items('https://115.com/s/abc123', '示例片名', '盘搜')
+    magnet = resource_items('magnet:?xt=urn:btih:' + 'A' * 32, '示例', '盘搜')
+    same_magnet = resource_items('magnet:?xt=urn:btih:' + '0' * 40, '示例', '另一个站')
+    items, truncated = merge_results([site + magnet, tg + same_magnet])
+    assert not truncated
+    assert [(item['key'], item['source_names']) for item in items] == [
+        ('share:abc123', ['盘搜', 'TG']), ('magnet:' + '0' * 40, ['盘搜', '另一个站'])]
+    assert items[0]['link'] == 'https://115.com/s/abc123?password=abcd'
 
 
+def test_aggregation_and_legacy_token_removal(tmp_path, monkeypatch):
+    monkeypatch.setenv('ADMIN_USERNAME', 'admin')
+    monkeypatch.setenv('ADMIN_PASSWORD', 'test-password-1234')
+    data = tmp_path / 'data'
+    previous = Store(data, 'admin', 'test-password-1234')
+    previous.set_many({'resource_discovery_base': 'https://legacy.example',
+                       'resource_discovery_token': 'legacy-token'})
+    previous.close()
+    app = create_app(data, tmp_path / 'strm', FakeCloud)
+    seen = []
 
-def test_clean_item_syncs_remark_and_all_detail_fields():
-    """影视探索的资源卡要靠备注判断「这个版本是什么」，字段必须整份同步过去。"""
-    item = {
-        'title': '流人 (2022)', 'provider': '115', 'source': 're0', 'slug': 'x1',
-        'remark': 'S06 4K ATVP WEB-DL DV&HDR DDP5.1 内封简繁+简/繁英双语字幕[SCDIY@FGTWeb] 修复E01后续缺失字幕的问题',
-        'message_text': 'S06 4K ATVP WEB-DL DV&HDR DDP5.1', 'published_at': '2026-09-16 15:55:50',
-        'quality': 'WEB-DL', 'resolution': '2160p', 'size': '54.31GB', 'sharer': '山茶',
-        'link_type': 'share', 'validate_status': 'valid', 'validate_message': '链接可用',
-        'validation_label': '有效', 'validation_known': True, 'is_official': False,
-        'dolby_vision': True, 'channel_title': '',
-        'resolution_tags': ['4K'], 'subtitle_types': ['内封'], 'subtitle_languages': ['简中', '简英'],
-        'source_tags': ['WEB-DL/WEBRip'], 'supported_targets': ['115'],
-        'resource_specification': '2160p.Apple TV+.WEB-DL.DoVi HDR.DDP 5.1-SCDIY@FGTWeb',
-        'resource_specs': {'resource_pix': '2160p', 'web_source': 'Apple TV+',
-                           'resource_team': 'SCDIY@FGTWeb'},
-        'episode': {'season_num': 6, 'episode_num': 1, 'end_episode_num': None,
-                    'kind': 'episode_marker', 'confidence': 'high'},
-        'unlocked_users_count': 249, 'unlocked_users_known': True,
-        'is_unlocked': True, 'points_known': True, 'unlock_points': 0,
-    }
-    clean = clean_item(item)
-    assert clean['remark'] == item['remark']
-    assert clean['message_text'] == item['message_text']
-    assert clean['published_at'] == '2026-09-16 15:55:50'
-    assert clean['subtitle_types'] == ['内封'] and clean['resolution_tags'] == ['4K']
-    assert clean['source_tags'] == ['WEB-DL/WEBRip'] and clean['supported_targets'] == ['115']
-    assert clean['resource_specification'].endswith('-SCDIY@FGTWeb')
-    assert clean['resource_specs']['resource_team'] == 'SCDIY@FGTWeb'
-    assert clean['episode'] == {'season_num': 6, 'episode_num': 1,
-                               'kind': 'episode_marker', 'confidence': 'high'}
-    assert clean['unlocked_users_count'] == 249 and clean['unlocked_users_known'] is True
-    assert clean['dolby_vision'] is True and clean['is_official'] is False
-    assert clean['validation_label'] == '有效' and clean['validate_message'] == '链接可用'
-    # 脏数据仍然要拦：超长裁剪、异常集号与人数丢弃
-    dirty = clean_item({'remark': 'x' * 500, 'resource_specs': {'resource_pix': 'y' * 200},
-                        'episode': {'season_num': -1, 'episode_num': 99999},
-                        'unlocked_users_count': -3})
-    assert len(dirty['remark']) == 300 and len(dirty['resource_specs']['resource_pix']) == 80
-    assert dirty['episode'] == {} and dirty['unlocked_users_count'] is None
-
-def test_config_search_and_auth_boundaries(tmp_path, monkeypatch):
-    monkeypatch.setenv('ADMIN_USERNAME', 'admin'); monkeypatch.setenv('ADMIN_PASSWORD', 'test-password-1234')
-    app = create_app(tmp_path/'data', tmp_path/'strm', FakeCloud)
-    seen = []; state = {'redirect':False}
     def handler(request):
-        seen.append((request.method, request.url.path, request.headers.get('authorization')))
-        if state['redirect']:
-            return httpx.Response(302, headers={'Location':'https://external.invalid/receive'})
-        if request.url.path.endswith('/copy-link'):
-            return httpx.Response(200, json={'success':True,'data':{'share_url':'https://115.com/s/abc123?password=abcd'}})
-        return httpx.Response(200, json={'success':True,'data':{'items':[{'title':'result', 'provider':'115', 'message_text':'https://115.com/s/abc123', 'is_unlocked':True}], 'errors':[{'source':'other'}]}})
+        seen.append(request.url.host)
+        assert request.url.path == '/api/search'
+        assert 'authorization' not in request.headers
+        assert json.loads(request.content) == {
+            'kw': '示例片名', 'res': 'merge', 'cloud_types': ['115', 'magnet', 'ed2k']}
+        if request.url.host == 'broken.example':
+            return httpx.Response(302, headers={'Location': 'https://elsewhere.example'})
+        return httpx.Response(200, json={'code': 0, 'data': {'total': 2, 'merged_by_type': {
+            '115': [{'url': 'https://115.com/s/example', 'password': 'abcd', 'note': '4K 版本'}],
+            'magnet': [{'url': 'magnet:?xt=urn:btih:' + 'a' * 40}],
+        }}})
+
+    async def tg_search(name, title):
+        assert (name, title) == ('movies_example', '示例片名')
+        return [{'text': '示例片名\n1080p 版本', 'links': ['https://115.com/s/example'],
+                 'published_at': '2026-11-26T10:00:00+00:00'}]
+
+    settings = '/api/v1/explore/resource-config'
+    search = '/api/v1/explore/resources'
+    body = {'title': '示例片名', 'tmdb_id': 42, 'media_type': 'movie', 'year': '2026'}
     with TestClient(app) as client:
-        assert client.get('/api/v1/explore/resource-config').status_code == 401
-        login=client.post('/api/v1/auth/login',json={'username':'admin','password':'test-password-1234'})
-        client.headers['X-CSRF-Token']=login.json()['csrf']
-        cfg=client.put('/api/v1/explore/resource-config',json={'base_url':'http://127.0.0.1:12366','token':'secret-token'})
-        assert cfg.status_code == 200 and cfg.json()['token_configured'] and 'secret-token' not in cfg.text
-        previous=app.state.http
-        app.state.http=httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        body={'title':'Example','tmdb_id':42,'media_type':'movie','year':'2026','sources':['re0']}
-        result=client.post('/api/v1/explore/resources',json=body)
-        assert result.status_code == 200 and result.json()['partial'] is True
-        assert result.json()['items'][0]['share_url']=='https://115.com/s/abc123'
-        assert seen==[('POST','/api/media/resources/search','Bearer secret-token')]
-        assert client.post('/api/v1/explore/resources',json={**body,'sources':['invalid']}).status_code==422
-        resolved=client.post('/api/v1/explore/resources/resolve',json={'source':'re0','provider':'115','slug':'candidate-1'})
-        assert resolved.status_code==200 and resolved.json()['share_url'].endswith('abc123?password=abcd')
-        assert client.post('/api/v1/explore/resources/resolve',json={'source':'re0','provider':'other','slug':'candidate-1'}).status_code==422
-        state['redirect']=True
-        assert client.post('/api/v1/explore/resources',json=body).status_code==502
-        assert len(seen)==3 and [path for _,path,_ in seen]==['/api/media/resources/search','/api/media/resources/copy-link','/api/media/resources/search']
-        assert client.post('/api/v1/explore/resources/resolve',json={'source':'re0','provider':'115','slug':'candidate-1'}).status_code==502
-        assert len(seen)==4
-        changed=client.put('/api/v1/explore/resource-config',json={'base_url':'http://127.0.0.1:12367'})
-        assert not changed.json()['token_configured']
-        assert client.post('/api/v1/explore/resources',json=body).status_code==409
-        import asyncio
-        asyncio.run(app.state.http.aclose()); app.state.http=previous
+        assert client.get(settings).status_code == 401
+        login = client.post('/api/v1/auth/login', json={'username': 'admin', 'password': 'test-password-1234'})
+        client.headers['X-CSRF-Token'] = login.json()['csrf']
+        assert client.post(search, json=body).status_code == 409
+        assert app.state.store.get('resource_discovery_token', None) is None
+        assert app.state.store.get('resource_discovery_base', None) is None
+        app.state.store.set_many({'channel_monitor': {'channels': [{'name': 'movies_example'}]}})
+        monkeypatch.setattr(app.state.organizer.telegram, 'search_channel', tg_search)
+        assert client.put(settings, json={'telegram_channels': ['unknown_channel']}).status_code == 422
+        sites = [
+            {'name': '盘搜', 'base_url': 'https://search.example'},
+            {'name': '不可用', 'base_url': 'https://broken.example'},
+            {'name': '已停用', 'base_url': 'https://disabled.example', 'enabled': False},
+        ]
+        config = client.put(settings, json={'sites': sites, 'telegram_channels': ['movies_example']})
+        assert config.status_code == 200
+        assert 'legacy' not in config.text
+        assert config.json()['sites'][2]['enabled'] is False
+        assert client.put(settings, json={'sites': [sites[0], {**sites[0], 'name': '不同名称'}]}).status_code == 422
+        original_http = app.state.http
+        mock_http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        app.state.http = mock_http
+        try:
+            response = client.post(search, json=body)
+            assert response.status_code == 200
+            result = response.json()
+            assert result['items'][0]['source_names'] == ['盘搜', 'movies_example']
+            assert result['items'][0]['link'] == 'https://115.com/s/example?password=abcd'
+            assert result['items'][1]['link_type'] == 'magnet'
+            assert 'HTTP 302' in result['sources'][1]['error']
+            assert set(seen) == {'search.example', 'broken.example'}
+        finally:
+            app.state.http = original_http
+            client.portal.call(mock_http.aclose)
+        assert client.post(search + '/resolve', json={}).status_code in (404, 405)
+
+
+
+def test_removed_site_credentials_are_cleaned_without_losing_torznab(tmp_path, monkeypatch):
+    monkeypatch.setenv('ADMIN_USERNAME', 'admin')
+    monkeypatch.setenv('ADMIN_PASSWORD', 'test-password-1234')
+    data = tmp_path / 'data'
+    site = {'kind': 'torznab', 'name': 'Tracker', 'base_url': 'https://tracker.example/1/api'}
+    previous = Store(data, 'admin', 'test-password-1234')
+    previous.set_many({'resource_search_sources': {
+        'sites': [{**site, 'api_key': 'tracker-key'}],
+        're0': {'enabled': True, 'client_id': 'retired-app', 'app_secret': 'retired-secret',
+                'access_token': 'retired-token', 'refresh_token': 'retired-refresh'},
+    }})
+    previous.close()
+    app = create_app(data, tmp_path / 'strm', FakeCloud)
+    seen = []
+    magnet = 'magnet:?xt=urn:btih:' + 'a' * 40
+
+    def handler(request):
+        seen.append((request.method, request.url.host, request.url.path))
+        assert request.url.params['apikey'] == 'tracker-key'
+        assert request.url.params['q'] == 'Example'
+        assert request.url.params['t'] == 'search'
+        assert 'authorization' not in request.headers
+        xml = f"""<rss xmlns:torznab="http://torznab.com/schemas/2015/feed">
+          <channel>
+            <item><title>Torrent with magnet</title>
+              <torznab:attr name="magneturl" value="{magnet}"/>
+            </item>
+            <item><title>Torrent without magnet</title>
+              <enclosure url="https://tracker.example/dl?secret=private" type="application/x-bittorrent"/>
+            </item>
+          </channel>
+        </rss>"""
+        return httpx.Response(200, text=xml)
+
+    with TestClient(app) as client:
+        login = client.post('/api/v1/auth/login', json={'username': 'admin', 'password': 'test-password-1234'})
+        client.headers['X-CSRF-Token'] = login.json()['csrf']
+        settings = '/api/v1/explore/resource-config'
+        assert 're0' not in app.state.store.get('resource_search_sources')
+        config = client.get(settings)
+        assert config.json()['sites'][0]['api_key_configured'] is True
+        assert 're0' not in config.json() and 'tracker-key' not in config.text
+        assert client.put(settings, json={'sites': [site]}).status_code == 200
+        assert client.post('/api/v1/explore/re0/authorize', json={}).status_code in (404, 405)
+        original_http = app.state.http
+        mock_http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        app.state.http = mock_http
+        try:
+            response = client.post('/api/v1/explore/resources',
+                                   json={'title': 'Example', 'tmdb_id': 42, 'media_type': 'tv'})
+        finally:
+            app.state.http = original_http
+            client.portal.call(mock_http.aclose)
+        assert response.status_code == 200
+        [torrent] = response.json()['items']
+        assert torrent['link'] == magnet
+        assert 'private' not in response.text
+        assert seen == [('GET', 'tracker.example', '/1/api')]

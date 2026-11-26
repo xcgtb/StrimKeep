@@ -75,10 +75,43 @@ async function testTg(){await run(async()=>{ElMessage((await props.api('/notific
 async function saveAppearance(){await run(async()=>{requireLoaded('appearance');const c=(await props.api('/console/config')).config;appearance.value=(await props.api('/console/config','PUT',{...c,theme:appearance.value.theme,background_url:appearance.value.background_url,background_opacity:appearance.value.background_opacity})).config;emit('appearance',appearance.value);ElMessage.success('外观已保存')})}
 async function saveThrottle(){await run(async()=>{requireLoaded('services');mask.value=await props.api('/settings','PUT',{cloud_throttle:throttle.value});ElMessage.success('请求节奏已保存')})}
 async function saveNetwork(){await run(async()=>{requireLoaded('network');networkMask.value=await props.api('/network/config','PUT',network.value);network.value.proxy_url='';ElMessage.success('网络代理已保存并生效')})}
-const resource=ref({base_url:'',token:''}),resourceConfigured=ref(false)
-async function loadResource(){try{const r=await props.api('/explore/resource-config');resource.value.base_url=r.base_url||'';resource.value.token='';resourceConfigured.value=!!r.token_configured;loaded.value.resource=true}catch(e){loaded.value.resource=false;error.value=(e as Error).message}}
-async function saveResource(){await run(async()=>{requireLoaded('resource');const r=await props.api('/explore/resource-config','PUT',resource.value);resource.value.token='';resourceConfigured.value=!!r.token_configured;ElMessage.success('资源来源已保存')})}
-async function clearResource(){await run(async()=>{requireLoaded('resource');const r=await props.api('/explore/resource-config','PUT',{base_url:resource.value.base_url,clear_token:true});resource.value.token='';resourceConfigured.value=!!r.token_configured;ElMessage.success('已清除本地令牌')})}
+type ResourceSite = { kind: 'pansou' | 'torznab'; name: string; base_url: string; enabled: boolean; api_key: string }
+type ResourceChannel = { name: string; title: string }
+const resource = ref<{ sites: ResourceSite[]; telegram_channels: string[] }>({sites: [], telegram_channels: []})
+const savedSiteKeys = ref<string[]>([])
+const resourceChannels = ref<ResourceChannel[]>([])
+const resourceTelegramConnected = ref(false)
+function updateResource(data: any) {
+  const sites = data.sites || []
+  resource.value = {
+    sites: sites.map((site: ResourceSite) => ({
+      kind: site.kind || 'pansou', name: site.name, base_url: site.base_url, enabled: site.enabled, api_key: ''
+    })),
+    telegram_channels: data.telegram_channels || [],
+  }
+  savedSiteKeys.value = sites.filter((site: any) => site.api_key_configured).map((site: ResourceSite) => site.base_url)
+  resourceChannels.value = data.channels || []
+  resourceTelegramConnected.value = !!data.telegram_logged_in
+}
+async function loadResource() {
+  try {
+    updateResource(await props.api('/explore/resource-config'))
+    loaded.value.resource = true
+  } catch (e) {
+    loaded.value.resource = false
+    error.value = (e as Error).message
+  }
+}
+async function saveResource() {
+  await run(async () => {
+    requireLoaded('resource')
+    updateResource(await props.api('/explore/resource-config', 'PUT', resource.value))
+    ElMessage.success('资源来源已保存')
+  })
+}
+function addResourceSite() {
+  resource.value.sites.push({kind: 'pansou', name: '', base_url: '', enabled: true, api_key: ''})
+}
 watch(tab,value=>{if(value==='resource'&&!loaded.value.resource)void loadResource();if(value==='telegram'){if(!transferBotAll.value)void loadTransferBot();if(!loaded.value.commands)void loadBotCommands()}})
 watch(()=>route.query.section,value=>{if(value==='resource'||value==='telegram'||value==='emby')tab.value=value})
 watch(()=>props.tab,value=>{if(value)tab.value=value})
@@ -97,7 +130,48 @@ onMounted(()=>{if(tab.value==='resource')void loadResource();run(async()=>{
 </script>
 <template><PageHeader title="系统设置"/><el-alert v-if="error" :title="error" type="error"/><el-tabs v-model="tab" class="settings-tabs workspace-tabs"><el-tab-pane label="服务连接" name="services"/><el-tab-pane label="资源来源" name="resource"/><el-tab-pane label="Telegram 通知" name="telegram"/><el-tab-pane label="网络代理" name="network"/><el-tab-pane label="API 与备份" name="system"/><el-tab-pane label="外观" name="appearance"/><el-tab-pane label="侧边栏" name="sidebar"/></el-tabs>
 <template v-if="tab==='services'"><section class="panel settings-panel"><h2>TMDB</h2><el-form label-position="top" :disabled="busy"><el-form-item label="TMDB API Key"><el-input v-model="connections.tmdb_key" type="password" autocomplete="new-password" show-password :placeholder="mask.tmdb_key_configured?'已保存，留空保留原值':'填写 API Key'"/></el-form-item></el-form><el-button :loading="busy" @click="check('tmdb')">检查连接</el-button><span class="hint">{{checks.tmdb}}</span></section><section class="panel settings-panel"><h2>115 请求节奏</h2><el-form label-position="top" :disabled="busy"><el-form-item label="读接口最小间隔（毫秒）"><el-input-number v-model="throttle.read_ms" :min="0" :max="5000" :step="50"/></el-form-item><el-form-item label="写接口最小间隔（移动/重命名/删除，毫秒）"><el-input-number v-model="throttle.write_ms" :min="0" :max="15000" :step="500"/></el-form-item></el-form><p class="hint">后台请求按设置的读写间隔执行；115 返回限流时会自动放慢并冷却。批量整理不再按固定写入次数额外暂停。</p><el-button :loading="busy" @click="saveThrottle">保存请求节奏</el-button></section><div class="save-bar"><el-button type="primary" :loading="busy" @click="saveConnections">保存服务连接</el-button></div></template>
-<section v-if="tab==='resource'" class="panel settings-panel"><h2> 资源来源</h2><p class="hint">用于影视探索检索资源；转存目标在「资源入库 → 保存目录」里单独设置（留空则跟随 Web 转存目录）。</p><el-form label-position="top" :disabled="busy"><el-form-item label=" 服务地址"><el-input v-model="resource.base_url" placeholder="http://192.0.2.10:12366"/></el-form-item><el-form-item label="OpenAPI 令牌"><el-input v-model="resource.token" type="password" show-password autocomplete="new-password" :placeholder="resourceConfigured?'已加密保存，地址不变时留空保留原值':'填写  OpenAPI 令牌'"/></el-form-item></el-form><p class="hint">更换服务地址时需要重新填写令牌。获取需要积分的资源前会单独提示确认。</p><div class="button-row"><el-button type="primary" :loading="busy" @click="saveResource">保存资源来源</el-button><el-button v-if="resourceConfigured" :disabled="busy" @click="clearResource">清除本地令牌</el-button></div></section>
+<section v-if="tab==='resource'" class="panel settings-panel">
+  <h2>资源来源</h2>
+  <el-form label-position="top" :disabled="busy || !loaded.resource">
+    <el-form-item label="Telegram 搜索频道">
+      <el-select v-model="resource.telegram_channels" multiple filterable clearable :multiple-limit="8"
+        :placeholder="resourceChannels.length ? '选择要搜索的频道' : '请先在频道监控添加频道'" style="width:100%">
+        <el-option v-for="channel in resourceChannels" :key="channel.name"
+          :label="channel.title" :value="channel.name"/>
+      </el-select>
+    </el-form-item>
+    <p v-if="!resourceTelegramConnected" class="hint">Telegram 搜索需要先在「频道监控」登录用户会话。</p>
+    <h3>搜索站点</h3>
+    <template v-for="(site, index) in resource.sites" :key="index">
+      <div>
+        <el-form-item label="类型">
+          <el-select v-model="site.kind" @change="site.api_key=''">
+            <el-option label="PanSou" value="pansou"/>
+            <el-option label="Torznab" value="torznab"/>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="站点名称">
+          <el-input v-model="site.name" maxlength="60"/>
+        </el-form-item>
+        <el-form-item :label="site.kind==='torznab' ? 'Torznab API 地址' : 'PanSou 服务地址'">
+          <el-input v-model="site.base_url" maxlength="300"/>
+        </el-form-item>
+        <el-form-item v-if="site.kind==='torznab'" label="API Key">
+          <el-input v-model="site.api_key" type="password" autocomplete="new-password" maxlength="1024"
+            :placeholder="savedSiteKeys.includes(site.base_url) ? '已保存，留空保留' : '按站点要求填写'"/>
+        </el-form-item>
+        <div class="button-row">
+          <el-switch v-model="site.enabled" active-text="启用" :aria-label="site.name || '启用站点'"/>
+          <el-button text type="danger" @click="resource.sites.splice(index,1)">移除</el-button>
+        </div>
+      </div>
+    </template>
+    <div class="button-row">
+      <el-button :disabled="resource.sites.length>=8" @click="addResourceSite">添加站点</el-button>
+    </div>
+    <el-button type="primary" :loading="busy" @click="saveResource">保存资源来源</el-button>
+  </el-form>
+</section>
 <section v-if="tab==='telegram'" class="panel settings-panel"><h2>Telegram 机器人与通知</h2><el-form label-position="top" :disabled="busy"><el-form-item label="启用 Telegram 推送"><el-switch v-model="tg.telegram_enabled"/></el-form-item><el-form-item label="Bot Token"><el-input v-model="tg.bot_token" type="password" autocomplete="new-password" show-password :placeholder="tgMask.bot_token_configured?'已加密保存，留空保留原值':'填写 Bot Token'"/></el-form-item><el-form-item label="通知接收 Chat ID"><el-input v-model="tg.chat_id" autocomplete="off" :placeholder="tgMask.chat_id_configured?'已保存，留空保留原值':'用户、群组或频道 ID'"/></el-form-item></el-form><h3>通用 Webhook</h3><el-form label-position="top" :disabled="busy"><el-form-item label="启用 Webhook 推送"><el-switch v-model="tg.webhook_enabled"/></el-form-item><el-form-item label="Webhook 地址"><el-input v-model="tg.webhook_url" type="password" show-password autocomplete="new-password" :placeholder="tgMask.webhook_url_configured?'已保存，留空保留原值':'https://...'"/></el-form-item><el-form-item label="请求令牌（可选）"><el-input v-model="tg.webhook_secret" type="password" show-password autocomplete="new-password" :placeholder="tgMask.webhook_secret_configured?'已保存，留空保留原值':'写入 X-StrimKeep-Token'"/></el-form-item><div class="button-row"><el-button :disabled="busy||!tgMask.webhook_url_configured" @click="testWebhook">发送 Webhook 测试</el-button></div></el-form><h3>选择要发送的消息</h3><div class="notification-choices"><div v-for="[key,label] in categories" :key="key"><span>{{label}}</span><el-switch v-model="tg.categories[key]" :aria-label="label"/></div></div><p class="hint">定时整理未发现资源只写入日志，不推送 TG。机器人私聊的指令回执正常回复；是否接收链接、谁能操作在「资源入库」页的「Telegram 接收链接」中设置。</p><div class="button-row"><el-button type="primary" :loading="busy" @click="saveTg">保存通知设置</el-button><el-button :disabled="busy||!tgMask.bot_token_configured" @click="testTg">发送测试通知</el-button></div></section>
 <section v-if="tab==='telegram'" class="panel settings-panel"><h2>Telegram 接收链接</h2><p class="hint">私聊机器人发送链接即可转存，复用上面的 Bot Token；落盘后是否立即整理在「资源入库」页的「落盘后处理」里设置。</p><el-form label-position="top" :disabled="busy"><el-form-item label="启用转存机器人"><el-switch v-model="transferBot.bot_enabled"/></el-form-item><el-form-item label="允许操作的 TG 用户数字 ID"><el-input v-model="transferBot.allowed_user_id" placeholder="仅此用户可以私聊机器人发起转存"/></el-form-item></el-form><p v-if="transferBot.bot_enabled" class="hint">{{botState.state==='ready'?'机器人已连接，可发送新链接':botState.state==='error'?botState.message:'机器人正在连接，请稍候再发链接'}}。启用前的旧消息不会自动执行。</p><div class="button-row"><el-button type="primary" :loading="busy" @click="saveTransferBot">保存接收设置</el-button></div><h3>机器人指令</h3><p class="hint">使用上下按钮调整菜单顺序；关闭的指令不会显示在菜单中，也不会执行。帮助始终显示在最前面。</p><div class="bot-command-grid"><div v-for="(c,index) in botCmds" :key="c.name" class="bot-command-row"><div class="command-label"><strong>{{c.label}}</strong><code>/{{c.name}}</code></div><div class="command-actions"><el-button size="small" :disabled="busy||index===0" :aria-label="`上移${c.label}`" @click="moveBotCommand(index,-1)">↑</el-button><el-button size="small" :disabled="busy||index===botCmds.length-1" :aria-label="`下移${c.label}`" @click="moveBotCommand(index,1)">↓</el-button><el-switch v-model="c.enabled" :aria-label="c.label"/></div></div></div><div class="button-row"><el-button :loading="busy" @click="saveBotCommands">保存指令设置</el-button></div></section>
 <section v-if="tab==='sidebar'" class="panel settings-panel"><h2>侧边栏顺序</h2>
