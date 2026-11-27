@@ -1,16 +1,21 @@
+import asyncio
 import json
 import sqlite3
 import sys
+import threading
 import time
+from contextlib import asynccontextmanager
 from types import ModuleType, SimpleNamespace
 
+import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from strimkeep.inventory_operations_api import install_inventory_operations
+from strimkeep.inventory_operations_api import install_inventory_operations, inventory_delete_loop
+from strimkeep.schema_migrations import INVENTORY_DISPATCH_DDL
 
 
-def setup_app(root, monkeypatch, include_share=True):
+def setup_app(root, monkeypatch, include_share=True, *, start_worker=True):
     relative = '分享影视库/剧集/Show {tmdb-12}/Season 01/Show.S01E01.1080p.strm'
     path = root / relative
     if include_share:
@@ -19,8 +24,10 @@ def setup_app(root, monkeypatch, include_share=True):
         (path.parents[1] / 'poster.jpg').write_text('poster', encoding='utf-8')
         path.write_text('http://example/play115/share/s1/a', encoding='utf-8')
     (root / 'cloud').mkdir()
-    db = sqlite3.connect(':memory:', check_same_thread=False)
+    database_path = root / 'inventory-test.sqlite'
+    db = sqlite3.connect(database_path, check_same_thread=False)
     db.row_factory = sqlite3.Row
+    db.execute('PRAGMA journal_mode=WAL')
     db.executescript('''CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE TABLE organize_jobs(state TEXT);
       CREATE TABLE share_wash_intents(id TEXT);
@@ -28,17 +35,45 @@ def setup_app(root, monkeypatch, include_share=True):
       CREATE TABLE share_strms(id TEXT,share_code TEXT,receive_code TEXT,file_id TEXT,pickcode TEXT,strm_path TEXT,token_hash TEXT,revoked INTEGER);
       CREATE TABLE output_registry(account_id TEXT,file_id TEXT,source TEXT,trail TEXT,playback_id TEXT,relative_path TEXT,files TEXT,active INTEGER);
       CREATE TABLE owned_outputs(relative_path TEXT,account_id TEXT,file_id TEXT,digest TEXT);''')
+    db.execute(INVENTORY_DISPATCH_DDL)
     if include_share:
         db.execute('INSERT INTO share_strms VALUES (?,?,?,?,?,?,?,?)', ('s1', 'code', '', 'f1', '', relative, 'hash', 0))
     db.commit()
     settings = {'organize_config': {'library_dir_name': 'cloud'}}
-    store = SimpleNamespace(db=db, root=root / 'state', get=settings.get)
-    import asyncio
+    class TestStore:
+        def __init__(self):
+            self.local = threading.local()
+            self.local.db = db
+            self.root = root / 'state'
+
+        @property
+        def db(self):
+            if not hasattr(self.local, 'db'):
+                connection = sqlite3.connect(database_path, timeout=10)
+                connection.row_factory = sqlite3.Row
+                self.local.db = connection
+            return self.local.db
+
+        def get(self, key, default=None):
+            return settings.get(key, default)
+
+    store = TestStore()
     engine = SimpleNamespace(root=root, store=store, publication_gate=asyncio.Lock(), index=SimpleNamespace(account=lambda _: 'account'))
     share = ModuleType('strimkeep.share_service')
     share._verified_share_strm = lambda base, rel, sid: base / rel if sid == 's1' else None
     monkeypatch.setitem(sys.modules, 'strimkeep.share_service', share)
-    app = FastAPI()
+    @asynccontextmanager
+    async def lifespan(app):
+        task = None
+        if start_worker:
+            task = asyncio.create_task(inventory_delete_loop(store, app.state.inventory_run_delete, interval=.01))
+        try:
+            yield
+        finally:
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+    app = FastAPI(lifespan=lifespan)
     app.state.organizer = engine
     app.state.strms = root
     def admin(): raise HTTPException(401)
@@ -79,6 +114,128 @@ def wait(client, plan_id):
             return result
         time.sleep(.02)
     raise AssertionError('plan did not finish')
+
+
+def test_web_only_queues_and_worker_waits_for_running_publishers(tmp_path, monkeypatch):
+    app, admin, path, db = setup_app(tmp_path, monkeypatch, start_worker=False)
+    try:
+        with TestClient(app) as client:
+            app.dependency_overrides[admin] = lambda: None
+            plan = client.post('/api/v1/inventory/delete/plan', json={
+                'mode': 'manual', 'selections': [{'kind': 'tv', 'tmdb_id': 12, 'side': 'share'}]}).json()
+            plan_id = plan['plan_id']
+            assert client.post(f'/api/v1/inventory/delete/{plan_id}/execute').status_code == 200
+            assert client.get(f'/api/v1/inventory/delete/{plan_id}').json()['state'] == 'starting'
+            assert path.is_file()
+
+        async def run():
+            from strimkeep.inventory_plans import _load
+            with db:
+                db.execute("INSERT INTO organize_jobs VALUES('running')")
+            task = asyncio.create_task(app.state.inventory_run_delete(plan_id))
+            await asyncio.sleep(.04)
+            assert path.is_file() and not task.done()
+            async with app.state.organizer.publication_gate:
+                with db:
+                    db.execute("DELETE FROM organize_jobs")
+                assert path.is_file() and not task.done()
+            await asyncio.wait_for(task, 3)
+            assert not path.exists()
+            assert _load(db, plan_id)['state'] == 'completed'
+        asyncio.run(run())
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('phase', ['cloud_recycled', 'strm_missing', 'uncertain', 'ledger_committed', 'keeper_changed'])
+def test_inventory_resume_reconciles_cloud_receipt_once(tmp_path, monkeypatch, phase):
+    from strimkeep import inventory_executor
+    from strimkeep.inventory_operations_api import PlanRequest
+    from strimkeep.inventory_plans import _load, pending_action, queue_plan, recover_dispatched_plans
+    from strimkeep.store import Store
+    from test_deep_delete import add_managed_output, FakeEngine, GuardedCloud, make_store, MANAGED_CONTENT, MANAGED_REL
+
+    async def run():
+        store = make_store(tmp_path)
+        try:
+            relative = MANAGED_REL.removesuffix('.mkv') + '.strm'
+            with store.db:
+                store.db.execute("UPDATE organized_files SET relative_path=? WHERE file_id='3001'", (relative,))
+                store.db.execute("UPDATE playbacks SET relative_path=? WHERE file_id='3001'", (relative,))
+                store.db.execute('DELETE FROM share_strms')
+            source = add_managed_output(store, relative)
+            store.set_many({'organize_config': {'library_dir_name': '影视媒体库'}})
+
+            class InterruptedCloud(GuardedCloud):
+                async def recycle(self, fid, parent):
+                    await super().recycle(fid, parent)
+                    raise asyncio.CancelledError()
+
+            app = FastAPI()
+            engine = FakeEngine(store, tmp_path / 'strm')
+            engine.publication_gate = asyncio.Lock()
+            engine.index = SimpleNamespace(account=lambda _: '1')
+            engine.cloud = (GuardedCloud(source) if phase == 'ledger_committed'
+                            else InterruptedCloud(source, keep=phase == 'uncertain'))
+            app.state.organizer, app.state.strms = engine, engine.root
+            install_inventory_operations(app, store, lambda: None)
+            file = engine.root / relative
+            file.parent.mkdir(parents=True)
+            file.write_bytes(MANAGED_CONTENT)
+            file.with_suffix('.nfo').write_text('sidecar', encoding='utf-8')
+            keeper = engine.root / relative.replace('影视媒体库/', '分享影视库/', 1)
+            if phase == 'keeper_changed':
+                keeper.parent.mkdir(parents=True)
+                keeper.write_bytes(b'keeper')
+            plan = await app.state.inventory_build_delete_plan(PlanRequest(
+                mode='manual', selections=[{'kind': 'tv', 'tmdb_id': 10, 'side': 'cloud'}]))
+            pid = plan['plan_id']
+            queue_plan(store.db, pid)
+            def interrupt_after_ledger(*args, **kwargs):
+                raise asyncio.CancelledError()
+
+            with monkeypatch.context() as patch:
+                if phase == 'ledger_committed':
+                    patch.setattr(inventory_executor, 'record_progress', interrupt_after_ledger)
+                with pytest.raises(asyncio.CancelledError):
+                    await app.state.inventory_run_delete(pid)
+            assert _load(store.db, pid)['state'] == 'executing'
+            assert pending_action(store.db, pid) == (plan['actions'][0], phase == 'ledger_committed')
+            assert file.is_file() == (phase != 'ledger_committed')
+            if phase in ('strm_missing', 'keeper_changed'):
+                file.unlink()
+            if phase == 'keeper_changed':
+                keeper.write_bytes(b'changed')
+            store.close()
+            store = Store(tmp_path / 'data', 'admin', 'test-password-1234')
+            engine.store = store
+            engine.publication_gate = asyncio.Lock()
+            app = FastAPI()
+            app.state.organizer, app.state.strms = engine, engine.root
+            install_inventory_operations(app, store, lambda: None)
+            recover_dispatched_plans(store.db)
+            await app.state.inventory_run_delete(pid)
+            status = _load(store.db, pid)
+            assert engine.cloud.recycled == [('3001', '77')]
+            if phase == 'keeper_changed':
+                assert status['state'] == 'needs_review' and keeper.read_bytes() == b'changed'
+                assert store.db.execute("SELECT 1 FROM organized_files WHERE file_id='3001'").fetchone()
+                assert file.with_suffix('.nfo').exists()
+                return
+            if phase == 'uncertain':
+                assert status['state'] == 'needs_review' and file.is_file()
+                assert pending_action(store.db, pid) == (plan['actions'][0], False)
+                engine.cloud.live['3001'] = False
+                queue_plan(store.db, pid)
+                await app.state.inventory_run_delete(pid)
+                status = _load(store.db, pid)
+            assert status['state'] == 'completed' and status['progress'] == plan['actions']
+            assert engine.cloud.recycled == [('3001', '77')]
+            assert not file.exists() and not file.with_suffix('.nfo').exists()
+            assert store.db.execute("SELECT 1 FROM organized_files WHERE file_id='3001'").fetchone() is None
+        finally:
+            store.close()
+    asyncio.run(run())
 
 
 def test_user_plan_and_isolated_share_deletion(tmp_path, monkeypatch):

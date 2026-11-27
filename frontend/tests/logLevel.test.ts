@@ -21,3 +21,15 @@ test('successful history purge and already-cleaned webhook are not errors',()=>{
   assert.equal(levelOf({kind:'deep_delete',message:'深度删除 · 已由库存清理完成：该作品/季已无待删除记录（清理 2 条历史记录）。'}),'info')
   assert.equal(levelOf({kind:'deep_delete',message:'深度删除 · 未匹配：收到「Series」事件 /media/x，没有找到这条文件的取链记录（未执行任何删除）'}),'warn')
 })
+
+test('ignored Emby folder notifications stay informational regardless of the title',()=>{
+  const message = '深度删除 · 已忽略 Emby 目录移除通知 · /media/分享影视库/电影/无法原谅'
+  assert.equal(levelOf({kind:'deep_delete',message}),'info')
+  assert.equal(levelOf({kind:'system',message}),'error')
+})
+
+test('successful 302 logs stay informational when the title contains an error keyword',()=>{
+  const message = '视频流 302 直连 115 · 无法原谅（条目 123） · 主 Emby（9001）'
+  assert.equal(levelOf({kind:'play',message}),'info')
+  assert.equal(levelOf({kind:'play',message:'视频流直链解析失败（timeout），拒绝经隧道转发'}),'error')
+})

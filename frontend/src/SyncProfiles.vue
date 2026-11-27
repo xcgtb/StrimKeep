@@ -18,7 +18,7 @@ const previewError = ref('')
 const weekdays=['周日','周一','周二','周三','周四','周五','周六']
 const metadataLabels = {
   inherit: '沿用全局设置',
-  source: '使用网盘已有信息',
+  source: 'STRM + 网盘已有附属文件',
   technical: 'STRM + 技术媒体信息',
 } satisfies Record<Profile['metadata_mode'], string>
 const blank=():Profile=>({name:'',source_cid:'',source_label:'',source_cids:[],source_labels:{},mode:'incremental',metadata_mode:'inherit',exclude_keywords:[],emby_target:'main',enabled:false,frequency:'daily',weekday:1,time:'03:00',interval_minutes:60,cron:'0 3 * * *',timezone:'Asia/Shanghai'})
@@ -87,7 +87,7 @@ async function save() {
 }
 async function execute(p:Profile){await runAction(async()=>{const job=await props.api(`/sync/profiles/${p.id}/run`,'POST',{});ElMessage.success(`“${p.name}”已加入队列（任务 #${job.id}）`)})}
 async function remove(p:Profile){try{await ElMessageBox.confirm(`删除同步任务“${p.name}”？已入队的任务不会取消，云盘与本地文件不会被删除。`,'删除同步任务',{type:'warning'})}catch{return}await runAction(async()=>{await props.api(`/sync/profiles/${p.id}`,'DELETE');await load();ElMessage.success('同步任务已删除')})}
-function timing(p:Profile){if(!p.enabled)return p.after_transfer?'转存后补扫':'仅手动';if(p.frequency==='interval')return `每 ${p.interval_minutes} 分钟`;if(p.frequency==='cron')return `Cron ${p.cron}`;return `${p.frequency==='daily'?'每天':weekdays[p.weekday]} ${p.time}`}
+function timing(p:Profile){if(!p.enabled)return '仅手动';if(p.frequency==='interval')return `每 ${p.interval_minutes} 分钟`;if(p.frequency==='cron')return `Cron ${p.cron}`;return `${p.frequency==='daily'?'每天':weekdays[p.weekday]} ${p.time}`}
 </script>
 <template>
   <el-alert v-if="error" :title="error" type="error" show-icon/>
@@ -107,45 +107,12 @@ function timing(p:Profile){if(!p.enabled)return p.after_transfer?'转存后补�
         </div>
         <div><el-button @click="picker=true">＋ 添加目录</el-button><span class="sync-directory-tip"> 已添加 {{draft.source_cids.length}} / 20</span></div>
       </div>
-      <div class="sync-field wide">
-        <span>路径排除词</span>
-        <el-input-tag v-model="draft.exclude_keywords" :max="20" :maxlength="100"
-          aria-label="路径排除词" placeholder="输入后按回车，例如 /预告片/"/>
-        <span class="sync-directory-tip">按完整 115 路径匹配，忽略大小写。命中的视频或附属文件会跳过，已有本地文件保留。</span>
-      </div>
       <div class="sync-field">
         <span>同步方式</span>
         <el-radio-group v-model="draft.mode" aria-label="同步方式"><el-radio-button value="incremental">增量同步</el-radio-button><el-radio-button value="full">全量同步</el-radio-button></el-radio-group>
-        <span class="sync-directory-tip">{{draft.mode==='incremental'?'扫描目录，复用未变化的输出。':'扫描目录并逐项核对，内容相同的 STRM 直接复用。'}}</span>
+        <span class="sync-directory-tip">{{draft.mode==='incremental'?'扫描目录，复用未变化的输出。':'逐项核对本地和网盘，内容相同的 STRM 不重写。'}}</span>
       </div>
-      <div v-if="draft.mode==='incremental'" class="sync-field">
-        <div class="sync-switch"><el-switch v-model="draft.after_transfer" aria-label="转存后补扫"/><span>转存后补扫</span></div>
-        <span class="sync-directory-tip">本项目核实转存完成后，在同步范围内补扫目标目录。</span>
-      </div>
-      <div class="sync-field wide">
-        <span>元数据处理</span>
-        <el-select v-model="draft.metadata_mode" aria-label="元数据处理">
-          <el-option v-for="(label, value) in metadataLabels" :key="value" :label="label" :value="value"/>
-        </el-select>
-        <span v-if="draft.metadata_mode==='technical'" class="sync-directory-tip">直接探测分辨率、编码和音轨，保留本地 NFO 和图片。需要通知时可选择独立 Emby。</span>
-        <span v-else-if="draft.metadata_mode==='source'" class="sync-directory-tip">复制网盘已有的 NFO、图片和已选附属文件。Emby 自动提取沿用全局设置。</span>
-        <span v-else class="sync-directory-tip">按 STRM 全局设置处理字幕、NFO 和海报。</span>
-      </div>
-      <div class="sync-field">
-        <span>Emby 入库通知</span>
-        <el-select v-model="draft.emby_target" aria-label="Emby 入库通知">
-          <el-option value="main" label="沿用任务默认"/>
-          <el-option value="off" label="关闭入库通知"/>
-          <el-option v-for="target in embyTargets" :key="target.id" :value="target.id" :label="target.name"
-            :disabled="!target.upstream || !target.api_key_configured"/>
-          <el-option v-if="!['main','off'].includes(draft.emby_target) && !embyTargets.some(target=>target.id===draft?.emby_target)"
-            :value="draft.emby_target" label="原 Emby 实例（当前不可用）" disabled/>
-        </el-select>
-        <span v-if="embyTargetsError" class="sync-directory-tip">暂时无法读取 Emby 实例，请刷新页面后重试。</span>
-        <span v-else-if="draft.emby_target==='main'" class="sync-directory-tip">{{draft.metadata_mode==='technical'?'技术媒体信息模式默认关闭通知。':'使用主 Emby 和 STRM 全局通知设置。'}}</span>
-        <span v-else-if="draft.emby_target!=='off'" class="sync-directory-tip">按此实例的映射提交变更路径，并核实入库。技术媒体信息可选上方的提取模式。</span>
-      </div>
-      <div class="sync-field"><span>定时执行</span><div class="sync-switch"><el-switch v-model="draft.enabled"/><span>{{draft.enabled?'已开启':'已关闭'}}</span></div></div>
+      <div class="sync-field"><span>定时执行</span><div class="sync-switch"><el-switch v-model="draft.enabled" aria-label="定时执行"/><span>{{draft.enabled?'已开启':'已关闭'}}</span></div></div>
       <template v-if="draft.enabled"><div class="sync-field wide"><span>执行频率</span><el-radio-group v-model="draft.frequency"><el-radio-button value="daily">每天</el-radio-button><el-radio-button value="weekly">每周</el-radio-button><el-radio-button value="interval">间隔</el-radio-button><el-radio-button value="cron">Cron</el-radio-button></el-radio-group></div>
         <div v-if="draft.frequency==='weekly'" class="sync-field"><span>星期</span><el-select v-model="draft.weekday"><el-option v-for="(day,i) in weekdays" :key="i" :label="day" :value="i"/></el-select></div>
         <label v-if="draft.frequency==='daily'||draft.frequency==='weekly'" class="sync-field"><span>执行时间</span><el-input v-model="draft.time" type="time"/></label>
@@ -154,9 +121,60 @@ function timing(p:Profile){if(!p.enabled)return p.after_transfer?'转存后补�
         <div class="sync-field"><span>时区</span><el-select v-model="draft.timezone"><el-option label="北京时间" value="Asia/Shanghai"/><el-option label="UTC" value="UTC"/></el-select></div>
       </template>
     </div>
+    <details class="sync-advanced">
+      <summary>附属文件与高级选项</summary>
+      <div class="sync-editor-grid">
+        <div v-if="draft.mode==='incremental'" class="sync-field wide">
+          <div class="sync-switch"><el-switch v-model="draft.after_transfer" aria-label="纯转存后同步"/><span>纯转存后同步</span></div>
+          <span class="sync-directory-tip">转存核实后同步目标目录。已安排立即整理的转存会跳过这一步。</span>
+        </div>
+        <div class="sync-field wide">
+          <span>路径排除词</span>
+          <el-input-tag v-model="draft.exclude_keywords" :max="20" :maxlength="100"
+            aria-label="路径排除词" placeholder="输入后按回车，例如 /预告片/"/>
+          <span class="sync-directory-tip">按完整 115 路径匹配，忽略大小写。命中的文件会跳过，已有本地文件保留。</span>
+        </div>
+        <div class="sync-field wide">
+          <span>元数据处理</span>
+          <el-select v-model="draft.metadata_mode" aria-label="元数据处理">
+            <el-option v-for="(label, value) in metadataLabels" :key="value" :label="label" :value="value"/>
+          </el-select>
+          <span v-if="draft.metadata_mode==='technical'" class="sync-directory-tip">提取分辨率、编码和音轨，保留本地 NFO 和图片。</span>
+          <span v-else-if="draft.metadata_mode==='source'" class="sync-directory-tip">复制网盘已有的 NFO、图片和选定的附属文件。</span>
+          <span v-else class="sync-directory-tip">按 STRM 全局设置处理字幕、NFO 和海报。</span>
+        </div>
+        <div class="sync-field">
+          <span>Emby 入库通知</span>
+          <el-select v-model="draft.emby_target" aria-label="Emby 入库通知">
+            <el-option value="main" label="沿用默认"/>
+            <el-option value="off" label="关闭入库通知"/>
+            <el-option v-for="target in embyTargets" :key="target.id" :value="target.id" :label="target.name"
+              :disabled="!target.upstream || !target.api_key_configured"/>
+            <el-option v-if="!['main','off'].includes(draft.emby_target) && !embyTargets.some(target=>target.id===draft?.emby_target)"
+              :value="draft.emby_target" label="原 Emby 实例（当前不可用）" disabled/>
+          </el-select>
+          <span v-if="embyTargetsError" class="sync-directory-tip">暂时无法读取 Emby 实例，请刷新页面后重试。</span>
+          <span v-else-if="draft.emby_target==='main'" class="sync-directory-tip">{{draft.metadata_mode==='technical'?'技术媒体信息模式默认关闭通知。':'使用主 Emby 和全局通知设置。'}}</span>
+          <span v-else-if="draft.emby_target!=='off'" class="sync-directory-tip">按所选 Emby 的路径映射提交变更，并核实入库。</span>
+        </div>
+      </div>
+    </details>
     <div class="sync-editor-actions"><el-button :disabled="busy" @click="draft=null">取消</el-button><el-button type="primary" :disabled="busy" @click="save">保存任务</el-button></div>
   </section>
-  <div v-if="profiles.length" class="sync-list"><article v-for="p in profiles" :key="p.id" class="sync-card"><div class="sync-card-top"><strong>{{p.name}}</strong><span class="sync-badge" :class="{'sync-badge-full':p.mode==='full'}">{{p.mode==='incremental'?'增量同步':'全量同步'}}</span></div><div class="sync-card-directory"><div v-for="id in p.source_cids" :key="id">{{p.source_labels[id]||id}}</div></div><div class="sync-card-meta"><span>{{metadataLabels[p.metadata_mode]}}</span><span>{{timing(p)}}</span><span v-if="p.emby_target!=='main'">{{targetLabel(p.emby_target)}}</span><span v-if="p.enabled&&p.next_due">下次 {{new Date(p.next_due*1000).toLocaleString('zh-CN',{timeZone:p.timezone||'Asia/Shanghai'})}}</span></div><div class="sync-card-actions"><el-button type="primary" :disabled="busy" @click="execute(p)">立即执行</el-button><el-button :disabled="busy" @click="edit(p)">编辑</el-button><el-button text type="danger" :disabled="busy" @click="remove(p)">删除</el-button></div></article></div>
+  <div v-if="profiles.length" class="sync-list">
+    <article v-for="p in profiles" :key="p.id" class="sync-card">
+      <div class="sync-card-top"><strong>{{p.name}}</strong><span class="sync-badge" :class="{'sync-badge-full':p.mode==='full'}">{{p.mode==='incremental'?'增量同步':'全量同步'}}</span></div>
+      <div class="sync-card-directory"><div v-for="id in p.source_cids" :key="id">{{p.source_labels[id]||id}}</div></div>
+      <div class="sync-card-meta">
+        <span v-if="p.enabled||!p.after_transfer">{{timing(p)}}</span>
+        <span v-if="p.after_transfer">纯转存后同步</span>
+        <span v-if="p.metadata_mode!=='inherit'">{{metadataLabels[p.metadata_mode]}}</span>
+        <span v-if="p.emby_target!=='main'">{{targetLabel(p.emby_target)}}</span>
+        <span v-if="p.enabled&&p.next_due">下次 {{new Date(p.next_due*1000).toLocaleString('zh-CN',{timeZone:p.timezone||'Asia/Shanghai'})}}</span>
+      </div>
+      <div class="sync-card-actions"><el-button type="primary" :disabled="busy" @click="execute(p)">立即执行</el-button><el-button :disabled="busy" @click="edit(p)">编辑</el-button><el-button text type="danger" :disabled="busy" @click="remove(p)">删除</el-button></div>
+    </article>
+  </div>
   <div v-else-if="!draft" class="sync-empty"><p>暂无同步任务</p></div>
   <el-button text @click="emit('navigate','tasks')">查看任务进度 →</el-button>
   <DirectoryPicker v-if="picker" :api="api" @select="select" @close="picker=false"/>
@@ -182,6 +200,9 @@ function timing(p:Profile){if(!p.enabled)return p.after_transfer?'转存后补�
   </el-dialog>
 </template>
 <style scoped>
+.sync-advanced{margin-bottom:16px}
+.sync-advanced summary{cursor:pointer;color:var(--text);font-size:13px;font-weight:600}
+.sync-advanced .sync-editor-grid{padding-bottom:4px}
 .sync-folder-actions{display:flex;flex:none;align-items:center;gap:12px;padding-right:10px}
 .sync-folder-actions :deep(.el-button + .el-button){margin-left:0}
 .sync-preview-paths{display:grid;gap:5px;margin:0 0 10px}

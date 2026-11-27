@@ -34,12 +34,8 @@ def _work_name(relative):
     return PurePosixPath(folder).name if folder else None
 
 
-def verify_work(engine, expected, action, work_paths=None):
-    """Check plan targets, retained evidence and STRM membership for this work.
-
-    目录是事实：作品 STRM 必须在磁盘上、指纹没变、没有新冒出来的文件。
-    台账只核对网盘侧来源：分享侧缺登记不影响清理（计划里本来就只有本地文件）。
-    """
+def verify_work(engine, expected, action, work_paths=None, *, missing_target=False):
+    """Check plan targets, retained evidence and STRM membership for this work."""
     from .inventory_api import inventory_config_value
     store, root = engine.store, Path(engine.root)
     roots = resolve_roots(root, store)
@@ -51,7 +47,7 @@ def verify_work(engine, expected, action, work_paths=None):
     identity = library_identities(root, roots)
     if identity != expected.get('identity'):
         raise ValueError('库根目录已改变')
-    work_id, work_folder = _work(action['path'])
+    _, work_folder = _work(action['path'])
     work_name = PurePosixPath(work_folder).name
     if work_paths is None:
         files = [item for item in expected['files'] if _work_name(item['path']) == work_name]
@@ -59,9 +55,11 @@ def verify_work(engine, expected, action, work_paths=None):
         files = [item for item in expected['files'] if item['path'] in work_paths]
     if not files:
         raise ValueError('计划作品无法核实')
+    folders = {_work(v['path'])[1] for v in files}
+    if missing_target:
+        files = [item for item in files if item['path'] != action['path']]
     keys = {(v['side'], v['id'], v['path']) for v in files}
     plan_paths = {v['path'] for v in files}
-    folders = {_work(v['path'])[1] for v in files}
     names = {PurePosixPath(folder).name for folder in folders}
     disk = set()
 
@@ -70,6 +68,9 @@ def verify_work(engine, expected, action, work_paths=None):
 
     for folder in folders:
         base = root.joinpath(*PurePosixPath(folder).parts)
+        if (missing_target and folder == work_folder and not base.exists() and not base.is_symlink()
+                and not any(path.startswith(folder + '/') for path in plan_paths)):
+            continue
         if base.is_symlink() or not base.is_dir():
             raise ValueError('作品目录已变化')
         for current, subdirs, filenames in os.walk(base, followlinks=False, onerror=onerror):
@@ -86,10 +87,12 @@ def verify_work(engine, expected, action, work_paths=None):
     missing = plan_paths - disk
     if missing:
         raise ValueError('待删文件已不在磁盘上：%s' % sorted(missing)[0])
+    if missing_target and action['path'] in disk:
+        raise ValueError('待核实的 STRM 已重新出现')
     # 作品的网盘登记必须与计划一致（登记变了，说明来源可能换了）；
     # 分享侧以目录为准，登记缺行不阻止清理。
     registered = [(side, str(record_id), path) for side, record_id, path in registered_rows(store)
-                  if _work_name(path) in names]
+                  if _work_name(path) in names and (not missing_target or path != action['path'])]
     registered_paths = {path for _, _, path in registered}
     allowed_extra = registered_paths | {str(item.get('path') or '')
                                         for item in expected.get('unsupported') or ()

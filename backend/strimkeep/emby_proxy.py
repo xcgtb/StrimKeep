@@ -16,8 +16,9 @@ import re
 import socket
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from .emby_connection import error_message, saved_base, strm_mount_path
 from .store import digest
 
@@ -70,6 +71,22 @@ def play_identity(path: str):
         match = _SHARE.match(parts.path)
         return ('share', match.group('sid')) if match else None
     return ('pickcode', segments[1])
+
+
+def _stream_title(source, path, local_path):
+    title = os.path.splitext(os.path.basename(local_path))[0] if local_path else ''
+    if not title:
+        name = source.get('Name')
+        if isinstance(name, str) and '://' not in name:
+            title = name.strip()
+    if not title:
+        # /play115/{pickcode}/{file_id}/{sha1}/{size}/{name}
+        parts = urlsplit(path).path.strip('/').split('/')
+        if len(parts) == 6 and parts[0] == 'play115' and parts[1] != 'share':
+            title = unquote(parts[-1])
+    if '://' in title:
+        return ''
+    return re.sub(r'[\x00-\x1f\x7f]+', ' ', title).strip()[:120]
 
 
 RESOLVE_RETRY_DELAY = 0.3
@@ -274,6 +291,7 @@ class ProxyServer:
         self.task = None
         self.client = None
         self.logged = 0.0
+        self.stream_logs = OrderedDict()
 
     @property
     def id(self):
@@ -285,12 +303,21 @@ class ProxyServer:
     def running(self):
         return bool(self.server and self.server.started and self.task and not self.task.done())
 
-    def event(self, message, throttle=60.0):
-        """写操作记录；同类失败按节流合并，避免播放器重连刷屏。"""
+    def event(self, message, throttle=60.0, *, stream_key=None):
+        """写操作记录。播放按媒体源和请求类型节流，其他诊断沿用实例节流。"""
         now = time.monotonic()
-        if now - self.logged < throttle:
-            return
-        self.logged = now
+        if stream_key is None:
+            if now - self.logged < throttle:
+                return
+            self.logged = now
+        else:
+            last = self.stream_logs.get(stream_key)
+            if last is not None and now - last < throttle:
+                return
+            self.stream_logs[stream_key] = now
+            self.stream_logs.move_to_end(stream_key)
+            if len(self.stream_logs) > 256:
+                self.stream_logs.popitem(last=False)
         try:
             self.store.event('play', message)
         except Exception:
@@ -356,8 +383,8 @@ class ProxyServer:
         local = self._local_strm(path, config)
         return local, play_identity(self._read_strm(local)) if local else None
 
-    async def _upstream_path(self, item, request, config):
-        """问上游 Emby 这部片的 Path。
+    async def _upstream_source(self, item, request, config):
+        """向上游 Emby 核实该用户请求的媒体源。
 
         用 PlaybackInfo 而不是 ``/emby/Items/{id}``：后者在这个 Emby 版本上直接 404
         （实测返回 "The file '/emby/Items/14176' could not be found."），而 PlaybackInfo
@@ -371,7 +398,7 @@ class ProxyServer:
                  or auth_headers.get('x-emby-token') or auth_headers.get('x-mediabrowser-token'))
         auth = auth_headers.get('authorization', '') or auth_headers.get('x-emby-authorization', '')
         if not token and not re.search(r'(?:Bearer\s+\S+|\bToken\s*=\s*["\']?[^,"\'\s]+)', auth, re.I):
-            return ''
+            return {}
         headers['content-type'] = 'application/json'
         params = {k: v for k, v in request.query_params.items() if k.lower() in ('api_key', 'apikey', 'x-emby-token', 'userid', 'mediasourceid')}
         try:
@@ -379,11 +406,9 @@ class ProxyServer:
             source_id = query.get('mediasourceid')
             if source_id:
                 sources = [source for source in sources if str(source.get('Id') or '') == source_id]
-            if len(sources) != 1:
-                return ''  # 版本不明确时交回 Emby 处理
-            return str(sources[0].get('Path') or '')
+            return sources[0] if len(sources) == 1 else {}  # 版本不明确时交回 Emby 处理
         except (httpx.HTTPError, ValueError):
-            return ''
+            return {}
 
     async def _stream_redirect(self, request, config):
         """视频/音频流 → 302 到 115 直链；解析不出直链就返回 None（照旧转发）。"""
@@ -397,8 +422,11 @@ class ProxyServer:
                 self.event('转码/HLS 请求（%s）：视频将占用隧道，请改为直连播放'
                            % request.url.path[:80], throttle=30.0)
             return None
-        path = await self._upstream_path(match.group('id'), request, config)
-        _, identity = self._stream_source(path, config)
+        started = time.monotonic()
+        item = match.group('id')
+        source = await self._upstream_source(item, request, config)
+        path = str(source.get('Path') or '')
+        local_path, identity = self._stream_source(path, config)
         ua = request.headers.get('user-agent', '')
         if not identity:
             # 不是我们的内容（本地/其它来源）：只能转发，但绝不占用视频通道的是我们的片。
@@ -413,7 +441,23 @@ class ProxyServer:
                 {'error': {'code': 'DIRECT_LINK_UNAVAILABLE',
                            'message': '取 115 直链失败（%s）。为避免视频经 frp 隧道转发，本次已拒绝。'
                                       '请检查 115 登录/分享状态后重试。' % reason}}, 503)
-        self.event('视频流 302 直连 115（%s）' % ua_label(ua), throttle=10.0)
+        title = _stream_title(source, path, local_path)
+        media = f'{title}（条目 {item}）' if title else f'条目 {item}'
+        server = ' '.join(str(self.rule.get('name') or 'Emby').split())[:60]
+        player = ua_label(ua)
+        range_header = request.headers.get('range', '')
+        range_start = re.match(r'bytes=(\d{1,20})-', range_header, re.I)
+        method = request.method
+        request_detail = 'HEAD 探测' if method == 'HEAD' else method
+        if range_header:
+            request_detail += f' Range 从 {range_start.group(1)} 字节' if range_start else ' Range'
+        source_label = '分享来源' if identity[0] == 'share' else '网盘来源'
+        elapsed_ms = (time.monotonic() - started) * 1000
+        self.event(
+            f'视频流 302 直连 115 · {media} · {server}（{config.port}） · {player} · '
+            f'{source_label} · {request_detail} · 处理 {elapsed_ms:.0f} ms',
+            throttle=10.0, stream_key=(item, identity, player, method, bool(range_header)),
+        )
         return RedirectResponse(url, status_code=302)
 
 

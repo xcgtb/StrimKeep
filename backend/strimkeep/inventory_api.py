@@ -348,6 +348,13 @@ def install_inventory(app, store, admin):
         return snapshot
 
     async def mapping_snapshot(force=False):
+        def cleanup_revision():
+            row = store.db.execute("SELECT value FROM meta WHERE key='inventory_cleanup_revision'").fetchone()
+            return row[0] if row else None
+        revision = await asyncio.to_thread(cleanup_revision)
+        if revision != mapping_cache.get('cleanup_revision'):
+            invalidate_mapping_cache()
+            mapping_cache['cleanup_revision'] = revision
         snapshot = mapping_cache['snapshot']
         age = time.monotonic() - mapping_cache['at']
         if snapshot is not None and not force:
@@ -555,10 +562,13 @@ def install_inventory(app, store, admin):
                 # 只是网盘侧文件核不上来源、进不了删除计划（分享侧不受影响）。
                 account = ''
             from .inventory_partition import partition
-            rows = await asyncio.to_thread(filesystem_rows, app.state.strms, roots, store.db)
-            scoped = await asyncio.to_thread(partition, app.state.strms, roots, rows,
-                                             settings.get('match_strategy', 'title_year'),
-                                             store.db, account)
+
+            def scan_partition():
+                rows = filesystem_rows(app.state.strms, roots, store.db)
+                return partition(app.state.strms, roots, rows, settings.get('match_strategy', 'title_year'),
+                                 store.db, account)
+
+            scoped = await asyncio.to_thread(scan_partition)
             snapshot, sources = scoped['projection'], scoped['sources']
             policy = public_policy(store.get('upgrade_policy'))
             result = await asyncio.to_thread(

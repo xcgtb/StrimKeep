@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from strimkeep.inventory_operations_api import install_inventory_operations
+from strimkeep.schema_migrations import INVENTORY_DISPATCH_DDL
 
 
 class Store:
@@ -21,6 +22,7 @@ def test_inventory_plans_runs_sql_off_event_loop(monkeypatch):
     conn = sqlite3.connect(':memory:', check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute('CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT)')
+    conn.execute(INVENTORY_DISPATCH_DDL)
     for index in range(32):
         conn.execute(
             'INSERT INTO meta VALUES(?,?)',

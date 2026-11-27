@@ -234,6 +234,9 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         # Production Web runs no background loops; Worker owns inventory scans,
         # coverage, media info and housekeeping. Tests inline everything.
         if getattr(app.state.organizer, 'web_only', False) is False:
+            from .inventory_operations_api import inventory_delete_loop
+            app.state.inventory_delete_task = asyncio.create_task(
+                inventory_delete_loop(store, app.state.inventory_run_delete))
             app.state.inventory_scan_task = asyncio.create_task(app.state.inventory_scan_loop())
             app.state.coverage_task = asyncio.create_task(app.state.organizer.emby.coverage_loop())
             app.state.media_info_task = asyncio.create_task(inject_loop(app, store))
@@ -242,7 +245,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         try:
             yield
         finally:
-            for name in ('coverage_task', 'media_info_task',
+            for name in ('coverage_task', 'media_info_task', 'inventory_delete_task',
                          'housekeep_task', 'inventory_scan_task'):
                 task = getattr(app.state, name, None)
                 if task and not task.done():
@@ -1414,18 +1417,26 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         supplied = token or str(request.headers.get('x-strimkeep-token') or '')
         if not secret or not supplied or not hmac.compare_digest(secret.encode(), supplied[:400].encode()):
             raise HTTPException(403, '深度删除联动未启用或令牌无效。')
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(422, '事件体不是合法 JSON。')
+        # 验收请求仍走鉴权和解析，但不写日志或更新面板。
+        quiet = request.headers.get('x-strimkeep-acceptance') == '1'
+        folder = deep_delete.emby_removed_folder(payload)
+        if folder is not None:
+            if not quiet:
+                path = folder.get('Path')
+                detail = ' · ' + ' '.join(path[:400].splitlines()) if isinstance(path, str) and path else ''
+                store.event('deep_delete', '深度删除 · 已忽略 Emby 目录移除通知%s' % detail)
+            return {'accepted': False, 'ignored': True, 'matched': 0,
+                    'reason': 'Emby 目录移除通知已忽略'}
         busy = store.db.execute(
             "SELECT count(*) FROM organize_jobs WHERE state IN ('queued','running')"
             " AND json_extract(config,'$.job_kind') IN ('organize','transfer','strm_sync','share_organize')").fetchone()[0]
         if busy:
             raise HTTPException(409, '整理或转存任务执行中，为避免竞态请稍后重发删除事件。')
-        try:
-            payload = await request.json()
-        except Exception:
-            raise HTTPException(422, '事件体不是合法 JSON。')
         event = deep_delete.parse_event(payload)
-        # 验收脚本会发一条假事件来验证鉴权：带上这个头就照常校验，但不写事件/面板。
-        quiet = request.headers.get('x-strimkeep-acceptance') == '1'
         if not event:
             # 收到了但不是我们认的删除事件：也要留痕，否则排查时只能看到"没反应"。
             if not quiet:

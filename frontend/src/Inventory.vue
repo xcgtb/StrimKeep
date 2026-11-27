@@ -373,13 +373,30 @@ function entryBasis(entry:any) {
   return bits.join(' · ')
 }
 function itemLabel(item:any) { return item?.title || ('TMDB ' + (item?.tmdb_id ?? '')) }
-function resultLabel(done:boolean) { return done ? '已删除' : '未执行' }
+function resultLabel(file:{done:boolean;checkpoint?:string}) {
+  if (file.done || file.checkpoint === 'confirmed') return '已确认清理'
+  return file.checkpoint === 'needs_review' ? '待核实' : '未执行'
+}
 function stateLabel(value:string) {
-  return ({planned:'待执行', executing:'执行中', completed:'已完成', failed:'失败',
+  return ({planned:'待执行', starting:'等待后台', executing:'执行中', needs_review:'待核实', completed:'已完成', failed:'失败',
            expired:'已过期'} as Record<string,string>)[value] || value || '未知'
 }
 function stateType(value:string) {
-  return value === 'completed' ? 'success' : value === 'failed' ? 'danger' : value === 'executing' ? 'warning' : 'info'
+  return value === 'completed' ? 'success' : value === 'failed' ? 'danger' : ['executing','needs_review'].includes(value) ? 'warning' : 'info'
+}
+async function recheckPlan(id:string) {
+  if (historyBusy.value) return
+  try {
+    await ElMessageBox.confirm('重新核对中断的文件，确认安全后继续执行剩余清理。', '继续片库清理',
+      {type:'warning', confirmButtonText:'重新核对', cancelButtonText:'取消'})
+  } catch { return }
+  try {
+    historyBusy.value = true
+    await props.api(`/inventory/delete/${id}/execute`, 'POST')
+    delete planDetails.value[id]
+    await loadHistory()
+  } catch (e) { historyError.value = (e as Error).message }
+  finally { historyBusy.value = false }
 }
 async function loadHistory() {
   historyError.value = ''
@@ -481,10 +498,14 @@ async function executePlan() {
   try {
     const id = plan.value.plan_id
     await props.api(`/inventory/delete/${id}/execute`, 'POST')
-    for (;;) {
+    while (planOpen.value) {
       execution.value = await props.api(`/inventory/delete/${id}`)
       if (!['starting','executing'].includes(execution.value.state)) break
       await new Promise(resolve => setTimeout(resolve, 800))
+    }
+    if (!planOpen.value) {
+      void loadHistory()
+      return
     }
     if (execution.value.state === 'completed') {
       // The deletion is finished. Reset the old view before yielding so a
@@ -799,24 +820,25 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize); clearC
     </section>
    </template>
    <details class="gov-panel gov-history"><summary><span><strong>最近清理计划</strong><small>一次计划一个框，点开看清理了什么、为什么</small></span><span class="gov-chevron">展开</span></summary><div class="gov-panel-body">
-    <div class="inventory-tools"><el-button :loading="historyBusy" @click="loadHistory">刷新状态</el-button><span class="muted">执行中断的计划不会自动重试；旧计划没有留详情，只能看到数量与状态。</span></div>
+    <div class="inventory-tools"><el-button :loading="historyBusy" @click="loadHistory">刷新状态</el-button><span class="muted">Worker 重启后会核对中断进度。来源或结果无法确认时，计划会停在「待核实」。</span></div>
     <el-alert v-if="historyError" :title="historyError" type="error" :closable="false" />
     <p v-if="!history.length && !historyBusy" class="muted">暂无清理计划</p>
     <details v-for="row in history" :key="row.plan_id" class="plan-box" @toggle="onPlanToggle(row, $event)">
      <summary><span><strong>{{ row.mode_label }} · {{ stateLabel(row.state) }}</strong><small>{{ new Date(row.created * 1000).toLocaleString() }} · 共 {{ row.count }} 个文件，已处理 {{ row.done }} 个<span v-if="row.error"> · {{ row.error }}</span></small></span><span><el-tag :type="stateType(row.state)" size="small">{{ stateLabel(row.state) }}</el-tag></span></summary>
      <div class="plan-box-body">
+      <el-button v-if="row.state==='needs_review'" :disabled="historyBusy" @click="recheckPlan(row.plan_id)">重新核对并继续</el-button>
       <p v-if="planDetailBusy === row.plan_id" class="muted">正在读取详情…</p>
       <template v-else-if="planDetails[row.plan_id]">
        <p class="plan-summary">共 {{ planDetails[row.plan_id].count }} 个文件 · 已删除 {{ planDetails[row.plan_id].done }} 个<template v-if="planDetails[row.plan_id].finished"> · 完成于 {{ new Date(planDetails[row.plan_id].finished * 1000).toLocaleString() }}</template><template v-if="planDetails[row.plan_id].message"> · {{ planDetails[row.plan_id].message }}</template></p>
        <div v-for="(entry, index) in planDetails[row.plan_id].entries || []" :key="index" class="plan-entry">
         <p class="plan-entry-title"><strong>{{ itemLabel(entry) }}</strong><span v-if="entry.season != null"> · 第 {{ entry.season }} 季</span><el-tag size="small" class="plan-entry-tag">{{ entry.reason_label || '治理清理' }}</el-tag></p>
         <p v-if="entryBasis(entry)" class="plan-entry-basis">{{ entryBasis(entry) }}</p>
-        <details v-if="entry.files?.length"><summary>文件 {{ entry.files.length }} 个（已删除 {{ entry.done }}）</summary><p v-for="file in entry.files" :key="file.path" class="file-path">{{ side(file.side) }} · {{ file.path }} · {{ resultLabel(file.done) }}</p></details>
+        <details v-if="entry.files?.length"><summary>文件 {{ entry.files.length }} 个（已删除 {{ entry.done }}）</summary><p v-for="file in entry.files" :key="file.path" class="file-path">{{ side(file.side) }} · {{ file.path }} · {{ resultLabel(file) }}</p></details>
         <p v-else class="muted">这条没有对应到文件。</p>
        </div>
        <div v-if="planDetails[row.plan_id].others?.length" class="plan-entry">
         <p class="plan-entry-title"><strong>未归入条目的文件（{{ planDetails[row.plan_id].others.length }}）</strong></p>
-        <p v-for="file in planDetails[row.plan_id].others" :key="file.path" class="file-path">{{ side(file.side) }} · {{ file.path }} · {{ resultLabel(file.done) }}</p>
+        <p v-for="file in planDetails[row.plan_id].others" :key="file.path" class="file-path">{{ side(file.side) }} · {{ file.path }} · {{ resultLabel(file) }}</p>
        </div>
        <p v-if="planDetails[row.plan_id].items?.length" class="muted">旧计划的条目：{{ planDetails[row.plan_id].items.map(itemLabel).join('、') }}</p>
       </template>
@@ -827,10 +849,24 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize); clearC
   </template>
   <InventoryOrphans v-else :api="props.api" />
   <el-alert v-if="planError && !planOpen" :title="planError" type="error" :closable="false" />
-  <el-dialog v-model="planOpen" :title="planTitle" width="min(90%, 760px)" :close-on-click-modal="false" :close-on-press-escape="!planBusy" :show-close="!planBusy">
+  <el-dialog v-model="planOpen" :title="planTitle" width="min(90%, 760px)" :close-on-click-modal="false" :close-on-press-escape="!planBusy || !!execution" :show-close="!planBusy || !!execution">
    <template v-if="!plan"><el-alert v-if="planError" :title="planError" type="error" :closable="false" /><p v-else class="muted">正在核对库存、文件来源与规则，生成清理清单…</p></template>
-   <template v-else><el-alert :title="`${PLAN_LABELS[planMode] || '清理'}${planScope ? '（' + planScope + '）' : ''}：${planMode === 'manual' ? '只清理所选作品的文件，网盘进 115 回收站，分享只删本地 STRM。' : '按治理判定清理被淘汰的一侧。'}扫描计划 2 小时内有效，其他计划 15 分钟内有效；库存变化会停止执行。`" type="warning" :closable="false" /><p>共 {{ plan.actions.length }} 个文件</p><el-table :data="plan.actions" max-height="350"><el-table-column label="库" width="100"><template #default="s">{{ side(s.row.side) }}</template></el-table-column><el-table-column prop="path" label="文件路径" /></el-table><el-alert v-if="planError" :title="planError" type="error" :closable="false" /><div v-if="execution"><el-progress :percentage="execution.count ? Math.round(execution.progress.length * 100 / execution.count) : 0" :status="execution.state === 'failed' || planError ? 'exception' : execution.state === 'completed' ? 'success' : undefined" /><p>状态：{{ planError ? '待核实' : execution.state }} · 已处理 {{ execution.progress.length }}/{{ execution.count }}<span v-if="execution.error"> · {{ execution.error }}</span></p><p v-if="!planError && ['starting','executing'].includes(execution.state) && !execution.current" class="muted">正在核对执行前库存，请稍候…</p><p v-if="!planError && ['starting','executing'].includes(execution.state) && execution.current" class="file-path">正在处理并核对 {{ side(execution.current.side) }}：{{ execution.current.path }}</p></div></template>
-   <template #footer><el-button :disabled="planBusy" @click="planOpen = false">关闭</el-button><el-button v-if="plan" type="danger" :loading="planBusy" :disabled="!!execution" @click="executePlan">确认并执行</el-button></template>
+   <template v-else>
+    <el-alert :title="`${PLAN_LABELS[planMode] || '清理'}${planScope ? '（' + planScope + '）' : ''}。${planMode === 'manual' ? '网盘文件进入 115 回收站，分享库清理本地 STRM。' : '按治理判定清理被淘汰的一侧。'}扫描计划 2 小时内有效，其他计划 15 分钟内有效。`" type="warning" :closable="false" />
+    <p>共 {{ plan.actions.length }} 个文件</p>
+    <el-table :data="plan.actions" max-height="350">
+     <el-table-column label="库" width="100"><template #default="s">{{ side(s.row.side) }}</template></el-table-column>
+     <el-table-column prop="path" label="文件路径" />
+    </el-table>
+    <el-alert v-if="planError" :title="planError" type="error" :closable="false" />
+    <div v-if="execution">
+     <el-progress :percentage="execution.count ? Math.round(execution.progress.length * 100 / execution.count) : 0" :status="execution.state === 'failed' || planError ? 'exception' : execution.state === 'completed' ? 'success' : undefined" />
+     <p>{{ planError ? '待核实' : stateLabel(execution.state) }} · 已确认 {{ execution.progress.length }}/{{ execution.count }}<span v-if="execution.error"> · {{ execution.error }}</span></p>
+     <p v-if="execution.current" class="file-path">{{ execution.current_confirmed ? '已核实' : '正在核对或等待核实' }} · {{ side(execution.current.side) }} · {{ execution.current.path }}</p>
+     <p v-else-if="!planError && execution.state==='starting'" class="muted">等待后台执行。已有的整理或同步任务会先完成。</p>
+    </div>
+   </template>
+   <template #footer><el-button :disabled="planBusy && !execution" @click="planOpen = false">关闭</el-button><el-button v-if="plan" type="danger" :loading="planBusy" :disabled="!!execution" @click="executePlan">确认并执行</el-button></template>
   </el-dialog>
  </section>
 </template>

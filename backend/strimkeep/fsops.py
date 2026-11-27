@@ -13,7 +13,7 @@ SIDECAR_EXT = {'.nfo', '.json', '.xml', '.bif', '.jpg', '.jpeg', '.png', '.webp'
 LIBRARY_NAMES = ('影视媒体库', '分享影视库')
 
 
-def purge_strm(path, root):
+def purge_strm(path, root, *, resume_missing=False):
     """删除一个 STRM，并清理它自己的附属文件；目录无视频时再清整目录侧车并删空目录。
 
     范围控制（单集/单季/整剧不误伤）：
@@ -23,13 +23,15 @@ def purge_strm(path, root):
     """
     path, root = Path(path), Path(root)
     out = {'file': 0, 'sidecars': 0, 'dirs': 0}
-    try:
-        path.unlink()
-        out['file'] = 1
-    except FileNotFoundError:
-        return out
-    except OSError:
-        return out
+    if resume_missing:
+        if path.exists() or path.is_symlink():
+            return out
+    else:
+        try:
+            path.unlink()
+            out['file'] = 1
+        except OSError:
+            return out
 
     parent = path.parent
     stem = path.stem

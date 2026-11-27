@@ -74,7 +74,7 @@ def _local_share_strm(root, relative):
     return local
 
 
-async def delete_one(engine, evidence, source):
+async def delete_one(engine, evidence, source, on_confirm=None):
     if not engine.publication_gate.locked():
         raise RuntimeError('删除需要持有发布锁')
     side, record_id, path = evidence['side'], evidence['id'], evidence['path']
@@ -91,7 +91,7 @@ async def delete_one(engine, evidence, source):
         row = engine.store.db.execute('SELECT file_id,playback_id,relative_path FROM organized_files WHERE file_id=?', (record_id,)).fetchone()
         if not row or row['relative_path'] != path:
             return False
-        status, message, _ = await guarded_managed_delete(engine, dict(row))
+        status, message, _ = await guarded_managed_delete(engine, dict(row), on_confirm=on_confirm)
         if status == 'done':
             cleanup_empty_work(engine, path)
             return True
@@ -108,6 +108,9 @@ async def delete_one(engine, evidence, source):
             result = purge_strm(local, engine.root)
             if result['file'] != 1 or local.exists() or local.is_symlink():
                 return False
+            if on_confirm is not None:
+                with engine.store.db:
+                    on_confirm()
             cleanup_empty_work(engine, path)
             return True
         from .share_service import _verified_share_strm
@@ -120,7 +123,59 @@ async def delete_one(engine, evidence, source):
         with engine.store.db:
             count = engine.store.db.execute('DELETE FROM share_strms WHERE id=? AND revoked=0 AND strm_path=?',
                                             (record_id, path)).rowcount
+            if count == 1 and on_confirm is not None:
+                on_confirm()
         if count == 1:
             cleanup_empty_work(engine, path)
         return count == 1
+    return False
+
+
+async def recover_missing_delete(engine, evidence, source, on_confirm, verify):
+    """Reconcile a missing pending STRM without submitting a fresh recycle."""
+    if not engine.publication_gate.locked():
+        raise RuntimeError('清理恢复需要持有发布锁')
+    side, record_id, path = evidence['side'], evidence['id'], evidence['path']
+    relative = PurePosixPath(path)
+    root = Path(engine.root).resolve()
+    local = root.joinpath(*relative.parts)
+    if (relative.is_absolute() or '..' in relative.parts or '\\' in path or relative.suffix.lower() != '.strm'
+            or not local.resolve().is_relative_to(root) or local.is_symlink()
+            or any(parent.is_symlink() for parent in local.parents if parent.is_relative_to(root))):
+        return False
+    if local.exists():
+        return None
+    if await verify() is not True:
+        return False
+
+    store = engine.store
+    account = engine.index.account({})
+    if source_fingerprints(store.db, [(side, record_id, path)], account) != [source]:
+        return False
+    if side == 'cloud':
+        from .deep_delete import guarded_managed_delete
+        row = store.db.execute(
+            'SELECT file_id,playback_id,relative_path FROM organized_files WHERE file_id=?',
+            (record_id,)).fetchone()
+        if not row or row['relative_path'] != path:
+            return False
+        state, _, _ = await guarded_managed_delete(
+            engine, dict(row), on_confirm=on_confirm, recover_only=True)
+        return state == 'done'
+
+    if side == 'share':
+        from .fsops import purge_strm
+        with store.db:
+            if is_synthetic(record_id):
+                if store.db.execute('SELECT 1 FROM share_strms WHERE strm_path=? AND revoked=0',
+                                    (path,)).fetchone():
+                    return False
+            elif store.db.execute('DELETE FROM share_strms WHERE id=? AND revoked=0 AND strm_path=?',
+                                  (record_id, path)).rowcount != 1:
+                return False
+            purge_strm(local, root, resume_missing=True)
+            if local.exists() or local.is_symlink():
+                raise RuntimeError('本地 STRM 已重新出现，请核对后继续')
+            on_confirm()
+        return True
     return False

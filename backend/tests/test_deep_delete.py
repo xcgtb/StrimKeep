@@ -500,6 +500,39 @@ def test_pathless_webhook_reports_unsafe_and_never_queues(tmp_path, monkeypatch)
         assert store.db.execute('SELECT count(*) FROM deep_delete_queue').fetchone()[0] == 0
 
 
+def test_emby_folder_removal_is_ignored_during_organize(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from strimkeep.main import create_app
+
+    monkeypatch.setenv('ADMIN_USERNAME', 'admin')
+    monkeypatch.setenv('ADMIN_PASSWORD', 'test-password-1234')
+    app = create_app(tmp_path / 'app-data', tmp_path / 'app-strm')
+    store = app.state.store
+    store.set_many({'sync_config': {'webhook_token': 'testing-webhook', 'deep_delete_dry_run': False}})
+    path = '/media/分享影视库/电影/国产电影/电影名 (2026) {tmdb-10}'
+    payload = {'Event': 'library.deleted', 'Item': {'Type': 'Folder', 'Path': path, 'Id': '45103'}}
+    headers = {'X-StrimKeep-Token': 'testing-webhook'}
+
+    with TestClient(app) as client:
+        with store.db:
+            store.db.execute(
+                "INSERT INTO organize_jobs(state,config,created,updated) VALUES('queued',?,1,1)",
+                (json.dumps({'job_kind': 'organize'}),),
+            )
+        last = store.meta_json('deep_delete_last', {})
+        response = client.post('/api/v1/emby/webhook', headers=headers, json=payload)
+        assert response.status_code == 200
+        assert response.json() == {'accepted': False, 'ignored': True, 'matched': 0,
+                                   'reason': 'Emby 目录移除通知已忽略'}
+        notices = store.db.execute("SELECT message FROM events WHERE kind='deep_delete'").fetchall()
+        assert [row[0] for row in notices] == ['深度删除 · 已忽略 Emby 目录移除通知 · ' + path]
+        assert store.meta_json('deep_delete_last', {}) == last
+        assert store.db.execute('SELECT count(*) FROM deep_delete_queue').fetchone()[0] == 0
+
+        movie = {'Event': 'library.deleted', 'Item': {'Type': 'Movie', 'Path': path + '/movie.strm'}}
+        assert client.post('/api/v1/emby/webhook', headers=headers, json=movie).status_code == 409
+
+
 class ChainCloud(GuardedCloud):
     """带云端目录链与空目录回收的假云盘，供 prune_cloud_empty_chain 使用。"""
 

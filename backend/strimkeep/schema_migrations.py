@@ -7,6 +7,13 @@
 """
 import json
 
+INVENTORY_DISPATCH_DDL = (
+    "CREATE TABLE IF NOT EXISTS inventory_plan_dispatch ("
+    "plan_id TEXT PRIMARY KEY, queued_at REAL NOT NULL, "
+    "current TEXT NOT NULL DEFAULT '', confirmed INTEGER NOT NULL DEFAULT 0, "
+    "work_groups TEXT NOT NULL DEFAULT '')"
+)
+
 # (编号, 说明, 升级 SQL 列表)。列表内多条语句逐条执行。
 MIGRATIONS = [
     (1, '撤销表下线与热路径索引', [
@@ -48,6 +55,7 @@ MIGRATIONS = [
         "result TEXT NOT NULL DEFAULT '')",
         "CREATE INDEX IF NOT EXISTS worker_commands_state ON worker_commands(state,id)",
     ]),
+    (6, '库存清理派发与确认进度', [INVENTORY_DISPATCH_DDL]),
 ]
 
 # 列补丁：表 → [(列名, DDL)]。幂等：先 PRAGMA table_info 再补。

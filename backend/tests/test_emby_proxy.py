@@ -752,11 +752,15 @@ def test_video_stream_is_redirected_to_cdn_instead_of_relayed():
             seen.append(str(request.url))
             if request.url.path == '/emby/Items/123/PlaybackInfo':
                 return httpx.Response(200, json={'MediaSources': [{'Path': PLAYCODE_PATH}]})
+            if request.url.path == '/emby/Items/124/PlaybackInfo':
+                return httpx.Response(200, json={'MediaSources': [{'Path': PLAYCODE_PATH, 'Name': '另一部影片'}]})
             return httpx.Response(206, content=b'x' * 8)
 
-        rule = {'id': 'r1', 'upstream': 'http://emby', 'api_key': 'ADMIN-KEY',
+        rule = {'id': 'r1', 'name': '主 Emby', 'upstream': 'http://emby', 'api_key': 'ADMIN-KEY',
                 'port': 9001, 'enabled': True}
-        server = ProxyServer(rule, FakeStore(), FakeCloud())
+        store = FakeStore()
+        server = ProxyServer(rule, store, FakeCloud())
+        server.event('反代注入直链：1 条')
         server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
         app = server.build()
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
@@ -773,7 +777,21 @@ def test_video_stream_is_redirected_to_cdn_instead_of_relayed():
                                               'Range': 'bytes=1048576-'},
                                      follow_redirects=False)
             assert again.status_code == 302
-        assert sum(1 for url in seen if '/emby/Items/123' in url) == 2
+            for item in (123, 124):
+                repeat = await client.get(f'/emby/videos/{item}/stream.mkv',
+                                          params={'api_key': 'user-token'},
+                                          headers={'User-Agent': 'SenPlayer', 'Range': 'bytes=2097152-'},
+                                          follow_redirects=False)
+                assert repeat.status_code == 302
+        assert sum(1 for url in seen if '/emby/Items/123' in url) == 3
+        logs = [message for kind, message in store.events if kind == 'play' and '302' in message]
+        assert len(logs) == 3
+        assert '片.mkv（条目 123）' in logs[0] and 'GET' in logs[0]
+        assert 'Range 从 1048576 字节' in logs[1]
+        assert '另一部影片（条目 124）' in logs[2]
+        assert all('主 Emby（9001） · SenPlayer · 网盘来源' in log for log in logs)
+        assert all(secret not in log for log in logs
+                   for secret in ('user-token', 'ADMIN-KEY', 'abcdefg', 'https://', PLAYCODE_PATH))
         await server.client.aclose()
     asyncio.run(run())
 
@@ -867,6 +885,9 @@ def test_video_stream_reads_strm_content_to_build_the_redirect(monkeypatch, tmp_
                                                  server.config())
         assert response is not None and response.status_code == 302
         assert response.headers['location'].startswith('https://cdn')
+        _, message = store.events[-1]
+        assert '测试（条目 77）' in message
+        assert '/media/' not in message and str(tmp_path) not in message
         await server.client.aclose()
     asyncio.run(run())
 
@@ -885,7 +906,7 @@ def test_stream_redirect_checks_identity_and_media_source():
         server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
         from types import SimpleNamespace
         def req(query):
-            return SimpleNamespace(query_params=query, headers={'user-agent':'player'}, url=SimpleNamespace(path='/emby/videos/1/stream.mkv',query=''))
+            return SimpleNamespace(method='GET', query_params=query, headers={'user-agent':'player'}, url=SimpleNamespace(path='/emby/videos/1/stream.mkv',query=''))
         assert await server._stream_redirect(req({}), server.config()) is None
         assert calls == []
         download = req({'api_key':'valid'})

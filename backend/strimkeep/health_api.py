@@ -71,7 +71,8 @@ def _worker(store):
         return _check('worker', '后台 Worker', ERROR, '整理或调度已停止', detail, 'logs')
     labels = {'emby_coverage': '入库核查', 'media_info': '媒体信息补写', 'housekeeping': '例行维护',
               'operations': '后台命令', 'cover_operations': '封面生成', 'library_covers': '封面定时',
-              'inventory_schedule': '库存定时', 'inventory_compare': '全库对照', 'channel_check': '频道检查'}
+              'inventory_schedule': '库存定时', 'inventory_compare': '全库对照',
+              'inventory_delete': '片库清理', 'channel_check': '频道检查'}
     background = heartbeat.get('background') or {}
     stopped = [labels.get(name, name) for name, alive in background.items() if not alive]
     if stopped:

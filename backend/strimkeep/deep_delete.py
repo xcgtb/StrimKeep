@@ -11,6 +11,7 @@
 - dry_run（预演）模式只记录将要做什么
 """
 import asyncio
+import hashlib
 import json
 import re
 import time
@@ -18,6 +19,16 @@ from pathlib import Path
 from .emby_connection import strm_mount_path
 
 TYPES = ('Movie', 'Episode', 'Season', 'Series')
+
+
+def emby_removed_folder(payload):
+    """Return the native Emby folder-removal notice, which cannot authorize a delete."""
+    if not isinstance(payload, dict) or payload.get('Event') != 'library.deleted':
+        return None
+    item = payload.get('Item')
+    if isinstance(item, dict) and item.get('Type') == 'Folder':
+        return item
+    return None
 
 
 def parse_event(payload):
@@ -237,7 +248,6 @@ async def prune_cloud_empty_chain(engine, cid, notes):
 
 def _prepare_cloud(engine, target):
     """逐条核验：受管身份、本地 STRM、网盘来源。返回 (info, status, message)。"""
-    import hashlib
     from pathlib import Path
     try:
         store = engine.store
@@ -281,7 +291,7 @@ def _prepare_cloud(engine, target):
                        or intent.get('relative_path') != relative):
             return None, 'failed', '已有回收意图但身份不一致，未重复提交。'
         return {'account': account, 'fid': str(fid), 'pid': str(source['parent_id']),
-                'relative': relative, 'source': source, 'path': path, 'root': root,
+                'relative': relative, 'source': source, 'path': path, 'root': root, 'digest': expected,
                 'playback': pid, 'intent_key': intent_key, 'new_intent': intent is None}, None, ''
     except Exception as exc:
         detail = ('%s: %s' % (type(exc).__name__, exc)).strip()[:120]
@@ -296,14 +306,22 @@ async def _verify_gone(engine, fid):
         return False
 
 
-def _finish_cloud_local(engine, info):
+def _finish_cloud_local(engine, info, on_confirm=None, *, recover_only=False):
     store = engine.store
     try:
         from .fsops import purge_strm
         path = info['path']
         had_local = path.exists()
-        result = purge_strm(path, info['root']) if had_local else {'file': 0, 'dirs': 0}
-        if had_local and (result.get('file') != 1 or path.exists() or path.is_symlink()):
+        if path.is_symlink() or any(parent.is_symlink() for parent in path.parents
+                                    if parent.is_relative_to(info['root'])):
+            raise OSError('本地 STRM 路径已变化')
+        if had_local and (recover_only or not path.is_file()
+                          or path.stat().st_size > 20 * 1024 * 1024
+                          or hashlib.sha256(path.read_bytes()).hexdigest() != info['digest']):
+            raise OSError('本地 STRM 内容已变化')
+        result = (purge_strm(path, info['root'], resume_missing=recover_only)
+                  if had_local or recover_only else {'file': 0, 'dirs': 0})
+        if (had_local and result.get('file') != 1) or path.exists() or path.is_symlink():
             raise OSError('本地 STRM 清理失败')
         removed_dirs = result.get('dirs', 0)
         with store.db:
@@ -321,17 +339,21 @@ def _finish_cloud_local(engine, info):
             store.db.execute("DELETE FROM native_media_info_queue WHERE json_extract(target,'$.relative')=?",
                              (info['relative'],))
             store.db.execute('DELETE FROM meta WHERE key=?', (info['intent_key'],))
+            if on_confirm is not None:
+                on_confirm()
         return removed_dirs, had_local
     except Exception as exc:
         raise RuntimeError('网盘已回收，本地 STRM 或登记清理未完成；请核对后处理') from exc
 
 
-async def guarded_managed_delete(engine, target):
+async def guarded_managed_delete(engine, target, *, on_confirm=None, recover_only=False):
     """核验 → 提交一次回收 → 确认离开活动空间 → 本地清理。"""
     import asyncio
     info, status, message = _prepare_cloud(engine, target)
     if info is None:
         return status, message, []
+    if recover_only and info['new_intent']:
+        return 'failed', '没有已登记的回收意图，无法核实中断文件。', []
     store = engine.store
     try:
         if info['new_intent']:
@@ -354,9 +376,9 @@ async def guarded_managed_delete(engine, target):
                 pass
         if not await _verify_gone(engine, info['fid']):
             return 'failed', '网盘回收结果尚未确认，保留本地文件且不会重复提交。', []
-        removed_dirs, had_local = _finish_cloud_local(engine, info)
+        removed_dirs, had_local = _finish_cloud_local(engine, info, on_confirm, recover_only=recover_only)
         notes = []
-        if removed_dirs or not had_local:
+        if not recover_only and (removed_dirs or not had_local):
             await prune_cloud_empty_chain(engine, info['pid'], notes)
         text = '已确认网盘文件离开活动空间；受管本地 STRM 与专属侧车已清理。'
         if notes:

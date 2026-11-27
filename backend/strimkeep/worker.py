@@ -141,6 +141,7 @@ async def run_worker():
     engine.library_covers = LibraryCovers(store, http)
     await asyncio.to_thread(commands.recover_running, store)
     scan_app = inventory_app(store, engine, strm_root.resolve(), http)
+    from .inventory_operations_api import inventory_delete_loop
     background = {name: asyncio.create_task(coro, name=name) for name, coro in {
         'emby_coverage': engine.emby.coverage_loop(),
         'media_info': inject_loop(app, store),
@@ -148,6 +149,7 @@ async def run_worker():
         'operations': command_loop(store, engine, stop, commands.OPERATIONS),
         'cover_operations': command_loop(store, engine, stop, commands.COVER_OPERATIONS),
         'inventory_compare': command_loop(store, engine, stop, ('inventory_compare',), scan_app),
+        'inventory_delete': inventory_delete_loop(store, scan_app.state.inventory_run_delete),
         'channel_check': command_loop(store, engine, stop, ('channel_check',)),
         'library_covers': engine.library_covers.schedule_loop(),
         'inventory_schedule': scan_app.state.inventory_scan_loop(),
