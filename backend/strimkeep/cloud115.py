@@ -199,6 +199,7 @@ class Cloud115:
         # 于是重启后第一次请求立刻撞上还没结束的封锁窗口）。
         self._runtime_checked = float('-inf')
         self._runtime_account = None
+        self._runtime_revision = None
         self._restore_runtime()
 
     def _account_key(self):
@@ -225,8 +226,12 @@ class Cloud115:
             self.limit_streak = self.success_streak = 0
         self._runtime_account = account
         state = self.store.meta_json('cloud_runtime', {}) or {}
-        if state.get('account', account) != account:
+        if not isinstance(state, dict) or state.get('account', account) != account:
             return
+        revision = account, state.get('at')
+        if not first_read and revision == self._runtime_revision:
+            return
+        self._runtime_revision = revision
         try:
             cooldown = float(state.get('cooldown_until') or 0) - time.time()
             waf = float(state.get('waf_until') or 0) - time.time()
@@ -267,6 +272,7 @@ class Cloud115:
                     state[field] = max(state[field], previous)
             self.store.db.execute('INSERT OR REPLACE INTO meta VALUES(?,?)',
                                   ('cloud_runtime', json.dumps(state)))
+        self._runtime_revision = account, wall
 
     def throttle(self):
         """读 store 里的 cloud_throttle，30 秒缓存一次，别让每个请求都查库。"""
