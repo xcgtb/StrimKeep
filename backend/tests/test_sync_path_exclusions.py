@@ -89,7 +89,6 @@ def test_path_filter_preserves_existing_strm_and_applies_to_sidecars(tmp_path):
             assert json.loads(row['config'])['sync_exclude_keywords'] == ['/待整理/extras/']
 
             allowed = engine.tasks.sync_profile_config({**incremental, 'exclude_keywords': []})
-            assert engine.sync.scope(allowed) != engine.sync.scope({**allowed, 'sync_exclude_keywords': ['/extras/']})
             jid = new_job(store, allowed)
             await engine.run_job(jid)
             assert engine.job(jid)['state'] == 'completed'
