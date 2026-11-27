@@ -836,7 +836,7 @@ class ChannelMonitor:
         results = []
         enabled = {rule['name'] for rule in config['channels'] if rule['enabled']}
         for rule in config['channels']:
-            if not rule['enabled'] and not force:
+            if not rule['enabled']:
                 continue
             # 每抓一个就重算一次：title 是抓完才知道的，只在循环外算一次的话，
             # 后面频道的 title 要等到下一轮才生效（白多抓一轮）。

@@ -74,7 +74,7 @@ class ChannelRule(BaseModel):
     @model_validator(mode='after')
     def complete(self):
         if self.mode:
-            if self.mode == 'offline' and not self.target_cid:
+            if self.enabled and self.mode == 'offline' and not self.target_cid:
                 raise ValueError('存网盘/离线模式需要先选一个 115 保存目录。')
             if not self.share_mode:
                 self.share_mode = {'strm': 'strm', 'transfer': 'transfer', 'offline': 'transfer'}[self.mode]
@@ -84,6 +84,8 @@ class ChannelRule(BaseModel):
                 self.offline_cid, self.offline_label = self.target_cid, self.target_label
         if not self.share_mode:
             self.share_mode = 'strm'
+        if not self.enabled:
+            return self
         if self.share_mode == 'transfer' and not (self.share_cid or self.offline_cid
                                                    or self.magnet_cid or self.ed2k_cid):
             raise ValueError('115 网盘落盘需要至少选一个目录（分享转存 / 磁力 / ED2K）。')

@@ -79,7 +79,11 @@ function dropRoute(c:any,index:number|string){c.routes.splice(Number(index),1)}
 function stateOf(name:string){return sources.value.find((s:any)=>s.name===name)||{}}
 function stateLabel(row:any){return ({new:'未跟进',ready:'正常',backoff:'限流退避',error:'读取失败'} as any)[row.state]||row.state||'未跟进'}
 function notSource(cid:string){return !!cid&&!organizeSources.value.includes(cid)}
-async function save(){const missing=config.value.channels.filter((c:any)=>c.share_mode==='transfer'&&!c.share_cid&&!c.magnet_cid&&!c.ed2k_cid);if(missing.length){ElMessage.warning('「'+missing[0].name+'」还没选目录：分享转存、磁力、ED2K 至少配置一个');return}
+async function save(){const active=config.value.channels.filter((c:any)=>c.enabled)
+ const missing=active.find((c:any)=>c.share_mode==='transfer'&&!c.share_cid&&!c.offline_cid&&!c.magnet_cid&&!c.ed2k_cid)
+ if(missing){ElMessage.warning('启用「'+missing.name+'」前，请至少选一个转存或离线目录');return}
+ const privatePreview=active.find((c:any)=>c.source==='preview'&&/^-?\d+$/.test(c.name))
+ if(privatePreview){ElMessage.warning('启用「'+privatePreview.name+'」前，请将读取来源设为「用户会话」');return}
  const payload=JSON.parse(JSON.stringify(config.value))
  payload.channels=payload.channels.map((c:any)=>{const rest={...c};delete rest.mode;delete rest.target_cid;delete rest.target_label;return rest})
  await run(async()=>{absorb(await props.api('/channels','PUT',payload));ElMessage.success('频道监控已保存')})}
@@ -189,11 +193,11 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
    <strong>{{c.name}}</strong>
    <el-button text size="small" :disabled="busy" @click="startRename(c)">改名</el-button>
    <el-tag size="small" :type="c.enabled?'success':'info'">{{c.enabled?'启用':'停用'}}</el-tag>
-   <el-tag size="small" :type="stateOf(c.name).state==='error'?'danger':stateOf(c.name).state==='backoff'?'warning':'success'">{{stateLabel(stateOf(c.name))}}</el-tag>
+   <el-tag v-if="c.enabled" size="small" :type="stateOf(c.name).state==='error'?'danger':stateOf(c.name).state==='backoff'?'warning':'success'">{{stateLabel(stateOf(c.name))}}</el-tag>
    <el-button text type="danger" style="margin-left:auto" :disabled="busy" @click="removeChannel(c.name)">移除</el-button>
   </div>
   <p class="hint channel-meta">{{stateOf(c.name).title||'—'}} · 跟进到 {{stateOf(c.name).last_message_id||'—'}} · 已收 {{stateOf(c.name).posts||0}} 个分享</p>
-  <p class="hint channel-meta" v-if="stateOf(c.name).error">{{stateOf(c.name).error}}</p>
+  <p class="hint channel-meta" v-if="c.enabled && stateOf(c.name).error">{{stateOf(c.name).error}}</p>
 
   <div class="channel-section">
    <div class="organize-option"><label>处理这个频道</label><el-switch v-model="c.enabled" :disabled="busy"/></div>

@@ -455,6 +455,35 @@ def test_api_rejects_incomplete_transfer_rule_and_bad_cron():
     assert ok.channels[0].name == 'Test_Chan' and ok.cron == '*/10 * * * *'
 
 
+@pytest.mark.parametrize('draft, completion', [
+    ({'name': 'testchan', 'share_mode': 'transfer'}, {'share_cid': '12345'}),
+    ({'name': 'testchan', 'mode': 'offline'}, {'target_cid': '12345'}),
+    ({'name': '-1001234567', 'source': 'preview'}, {'source': 'session'}),
+])
+def test_disabled_channel_saves_incomplete_rule_until_enabled(draft, completion):
+    options = ChannelOptions(enabled=True, channels=[{**draft, 'enabled': False}])
+    assert not options.channels[0].enabled
+    with pytest.raises(ValueError):
+        ChannelOptions(enabled=True, channels=[{**draft, 'enabled': True}])
+    assert ChannelOptions(enabled=True, channels=[{**draft, **completion}]).channels[0].enabled
+
+
+def test_manual_check_skips_disabled_channel_even_if_schedule_is_off(tmp_path):
+    async def run():
+        store, monitor, http, _ = make(tmp_path, {
+            ('enabled_channel', None): FakeResponse(200, page([(100, 'x', [])])),
+        }, {'enabled': False, 'channels': [
+            {'name': 'enabled_channel'}, {'name': 'disabled_channel', 'enabled': False},
+        ]})
+        try:
+            assert await monitor.tick() == []
+            assert await monitor.tick(force=True) == [('enabled_channel', 0)]
+            assert http.urls == ['https://t.me/s/enabled_channel']
+        finally:
+            store.close()
+    asyncio.run(run())
+
+
 def test_channel_never_rewrites_the_organize_sources(tmp_path, monkeypatch):
     """目录不锁死：频道转存不该替用户改「待整理目录」。"""
     async def run():
