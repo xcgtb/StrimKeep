@@ -23,7 +23,7 @@ from .cloud115 import CloudError
 from .offline_api import directory_config, organize_flag_for
 from .transfer import shares
 
-SOURCES = ('manual', 'rss', 'webhook', 'telegram')
+SOURCES = ('manual', 'rss', 'webhook', 'telegram', 'subscription')
 STATUSES = ('pending', 'queued', 'duplicate', 'needs_review', 'failed', 'skipped')
 URL_RE = re.compile(r'(?i)(?:magnet:\?[^\s<>"\']+|ed2k://[^\s<>"\']+|(?:https?|ftp)://[^\s<>"\']+)')
 MAGNET_HASH = re.compile(r'(?i)btih:([A-Za-z0-9]+)')
@@ -223,12 +223,12 @@ class ResourceInbox:
         now = _now()
         accepted = requeued = duplicates = 0
         items = []
-        with self.store.db:
+        with self.store.transaction(immediate=True):
             for key, url, _kind in found:
                 existing = self.store.db.execute(
                     'SELECT id,status FROM resource_inbox WHERE dedupe_key=?', (key,)).fetchone()
                 if existing:
-                    if existing['status'] in ('failed', 'skipped', 'needs_review', 'duplicate'):
+                    if source != 'subscription' and existing['status'] in ('failed', 'skipped', 'needs_review', 'duplicate'):
                         self.store.db.execute(
                             'UPDATE resource_inbox SET source=?,external_id=?,title=?,text=?,'
                             'target_cid=?,auto_organize=?,status=\'pending\',message=\'\','
@@ -263,6 +263,7 @@ class ResourceInbox:
             self.store.db.execute(sql, values)
 
     async def process_row(self, row):
+        subscription = row['source'] == 'subscription'
         target = str(row['target_cid'] or '').strip() or self.config().get('target_cid', '')
         auto = bool(row['auto_organize'])
         text = str(row['text'] or '')
@@ -276,8 +277,19 @@ class ResourceInbox:
             if not target:
                 self._set(row['id'], 'needs_review', '还没有设置 115 分享转存目录。')
                 return
+            options = {}
+            if subscription:
+                attempt = self.store.db.execute(
+                    'SELECT expected_video FROM media_subscription_attempts WHERE inbox_id=?',
+                    (row['id'],)).fetchone()
+                if not attempt or not attempt['expected_video']:
+                    self._set(row['id'], 'needs_review', '追更转存缺少已核对的视频信息。')
+                    return
+                options = {'expected_video': json.loads(attempt['expected_video']),
+                           'update': f"subscription:{row['id']}"}
+                self._set(row['id'], 'needs_review', '转存提交待核实，请查看任务中心。')
             try:
-                ids = await self.engine.transfer.enqueue(text, target, auto, 'inbox')
+                ids = await self.engine.transfer.enqueue(text, target, auto, 'inbox', **options)
             except (ValueError, CloudError) as exc:
                 self._fail(row, exc)
                 return
@@ -307,6 +319,8 @@ class ResourceInbox:
             self._set(row['id'], 'needs_review', '还没有设置 %s 的离线目录。' % kind)
             return
         organize = auto if auto else organize_flag_for(cfg, kind, 'inbox')
+        if subscription:
+            self._set(row['id'], 'needs_review', '离线提交待核实，请查看任务中心。')
         try:
             sid = await self.engine.offline.submit(
                 [url], target, self._label(target), organize=organize, origin='inbox')

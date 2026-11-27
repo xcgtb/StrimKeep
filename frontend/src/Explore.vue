@@ -86,6 +86,7 @@ type ResourceItem = {
   provider_label: string
   remark: string
   published_at: string
+  review_reason?: string
 }
 type ResourceSource = { name: string; found?: number; error?: string }
 type ResourceAction = 'transfer' | 'share' | 'offline'
@@ -102,6 +103,144 @@ let targetRequestVersion = 0
 const resourceFailures = computed(() => resourceSources.value.filter(source => source.error))
 const visibleResources = computed(() => resourceItems.value.filter(item =>
   resourceFilter.value === 'all' || (resourceFilter.value === 'share') === (item.link_type === 'share')))
+
+type SeasonChoice = { number: number; name: string; air_date: string }
+type SubscriptionSettings = { share_action: 'share' | 'transfer'; backfill: boolean; enabled: boolean }
+type Subscription = SubscriptionSettings & {
+  media_type: 'movie' | 'tv'; tmdb_id: number; season: number; title: string; state: string; message: string;
+  last_check: number; next_check: number;
+  details: { present?: number[]; missing?: number[]; submitted?: number[]; needs_review?: number[];
+    candidates?: ResourceItem[]; sources?: ResourceSource[] };
+  attempts: { episode: number; job_id?: number; inbox_id?: number }[];
+}
+const subscriptionDialog = ref(false), subscriptionBusy = ref(false), subscriptionError = ref('')
+const subscriptions = ref<Subscription[]>([])
+const subscriptionEditor = ref<{ id: number; kind: 'movie' | 'tv'; title: string; seasons: SeasonChoice[]; edit: boolean } | null>(null)
+const subscriptionSeason = ref<number>()
+const subscriptionSettings = ref<SubscriptionSettings>({share_action: 'share', backfill: false, enabled: true})
+const subscribedWorks = computed(() => new Set(subscriptions.value.map(row => row.media_type + ':' + row.tmdb_id)))
+const subscriptionStates: Record<string, string> = {
+  pending: '等待检查', waiting: '待开播', caught_up: '已追齐', searching: '等待资源',
+  review: '待核查', submitted: '等待入库', error: '检查失败'
+}
+const subscriptionPath = '/explore/subscriptions'
+const subscriptionEndpoint = (kind: 'movie' | 'tv', id: number, season = 0) =>
+  kind === 'movie' ? subscriptionPath + '/movie/' + id : subscriptionPath + '/' + id + '/' + season
+const seasonLabel = (season: number) => 'S' + String(season).padStart(2, '0')
+const workLabel = (row: Subscription) => row.media_type === 'movie' ? '电影' : seasonLabel(row.season)
+function subscriptionLabel(row: Subscription) {
+  if (row.state === 'completed') return '已入库'
+  if (!row.enabled) return '已暂停'
+  if (row.media_type === 'movie' && row.state === 'waiting') return '待上映'
+  return subscriptionStates[row.state] || row.state
+}
+const episodeList = (episodes: number[]) => episodes.slice(0, 12).map(n => 'E' + String(n).padStart(2, '0')).join('、')
+  + (episodes.length > 12 ? ` 等 ${episodes.length} 集` : '')
+const checkTime = (ts: number) => new Date(ts * 1000).toLocaleString('zh-CN', {
+  month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+})
+function settingsFor(row: Subscription): SubscriptionSettings {
+  return {share_action: row.share_action, backfill: Boolean(row.backfill), enabled: Boolean(row.enabled)}
+}
+async function refreshSubscriptions() {
+  subscriptions.value = (await props.api(subscriptionPath)).items || []
+}
+async function doSubscription(action: () => Promise<void>) {
+  if (subscriptionBusy.value) return
+  subscriptionBusy.value = true
+  subscriptionError.value = ''
+  try { await action() } catch (e) {
+    subscriptionError.value = (e as Error).message
+  } finally {
+    subscriptionBusy.value = false
+  }
+}
+function showSubscriptions() {
+  if (subscriptionBusy.value) return
+  subscriptionEditor.value = null
+  subscriptionDialog.value = true
+  void doSubscription(refreshSubscriptions)
+}
+function subscribeTo(item: { id: number; kind: 'movie' | 'tv'; title: string }) {
+  if (subscriptionBusy.value) return
+  const movie = item.kind === 'movie' && subscriptions.value.find(row => row.media_type === 'movie' && row.tmdb_id === item.id)
+  if (movie && movie.state === 'completed') {
+    showSubscriptions()
+    return
+  }
+  subscriptionError.value = ''
+  subscriptionSettings.value = {share_action: 'share', backfill: false, enabled: true}
+  subscriptionSeason.value = undefined
+  subscriptionEditor.value = {id: item.id, kind: item.kind, title: item.title, seasons: [], edit: false}
+  subscriptionDialog.value = true
+  if (item.kind === 'movie') {
+    if (movie) subscriptionSettings.value = settingsFor(movie)
+    return
+  }
+  void doSubscription(async () => {
+    const {title, seasons} = await props.api(`${subscriptionPath}/seasons/${item.id}`) as {
+      title: string; seasons: SeasonChoice[]
+    }
+    subscriptionEditor.value = {id: item.id, kind: 'tv', title, seasons, edit: false}
+    const today = new Date().toLocaleDateString('sv-SE')
+    const aired = seasons.filter(season => season.air_date && season.air_date <= today)
+    subscriptionSeason.value = aired.at(-1)?.number ?? seasons[0]?.number
+    loadSeasonSettings()
+  })
+}
+function loadSeasonSettings() {
+  const row = subscriptions.value.find(row => row.media_type === 'tv'
+    && row.tmdb_id === subscriptionEditor.value?.id && row.season === subscriptionSeason.value)
+  subscriptionSettings.value = row ? settingsFor(row) : {share_action: 'share', backfill: false, enabled: true}
+}
+function editSubscription(row: Subscription) {
+  subscriptionError.value = ''
+  subscriptionEditor.value = {id: row.tmdb_id, kind: row.media_type, title: row.title, seasons: [], edit: true}
+  subscriptionSeason.value = row.season
+  subscriptionSettings.value = settingsFor(row)
+}
+function saveSubscription() {
+  const editor = subscriptionEditor.value
+  const season = subscriptionSeason.value
+  if (!editor || (editor.kind === 'tv' && !season)) return
+  void doSubscription(async () => {
+    await props.api(subscriptionEndpoint(editor.kind, editor.id, season), 'PUT', subscriptionSettings.value)
+    subscriptionEditor.value = null
+    ElMessage.success('订阅已保存')
+    await refreshSubscriptions()
+  })
+}
+function updateSubscription(row: Subscription, enabled: boolean) {
+  void doSubscription(async () => {
+    await props.api(subscriptionEndpoint(row.media_type, row.tmdb_id, row.season), 'PUT', {...settingsFor(row), enabled})
+    await refreshSubscriptions()
+  })
+}
+async function removeSubscription(row: Subscription) {
+  try {
+    const label = row.media_type === 'tv' ? seasonLabel(row.season) : ''
+    await ElMessageBox.confirm(`取消「${row.title}」${label}的订阅？`, '取消订阅',
+      {confirmButtonText: '取消订阅', cancelButtonText: '保留', type: 'warning'})
+  } catch { return }
+  await doSubscription(async () => {
+    await props.api(subscriptionEndpoint(row.media_type, row.tmdb_id, row.season), 'DELETE')
+    await refreshSubscriptions()
+  })
+}
+function reviewSubscription(row: Subscription) {
+  ++resourceRequestVersion
+  selected.value = {id: row.tmdb_id, title: row.title, kind: row.media_type}
+  resourceItems.value = row.details.candidates || []
+  resourceFilter.value = 'all'
+  resourceSources.value = []
+  resourceError.value = ''
+  resourceMessage.value = ''
+  resourceTruncated.value = false
+  resourceBusy.value = false
+  subscriptionDialog.value = false
+  resourceDialog.value = true
+  void loadTransferTarget()
+}
 
 async function findResources(item: any) {
   selected.value = item
@@ -243,11 +382,11 @@ watch(() => [route.name, route.query.resource_id, route.query.resource_kind, rou
   lastInventoryResource = key
   void findResources({id:Number(id), kind, title})
 }, {immediate:true})
-onMounted(async()=>{await loadGenres();await load()})
+onMounted(async()=>{void refreshSubscriptions().catch(()=>{});await loadGenres();await load()})
 </script>
 <template>
 <PageHeader title="影视探索" description="搜索电影和剧集，查看两库的入库状态。"><template #actions>
-<div class="kind-switch" aria-label="作品类型"><button :class="{active:kind==='movie'}" :aria-pressed="kind==='movie'" @click="pick('movie')">电影</button><button :class="{active:kind==='tv'}" :aria-pressed="kind==='tv'" @click="pick('tv')">剧集</button></div></template></PageHeader>
+<div class="kind-switch" aria-label="作品类型"><button :class="{active:kind==='movie'}" :aria-pressed="kind==='movie'" @click="pick('movie')">电影</button><button :class="{active:kind==='tv'}" :aria-pressed="kind==='tv'" @click="pick('tv')">剧集</button></div><el-button @click="showSubscriptions">追更订阅</el-button></template></PageHeader>
 <el-alert v-if="error" :title="error" type="error" show-icon class="global-error"/>
 
 <div class="filter-bar">
@@ -299,6 +438,9 @@ onMounted(async()=>{await loadGenres();await load()})
 <div class="explore-info">
 <h3 :title="it.title">{{it.title}}</h3>
 <p class="muted">{{it.year}} · TMDB</p><el-button size="small" @click="findResources(it)">查找资源</el-button>
+<el-button class="subscribe-card-button" size="small" @click="subscribeTo(it)">
+  {{subscribedWorks.has(it.kind + ':' + it.id) ? '订阅设置' : it.kind === 'movie' ? '订阅电影' : '订阅追更'}}
+</el-button>
 </div>
 </article>
 </div>
@@ -308,6 +450,68 @@ onMounted(async()=>{await loadGenres();await load()})
 <el-button :disabled="page<=1" @click="go(page-1)">上一页</el-button>
 <el-button :disabled="page>=totalPages" @click="go(page+1)">下一页</el-button>
 </div>
+
+<el-dialog v-model="subscriptionDialog" class="discovery-dialog" width="min(660px, 96vw)"
+  :title="subscriptionEditor?.title || '追更订阅'">
+  <el-alert v-if="subscriptionError" :title="subscriptionError" type="error" :closable="false" show-icon/>
+  <el-form v-if="subscriptionEditor" v-loading="subscriptionBusy" label-position="top" class="subscription-editor">
+    <el-form-item v-if="subscriptionEditor.kind==='tv'" label="订阅季">
+      <el-select v-if="!subscriptionEditor.edit" v-model="subscriptionSeason" placeholder="选择季" @change="loadSeasonSettings">
+        <el-option v-for="season in subscriptionEditor.seasons" :key="season.number" :value="season.number"
+          :label="`${seasonLabel(season.number)} · ${season.name || '第 ' + season.number + ' 季'}`"/>
+      </el-select>
+      <span v-else>{{ seasonLabel(subscriptionSeason || 1) }}</span>
+    </el-form-item>
+    <el-form-item label="115 分享入库方式">
+      <el-radio-group v-model="subscriptionSettings.share_action">
+        <el-radio value="share">生成分享 STRM</el-radio>
+        <el-radio value="transfer">转存到 115</el-radio>
+      </el-radio-group>
+      <p class="hint">磁力和 ED2K 使用资源入库中已配置的离线目录。</p>
+    </el-form-item>
+    <el-form-item v-if="subscriptionEditor.kind==='tv'">
+      <el-checkbox v-model="subscriptionSettings.backfill">补齐已有集数之前的缺集</el-checkbox>
+    </el-form-item>
+    <div class="subscription-actions">
+      <el-button @click="showSubscriptions">订阅列表</el-button>
+      <el-button type="primary" :disabled="subscriptionEditor.kind==='tv' && !subscriptionSeason" :loading="subscriptionBusy" @click="saveSubscription">保存订阅</el-button>
+    </div>
+  </el-form>
+  <div v-else v-loading="subscriptionBusy" class="subscription-list">
+    <div class="subscription-actions"><el-button :icon="Refresh" :disabled="subscriptionBusy" @click="doSubscription(refreshSubscriptions)">刷新</el-button></div>
+    <el-empty v-if="!subscriptions.length && !subscriptionBusy" description="从电影或剧集卡片添加订阅"/>
+    <article v-for="row in subscriptions" :key="`${row.media_type}:${row.tmdb_id}:${row.season}`" class="subscription-row">
+      <header>
+        <strong>{{row.title}} · {{workLabel(row)}}</strong>
+        <el-tag size="small" :type="row.state === 'completed' ? 'success' : row.enabled && ['review','error'].includes(row.state) ? 'warning' : 'info'">
+          {{subscriptionLabel(row)}}
+        </el-tag>
+      </header>
+      <p v-if="row.message" class="hint">{{row.message}}</p>
+      <p class="hint" v-if="row.last_check">上次检查 {{checkTime(row.last_check)}}<span v-if="row.enabled && row.next_check"> · 下次 {{checkTime(row.next_check)}}</span></p>
+      <template v-if="row.media_type==='tv'">
+        <p class="hint" v-if="row.details.present?.length">已入库 {{episodeList(row.details.present)}}</p>
+        <p class="hint" v-if="row.details.missing?.length">待补 {{episodeList(row.details.missing)}}</p>
+        <p class="hint" v-if="row.details.submitted?.length">已提交 {{episodeList(row.details.submitted)}}</p>
+        <p class="hint" v-if="row.details.needs_review?.length">待核查 {{episodeList(row.details.needs_review)}}</p>
+      </template>
+      <p class="hint" v-if="row.details.sources?.some(source => source.error)">
+        搜索失败 {{row.details.sources.filter(source => source.error).map(source => source.name).join('、')}}
+      </p>
+      <p class="hint" v-if="row.attempts.length">提交记录 {{row.attempts.slice(-4).map(a =>
+        (row.media_type === 'tv' ? 'E' + a.episode + ' · ' : '') + (a.job_id ? '任务 #' + a.job_id : a.inbox_id ? '收件箱 #' + a.inbox_id : '已有分享 STRM')).join('、')}}</p>
+      <div class="subscription-actions">
+        <el-button v-if="row.details.candidates?.length" size="small" @click="reviewSubscription(row)">查看候选</el-button>
+        <el-button v-else-if="row.details.needs_review?.length" size="small"
+          @click="subscriptionDialog=false;findResources({id:row.tmdb_id,title:row.title,kind:row.media_type})">查找其他资源</el-button>
+        <el-button v-if="row.state!=='completed'" size="small" @click="editSubscription(row)">编辑</el-button>
+        <el-button v-if="row.state!=='completed'" size="small" @click="updateSubscription(row, !row.enabled)">{{row.enabled ? '暂停' : '恢复'}}</el-button>
+        <el-button v-if="row.enabled" size="small" @click="updateSubscription(row, true)">安排检查</el-button>
+        <el-button size="small" text type="danger" @click="removeSubscription(row)">取消订阅</el-button>
+      </div>
+    </article>
+  </div>
+</el-dialog>
 
 <el-dialog v-model="resourceDialog" class="discovery-dialog" width="min(880px, 96vw)" :show-close="true">
 <template #header><div class="resource-heading"><h2>{{selected?.title}}</h2><p>{{selected?.kind==='tv'?'剧集':'电影'}} · {{selected?.year||'年份未知'}} · {{selected?.badge||'状态未知'}}</p></div></template>
@@ -347,6 +551,7 @@ onMounted(async()=>{await loadGenres();await load()})
       <span>{{ item.provider_label }}</span>
     </div>
     <h3>{{ item.title }}</h3>
+    <p v-if="item.review_reason" class="resource-remark">{{ item.review_reason }}</p>
     <p v-if="item.remark && item.remark !== item.title" class="resource-remark" :title="item.remark">{{ item.remark }}</p>
     <span v-if="item.published_at" class="resource-meta">{{ item.published_at }}</span>
     <div class="resource-card-actions">
@@ -366,6 +571,15 @@ onMounted(async()=>{await loadGenres();await load()})
 </template>
 <style scoped>
 :global(.discovery-dialog){margin:4vh auto !important;max-height:92vh;display:flex;flex-direction:column}:global(.discovery-dialog .el-dialog__body){min-height:0;overflow:auto}
+.explore-info :deep(.subscribe-card-button){margin-left:0;margin-top:5px}
+.subscription-editor,.subscription-list{padding-top:12px}
+.subscription-row{padding:14px 0;border-top:1px solid var(--line)}
+.subscription-row header,.subscription-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.subscription-row header{justify-content:space-between}
+.subscription-row .hint,.subscription-editor .hint{margin:6px 0}
+.subscription-list>.subscription-actions{justify-content:flex-end;margin-bottom:12px}
+.subscription-row .subscription-actions{margin-top:9px}
+.subscription-actions :deep(.el-button){margin-left:0}
 
 .target-summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 13px;border:1px solid var(--el-border-color-lighter);background:var(--el-fill-color-light);border-radius:10px}.target-summary>div{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 10px}.target-caption{font-size:10px;letter-spacing:.06em;color:var(--el-color-primary);font-weight:700}.target-summary strong{font-size:13px}.target-summary small{font-size:12px;color:var(--el-text-color-secondary)}.resource-buttons{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.resource-buttons :deep(.el-button + .el-button){margin-left:0}.resource-heading{padding-right:32px}.resource-heading h2{font-size:22px;margin:5px 0 4px;line-height:1.3}.resource-heading p{margin:0;color:var(--el-text-color-secondary);font-size:13px}.resource-toolbar,.resource-summary,.resource-card-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}.resource-toolbar{padding:4px 0 18px}.resource-toolbar-actions{display:flex;align-items:center;gap:10px}.resource-summary{padding:17px 0 12px;border-top:1px solid var(--el-border-color-lighter);font-size:13px;color:var(--el-text-color-secondary)}.resource-summary strong{font-size:20px;color:var(--el-text-color-primary)}.resource-filters{display:flex;gap:4px;background:var(--el-fill-color-light);padding:3px;border-radius:9px}.resource-filters button{border:0;background:transparent;color:var(--el-text-color-secondary);font-size:12px;padding:6px 9px;border-radius:7px;cursor:pointer}.resource-filters button.active{background:var(--el-bg-color);color:var(--el-color-primary);box-shadow:0 1px 4px #0002}.resource-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;max-height:52vh;overflow:auto;padding:1px 4px 4px 1px}.resource-card{border:1px solid var(--el-border-color-lighter);background:var(--el-fill-color-blank);border-radius:12px;padding:14px;min-width:0;display:flex;flex-direction:column;gap:10px}.resource-card h3{font-size:14px;line-height:1.5;margin:0;overflow-wrap:anywhere}.resource-labels,.resource-meta{display:flex;flex-wrap:wrap;gap:6px}.resource-labels span{font-size:11px;padding:3px 7px;border-radius:5px;background:var(--el-fill-color-light);color:var(--el-text-color-regular)}.resource-labels .source-badge{color:var(--el-color-primary);background:var(--el-color-primary-light-9);font-weight:700}.resource-meta{font-size:12px;color:var(--el-text-color-secondary)}.resource-card-actions{margin-top:auto;padding-top:10px;border-top:1px solid var(--el-border-color-lighter)}.resource-note{font-size:12px;color:var(--el-text-color-secondary)}.resource-remark{margin:0;font-size:12px;line-height:1.6;color:var(--el-text-color-regular);overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.badge-unknown{background:rgba(130,108,48,.9)}
 @media(max-width:640px){.resource-list{grid-template-columns:1fr;max-height:48vh}.resource-toolbar,.resource-summary,.resource-card-actions{align-items:flex-start;flex-wrap:wrap}.resource-heading h2{font-size:19px}.resource-filters{margin-left:auto}}

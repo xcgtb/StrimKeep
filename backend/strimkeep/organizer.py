@@ -145,7 +145,10 @@ class Organizer:
         self.notifications.channel_photo = self.telegram.notification_photo
         self.channels = ChannelMonitor(self)
         from .resource_inbox import ResourceInbox
+        from .subscriptions import MediaSubscriptions
         self.resources = ResourceInbox(self)
+        self.subscriptions = MediaSubscriptions(self)
+        self.subscription_task = None
 
     def start(self):
         # Interrupted requests are rechecked in process_item(), not rerun from scratch.
@@ -161,6 +164,7 @@ class Organizer:
         self.clock = asyncio.create_task(self.schedule_loop())
         self.channels.start()
         self.resources.start()
+        self.subscription_task = asyncio.create_task(self.subscriptions.loop())
         self.bot.start()
         self.emby.task = asyncio.create_task(self.emby.loop())
         self.emby.media_info.task = asyncio.create_task(self.emby.media_info.loop())
@@ -181,6 +185,9 @@ class Organizer:
 
     async def close(self):
         self.closing = True
+        if self.subscription_task:
+            self.subscription_task.cancel()
+            await asyncio.gather(self.subscription_task, return_exceptions=True)
         await self.channels.close()
         await self.resources.close()
         await self.bot.close()
@@ -1111,11 +1118,12 @@ class Organizer:
         """TMDB「条目不存在」的两种历史写法：新代码 TMDB_NOT_FOUND，旧代码 404 + UNAVAILABLE。"""
         return _tmdb_missing_error(exc)
 
-    async def tmdb(self, path, params=None):
+    async def tmdb(self, path, params=None, *, detail_ttl=None):
         """TMDB 请求走独立客户端：缓存、负缓存、429/5xx 重试都在那里。"""
         return await self._tmdb_client.get(
             self.http, path, params, misses=self._tmdb_missing,
-            search_ttl=self.TMDB_SEARCH_SECONDS, detail_ttl=self.TMDB_DETAIL_SECONDS,
+            search_ttl=self.TMDB_SEARCH_SECONDS,
+            detail_ttl=self.TMDB_DETAIL_SECONDS if detail_ttl is None else detail_ttl,
             episode_ttl=self.TMDB_EPISODE_SECONDS, missing_ttl=self.TMDB_MISSING_SECONDS)
 
     def _tmdb_gateway(self):

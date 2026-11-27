@@ -19,7 +19,7 @@ import os
 import re
 import secrets
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .media import PROBE_UA
 
@@ -38,6 +38,7 @@ from .share_cleanup import (pending_count, validate_play_token, refresh_share_ad
                             prune_empty_pending)
 from .share_recognition import episode_range_of, is_share_category as _is_share_category, quality_rank
 from .recognition_aliases import apply_alias
+from .transfer import verify_subscription_video
 
 PENDING_NAME = '分享STRM待整理'
 UNIDENT_NAME = '分享STRM未识别'
@@ -306,7 +307,8 @@ def generate(store, root, secret, videos, origin='web', settings_snapshot=None, 
     return {'created': created, 'skipped': skipped}
 
 
-def enqueue_organize(engine, origin='web', secret=None, channel_claim=None, generate_only=False, pending_only=False):
+def enqueue_organize(engine, origin='web', secret=None, channel_claim=None, generate_only=False, pending_only=False,
+                     *, expected_video=None):
     """把整理放入持久化 FIFO（U03）。secret 存在时任务会先补齐该分享的待整理。"""
     store = engine.store
     inherited = share_effective_settings(store)
@@ -315,6 +317,8 @@ def enqueue_organize(engine, origin='web', secret=None, channel_claim=None, gene
               'strm_options':inherited['strm'],'playback_base':inherited['playback_base'],'shared_version':inherited['version']}
     if generate_only: config['generate_only'] = True
     if pending_only: config['pending_only'] = True
+    if expected_video is not None:
+        config['expected_subscription_video'] = expected_video
     now = time.time()
     with store.transaction():
         jid = store.jobs.create(json.dumps(config, ensure_ascii=False))
@@ -364,7 +368,12 @@ async def run_organize(engine, job_id, config):
     secret = store.get('share-secret:' + str(job_id))
     if secret:
         engine.update_job(job_id, stage='读取分享内容并生成待整理 STRM')
-        videos = await list_videos(engine.cloud, secret, strm_rules['video_extensions'])
+        expected = config.get('expected_subscription_video')
+        videos = await list_videos(engine.cloud, secret, expected['extensions'] if expected else strm_rules['video_extensions'])
+        if expected:
+            verify_subscription_video(
+                ((list(PurePosixPath(video['path'], video['name']).parts), video['size']) for video in videos),
+                expected)
         if not videos:
             engine.update_job(job_id, state='completed', stage='分享整理结束', manifest=1, message='未发现符合当前视频扩展名的文件，其他格式已按规则跳过。')
             return
@@ -389,6 +398,8 @@ async def run_organize(engine, job_id, config):
     rows = store.db.execute(
         "SELECT * FROM share_strms WHERE revoked=0 AND strm_path LIKE ? ORDER BY created, id",
         (PENDING_NAME + '/%',)).fetchall()
+    if config.get('expected_subscription_video') and secret:
+        rows = [row for row in rows if row['share_code'] == secret['share_code']]
     # Capture original source membership before any successful item moves.
     # A durable marker makes a restarted or interrupted batch conservative:
     # old successes cannot be inferred from the remaining pending rows.

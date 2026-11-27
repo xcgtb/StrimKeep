@@ -208,6 +208,26 @@ def merge_results(groups):
     return list(merged.values()), truncated
 
 
+def discovery_config(store):
+    return DiscoveryConfig.model_validate(store.get(SETTING, {}))
+
+
+async def discover_resources(store, http, telegram, title):
+    cfg = discovery_config(store)
+    titles = {row['name']: row['title'] for row in
+              store.db.execute('SELECT name,title FROM channel_state')}
+    searches = [search_source(site.name, search_pansou(http, site, title))
+                for site in cfg.sites if site.enabled]
+    for channel in cfg.telegram_channels:
+        label = titles.get(channel) or channel
+        searches.append(search_source(label, search_channel(telegram, channel, label, title)))
+    if not searches:
+        return {'items': [], 'sources': [], 'truncated': False}
+    status, groups = zip(*(await asyncio.gather(*searches)))
+    items, truncated = merge_results(groups)
+    return {'items': items, 'sources': status, 'truncated': truncated}
+
+
 def install_resource_discovery(app, store, admin):
     store.forget(('resource_discovery_base', 'resource_discovery_token'))
     saved = store.get(SETTING, {})
@@ -219,9 +239,6 @@ def install_resource_discovery(app, store, admin):
         saved['sites'] = sites
         store.set_many({SETTING: saved})
 
-    def load():
-        return DiscoveryConfig.model_validate(store.get(SETTING, {}))
-
     def channel_options():
         monitor = app.state.organizer.channels
         titles = {row['name']: row['title'] for row in
@@ -231,7 +248,7 @@ def install_resource_discovery(app, store, admin):
 
     @app.get('/api/v1/explore/resource-config', dependencies=[Depends(admin)])
     async def config():
-        cfg = load()
+        cfg = discovery_config(store)
         return {
             'telegram_channels': cfg.telegram_channels, 'channels': channel_options(),
             'telegram_logged_in': app.state.organizer.telegram.status()['logged_in'],
@@ -245,18 +262,7 @@ def install_resource_discovery(app, store, admin):
 
     @app.post('/api/v1/explore/resources', dependencies=[Depends(admin)])
     async def search(body: SearchInput):
-        cfg = load()
-        channels = {option['name']: option['title'] for option in channel_options()}
-        http = app.state.http
-        searches = [search_source(site.name, search_pansou(http, site, body.title))
-                    for site in cfg.sites if site.enabled]
-        telegram = app.state.organizer.telegram
-        for channel in cfg.telegram_channels:
-            label = channels.get(channel, channel)
-            searches.append(search_source(label, search_channel(telegram, channel, label, body.title)))
-        if not searches:
+        results = await discover_resources(store, app.state.http, app.state.organizer.telegram, body.title)
+        if not results['sources']:
             raise HTTPException(409, '请在「系统设置 → 资源来源」添加站点或选择要搜索的 Telegram 频道。')
-        results = await asyncio.gather(*searches)
-        status, groups = zip(*results)
-        items, truncated = merge_results(groups)
-        return {'items': items, 'sources': status, 'truncated': truncated}
+        return results

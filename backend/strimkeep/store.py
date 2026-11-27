@@ -230,6 +230,17 @@ class Store:
           job_ids TEXT NOT NULL DEFAULT '[]',created REAL NOT NULL,updated REAL NOT NULL);
         CREATE INDEX IF NOT EXISTS resource_inbox_status ON resource_inbox(status,id);
         CREATE INDEX IF NOT EXISTS resource_inbox_source ON resource_inbox(source,id);
+        CREATE TABLE IF NOT EXISTS media_subscriptions(
+          media_type TEXT NOT NULL DEFAULT 'tv',tmdb_id INTEGER NOT NULL,season INTEGER NOT NULL,title TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,share_action TEXT NOT NULL,backfill INTEGER NOT NULL DEFAULT 0,
+          state TEXT NOT NULL DEFAULT 'pending',message TEXT NOT NULL DEFAULT '',
+          details TEXT NOT NULL DEFAULT '{}',last_check REAL NOT NULL DEFAULT 0,next_check REAL NOT NULL DEFAULT 0,
+          PRIMARY KEY(media_type,tmdb_id,season));
+        CREATE TABLE IF NOT EXISTS media_subscription_attempts(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,media_type TEXT NOT NULL,
+          tmdb_id INTEGER NOT NULL,season INTEGER NOT NULL,episode INTEGER NOT NULL,
+          link_key TEXT NOT NULL UNIQUE,kind TEXT NOT NULL,expected_video TEXT NOT NULL DEFAULT '',
+          inbox_id INTEGER,job_id INTEGER,created REAL NOT NULL,UNIQUE(media_type,tmdb_id,season,episode));
         CREATE TABLE IF NOT EXISTS resource_feeds(
           id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL DEFAULT '',url TEXT NOT NULL,
           enabled INTEGER NOT NULL DEFAULT 1,interval INTEGER NOT NULL DEFAULT 300,

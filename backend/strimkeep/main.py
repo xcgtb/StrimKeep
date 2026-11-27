@@ -710,6 +710,8 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
     install_inventory_operations(app, store, admin)
     from .resource_discovery import install_resource_discovery
     install_resource_discovery(app, store, admin)
+    from .subscriptions import install_subscriptions
+    install_subscriptions(app, store, admin)
     from .share_api import install_share
     install_share(app, store, admin)
     from .channels_api import install_channels

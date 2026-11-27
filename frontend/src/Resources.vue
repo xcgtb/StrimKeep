@@ -21,7 +21,7 @@ const feed=ref<any>(blankFeed())
 const rssXml=ref(''),importing=ref(false)
 const busy=ref(false),loading=ref(false),error=ref('')
 const STATUS:Record<string,string>={pending:'待处理',queued:'已入队',duplicate:'重复',needs_review:'待核查',failed:'失败',skipped:'已跳过'}
-const SOURCE:Record<string,string>={manual:'手动',rss:'RSS',webhook:'Webhook',telegram:'Telegram'}
+const SOURCE:Record<string,string>={manual:'手动',rss:'RSS',webhook:'Webhook',telegram:'Telegram',subscription:'追更订阅'}
 const statusType=(s:string):'success'|'danger'|'warning'|'info'=>s==='queued'?'success':s==='failed'?'danger':s==='needs_review'?'warning':'info'
 const webhookUrl=computed(()=>webhookToken.value?`${location.origin}/api/v1/resources/webhook/${webhookToken.value}`:'')
 const feedHealth=computed(()=>feeds.value.reduce((acc:any,row:any)=>{if(row.error||row.failures)acc.bad++;else acc.ok++;return acc},{ok:0,bad:0}))

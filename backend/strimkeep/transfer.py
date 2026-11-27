@@ -2,6 +2,7 @@
 import json
 import re
 import time
+from pathlib import PurePosixPath
 from urllib.parse import urlsplit,parse_qs
 from .cloud115 import CloudError, fatal
 
@@ -29,10 +30,18 @@ def shares(text):
     return found
 
 
+def verify_subscription_video(files, expected):
+    actual = [(parts, size) for parts, size in files
+              if parts and PurePosixPath(parts[-1]).suffix.casefold() in expected['extensions']]
+    if actual != [(expected['path'], expected['size'])]:
+        from .core import UncertainState
+        raise UncertainState('追更分享的视频内容已变化，请核查后再入库。')
+
+
 class Transfer:
     def __init__(self,engine):self.engine,self.store,self.cloud=engine,engine.store,engine.cloud
 
-    async def enqueue(self,text,dest,auto=False,origin='web',update=None):
+    async def enqueue(self,text,dest,auto=False,origin='web',update=None,*,expected_video=None):
         if not re.fullmatch(r'[1-9]\d{0,23}',dest):raise ValueError('请选择一个非根目录作为转存目标。')
         links=shares(text);account=self.engine.tasks.account()
         path=await self.cloud.path_info(dest)
@@ -56,6 +65,8 @@ class Transfer:
         with self.store.db:
             for link in links:
                 config={'job_kind':'transfer','account_id':account,'target_cid':dest,'target_label':label,'origin':origin,'organize_after':organize,'target_path_ids':[str(p['id']) for p in path]}
+                if expected_video is not None:
+                    config['expected_subscription_video'] = expected_video
                 jid=self.store.jobs.create(json.dumps(config))
                 self.store.db.execute('INSERT OR REPLACE INTO settings VALUES(?,?)',('transfer-secret:'+str(jid),encrypted(link)))
                 ids.append(jid)
@@ -89,6 +100,9 @@ class Transfer:
                     return
                 raise
             if not state['items']:raise UncertainState('分享中没有可保存的内容。')
+            if expected := config.get('expected_subscription_video'):
+                verify_subscription_video(((parts, size) for parts, is_dir, size in state['tree'] if not is_dir),
+                                          expected)
             save()
         self.engine.boundary(jid)
         # Only receiving and checking a batch needs exclusion from source
