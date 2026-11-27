@@ -18,6 +18,7 @@ import html as html_lib
 import json
 import re
 import time
+from contextlib import nullcontext
 from datetime import datetime
 
 from croniter import croniter
@@ -694,7 +695,8 @@ class ChannelMonitor:
             with self.store.db:
                 self.store.db.execute('DELETE FROM channel_share_attempts WHERE name=? AND share_code=?',
                                       (name, code))
-            result = share_service.generate(self.store, self.engine.root, secret, videos, origin='channel')
+            async with getattr(self.engine, 'publication_gate', None) or nullcontext():
+                result = share_service.generate(self.store, self.engine.root, secret, videos, origin='channel')
             created += len(result['created'])
         if created:
             queued=[]

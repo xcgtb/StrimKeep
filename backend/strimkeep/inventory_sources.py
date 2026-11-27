@@ -15,8 +15,11 @@ from .inventory_fs import is_synthetic
 
 def optional_account(engine):
     """An unavailable account makes cloud files ineligible, not local shares."""
+    index = getattr(engine, 'index', None)
+    if index is None:
+        return ''
     try:
-        return engine.index.account({})
+        return index.account({})
     except CloudError as exc:
         if exc.code not in ('LOGIN_REQUIRED', 'LOGIN_INVALID'):
             raise
