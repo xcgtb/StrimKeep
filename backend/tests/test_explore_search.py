@@ -4,6 +4,7 @@
 再点一次搜索还是同样的串，页面就永远「搜不到」。
 """
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from strimkeep import explore_api
@@ -85,3 +86,67 @@ def test_name_search_allows_year_but_rejects_other_filters(tmp_path, monkeypatch
     assert ok.status_code == 200, ok.text
     blocked = call(app, handler, {'kind': 'movie', 'q': '沙丘', 'genre': 28})
     assert blocked.status_code == 422
+
+
+@pytest.mark.parametrize('per_page', [30, 45])
+def test_deduplication_fills_display_pages_without_repeating_works(tmp_path, monkeypatch, per_page):
+    app = make_app(tmp_path, monkeypatch)
+    raw = list(range(1, 96))
+    raw[20:20] = [19, 20, None]
+    raw[44:44] = [40, None, 38]
+    raw[61:61] = [53, 54]
+    requested = []
+
+    def handler(request):
+        index = int(request.url.params['page'])
+        requested.append(index)
+        start = (index - 1) * 20
+        return httpx.Response(200, json={
+            'results': [{'id': value, 'title': f'作品 {value}'} if value is not None else {}
+                        for value in raw[start:start + 20]],
+            'total_pages': 6, 'total_results': len(raw),
+        })
+
+    with TestClient(app) as client:
+        client.post('/api/v1/auth/login', json={'username': 'admin', 'password': 'test-password-1234'})
+        app.state.store.set_many({'tmdb_key': 'k'})
+        http = app.state.http
+        fake = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        app.state.http = fake
+        try:
+            expected = list(range(1, 96))
+            for index, offset in enumerate(range(0, len(expected), per_page), 1):
+                result = client.get('/api/v1/explore/list', params={'per_page': per_page, 'page': index}).json()
+                assert result['page'] == index
+                assert [item['id'] for item in result['items']] == expected[offset:offset + per_page]
+                assert result['has_more'] is (offset + per_page < len(expected))
+                assert all(item['poster'] == '' for item in result['items'])
+            again = client.get('/api/v1/explore/list', params={'per_page': per_page, 'page': 1}).json()
+            assert [item['id'] for item in again['items']] == expected[:per_page]
+            beyond = client.get('/api/v1/explore/list', params={'per_page': per_page, 'page': index + 1}).json()
+            assert beyond['page'] == index and not beyond['has_more']
+            assert [item['id'] for item in beyond['items']] == expected[(index - 1) * per_page:]
+            assert sorted(requested) == list(range(1, 7))
+        finally:
+            app.state.http = http
+            client.portal.call(fake.aclose)
+
+
+def test_multiple_genres_and_regions_use_or_inside_each_group(tmp_path, monkeypatch):
+    settings = []
+
+    def handler(request):
+        settings.append((request.url.path, request.url.params))
+        return httpx.Response(200, json={'results': [MOVIE], 'total_pages': 1, 'total_results': 1})
+
+    app = make_app(tmp_path, monkeypatch)
+    response = call(app, handler, [
+        ('genre', 28), ('genre', 18), ('genre', 28),
+        ('region', 'KR'), ('region', 'JP'), ('region', 'KR'), ('year', 2021),
+    ])
+    assert response.status_code == 200, response.text
+    path, params = settings[0]
+    assert path.endswith('/discover/movie')
+    assert params['with_genres'] == '18|28'
+    assert params['with_origin_country'] == 'JP|KR'
+    assert params['primary_release_year'] == '2021'

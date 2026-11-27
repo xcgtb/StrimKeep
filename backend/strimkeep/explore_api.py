@@ -1,16 +1,25 @@
 """TMDB 影视探索：热门/分类浏览 + 入库状态角标（以 Emby 媒体库为准）。"""
+import asyncio
 import hashlib
 import json
+import math
 import re
 import time
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from collections import OrderedDict
+from typing import Annotated
 
 from fastapi import Depends, HTTPException, Query
+from pydantic import Field
 
 SORTS = ('popular', 'trending', 'top_rated', 'newest')
 MOVIE_ONLY = ('now_playing', 'upcoming')
 TV_ONLY = ('airing_today', 'on_the_air')
+TMDB_PAGE_SIZE = 20
+TMDB_PAGE_LIMIT = 500
+RESULT_FIELDS = ('id', 'title', 'name', 'original_title', 'original_name',
+                 'poster_path', 'vote_average', 'release_date', 'first_air_date')
 
 # TMDB ID → {kind}，5 分钟缓存，避免每次浏览都拉全库
 _emby_cache = {'at': 0, 'index': {}}
@@ -48,7 +57,98 @@ def _emby_identity(url, key):
     return hashlib.sha256((url + '\0' + key).encode()).hexdigest()
 
 
+@dataclass
+class _ExploreWindow:
+    """A sequence of distinct works retained while the user turns adjacent pages."""
+    next_page: int
+    offset: int
+    last_access: float
+    last_page: int = TMDB_PAGE_LIMIT
+    total: int | None = None
+    items: list = field(default_factory=list)
+    ids: set = field(default_factory=set)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    def append(self, number, data):
+        raw = data.get('results') or []
+        reported_total = data.get('total_results')
+        if type(reported_total) is int and reported_total >= 0:
+            self.total = min(reported_total, TMDB_PAGE_LIMIT * TMDB_PAGE_SIZE)
+            raw = raw[:max(0, self.total - (number - 1) * TMDB_PAGE_SIZE)]
+        reported_pages = data.get('total_pages')
+        if type(reported_pages) is int and reported_pages >= 0:
+            self.last_page = min(reported_pages, TMDB_PAGE_LIMIT)
+        elif self.total is not None:
+            self.last_page = math.ceil(self.total / TMDB_PAGE_SIZE)
+        elif len(raw) < TMDB_PAGE_SIZE:
+            self.last_page = number
+        for item in raw:
+            if not isinstance(item, dict) or type(item.get('id')) is not int or item['id'] in self.ids:
+                continue
+            self.ids.add(item['id'])
+            self.items.append({name: item[name] for name in RESULT_FIELDS if name in item})
+        self.next_page = number + 1
+
+
+class _ExplorePages:
+    def __init__(self):
+        self.windows = OrderedDict()
+
+    async def collect(self, fetch, path, params, page, per_page):
+        offset = (page - 1) * per_page
+        max_results = TMDB_PAGE_LIMIT * TMDB_PAGE_SIZE
+        if offset >= max_results:
+            return [], min(page, math.ceil(max_results / per_page)), math.ceil(max_results / per_page), False, False
+        key = (path, tuple(sorted(params.items())))
+        now = time.monotonic()
+        window = self.windows.get(key)
+        if window is None or offset < window.offset or (
+            not window.lock.locked() and (
+                now - window.last_access > 300
+                or offset > window.offset + len(window.items) + 12 * TMDB_PAGE_SIZE
+            )
+        ):
+            # An unrelated client can jump deep into the result set without replaying hundreds of API pages.
+            start = 1 if offset <= 12 * TMDB_PAGE_SIZE else offset // TMDB_PAGE_SIZE + 1
+            window = self.windows[key] = _ExploreWindow(start, (start - 1) * TMDB_PAGE_SIZE, now)
+        self.windows.move_to_end(key)
+        while len(self.windows) > 8:
+            self.windows.popitem(last=False)
+        async with window.lock:
+            window.last_access = time.monotonic()
+            wanted = offset + per_page - window.offset
+            pulled = 0
+            while len(window.items) < wanted and window.next_page <= window.last_page:
+                if pulled >= 24:
+                    raise HTTPException(502, 'TMDB 返回的分页数据暂时不完整，请重试。')
+                count = min(4, max(1, math.ceil((wanted - len(window.items)) / TMDB_PAGE_SIZE)))
+                numbers = range(window.next_page, min(window.next_page + count, window.last_page + 1))
+                pages = await asyncio.gather(*(fetch(path, {**params, 'page': n}) for n in numbers))
+                pulled += len(pages)
+                for number, data in zip(numbers, pages):
+                    if number > window.last_page:
+                        break
+                    window.append(number, data)
+            exhausted = window.next_page > window.last_page
+            available = window.offset + len(window.items)
+            estimate = window.total if window.total is not None else window.last_page * TMDB_PAGE_SIZE
+            if exhausted and window.offset and not window.items and estimate <= window.offset:
+                last = max(1, math.ceil(estimate / per_page))
+            else:
+                last = None
+            total = available if exhausted else max(available, estimate)
+            total_pages = max(1, min(TMDB_PAGE_LIMIT, math.ceil(total / per_page)))
+            page = min(page, total_pages)
+            start = (page - 1) * per_page - window.offset
+            items = window.items[max(0, start):max(0, start + per_page)]
+        if last is not None:
+            return await self.collect(fetch, path, params, last, per_page)
+        return items, page, total_pages, exhausted and not available, page < total_pages
+
+
 def install_explore(app, store, admin):
+    explore_pages = _ExplorePages()
+
     async def tmdb(path, params=None):
         key = store.get('tmdb_key')
         if not key:
@@ -190,13 +290,15 @@ def install_explore(app, store, admin):
     async def explore_list(
         kind: str = Query('movie', pattern='^(movie|tv)$'),
         sort: str = Query('popular'),
-        genre: int = Query(None, ge=0),
+        genre: list[Annotated[int, Field(ge=0)]] = Query([], max_length=32),
         year: int = Query(None, ge=1900, le=2100),
-        region: str = Query(None, pattern='^[A-Z]{2}$'),
+        region: list[Annotated[str, Field(pattern='^[A-Z]{2}$')]] = Query([], max_length=20),
         page: int = Query(1, ge=1, le=500),
         q: str = Query(None, max_length=200),
         per_page: int = Query(40, ge=10, le=60),
     ):
+        genre = sorted(set(genre) - {0})
+        region = sorted(set(region))
         allowed = set(MOVIE_ONLY if kind == 'movie' else TV_ONLY)
         selected = {sort} if sort in allowed else set()
         if selected:
@@ -207,7 +309,9 @@ def install_explore(app, store, admin):
             raise HTTPException(422, '名称搜索请先清除类型 / 地区 / 榜单筛选，年份可以保留。')
         if sort == 'trending' and (selected or genre or year or region):
             raise HTTPException(422, 'TMDB 趋势榜暂不支持组合筛选，请选择其他排序。')
-        params = {'page': page}
+        if not store.get('tmdb_key'):
+            raise HTTPException(409, '请先保存 TMDB API Key。')
+        params = {}
         date_field = 'primary_release_date' if kind == 'movie' else 'first_air_date'
         query = (q or '').strip()
         if query:
@@ -247,51 +351,21 @@ def install_explore(app, store, admin):
                 params['air_date.gte'] = (today - timedelta(days=7) if 'on_the_air' in selected else today).isoformat()
                 params['air_date.lte'] = today.isoformat()
         if region:
-            params['with_origin_country'] = region
+            params['with_origin_country'] = '|'.join(region)
         if genre:
-            params['with_genres'] = genre
+            params['with_genres'] = '|'.join(map(str, genre))
         if year:
             params['primary_release_year' if kind == 'movie' else 'first_air_date_year'] = year
 
-        import asyncio, math
         year_key = 'primary_release_year' if kind == 'movie' else 'first_air_date_year'
-
-        async def collect(params):
-            """按 per_page 换算成 TMDB 的 20 条一页，取回本页切片。"""
-            # Translate arbitrary page sizes into TMDB's fixed 20-item pages.
-            # Round offsets before fetching, then slice: 30-item pages otherwise
-            # silently skip ten works at each boundary.
-            offset = (page - 1) * per_page
-            if offset >= 10000:
-                return [], 0, min(500, math.ceil(10000 / per_page)), True
-            base = offset // 20 + 1
-            skip = offset % 20
-            pages_needed = min(501 - base, max(1, math.ceil((skip + per_page) / 20)))
-            pages = await asyncio.gather(*(tmdb(path, {**params, 'page': base + i})
-                                           for i in range(pages_needed)))
-            merged = []
-            for data in pages:
-                merged += data.get('results') or []
-            seen = set()
-            collected = []
-            for item in merged[skip:skip + per_page]:
-                if not isinstance(item, dict) or 'id' not in item or item['id'] in seen:
-                    continue
-                seen.add(item['id'])
-                collected.append(item)
-            total = pages[0].get('total_results')
-            if type(total) is not int or total < 0:
-                total = (pages[0].get('total_pages') or 1) * 20
-            return collected, total, max(1, min(500, math.ceil(min(total, 10000) / per_page))), False
-
-        results, total, total_pages, beyond_limit = await collect(params)
-        if beyond_limit:
-            return {'items': [], 'page': page, 'total_pages': total_pages}
-        # 带年份一条都没有时放宽一次：手输年份错一年、或片子跨年上映，
-        # 不该直接给一片空白（现场「带年份就搜不到」）。
-        if query and year and not results:
+        results, actual_page, total_pages, empty, has_more = await explore_pages.collect(tmdb, path, params, page, per_page)
+        relaxed_year = bool(query and year and empty)
+        if relaxed_year:
             relaxed = {key: value for key, value in params.items() if key != year_key}
-            results, total, total_pages, beyond_limit = await collect(relaxed)
+            results, actual_page, total_pages, _, has_more = await explore_pages.collect(tmdb, path, relaxed, page, per_page)
+        if not results:
+            return {'items': [], 'page': actual_page, 'total_pages': total_pages, 'has_more': False,
+                    'relaxed_year': relaxed_year}
 
         # Emby 为准（在不在媒体库），集数与总集数只查当前页里在库的剧集
         emby_idx, emby_complete = await emby_tmdb_index()
@@ -300,7 +374,7 @@ def install_explore(app, store, admin):
             value = emby_idx.get(('tv', tid))
             return value if isinstance(value, str) and value else None
         tv_sids = [(r['id'], series_id(r['id'])) for r in results
-                   if isinstance(r, dict) and series_id(r['id'])]
+                   if kind == 'tv' and series_id(r['id'])]
         async def _tv_total(tid):
             try:
                 details = await app.state.organizer.tmdb('tv/%d' % tid)
@@ -356,10 +430,11 @@ def install_explore(app, store, admin):
                 badge, ratio = '在库', None
             items.append({
                 'id': tid, 'kind': kind,
-                'title': r.get('title') or r.get('name') or '',
+                'title': r.get('title') or r.get('name') or r.get('original_title') or r.get('original_name') or '未命名',
                 'poster': r.get('poster_path') or '',
                 'rating': r.get('vote_average') or 0,
                 'year': (r.get('release_date') or r.get('first_air_date') or '')[:4],
                 'badge': badge, 'ratio': ratio,
             })
-        return {'items': items, 'page': page, 'total_pages': min(total_pages, 500)}
+        return {'items': items, 'page': actual_page, 'total_pages': total_pages,
+                'has_more': has_more, 'relaxed_year': relaxed_year}
