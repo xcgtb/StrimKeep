@@ -354,7 +354,7 @@ class Sync:
         self.store.jobs.replace_manifest(jid, [(v['id'], dumps(v)) for v in videos])
         current = json.loads(self.engine.job(jid)['config'])
         current.update(manifest_details)
-        current['sync_mode'] = 'full'
+        current['sync_mode'] = 'receipt' if listing == 'receipt' else 'full'
         current['sync_directory_stats']=stats
         current['sync_listing']=listing
         current['sync_effective_roots']=effective
@@ -1392,9 +1392,7 @@ class Sync:
         if not partial and not config.get('sync_trigger') and self.store.get('sync_full_due'):
             self.store.set_many({'sync_full_due': 0})
         summary = f'完整清单已核实；清理失效受管文件 {removed} 个。'
-        if cached:
-            summary = '复用近期已核对清单；本次未扫描全部云端目录，也不执行失效清理。'
-        elif config.get('sync_trigger') == 'transfer':
+        if config.get('sync_trigger') == 'transfer':
             summary = '已核实转存目录并补齐输出，失效清理交由常规同步。'
         messages = [summary, '；'.join(warnings) if warnings else '云端文件未修改。']
         if config.get('sync_filter_count'):
