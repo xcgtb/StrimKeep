@@ -159,7 +159,10 @@ async def run_worker():
     last_prune = 0.0
     try:
         while not stop.is_set():
-            store.set_meta('worker_heartbeat', heartbeat_payload(engine, background))
+            try:
+                await asyncio.to_thread(store.set_meta, 'worker_heartbeat', heartbeat_payload(engine, background))
+            except Exception:
+                pass
             now = time.monotonic()
             if now - last_reap >= 120:
                 last_reap = now

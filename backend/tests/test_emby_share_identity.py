@@ -115,3 +115,28 @@ def test_repair_rearms_unconfirmed_delivery(tmp_path):
     assert payload['targets'][0]['pid'] == 'share/s1'
     # 只修一次：再调用不重复改动。
     assert engine.emby.repair_share_identities(time.time()) == 0
+
+
+def test_share_pids_scoped_batch_query(tmp_path):
+    store, engine, _ = make_engine(tmp_path, {})
+    with store.db:
+        rows = [
+            (f's{i}', 'c1', '', f'f{i}', 'pc', f'name-{i}', f'分享影视库/剧集/作品/Season 1/E{i:04d}.strm', 'h',
+             1 if i == 0 else 0, 1)
+            for i in range(600)
+        ]
+        store.db.executemany(
+            'INSERT INTO share_strms(id,share_code,receive_code,file_id,pickcode,'
+            'name,strm_path,token_hash,revoked,created) VALUES(?,?,?,?,?,?,?,?,?,?)',
+            rows)
+
+    assert engine.emby.share_pids([]) == {}
+    # 超过 500 条时自动分批，且跳过 revoked=1（s0）与未请求的记录。
+    wanted = [f'分享影视库/剧集/作品/Season 1/E{i:04d}.strm' for i in range(0, 550)]
+    scoped = engine.emby.share_pids(wanted)
+    assert '分享影视库/剧集/作品/Season 1/E0000.strm' not in scoped
+    assert len(scoped) == 549
+    assert scoped['分享影视库/剧集/作品/Season 1/E0549.strm'] == 's549'
+    # 无参调用保持向后兼容，返回全部有效记录。
+    assert len(engine.emby.share_pids()) == 599
+

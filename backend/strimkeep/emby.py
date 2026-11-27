@@ -380,7 +380,7 @@ class EmbyDelivery:
             return result
         # 分享 STRM 在 Emby 里以 share/<share_id> 作为播放身份；任务里只有 115
         # 文件 ID，两边永远对不上，整批就会被判「入库未确认」。
-        shares = self.share_pids()
+        pending = []
         for row in self.store.db.execute("SELECT i.id,i.file_id,i.plan,i.state FROM organize_items i WHERE job_id=? AND state IN ('done','recycled') ORDER BY id", (jid,)):
             if only_ids is not None and row['id'] not in only_ids:
                 continue
@@ -400,6 +400,11 @@ class EmbyDelivery:
             if identity in seen:continue
             seen.add(identity)
             if job_config.get('job_kind') == 'strm_sync' and not plan.get('output_changed'): continue
+            pending.append((row, plan, update_type))
+        if not pending:
+            return result
+        shares = self.share_pids([plan['relative_path'] for _, plan, _ in pending])
+        for row, plan, update_type in pending:
             hint, details = plan.get('hint', {}), plan.get('details', {})
             if not hint:
                 managed = self.store.db.execute('SELECT metadata FROM organized_files WHERE file_id=?', (row['file_id'],)).fetchone()
@@ -415,13 +420,27 @@ class EmbyDelivery:
                            'tmdb':details.get('id') or hint.get('tmdb_id'), 'title':title, 'confirmed':False})
         return result
 
-    def share_pids(self):
+    def share_pids(self, paths=None):
         """分享入库的播放身份：Emby 里是 share/<share_id>，不是 115 文件 ID。
 
         分享 STRM 的播放地址是 /play115/share/<sid>/…，Emby 条目只带这个地址。
+        按当前批次路径集合分批查询（命中 share_strms_path 索引），避免大库全表加载。
         """
-        return {row['strm_path']: str(row['id']) for row in self.store.db.execute(
-            'SELECT id,strm_path FROM share_strms WHERE revoked=0')}
+        if paths is None:
+            return {row['strm_path']: str(row['id']) for row in self.store.db.execute(
+                'SELECT id,strm_path FROM share_strms WHERE revoked=0')}
+        unique = list(dict.fromkeys(str(p) for p in paths if p))
+        if not unique:
+            return {}
+        found = {}
+        for start in range(0, len(unique), 500):
+            chunk = unique[start:start + 500]
+            marks = ','.join('?' for _ in chunk)
+            for row in self.store.db.execute(
+                    f'SELECT id,strm_path FROM share_strms WHERE revoked=0 AND strm_path IN ({marks})',
+                    chunk):
+                found[row['strm_path']] = str(row['id'])
+        return found
 
     def row(self, jid):
         return self.store.db.execute('SELECT * FROM emby_deliveries WHERE job_id=?', (jid,)).fetchone()
