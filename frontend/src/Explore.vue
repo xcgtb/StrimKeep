@@ -1,16 +1,15 @@
 <script setup lang="ts">
 import PageHeader from './PageHeader.vue'
 import {computed, nextTick, onMounted, onUnmounted, ref, watch} from 'vue'
-import {Film, Search, Setting, Refresh, Filter} from '@element-plus/icons-vue'
+import {ArrowLeft, ArrowRight, Film, Search, Setting, Refresh} from '@element-plus/icons-vue'
 import {ElMessage,ElMessageBox} from 'element-plus'
 import {useRouter,useRoute} from 'vue-router'
 import {ApiError} from './api/client'
 const router=useRouter(),route=useRoute()
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>()
 const kind = ref<'movie' | 'tv'>('movie'), sort = ref('popular'), page = ref(1)
-const genreIds = ref<number[]>([]), regions = ref<string[]>([]), year = ref<number>()
-const filtersOpen=ref(false)
-const filterCount = computed(() => genreIds.value.length + regions.value.length + Number(Boolean(year.value)))
+const genreIds = ref<number[]>([]), regions = ref<string[]>([])
+const browseYear = ref<number>(), searchYear = ref<number>()
 type ExploreItem = { id: number; kind: 'movie' | 'tv'; title: string; poster: string; rating: number;
   year: string; badge: string; ratio?: string }
 const moviesOnMobile = window.matchMedia('(max-width: 640px)')
@@ -20,26 +19,31 @@ const missingPosters = ref(new Set<number>())
 const items = ref<ExploreItem[]>([]), genres = ref<{id: number; name: string}[]>([])
 const totalPages=ref(1),hasMore=ref(false),busy=ref(false),error=ref(''),relaxedYear=ref(false)
 const searchInput=ref(String(route.query.q||'')),activeQuery=ref(String(route.query.q||''))
+const browsing = computed(() => !activeQuery.value && sort.value !== 'trending')
+const year = computed(() => activeQuery.value ? searchYear.value : browseYear.value)
+const hasFilters = computed(() => Boolean(genreIds.value.length || regions.value.length || browseYear.value))
 watch(() => route.query.q, value => {
   const query = String(value || '').trim()
   if (query === activeQuery.value) return
   searchInput.value = activeQuery.value = query
-  genreIds.value = []
-  regions.value = []
-  sort.value = 'popular'
+  searchYear.value = undefined
   page.value = 1
   void load()
 })
 const badgeClass:Record<string,string>={'已入库':'badge-ok','已完整':'badge-ok','连载中':'badge-partial','未入库':'badge-none','状态未知':'badge-unknown'}
 
 let requestVersion=0
+let filterTimer: number | undefined
 async function load(scroll = false){
+  window.clearTimeout(filterTimer)
   const version=++requestVersion;busy.value=true;error.value=''
   try{
-    const q=new URLSearchParams({kind:kind.value,sort:sort.value,page:String(page.value),per_page:String(perPage.value)})
-    for (const genre of genreIds.value) q.append('genre', String(genre))
-    for (const region of regions.value) q.append('region', region)
-    if(year.value)q.set('year',String(year.value))
+    const q=new URLSearchParams({kind:kind.value,sort:activeQuery.value?'popular':sort.value,page:String(page.value),per_page:String(perPage.value)})
+    if (browsing.value) {
+      for (const genre of genreIds.value) q.append('genre', String(genre))
+      for (const region of regions.value) q.append('region', region)
+    }
+    if ((browsing.value || activeQuery.value) && year.value) q.set('year', String(year.value))
     if(activeQuery.value)q.set('q',activeQuery.value)
     const r=await props.api('/explore/list?'+q.toString())
     if(version!==requestVersion)return
@@ -49,9 +53,9 @@ async function load(scroll = false){
     totalPages.value = r.total_pages || 1
     hasMore.value = r.has_more ?? page.value < totalPages.value
     relaxedYear.value = Boolean(r.relaxed_year)
-    if (scroll) {
+    if (scroll && version === requestVersion) {
       await nextTick()
-      resultHeading.value?.scrollIntoView({block: 'start'})
+      if (version === requestVersion) resultHeading.value?.scrollIntoView({block: 'start'})
     }
   }catch(e){if(version===requestVersion){error.value=(e as Error).message;items.value=[];totalPages.value=1;hasMore.value=false;relaxedYear.value=false}}finally{if(version===requestVersion)busy.value=false}
 }
@@ -73,6 +77,7 @@ function clearSearchQuery() {
   if (!activeQuery.value) return
   activeQuery.value = ''
   searchInput.value = ''
+  searchYear.value = undefined
   if (route.query.q) {
     const query = {...route.query}
     delete query.q
@@ -81,42 +86,33 @@ function clearSearchQuery() {
 }
 function setSort(value: string) {
   if (sort.value === value) return
-  clearSearchQuery()
-  if (value === 'trending' && filterCount.value) {
-    genreIds.value = []
-    regions.value = []
-    year.value = undefined
-    ElMessage.info('已切换到独立的趋势榜')
-  }
   sort.value = value
   page.value = 1
   void load()
 }
 const regionOptions = [['CN','中国大陆'],['HK','中国香港'],['TW','中国台湾'],['US','美国'],
   ['GB','英国'],['JP','日本'],['KR','韩国'],['IN','印度'],['FR','法国'],['TH','泰国']]
-const activeFilters = computed(() => [
-  ...genres.value.filter(genre => genreIds.value.includes(genre.id)).map(genre => genre.name),
-  ...regionOptions.filter(([code]) => regions.value.includes(code)).map(([, label]) => label),
-  ...(year.value ? [String(year.value) + ' 年'] : []),
-])
+const selectedLabels = computed(() => [
+  genres.value.filter(genre => genreIds.value.includes(genre.id)).map(genre => genre.name).join('、'),
+  regionOptions.filter(([code]) => regions.value.includes(code)).map(([, label]) => label).join('、'),
+].filter(Boolean).join(' · '))
 function toggleSelection<T>(choices: T[], value: T) {
   return choices.includes(value) ? choices.filter(choice => choice !== value) : [...choices, value]
 }
-function applyBrowseFilters() {
-  clearSearchQuery()
-  if (sort.value === 'trending') sort.value = 'popular'
+function refreshFilters() {
   page.value = 1
-  void load()
+  requestVersion++
+  busy.value = true
+  window.clearTimeout(filterTimer)
+  filterTimer = window.setTimeout(() => void load(), 180)
 }
-function setRegion(code?: string) {
-  if (!code && !regions.value.length) return
-  regions.value = code ? toggleSelection(regions.value, code) : []
-  applyBrowseFilters()
+function setRegions(values: string[]) {
+  regions.value = values
+  refreshFilters()
 }
-function setGenre(id?: number) {
-  if (id === undefined && !genreIds.value.length) return
-  genreIds.value = id === undefined ? [] : toggleSelection(genreIds.value, id)
-  applyBrowseFilters()
+function setGenres(values: number[]) {
+  genreIds.value = values
+  refreshFilters()
 }
 function setYear(value?: string | number) {
   const next = value ? Number(value) : undefined
@@ -125,17 +121,15 @@ function setYear(value?: string | number) {
     return
   }
   if (year.value === next) return
-  year.value = next
-  if (sort.value === 'trending') sort.value = 'popular'
-  page.value = 1
-  void load()
+  if (activeQuery.value) searchYear.value = next
+  else browseYear.value = next
+  refreshFilters()
 }
 function resetFilters() {
   genreIds.value = []
   regions.value = []
-  year.value = undefined
-  page.value = 1
-  void load()
+  browseYear.value = undefined
+  refreshFilters()
 }
 function go(value: number) {
   if (busy.value || value < 1 || value === page.value || (value > page.value && !hasMore.value)) return
@@ -143,17 +137,20 @@ function go(value: number) {
   void load(true)
 }
 function doSearch(){
-  // 「沙丘 2021」「沙丘 (2021)」：把年份拆到筛选条件里，搜索词只留片名。
-  // 整串丢给 TMDB 基本搜不到（用户反馈的现场），而且年份会显示在筛选项上，看得见。
-  let text=searchInput.value.trim()
-  const match=text.match(/[\(（\[]?\s*((?:19|20)\d{2})\s*[\)）\]]?$/)
-  if(match){const trimmed=text.slice(0,match.index).trim();if(trimmed){text=trimmed;year.value=Number(match[1])}}
-  // 名称搜索和后端筛选冲突会 422，这里直接把冲突的筛选项清掉，避免「点搜索报错/没结果」。
-  genreIds.value = []
-  regions.value = []
-  if(sort.value!=='popular')sort.value='popular'
-  searchInput.value=text
-  activeQuery.value=text;page.value=1;const query={...route.query};if(text)query.q=text;else delete query.q;void router.replace({query});load()
+  let text = searchInput.value.trim()
+  if (!text) { clearSearch(); return }
+  const match = text.match(/[\(（\[]?\s*((?:19|20)\d{2})\s*[\)）\]]?$/)
+  const title = match && text.slice(0, match.index).trim()
+  if (match && title) {
+    text = title
+    searchYear.value = Number(match[1])
+  } else if (text !== activeQuery.value) {
+    searchYear.value = undefined
+  }
+  searchInput.value = activeQuery.value = text
+  page.value = 1
+  void router.replace({query: {...route.query, q: text}})
+  void load()
 }
 function clearSearch() {
   if (!activeQuery.value) return
@@ -488,11 +485,16 @@ onMounted(() => {
   void loadGenres()
   void load()
 })
-onUnmounted(() => moviesOnMobile.removeEventListener('change', updatePageSize))
+onUnmounted(() => {
+  moviesOnMobile.removeEventListener('change', updatePageSize)
+  window.clearTimeout(filterTimer)
+  requestVersion++
+})
 </script>
 <template>
-<PageHeader title="影视探索" description="搜索电影和剧集，查看两库的入库状态。"><template #actions>
-<div class="kind-switch" aria-label="作品类型"><button :class="{active:kind==='movie'}" :aria-pressed="kind==='movie'" @click="pick('movie')">电影</button><button :class="{active:kind==='tv'}" :aria-pressed="kind==='tv'" @click="pick('tv')">剧集</button></div><el-button @click="showSubscriptions">追更订阅</el-button></template></PageHeader>
+<PageHeader title="影视探索">
+  <template #actions><el-button @click="showSubscriptions">追更订阅</el-button></template>
+</PageHeader>
 <el-alert v-if="error" :title="error" type="error" show-icon class="global-error"/>
 
 <section class="filter-bar" aria-label="影视搜索与筛选">
@@ -501,56 +503,73 @@ onUnmounted(() => moviesOnMobile.removeEventListener('change', updatePageSize))
       <el-input v-model="searchInput" :prefix-icon="Search" aria-label="搜索电影或剧集" placeholder="输入片名或关键词"/>
       <el-button type="primary" native-type="submit">搜索</el-button>
     </form>
-    <div class="discovery-controls">
-      <el-select class="sort-select" :model-value="sort" aria-label="浏览排序" @change="setSort">
-        <el-option v-for="option in sortOptions" :key="option.v" :label="option.t" :value="option.v"/>
-      </el-select>
-      <el-button :icon="Filter" :aria-expanded="filtersOpen" aria-controls="explore-filters" @click="filtersOpen=!filtersOpen">
-        筛选<span v-if="filterCount" class="filter-count">{{filterCount}}</span>
-      </el-button>
+    <div class="kind-switch" role="group" aria-label="作品类型">
+      <button type="button" :aria-pressed="kind==='movie'" @click="pick('movie')">电影</button>
+      <button type="button" :aria-pressed="kind==='tv'" @click="pick('tv')">剧集</button>
     </div>
   </div>
-  <div v-show="filtersOpen" id="explore-filters" class="filter-block">
-    <div class="filter-row" role="group" aria-label="影视类型">
-      <span class="filter-label">类型</span>
-      <div class="filter-options">
-        <button type="button" class="filter-chip" :aria-pressed="!genreIds.length" @click="setGenre()">全部类型</button>
-        <button v-for="genre in genres" :key="genre.id" type="button" class="filter-chip"
-          :aria-pressed="genreIds.includes(genre.id)" @click="setGenre(genre.id)">{{genre.name}}</button>
+
+  <div v-if="!activeQuery" class="sort-options" role="group" aria-label="浏览排序">
+    <button v-for="option in sortOptions" :key="option.v" type="button"
+      :aria-pressed="sort===option.v" @click="setSort(option.v)">{{option.t}}</button>
+  </div>
+
+  <div v-if="browsing || activeQuery" class="browse-filters">
+    <template v-if="browsing">
+      <div class="filter-row wide-filters" role="group" aria-label="影视类型">
+        <span class="filter-label">类型</span>
+        <div class="filter-options">
+          <button type="button" class="filter-chip" :aria-pressed="!genreIds.length" @click="genreIds.length && setGenres([])">全部</button>
+          <button v-for="genre in genres" :key="genre.id" type="button" class="filter-chip"
+            :aria-pressed="genreIds.includes(genre.id)"
+            @click="setGenres(toggleSelection(genreIds, genre.id))">{{genre.name}}</button>
+        </div>
       </div>
-    </div>
-    <div class="filter-row" role="group" aria-label="制作地区">
-      <span class="filter-label">地区</span>
-      <div class="filter-options">
-        <button type="button" class="filter-chip" :aria-pressed="!regions.length" @click="setRegion()">全部地区</button>
-        <button v-for="[code, label] in regionOptions" :key="code" type="button" class="filter-chip"
-          :aria-pressed="regions.includes(code)" @click="setRegion(code)">{{label}}</button>
+      <div class="filter-row wide-filters" role="group" aria-label="制作地区">
+        <span class="filter-label">地区</span>
+        <div class="filter-options">
+          <button type="button" class="filter-chip" :aria-pressed="!regions.length" @click="regions.length && setRegions([])">全部</button>
+          <button v-for="[code, label] in regionOptions" :key="code" type="button" class="filter-chip"
+            :aria-pressed="regions.includes(code)" @click="setRegions(toggleSelection(regions, code))">{{label}}</button>
+        </div>
       </div>
-    </div>
-    <div class="filter-row">
-      <span class="filter-label">年份</span>
-      <div class="year-filter">
-        <el-select :model-value="year" filterable allow-create clearable default-first-option
-          aria-label="上映或首播年份" placeholder="全部年份" @change="setYear">
-          <el-option v-for="option in yearOptions" :key="option" :label="String(option)" :value="option"/>
+    </template>
+    <div class="filter-fields" :class="{'search-fields':activeQuery}">
+      <template v-if="browsing">
+        <el-select class="narrow-filter" :model-value="genreIds" multiple
+          aria-label="影视类型" placeholder="全部类型" @update:model-value="setGenres">
+          <template #tag><span v-if="genreIds.length" class="select-count">类型 {{genreIds.length}}</span></template>
+          <el-option v-for="genre in genres" :key="genre.id" :label="genre.name" :value="genre.id"/>
         </el-select>
-        <el-button v-if="filterCount" text @click="resetFilters">清除筛选</el-button>
+        <el-select class="narrow-filter" :model-value="regions" multiple
+          aria-label="制作地区" placeholder="全部地区" @update:model-value="setRegions">
+          <template #tag><span v-if="regions.length" class="select-count">地区 {{regions.length}}</span></template>
+          <el-option v-for="[code, label] in regionOptions" :key="code" :label="label" :value="code"/>
+        </el-select>
+        <span class="filter-label wide-filters">年份</span>
+      </template>
+      <el-select class="year-filter" :model-value="year" filterable allow-create clearable default-first-option
+          aria-label="上映或首播年份" placeholder="全部年份" @change="setYear">
+        <el-option v-for="option in yearOptions" :key="option" :label="String(option)" :value="option"/>
+      </el-select>
+      <el-button v-if="activeQuery" text @click="clearSearch">返回浏览</el-button>
+      <div v-else-if="hasFilters" class="filter-footer">
+        <span v-if="selectedLabels" class="selected-filters">{{selectedLabels}}</span>
+        <el-button text @click="resetFilters">清除筛选</el-button>
       </div>
     </div>
-    <p class="filter-hint">类型和地区可多选。同一组选中任意一项即可匹配。</p>
-  </div>
-  <div v-if="filterCount && !filtersOpen" class="filter-summary">
-    <span v-for="label in activeFilters" :key="label" class="filter-selection">{{label}}</span>
-    <el-button text size="small" @click="resetFilters">清除筛选</el-button>
   </div>
 </section>
 
 <div ref="resultHeading" class="results-header">
   <div>
-    <span v-if="activeQuery" class="search-tag">{{activeQuery}} <button type="button" aria-label="清除搜索" @click="clearSearch">×</button></span>
-    <span v-if="relaxedYear" class="muted result-note">该年份没有匹配，已显示不限年份的结果</span>
+    <span role="status" class="muted count">{{busy ? '正在加载' : `${items.length} 部 · 第 ${page} / ${totalPages} 页`}}</span>
+    <span v-if="!busy && relaxedYear" class="muted result-note">该年份无匹配，已显示不限年份的结果</span>
   </div>
-  <span role="status" class="muted count">{{busy ? '正在加载' : `${items.length} 部 · 第 ${page} / ${totalPages} 页`}}</span>
+  <nav v-if="totalPages>1" class="quick-pagination" aria-label="顶部翻页">
+    <el-button :icon="ArrowLeft" aria-label="上一页" :disabled="busy || page<=1" @click="go(page-1)"/>
+    <el-button :icon="ArrowRight" aria-label="下一页" :disabled="busy || !hasMore" @click="go(page+1)"/>
+  </nav>
 </div>
 
 <el-skeleton v-if="!items.length&&busy" :rows="6" animated/>
@@ -731,7 +750,7 @@ onUnmounted(() => moviesOnMobile.removeEventListener('change', updatePageSize))
   background: transparent;
   cursor: pointer;
 }
-.kind-switch button.active { background: var(--accent); color: #fff; }
+.kind-switch button[aria-pressed='true'] { background: var(--accent); color: #fff; }
 .filter-bar {
   margin-bottom: 18px;
   border: 1px solid var(--line);
@@ -739,46 +758,57 @@ onUnmounted(() => moviesOnMobile.removeEventListener('change', updatePageSize))
   background: var(--surface);
   padding: 14px;
 }
-.discovery-toolbar, .search-row, .discovery-controls {
+.discovery-toolbar, .search-row {
   display: flex;
   align-items: center;
   gap: 8px;
 }
-.discovery-toolbar { justify-content: space-between; }
+.discovery-toolbar { gap: 14px; }
 .search-row { flex: 1; max-width: 460px; min-width: 0; }
 .search-row :deep(.el-input) { min-width: 0; }
-.discovery-controls { flex-shrink: 0; }
-.sort-select { width: 128px; }
-.discovery-toolbar :deep(.el-button) { height: 36px; margin: 0; border-radius: 8px; }
-.discovery-toolbar :deep(.el-input__wrapper), .discovery-toolbar :deep(.el-select__wrapper) { min-height: 36px; }
-.filter-count {
-  margin-left: 6px;
-  min-width: 18px;
-  border-radius: 10px;
+.search-row :deep(.el-button), .search-row :deep(.el-input__wrapper) { min-height: 38px; }
+.sort-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 6px;
+  margin-top: 10px;
+}
+.sort-options button {
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.sort-options button:hover { background: var(--surface-soft); color: var(--text); }
+.sort-options button[aria-pressed='true'] {
   background: var(--el-color-primary-light-9);
   color: var(--el-color-primary);
-  font-size: 11px;
-  line-height: 18px;
+  font-weight: 650;
 }
-.filter-block {
+.browse-filters {
   display: grid;
-  gap: 12px;
-  margin-top: 14px;
-  padding-top: 14px;
+  gap: 8px;
+  margin-top: 9px;
+  padding-top: 9px;
   border-top: 1px solid var(--line);
 }
 .filter-row { display: grid; grid-template-columns: 3em minmax(0,1fr); align-items: start; gap: 8px; }
-.filter-label { padding-top: 7px; font-size: 13px; font-weight: 600; color: var(--muted); }
-.filter-options, .filter-summary, .year-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.filter-chip, .filter-selection {
+.filter-label { padding-top: 6px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.filter-options, .filter-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.filter-chip {
   border: 1px solid transparent;
-  border-radius: 7px;
-  padding: 6px 10px;
+  border-radius: 6px;
+  padding: 4px 9px;
   background: var(--surface-soft);
   color: var(--text);
   font-size: 12px;
+  min-height: 28px;
+  cursor: pointer;
 }
-.filter-chip { min-height: 32px; cursor: pointer; }
 .filter-chip:hover { border-color: var(--el-color-primary-light-5); }
 .filter-chip[aria-pressed='true'] {
   background: var(--el-color-primary-light-9);
@@ -786,14 +816,15 @@ onUnmounted(() => moviesOnMobile.removeEventListener('change', updatePageSize))
   color: var(--el-color-primary);
   font-weight: 600;
 }
-.filter-chip:focus-visible, .kind-switch button:focus-visible {
+.filter-chip:focus-visible, .kind-switch button:focus-visible, .sort-options button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.year-filter :deep(.el-select) { width: 135px; }
-.filter-hint { margin: 0 0 0 4em; color: var(--muted); font-size: 12px; line-height: 1.5; }
-.filter-summary { margin-top: 11px; }
-.filter-summary :deep(.el-button) { margin-left: 0; }
+.filter-fields > .filter-label { width: 51px; padding-top: 0; }
+.year-filter { width: 119px; }
+.filter-fields :deep(.narrow-filter) { display: none; }
+.filter-fields :deep(.el-button) { margin-left: 0; }
+.selected-filters { display: none; }
 .results-header {
   display: flex;
   align-items: center;
@@ -803,22 +834,11 @@ onUnmounted(() => moviesOnMobile.removeEventListener('change', updatePageSize))
   margin: 0 0 10px;
   scroll-margin-top: 84px;
 }
-.results-header > div { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 9px; min-width: 0; }
+.results-header > div { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
 .result-note, .count { font-size: 12px; }
 .count { flex-shrink: 0; }
-.search-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  max-width: 100%;
-  border-radius: 6px;
-  padding: 4px 8px;
-  color: var(--accent);
-  background: var(--surface-soft);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-.search-tag button { border: 0; padding: 0 2px; background: none; color: inherit; font-size: 16px; cursor: pointer; }
+.quick-pagination { display: flex; gap: 6px; }
+.quick-pagination :deep(.el-button) { min-width: 38px; padding: 0 8px; margin: 0; }
 .explore-grid {
   display: grid;
   grid-template-columns: repeat(3,minmax(0,1fr));
@@ -890,16 +910,35 @@ onUnmounted(() => moviesOnMobile.removeEventListener('change', updatePageSize))
 @media (min-width: 1200px) {
   .card-actions { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }
+@media (max-width: 759px) {
+  .browse-filters .wide-filters { display: none; }
+  .filter-fields:not(.search-fields) {
+    display: grid;
+    grid-template-columns: repeat(3,minmax(0,1fr));
+    align-items: stretch;
+    gap: 7px;
+  }
+  .filter-fields :deep(.narrow-filter), .filter-fields:not(.search-fields) .year-filter {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+  .filter-fields :deep(.el-select__wrapper) { min-height: 36px; padding-inline: 8px; }
+  .filter-fields :deep(.el-select__selection.is-near) { margin-left: 0; }
+  .filter-fields :deep(.el-select__selection) { min-width: 0; overflow: hidden; }
+  .select-count { font-size: 13px; color: var(--el-color-primary); }
+  .filter-footer { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
+  .selected-filters { display: block; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  .filter-footer :deep(.el-button) { margin-left: auto; padding-inline: 2px; }
+}
 @media (max-width: 640px) {
   .filter-bar { padding: 11px; margin-bottom: 13px; }
-  .discovery-toolbar { flex-wrap: wrap; }
-  .search-row { flex: 1 0 100%; max-width: none; }
-  .discovery-controls { flex: 1; justify-content: space-between; }
-  .sort-select { flex: 1; }
-  .filter-row { grid-template-columns: 1fr; gap: 5px; }
-  .filter-label { padding-top: 0; }
-  .filter-hint { margin-left: 0; }
-  .filter-chip { min-height: 34px; }
+  .discovery-toolbar { display: grid; gap: 8px; }
+  .kind-switch { justify-self: start; }
+  .search-row { max-width: none; }
+  .sort-options { gap: 2px 3px; margin-top: 5px; }
+  .sort-options button { min-height: 34px; padding-inline: 6px; }
+  .quick-pagination :deep(.el-button) { min-width: 40px; min-height: 36px; }
   .explore-grid { gap: 8px; }
   .explore-info { padding: 7px; }
   .explore-info h3 { font-size: 12px; }
