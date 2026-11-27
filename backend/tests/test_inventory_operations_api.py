@@ -343,7 +343,8 @@ def test_governance_rejects_inventory_changed_after_scan(tmp_path, monkeypatch):
 def test_scan_without_cloud_account_still_lists_and_plans_share_side(tmp_path, monkeypatch):
     from strimkeep.inventory_api import install_inventory
     app, admin, _, db = setup_app(tmp_path, monkeypatch)
-    app.state.organizer.index.account = lambda _: (_ for _ in ()).throw(ValueError('no account'))
+    from strimkeep.cloud115 import CloudError
+    app.state.organizer.index.account = lambda _: (_ for _ in ()).throw(CloudError('no account', 'LOGIN_INVALID'))
     install_inventory(app, app.state.organizer.store, admin)
     with TestClient(app) as client:
         app.dependency_overrides[admin] = lambda: None

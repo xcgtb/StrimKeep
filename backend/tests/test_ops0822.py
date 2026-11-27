@@ -149,6 +149,22 @@ def test_cooldown_survives_a_restart(tmp_path):
     store.close()
 
 
+def test_rate_limit_is_shared_by_live_instances_without_leaking_to_next_account(tmp_path):
+    store = Store(tmp_path, 'admin', PASSWORD)
+    store.set_many({'cookie': 'UID=111; CID=t; SEID=t'})
+    web = Cloud115(store)
+    worker = Cloud115(store)
+    worker.block_waf(405)
+    web._runtime_checked = float('-inf')
+    with pytest.raises(CloudError) as excinfo:
+        web.check_cooldown()
+    assert excinfo.value.code == 'RATE_LIMITED'
+    store.set_many({'cookie': 'UID=222; CID=t; SEID=t'})
+    web._runtime_checked = float('-inf')
+    web.check_cooldown()
+    store.close()
+
+
 def test_waf_block_survives_a_restart(tmp_path):
     store = Store(tmp_path / 'data', 'admin', PASSWORD)
     Cloud115(store).block_waf(405)

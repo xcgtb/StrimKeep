@@ -136,28 +136,26 @@ def page(messages, title='测试频道', has_more=False, button='https://example
 CONFIG = {'enabled': True, 'channels': ['testchan'], 'notify': True, 'interval': 300}
 
 
-def seed_orphan(store, name, title, cursor, posts=0):
+def seed_orphan(store, name, title, cursor, posts=0, peer_id=''):
     """造一条"已从配置移除、channel_state 还留着"的旧条目。"""
     with store.db:
         store.db.execute(
-            'INSERT INTO channel_state(name,title,last_message_id,state,posts,added) '
-            'VALUES(?,?,?,?,?,?)', (name, title, cursor, 'ready', posts, 1.0))
+            'INSERT INTO channel_state(name,title,last_message_id,state,posts,added,peer_id) '
+            'VALUES(?,?,?,?,?,?,?)', (name, title, cursor, 'ready', posts, 1.0, peer_id))
         store.db.execute('INSERT INTO channel_posts(name,message_id,created) VALUES(?,?,?)',
                          (name, cursor - 1, 1.0))
 
 
 def test_removed_then_readded_channel_keeps_its_cursor(tmp_path, monkeypatch):
-    """删掉旧条目再从会话列表重加数字 ID，不该重扫一页。
-
-    账本按频道名字记，名字从用户名换成数字 ID 就对不上了：新条目当"首次接入"回溯
-    一页，磁力/电驴又提交一遍。抓到标题后认回旧条目，游标和账本一起接过来。
-    """
-    html = page([(101, '没内容的帖子', []), (102, '没内容的帖子', [])], title='测试频道')
-    pages = {('testchan', None): FakeResponse(200, html)}
-    config = {'enabled': True, 'notify': True,
-              'channels': [{'name': 'testchan', 'enabled': True, 'source': 'preview'}]}
-    store, monitor, http, queued = make(tmp_path, pages, config, monkeypatch)
-    seed_orphan(store, 'oldname', '测试频道', cursor=100, posts=7)
+    """Connect a renamed account only after resolving the same Telegram peer."""
+    from types import SimpleNamespace
+    config = {'enabled': True, 'notify': True, 'channels': [{'name': 'testchan', 'source': 'session'}]}
+    store, monitor, http, queued = make(tmp_path, {}, config, monkeypatch)
+    seed_orphan(store, 'oldname', '测试频道', cursor=100, posts=7, peer_id='1234567')
+    async def fetch(name, before):
+        return {'title': '改名后的频道', 'peer_id': '1234567', 'has_more': False,
+                'messages': [{'id': message_id, 'text': '公告', 'links': []} for message_id in (101, 102)]}
+    monitor.engine.telegram = SimpleNamespace(fetch=fetch)
 
     asyncio.run(monitor.refresh('testchan'))
 
@@ -760,24 +758,36 @@ TWO_CHANNELS = {'enabled': True, 'notify': True, 'interval': 300,
                 'channels': [{'name': 'chanA'}, {'name': 'chanB'}]}
 
 
-def test_duplicate_channel_is_skipped_after_titles_are_known(tmp_path, monkeypatch):
-    """同一个频道的两种写法只抓一个；正本被禁用时由另一条接管，不能两条都不抓。
+def test_duplicate_channel_is_skipped_only_after_peer_is_known(tmp_path, monkeypatch):
+    from types import SimpleNamespace
 
-    title 只有抓完才知道，所以首轮两条各抓一次，第二轮起才认得出重复。
-    """
     async def run():
-        html = page([(100, '公告', [])], title='同一个频道')
-        pages = {('chanA', None): FakeResponse(200, html), ('chanB', None): FakeResponse(200, html)}
-        store, monitor, http, queued = make(tmp_path, pages, TWO_CHANNELS, monkeypatch)
+        config = {**TWO_CHANNELS, 'channels': [{'name': name, 'source': 'session'} for name in ('chanA', 'chanB')]}
+        store, monitor, _, _ = make(tmp_path, {}, config, monkeypatch)
+        called = []
+        async def fetch(name, before):
+            called.append(name)
+            return {'title': '同一个标题', 'peer_id': '1234567', 'has_more': False,
+                    'messages': [{'id':100, 'text':'公告', 'links':[]}]}
+        monitor.engine.telegram = SimpleNamespace(fetch=fetch)
         assert [name for name, _ in await monitor.tick()] == ['chanA', 'chanB']
         assert dict(store.db.execute('SELECT name,duplicate_of FROM channel_state')) == {
             'chanA': None, 'chanB': 'chanA'}
-        http.urls.clear()
+        called.clear()
         assert [name for name, _ in await monitor.tick()] == ['chanA']
-        assert http.urls == ['https://t.me/s/chanA']
-        store.set_many({'channel_monitor': {'enabled': True, 'notify': True, 'interval': 300,
-                                            'channels': [{'name': 'chanA', 'enabled': False},
-                                                         {'name': 'chanB'}]}})
+        assert called == ['chanA']
+        config['channels'][0]['enabled'] = False
+        store.set_many({'channel_monitor': config})
         assert [name for name, _ in await monitor.tick()] == ['chanB']
         store.close()
     asyncio.run(run())
+
+
+def test_distinct_public_channels_with_same_title_keep_independent_cursors(tmp_path, monkeypatch):
+    html = page([(100, '公告', [])], title='同一个标题')
+    pages = {('chanA', None): FakeResponse(200, html), ('chanB', None): FakeResponse(200, html)}
+    store, monitor, _, _ = make(tmp_path, pages, TWO_CHANNELS, monkeypatch)
+    asyncio.run(monitor.tick())
+    assert dict(store.db.execute('SELECT name,duplicate_of FROM channel_state')) == {
+        'chanA': None, 'chanB': None}
+    store.close()

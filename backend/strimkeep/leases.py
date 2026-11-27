@@ -4,7 +4,57 @@ Borrowed from Celery's visibility timeout and Gunicorn's worker timeout: a job
 that has been running far beyond a sane lease is not silently replayed (remote
 writes may have happened); it is moved to needs_review for explicit recovery.
 """
+import asyncio
 import time
+from pathlib import Path
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
+
+class PublicationGate:
+    """Serialize publication in both processes sharing one state directory."""
+
+    def __init__(self, state_directory):
+        self.path = Path(state_directory) / 'publication.lock' if state_directory else None
+        self.local = asyncio.Lock()
+        self.handle = None
+
+    def locked(self):
+        return self.local.locked()
+
+    async def acquire(self):
+        await self.local.acquire()
+        try:
+            if self.path is not None and fcntl is not None:
+                self.handle = self.path.open('a')
+                while True:
+                    try:
+                        fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        await asyncio.sleep(.05)
+            return True
+        except BaseException:
+            self.release()
+            raise
+
+    def release(self):
+        try:
+            if self.handle is not None:
+                self.handle.close()
+                self.handle = None
+        finally:
+            self.local.release()
+
+    async def __aenter__(self):
+        await self.acquire()
+        return self
+
+    async def __aexit__(self, *_):
+        self.release()
 
 STALE_SECONDS = 2 * 60 * 60
 

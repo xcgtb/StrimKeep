@@ -12,7 +12,7 @@ from pathlib import Path, PurePosixPath
 
 from .inventory_fs import is_synthetic, resolve_roots
 from .inventory_snapshot import _fingerprint
-from .inventory_sources import source_fingerprints
+from .inventory_sources import optional_account, source_fingerprints
 
 
 def cleanup_empty_work(engine, relative):
@@ -78,7 +78,7 @@ async def delete_one(engine, evidence, source, on_confirm=None):
     if not engine.publication_gate.locked():
         raise RuntimeError('删除需要持有发布锁')
     side, record_id, path = evidence['side'], evidence['id'], evidence['path']
-    account = engine.index.account({})
+    account = optional_account(engine)
     if source_fingerprints(engine.store.db, [(side, record_id, path)], account) != [source]:
         return False
     actual = _fingerprint(engine.root, path)

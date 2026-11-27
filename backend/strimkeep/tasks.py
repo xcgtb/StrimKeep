@@ -99,10 +99,11 @@ class Tasks:
         profile = next((p for p in self.store.get('sync_profiles', []) if p['id'] == profile_id), {})
         return self.transfer_profile_roots(profile)
 
-    def enqueue_transfer_sync(self, account, trail, label, received=()):
+    def enqueue_transfer_sync(self, account, trail, label, received=(), *, parent_id=None):
         """Use the confirmed transfer destination, constrained by the user's profile roots."""
+        jobs, warnings = [], []
         if not trail or str(trail[-1]) == '0':
-            return
+            return jobs, warnings
         dest = str(trail[-1])
         ancestors = {str(cid) for cid in trail}
         for profile in self.store.get('sync_profiles', []):
@@ -112,23 +113,27 @@ class Tasks:
                 config = self.sync_profile_config({**profile, 'source_cids': [dest],
                                                    'source_labels': {dest: label or dest}})
             except ValueError as exc:
-                self.store.event('sync', '转存补扫暂未入队：' + str(exc))
+                warnings.append(str(exc))
                 continue
             if config['account_id'] != account:
                 continue
             config.update(sync_trigger='transfer', cleanup_missing=False, stale_detect=False)
+            if parent_id is not None:
+                config['transfer_parent'] = parent_id
             if received and all(
                 not item['is_dir'] and Path(item['name']).suffix.lower() in config['video_extensions']
                 for item in received
             ):
                 config['sync_received_ids'] = sorted({str(item['id']) for item in received})
-            self.enqueue(config, scheduled=True)
+            child_id, _ = self.enqueue(config, scheduled=True)
+            jobs.append(child_id)
+        return jobs, warnings
 
     @staticmethod
     def schedule_identity(config):
         return (config.get('job_kind', 'organize'), tuple(sorted(config.get('source_cids', []))),
                 *(config.get(key) for key in ('account_id', 'sync_profile_id', 'mode', 'sync_trigger',
-                                             'emby_target', 'emby_target_binding')),
+                                             'emby_target', 'emby_target_binding', 'transfer_parent')),
                 tuple(config.get('sync_received_ids', [])),
                 frozenset(word.casefold() for word in config.get('sync_exclude_keywords', [])))
 

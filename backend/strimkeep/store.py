@@ -5,6 +5,7 @@ import hmac
 import contextlib
 import json
 import os
+import re
 import secrets
 import sqlite3
 import threading
@@ -19,6 +20,28 @@ from .schema_migrations import apply as apply_migrations
 # 启动 schema 的版本号：加表/改表时 +1。Store 初始化会执行（幂等的）建表脚本，
 # 然后把库抬到这个版本。仍兼容 1：老库只会被补齐缺表并打上新版本号，不动既有数据。
 SCHEMA_VERSION = '2'
+
+EVENT_JOB = re.compile(r'^任务\s*(\d+)\s*[：:]')
+ZERO_EVENT_COUNT = re.compile(
+    r'(?:失败|异常|失效|超时|拒绝|中断|限流|跳过)\s*[:：]?\s*0(?![\d.])'
+    r'(?:\s*(?:个|条|项|次|份|部|集|文件|任务))?')
+ERROR_EVENT = re.compile(r'失败|无法|异常|失效|超时|拒绝|中断')
+WARNING_EVENT = re.compile(r'限流|等待|跳过|未找到|未匹配|没有找到.*取链记录|稍后|不足|已停止|待处理')
+INFO_EVENT = re.compile(r'核对超时后只刷新命中的目标库|已清除.*历史失效记录|已由库存清理完成')
+
+
+def event_level(kind, message):
+    if kind == 'error':
+        return 'error'
+    text = ZERO_EVENT_COUNT.sub('', message)
+    if (kind == 'play' and text.startswith('视频流 302 直连 115 · ')
+            or kind == 'deep_delete' and text.startswith('深度删除 · 已忽略 Emby 目录移除通知')
+            or INFO_EVENT.search(text)):
+        return 'info'
+    if ERROR_EVENT.search(text):
+        return 'error'
+    return 'warn' if WARNING_EVENT.search(text) else 'info'
+
 
 SESSION_SECONDS = 30 * 24 * 60 * 60
 
@@ -361,6 +384,8 @@ class Store:
         waits; this retry also covers the small window where SQLite returns
         "database is locked" immediately after a busy timeout.
         """
+        if self.in_explicit_transaction:
+            return operation()
         for attempt in range(5):
             try:
                 with self.db:
@@ -441,11 +466,16 @@ class Store:
     def session(self, token: str):
         return self.db.execute('SELECT * FROM sessions WHERE hash=? AND expires>?', (digest(token), time.time())).fetchone()
 
-    def event(self, kind: str, message: str):
+    def event(self, kind: str, message: str, *, level=None, job_id=None, error_code=''):
         # Callers pass fixed messages, never raw upstream responses or credential values.
         now = time.time()
+        level = level or event_level(kind, message)
+        if job_id is None and (match := EVENT_JOB.match(message)):
+            if len(match[1]) <= 18:
+                job_id = int(match[1])
         self._write(lambda: self.db.execute(
-            'INSERT INTO events(at,kind,message) VALUES(?,?,?)', (now, kind, message)))
+            'INSERT INTO events(at,kind,message,level,job_id,error_code) VALUES(?,?,?,?,?,?)',
+            (now, kind, message, level, job_id, error_code)))
         self._append_log(kind, message)
 
     def _append_log(self, kind: str, message: str):
@@ -690,6 +720,7 @@ class Store:
         """
         conn = sqlite3.connect(self.path, check_same_thread=False, timeout=10)
         conn.row_factory = sqlite3.Row
+        conn.create_function('sk_event_level', 2, event_level, deterministic=True)
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA busy_timeout=15000')
         conn.execute('PRAGMA synchronous=NORMAL')

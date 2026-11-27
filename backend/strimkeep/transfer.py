@@ -92,6 +92,12 @@ class Transfer:
                 state['tree']=await self.share_tree(jid,secret,state['items'])
             except CloudError as exc:
                 # 只在转存提交前处理明确取消；不把登录/限流或结果未知当成取消。
+                if (config.get('expected_subscription_video') and exc.code == 'SHARE_NOT_FOUND'
+                        and not state.get('phase')):
+                    config['subscription_source_rejected'] = True
+                    save()
+                    self.engine.update_job(jid,state='failed',stage='分享已失效',message='订阅将尝试其他来源。')
+                    return
                 if (config.get('origin') == 'channel' and exc.code in ('CLOUD_REJECTED', 'SHARE_NOT_FOUND')
                         and '分享已取消' in str(exc)):
                     self.engine.update_job(jid,state='partial',stage='分享已取消，已跳过',
@@ -214,13 +220,22 @@ class Transfer:
         if config.get('origin')=='channel':
             # 频道转存不自动整理，但要把下一轮扫描提前，别让「空扫描退避」把新文件压一小时。
             self.engine.tasks.wake('organize')
-        if current and not state.get('organize_job') and trail and str(trail[-1]) == str(dest):
-            try:
-                self.engine.tasks.enqueue_transfer_sync(account, trail, config.get('target_label'), current)
-            except Exception as exc:
-                self.store.event('sync', f'转存任务 {jid} 已完成，补扫入队失败（{type(exc).__name__}）。')
+        if (current and not state.get('organize_job') and 'sync_jobs' not in state
+                and trail and str(trail[-1]) == str(dest)):
+            with self.store.transaction(immediate=True):
+                jobs, warnings = self.engine.tasks.enqueue_transfer_sync(
+                    account, trail, config.get('target_label'), current, parent_id=jid)
+                state['sync_jobs'] = jobs
+                state['sync_warnings'] = warnings
+                config['receipt'] = state
+                self.store.jobs.set_config(jid, dumps(config))
         message=f'已转存到 {config.get("target_label","目标目录")}，共 {len(current)} 个文件或文件夹。'
-        if state.get('organize_job'):message+=f'整理任务 #{state["organize_job"]} 已入队。'
+        if state.get('organize_job'):
+            message += f'整理任务 #{state["organize_job"]} 已入队。'
+        if state.get('sync_jobs'):
+            message += 'STRM 同步任务 %s 已入队。' % '、'.join(f'#{child}' for child in state['sync_jobs'])
+        if state.get('sync_warnings'):
+            message += '部分同步计划未入队，请查看任务详情。'
         if config.get('origin') == 'channel':
             roots = {str(cid) for cid in (self.store.get('organize_config', {}).get('source_cids') or [])}
             scope = set(config.get('target_path_ids') or [dest])

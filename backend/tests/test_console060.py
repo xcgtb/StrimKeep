@@ -285,3 +285,19 @@ def test_unidentified_cleanup_rejects_symlinks_and_active_records(tmp_path,monke
         (folder/'link').symlink_to(external,target_is_directory=True)
         result=c.post('/api/v1/strm/unidentified/cleanup',json={'paths':['分享STRM未识别/link/outside.strm']}).json()
         assert result['removed']==0 and (external/'outside.strm').exists()
+
+
+def test_structured_log_level_filter_applies_to_both_list_and_export(tmp_path, monkeypatch):
+    monkeypatch.setenv('ADMIN_USERNAME', 'admin')
+    monkeypatch.setenv('ADMIN_PASSWORD', 'test-password-1234')
+    app = create_app(tmp_path / 'data', tmp_path / 'strm', MemoryCloud)
+    with TestClient(app) as client:
+        auth = client.post('/api/v1/auth/login', json={'username':'admin', 'password':'test-password-1234'})
+        assert auth.status_code == 200
+        store = app.state.store
+        store.event('organize', '旧列表会靠文案猜成普通信息', level='warn', job_id=41, error_code='RATE_LIMITED')
+        store.event('organize', '只应出现在普通日志的控制样本')
+        rows = client.get('/api/v1/logs?level=warn&kind=organize').json()['items']
+        assert len(rows) == 1 and rows[0]['job_id'] == 41 and rows[0]['error_code'] == 'RATE_LIMITED'
+        assert '旧列表' in client.get('/api/v1/logs/export?level=warn&kind=organize').text
+        assert '只应出现在普通日志的控制样本' not in client.get('/api/v1/logs/export?level=warn&kind=organize').text

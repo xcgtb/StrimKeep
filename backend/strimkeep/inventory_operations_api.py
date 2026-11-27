@@ -18,7 +18,7 @@ from .inventory_plans import (
 from .inventory_preview import governance_preview
 from .inventory_revision import governance_revision
 from .inventory_snapshot import capture_snapshot
-from .inventory_sources import source_fingerprints
+from .inventory_sources import optional_account, source_fingerprints
 from .quality import public_policy
 
 
@@ -62,12 +62,10 @@ def install_inventory_operations(app, store, admin):
         config = store.get('organize_config', {}) or {}
         if not isinstance(config, dict):
             raise ValueError('整理配置无效')
-        if not config.get('library_dir_name') and not config.get('archive_cid'):
-            raise ValueError('请先设置影视整理的归档目录')
         from .inventory_fs import check_missing_registrations, resolve_roots, scan as filesystem_rows
         roots = resolve_roots(app.state.strms, store)
         check_missing_registrations(app.state.strms, roots, store.db)
-        account = engine.index.account({})
+        account = optional_account(engine)
         tie_config = inventory_config_value(store.get('inventory_config', {}))
         policy = {'upgrade': public_policy(store.get('upgrade_policy')), 'inventory': tie_config, 'guard_revision': 4}
         from .inventory_partition import partition

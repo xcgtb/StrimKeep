@@ -6,7 +6,7 @@ from pathlib import Path, PurePosixPath
 from .inventory import registered_rows
 from .inventory_fs import check_missing_registrations, resolve_roots
 from .inventory_snapshot import _fingerprint, library_identities
-from .inventory_sources import source_fingerprints
+from .inventory_sources import optional_account, source_fingerprints
 from .quality import public_policy
 
 _ID = re.compile(r'(?i)\{tmdb-(\d+)\}')
@@ -103,7 +103,7 @@ def verify_work(engine, expected, action, work_paths=None, *, missing_target=Fal
                          % sorted(extra - allowed_extra)[0])
     if {path for side, _, path in registered if side == 'cloud'} != {v['path'] for v in files if v['side'] == 'cloud'}:
         raise ValueError('网盘登记已变化')
-    account = engine.index.account({})
+    account = optional_account(engine)
     actual_sources = source_fingerprints(store.db, [(v['side'], v['id'], v['path']) for v in files], account)
     expected_sources = [v for v in expected['sources'] if (v['side'], v['id'], v['path']) in keys]
     source_key = lambda v: (v['side'], v['id'], v['path'])

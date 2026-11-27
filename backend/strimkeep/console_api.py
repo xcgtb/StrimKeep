@@ -1,6 +1,7 @@
 """Media overview, live logs and presentation settings."""
 import asyncio,calendar,datetime,json,time,shutil
 from pathlib import PurePosixPath
+from typing import Literal
 from urllib.parse import urlsplit
 from fastapi import Depends,HTTPException,Request,Query
 from fastapi.responses import StreamingResponse,Response,RedirectResponse
@@ -8,6 +9,7 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel,Field,ConfigDict
 import httpx
 from .network import emby_request
+from .store import digest
 from .message_templates import cloud_sign_notice, cloud_recycle_notice
 from .emby_connection import probe,fingerprint,error_message,strm_mount_path
 
@@ -68,15 +70,28 @@ def install_console(app,store,admin):
     async def config():
         return {'config': {**ConsoleConfig().model_dump(), **store.get('console_config', {}),
                            'strm_container_path': str(app.state.strms), 'emby_strm_path': strm_mount_path(store)}}
-    @app.put('/api/v1/console/config',dependencies=[Depends(admin)])
-    async def save(body:ConsoleConfig):
+    def save_console(body):
         for path in (body.strm_container_path,body.emby_strm_path):
             p=PurePosixPath(path)
             if not p.is_absolute() or '..' in p.parts:raise HTTPException(422,'路径映射须为容器内绝对路径。')
         if body.strm_container_path.rstrip('/')!=str(app.state.strms).rstrip('/'):
             raise HTTPException(422,'程序内路径应与实际 STRM 挂载一致：'+str(app.state.strms))
         if body.background_url and urlsplit(body.background_url).scheme not in ('http','https'):raise HTTPException(422,'背景图片请填写 HTTP/HTTPS 地址。')
-        store.set_many({'console_config':body.model_dump()});return await config()
+        store.set_many({'console_config': body.model_dump()})
+
+    @app.put('/api/v1/console/config',dependencies=[Depends(admin)])
+    async def save(body: ConsoleConfig):
+        save_console(body)
+        return await config()
+
+    @app.patch('/api/v1/console/config', dependencies=[Depends(admin)])
+    async def patch_console(body: ConsoleConfig):
+        with store.transaction(immediate=True):
+            current = (await config())['config']
+            updated = ConsoleConfig.model_validate({**current, **body.model_dump(exclude_unset=True)})
+            save_console(updated)
+        return await config()
+
     @app.get('/api/v1/network/config',dependencies=[Depends(admin)])
     async def network():
         c=store.get('network_config',{})
@@ -93,24 +108,28 @@ def install_console(app,store,admin):
             c['proxy_url']=body.proxy_url
         if body.enabled and not c.get('proxy_url'):raise HTTPException(422,'请填写代理地址。')
         c.update(enabled=body.enabled,proxy_emby=body.proxy_emby);store.set_many({'network_config':c});return await network()
+    def filtered_logs(before, after, kind, query, level, progress, limit):
+        order = 'ASC' if after is not None else 'DESC'
+        severity = "COALESCE(NULLIF(level,''),sk_event_level(kind,message))"
+        return store.db.execute(
+            "SELECT * FROM events WHERE id>? AND id<? AND (?='' OR kind=?) AND (? OR kind!='progress') "
+            f"AND (?='' OR {severity}=?) AND message LIKE ? ORDER BY id {order} LIMIT ?",
+            (after or 0, before, kind, kind, progress, level, level, '%' + query + '%', limit)).fetchall()
+
     @app.get('/api/v1/logs',dependencies=[Depends(admin)])
     async def logs(before:int=Query(2**62),kind:str='',q:str='',limit:int=Query(100,ge=1,le=500),
-                   after:int|None=Query(None,ge=0)):
-        # 0.8.21：events 是最大的表，带 LIKE 的查询放工作线程（一线程一连接由 Store.db 保证）。
+                   after:int|None=Query(None,ge=0),level:Literal['','info','warn','error']='',progress:bool=True):
         def read():
-            order = 'ASC' if after is not None else 'DESC'
-            rows = store.db.execute(
-                "SELECT * FROM events WHERE id>? AND id<? AND (?='' OR kind=?) "
-                f"AND message LIKE ? ORDER BY id {order} LIMIT ?",
-                (after or 0, before, kind, kind, '%' + q + '%', limit)).fetchall()
-            return {'items':[dict(r) for r in rows]}
+            return {'items':[dict(row) for row in filtered_logs(before, after, kind, q, level, progress, limit)]}
         return await app.state.db_worker.run(read, priority='interactive')
+
     @app.get('/api/v1/logs/export',dependencies=[Depends(admin)])
-    async def export_logs(kind:str='',q:str='',limit:int=Query(5000,ge=1,le=20000)):
-        """按当前筛选导出日志（最新在后），返回纯文本附件，方便留档/贴给客服。"""
+    async def export_logs(kind:str='',q:str='',limit:int=Query(5000,ge=1,le=20000),
+                          level:Literal['','info','warn','error']='',progress:bool=True):
         def read():
-            rows=store.db.execute('SELECT * FROM events WHERE (?=\'\' OR kind=?) AND message LIKE ? ORDER BY id DESC LIMIT ?',(kind,kind,'%'+q+'%',limit)).fetchall()
-            lines=[f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(r['at']))} [{r['kind']}] {r['message']}" for r in reversed(rows)]
+            rows = filtered_logs(2**62, None, kind, q, level, progress, limit)
+            lines = [f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(row['at']))} "
+                     f"[{row['kind']}] {row['message']}" for row in reversed(rows)]
             return '\n'.join(lines)+'\n'
         body=await app.state.db_worker.run(read, priority='interactive')
         name='strimkeep-logs-'+time.strftime('%Y%m%d-%H%M%S')+'.txt'
@@ -162,20 +181,52 @@ def install_console(app,store,admin):
         return {'history': starts[:8], 'trend': [{'date': label, 'count': bucket.get(label, 0)} for label in labels],
                 'trend_days': window}
 
+    activity_lock = asyncio.Lock()
+    activity_cache = {}
+
+    def activity_key(row):
+        return row.get('Id') or (row.get('Date'), row.get('Type'), row.get('ItemId'), row.get('Name'))
+
     @app.get('/api/v1/dashboard/activity', dependencies=[Depends(admin)])
     async def dashboard_activity():
         connection = app.state.organizer.emby.connection()
         if not connection:
             return {'history': [], 'trend': [], 'trend_days': 0, 'error': '尚未配置 Emby 连接'}
         url, key = connection
-        try:
-            response = await emby_request(app.state.http, 'GET', url + '/System/ActivityLog/Entries',
-                                          headers={'X-Emby-Token': key},
-                                          params={'StartIndex': 0, 'Limit': 1000}, timeout=6)
-            response.raise_for_status()
-            return activity_summary(response.json())
-        except (httpx.HTTPError, ValueError):
-            return {'history': [], 'trend': [], 'trend_days': 0, 'error': 'Emby 观看记录暂时无法读取'}
+        identity = fingerprint(url, key)
+        async with activity_lock:
+            valid = activity_cache.get('identity') == identity
+            previous = activity_cache.get('items', []) if valid else []
+            checked = activity_cache.get('at', 0) if valid else 0
+            if checked and time.time() - checked < 30:
+                return {**activity_summary({'Items': previous}), 'updated_at': checked}
+            known = {activity_key(row) for row in previous}
+            found = {}
+            try:
+                for start in range(0, 1000, 100):
+                    response = await emby_request(app.state.http, 'GET', url + '/System/ActivityLog/Entries',
+                                                  headers={'X-Emby-Token': key},
+                                                  params={'StartIndex': start, 'Limit': 100}, timeout=6)
+                    response.raise_for_status()
+                    page = response.json().get('Items')
+                    if not isinstance(page, list):
+                        raise ValueError('invalid Emby activity')
+                    clean = [row for row in page if isinstance(row, dict)]
+                    for row in clean:
+                        found[activity_key(row)] = row
+                    if known.intersection(found):
+                        for row in previous:
+                            found.setdefault(activity_key(row), row)
+                        break
+                    if len(page) < 100:
+                        break
+                entries = list(found.values())[:1000]
+                checked = time.time()
+                activity_cache.update(identity=identity, items=entries, at=checked)
+                return {**activity_summary({'Items': entries}), 'updated_at': checked}
+            except (httpx.HTTPError, ValueError, AttributeError):
+                return {**activity_summary({'Items': previous}), 'updated_at': checked, 'stale': bool(checked),
+                        'error': 'Emby 观看记录暂时无法读取'}
 
     @app.get('/api/v1/dashboard',dependencies=[Depends(admin)])
     async def dashboard(include_activity: bool = True):
@@ -290,14 +341,19 @@ def install_console(app,store,admin):
     @app.get('/api/v1/cloud/account',dependencies=[Depends(admin)])
     async def cloud_account(refresh:int=Query(0,ge=0,le=1)):
         """115 账号与容量：10 分钟内复用缓存，refresh=1 立即重取。只读。"""
+        account_key = digest(store.get('cookie') or '')
         cached=getattr(app.state,'cloud_account',None)
-        if refresh or not cached or time.time()-cached.get('at',0)>600:
+        if (refresh or not cached or cached.get('account_key') != account_key
+                or time.time()-cached.get('at',0) > (15 if cached.get('error') else 600)):
             try:
                 cached={'at':time.time(),**await app.state.organizer.cloud.account()}
             except Exception as exc:
                 cached={'at':time.time(),'error':str(exc)[:200] or '读取 115 账号信息失败'}
+            if account_key != digest(store.get('cookie') or ''):
+                return {'error': '115 账号已切换，请刷新容量。'}
+            cached['account_key'] = account_key
             app.state.cloud_account=cached
-        return {k:v for k,v in cached.items() if k!='at'}
+        return {k:v for k,v in cached.items() if k not in ('at', 'account_key')}
     @app.get('/api/v1/bot/commands',dependencies=[Depends(admin)])
     async def bot_commands_get():
         from .telegram_bot import BOT_COMMANDS, ordered_bot_commands

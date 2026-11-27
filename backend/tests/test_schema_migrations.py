@@ -10,6 +10,9 @@ def fresh_db():
     conn.row_factory = sqlite3.Row
     conn.executescript('''
         CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE events(id INTEGER PRIMARY KEY, kind TEXT, message TEXT);
+        CREATE TABLE channel_state(name TEXT PRIMARY KEY);
+        CREATE TABLE media_subscriptions(tmdb_id INTEGER);
         CREATE TABLE notifications(id INTEGER PRIMARY KEY, event_key TEXT UNIQUE, title TEXT, message TEXT,
           job_id INTEGER, at REAL, read_at REAL, telegram_state TEXT DEFAULT 'disabled');
         CREATE TABLE emby_deliveries(job_id INTEGER PRIMARY KEY, state TEXT, payload TEXT,

@@ -237,6 +237,12 @@ class Sync:
             allowed = self.engine.tasks.transfer_sync_roots(config['sync_profile_id'])
             if any(not allowed.intersection(part['id'] for part in trail) for trail in paths.values()):
                 raise UncertainState('转存目录已不在启用变更补扫的同步范围内，未发布同步清单。')
+        if config.get('sync_trigger') == 'directory_change':
+            profile = next((p for p in self.store.get('sync_profiles', [])
+                            if p['id'] == config.get('sync_profile_id')), {})
+            allowed = set(profile.get('source_cids') or [profile.get('source_cid')])
+            if any(not allowed.intersection(str(part['id']) for part in trail) for trail in paths.values()):
+                raise UncertainState('所选目录已不在同步计划的范围内，未发布同步清单。')
         # Pick the outermost selected root, independent of selection order.
         effective = [cid for cid in roots if not any(other != cid and other in [x['id'] for x in paths[cid]] for other in roots)]
         batched = getattr(self.cloud, 'download_tree', None)

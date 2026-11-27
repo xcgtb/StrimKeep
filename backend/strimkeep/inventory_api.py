@@ -18,7 +18,7 @@ from .inventory_fs import check_missing_registrations, resolve_roots, scan as fi
 from .inventory_audit import audit_roots
 from .inventory_preview import governance_preview
 from .inventory_revision import governance_revision
-from .inventory_sources import source_fingerprints
+from .inventory_sources import optional_account, source_fingerprints
 from .library_mapping import NO_STORE
 from .library_mapping import detail as mapping_detail
 from .library_mapping import page as mapping_page
@@ -175,8 +175,24 @@ def install_inventory(app, store, admin):
         except (OSError, ValueError) as exc:
             raise HTTPException(409, f'残留扫描失败：{exc}') from None
 
+    async def clean_inventory_command(kind, body):
+        if not commands.worker_ready(store, lane='operations'):
+            raise HTTPException(503, '后台清理暂未就绪。')
+        command_id = await asyncio.to_thread(commands.submit, store, kind, body.model_dump())
+        result = await commands.wait(store, command_id, timeout=60)
+        if result is None:
+            raise HTTPException(503, '后台仍在核对，请刷新后查看结果。')
+        if result.get('failed'):
+            raise HTTPException(409, result['message'])
+        return result
+
     @app.post('/api/v1/inventory/orphans/clean', dependencies=[Depends(admin)])
     async def clean_orphans(body: OrphanSelection):
+        if getattr(app.state.organizer, 'web_only', False):
+            return await clean_inventory_command('inventory_local_clean', body)
+        return await run_local_orphans(body)
+
+    async def run_local_orphans(body):
         from .inventory_orphans import clean_one, clean_sidecar
         paths = [item.path for item in body.items]
         if len(set(paths)) != len(paths):
@@ -248,6 +264,8 @@ def install_inventory(app, store, admin):
 
     @app.post('/api/v1/inventory/cloud-orphans/clean', dependencies=[Depends(admin)])
     async def clean_cloud_orphans(body: CloudOrphanSelection):
+        if getattr(app.state.organizer, 'web_only', False):
+            return await clean_inventory_command('inventory_cloud_clean', body)
         return await run_cloud_orphans(body)
 
     def job_key(job_id):
@@ -256,6 +274,9 @@ def install_inventory(app, store, admin):
     def read_job(job_id):
         job = store.meta_json(job_key(job_id), None)
         if job and job['state'] in ('queued', 'running') and job_id not in orphan_tasks:
+            command = commands.get(store, job.get('command_id')) if job.get('command_id') else None
+            if command and command['state'] in ('queued', 'running'):
+                return job
             job.update(state='interrupted', error='服务已重启，清理没有自动重试。请核对记录并重新扫描。', finished=time.time())
             store.set_meta(job_key(job_id), job)
         return job
@@ -270,7 +291,7 @@ def install_inventory(app, store, admin):
                 save(index=index + 1, current={'path': item.local.path if item.local else item.cloud.id,
                                               'phase':'核对本地残留' if item.local else '核对网盘目录'})
                 if item.local:
-                    local = (await clean_orphans(OrphanSelection(items=[item.local])))['items'][0]
+                    local = (await run_local_orphans(OrphanSelection(items=[item.local])))['items'][0]
                     job['results'].append({**local, 'location':'本地'})
                     save(results=job['results'])
                     if local.get('errors'):
@@ -311,8 +332,21 @@ def install_inventory(app, store, admin):
             raise HTTPException(422, '不能重复选择同一目录。')
         job = {'id':body.id, 'state':'queued', 'created':time.time(), 'count':len(body.items),
                'done':0, 'index':0, 'current':{}, 'results':[], 'error':''}
-        store.set_meta(job_key(body.id), job)
-        orphan_tasks[body.id] = asyncio.create_task(run_orphan_job(body, job))
+        if getattr(app.state.organizer, 'web_only', False):
+            if not commands.worker_ready(store, lane='operations'):
+                raise HTTPException(503, '后台清理暂未就绪。')
+            with store.transaction(immediate=True):
+                if existing := read_job(body.id):
+                    return existing
+                if commands.running(store, 'inventory_orphans'):
+                    raise HTTPException(409, '已有残留清理正在进行，请等待结束。')
+                job['command_id'] = commands.submit(store, 'inventory_orphans', body.model_dump())
+                # Use this transaction so a Worker cannot claim a job without its progress record.
+                store.db.execute('INSERT INTO meta(key,value) VALUES(?,?)',
+                                 (job_key(body.id), json.dumps(job, ensure_ascii=False)))
+        else:
+            store.set_meta(job_key(body.id), job)
+            orphan_tasks[body.id] = asyncio.create_task(run_orphan_job(body, job))
         return job
 
     @app.get('/api/v1/inventory/orphans/jobs', dependencies=[Depends(admin)])
@@ -525,6 +559,11 @@ def install_inventory(app, store, admin):
 
     @app.post('/api/v1/inventory/stale-records/clear', dependencies=[Depends(admin)])
     async def clear_stale_records(body: StaleSelection):
+        if getattr(app.state.organizer, 'web_only', False):
+            return await clean_inventory_command('inventory_stale_clear', body)
+        return await run_clear_stale(body)
+
+    async def run_clear_stale(body):
         from .inventory_stale import clear
         try:
             async with app.state.organizer.publication_gate:
@@ -535,6 +574,22 @@ def install_inventory(app, store, admin):
                 return await asyncio.to_thread(run)
         except (OSError, ValueError) as exc:
             raise HTTPException(409, f'失效记录未清理：{exc}') from None
+
+    async def inventory_cleanup_command(kind, payload):
+        if kind == 'inventory_orphans':
+            body = OrphanJobRequest.model_validate(payload)
+            job = read_job(body.id)
+            if not job:
+                raise ValueError('残留清理记录已不存在。')
+            await run_orphan_job(body, job)
+            return {'state': job['state']}
+        if kind == 'inventory_local_clean':
+            return await run_local_orphans(OrphanSelection.model_validate(payload))
+        if kind == 'inventory_cloud_clean':
+            return await run_cloud_orphans(CloudOrphanSelection.model_validate(payload))
+        return await run_clear_stale(StaleSelection.model_validate(payload))
+
+    app.state.inventory_cleanup_command = inventory_cleanup_command
 
     @app.get('/api/v1/inventory/config', dependencies=[Depends(admin)])
     async def inventory_config():
@@ -555,12 +610,7 @@ def install_inventory(app, store, admin):
         try:
             settings = inventory_config_value(store.get('inventory_config', {}))
             roots = resolve_roots(app.state.strms, store)
-            try:
-                account = app.state.organizer.index.account({})
-            except Exception:
-                # 没有 115 账号不再让整页治理不可用：库存照常展示，
-                # 只是网盘侧文件核不上来源、进不了删除计划（分享侧不受影响）。
-                account = ''
+            account = optional_account(app.state.organizer)
             from .inventory_partition import partition
 
             def scan_partition():

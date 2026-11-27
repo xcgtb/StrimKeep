@@ -88,13 +88,15 @@ async function download(){
   const params=new URLSearchParams({limit:'5000'})
   if(kind.value)params.set('kind',kind.value)
   if(term.value)params.set('q',term.value)
+  if(level.value!=='all')params.set('level',level.value)
+  if(!showProgress.value)params.set('progress','false')
   try{
     const res=await fetch('/api/v1/logs/export?'+params.toString(),{credentials:'include'})
     if(!res.ok)throw new Error('HTTP '+res.status)
     const blob=await res.blob(),url=URL.createObjectURL(blob),link=document.createElement('a')
     link.href=url;link.download='strimkeep-logs-'+new Date().toISOString().slice(0,19).replace(/[:T]/g,'')+'.txt'
     link.click();URL.revokeObjectURL(url)
-    ElMessage.success('已按类别和关键词导出日志；级别筛选仅影响页面显示')
+    ElMessage.success('已按当前筛选导出日志')
   }catch(err){ElMessage.error('导出失败：'+(err as Error).message)}
 }
 watch(search,value=>{if(queryTimer)clearTimeout(queryTimer);queryTimer=setTimeout(()=>term.value=value.toLowerCase(),180)})
@@ -130,7 +132,7 @@ usePageActivity(()=>{visible=true;void load()},()=>{visible=false;disconnect();i
    <time class="log-time">{{clock(r.at)}}</time>
    <span class="log-dot" aria-hidden="true"/>
    <span class="log-kind">{{kindLabel(r.kind)}}</span>
-   <span class="log-job" v-if="jobOf(r.message)">#{{jobOf(r.message)}}</span>
+   <span class="log-job" v-if="(r.job_id || jobOf(r.message))">#{{(r.job_id || jobOf(r.message))}}</span>
    <span class="log-body">{{bodyOf(r.message)}}</span>
   </button>
   <div :style="{height:Math.max(0,filtered.length-start-shown.length)*height+'px'}"/>
@@ -146,7 +148,8 @@ usePageActivity(()=>{visible=true;void load()},()=>{visible=false;disconnect();i
 <el-drawer :model-value="!!selected" :title="selected?kindLabel(selected.kind):'日志'" size="min(560px,100%)" @close="selected=null">
  <template v-if="selected">
   <p class="muted">{{fullTime(selected.at)}}</p>
-  <p v-if="jobOf(selected.message)">任务 <b>#{{jobOf(selected.message)}}</b></p>
+  <p v-if="selected.error_code">错误代码 <b>{{selected.error_code}}</b></p>
+  <p v-if="(selected.job_id || jobOf(selected.message))">任务 <b>#{{(selected.job_id || jobOf(selected.message))}}</b></p>
   <pre class="log-detail">{{bodyOf(selected.message)}}</pre>
  </template>
 </el-drawer>

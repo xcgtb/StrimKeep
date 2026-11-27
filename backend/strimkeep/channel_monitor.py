@@ -265,23 +265,14 @@ class ChannelMonitor:
         return self.config()
 
     def _mark_duplicates(self):
-        """同名频道只留一个：同一个频道的用户名和数字 ID 两种写法会重复抓取。
-
-        现场：`ltxjasna`（用户名）和 `-1004419698318`（数字 ID）其实是同一个频道 ——
-        频道原本公开（有用户名），改成私密后用户名失效、只剩数字 ID，于是又从用户
-        会话列表加了一条。旧的用户名条目不会自己消失，只会每轮 302。
-
-        按抓到的 title 判重，后加的标 duplicate_of。**正本要选能正常抓取的那条**：
-        转私密后旧的用户名条目一直是 error，它 added 更早，按 added 排会把它当正本，
-        反而把唯一能用的数字 ID 条目跳过。
-        """
+        """Only aliases with a verified Telegram peer ID share a cursor."""
         cols = {row[1] for row in self.store.db.execute('PRAGMA table_info(channel_state)')}
         if 'duplicate_of' not in cols:
             with self.store.db:
                 self.store.db.execute('ALTER TABLE channel_state ADD COLUMN duplicate_of TEXT')
         names = {rule['name'] for rule in self.config()['channels']}
         rows = self.store.db.execute(
-            "SELECT name,title,duplicate_of FROM channel_state "
+            "SELECT name,peer_id,duplicate_of FROM channel_state "
             "ORDER BY CASE WHEN state='error' THEN 1 ELSE 0 END, added").fetchall()
         seen, changed = {}, []
         with self.store.db:
@@ -289,10 +280,10 @@ class ChannelMonitor:
                 if row['name'] not in names:
                     # 已经从配置里移除：游标留着（误删恢复能续上），但不参与判重。
                     continue
-                title = str(row['title'] or '').strip()
-                owner = seen.get(title) if title else None
-                if title and not owner:
-                    seen[title] = row['name']
+                peer_id = row['peer_id']
+                owner = seen.get(peer_id) if peer_id else None
+                if peer_id and not owner:
+                    seen[peer_id] = row['name']
                 if row['duplicate_of'] != owner:
                     self.store.db.execute('UPDATE channel_state SET duplicate_of=? WHERE name=?',
                                           (owner, row['name']))
@@ -321,19 +312,8 @@ class ChannelMonitor:
         self.store.set_many({'channel_monitor': config})
         return self.config()
 
-    def _adopt_orphan(self, name, title):
-        """同一个频道换了写法，把旧条目的跟进位置和已处理记录接过来。
-
-        现场：频道从公开转私密后用户名被释放，用户在界面上删掉旧条目、再从会话列表
-        重加数字 ID。移除只是从配置里拿掉，`channel_state` 还留着（误删恢复靠它），
-        但账本是按名字记的 —— 新名字认不到旧账本，首轮当"首次接入"重扫一页，
-        磁力/电驴又往 115 离线提交一遍。
-
-        抓到的标题两种模式都有，就按标题认人：配置里已经没有、又抓过东西的同名旧行，
-        就是同一个频道的上一条记录。搬完把旧行删掉，免得下轮再认一次。
-        """
-        title = str(title or '').strip()
-        if not title:
+    def _adopt_orphan(self, name, title, peer_id):
+        if not peer_id:
             return None
         state = self._state(name)
         if state and state['last_message_id']:
@@ -341,8 +321,8 @@ class ChannelMonitor:
         names = {rule['name'] for rule in self.config()['channels']}
         rows = self.store.db.execute(
             'SELECT name,last_message_id FROM channel_state '
-            'WHERE title=? AND name<>? AND last_message_id IS NOT NULL',
-            (title, name)).fetchall()
+            'WHERE peer_id=? AND name<>? AND last_message_id IS NOT NULL',
+            (peer_id, name)).fetchall()
         orphans = [row for row in rows if row['name'] not in names]
         if not orphans:
             return None
@@ -356,9 +336,10 @@ class ChannelMonitor:
                                   (name, orphan))
             self.store.db.execute('UPDATE OR IGNORE channel_backfill SET name=? WHERE name=?',
                                   (name, orphan))
+            self.store.db.execute('UPDATE channel_shares SET name=? WHERE name=?', (name, orphan))
             self.store.db.execute(
-                'UPDATE channel_state SET last_message_id=?, posts=?, title=? WHERE name=?',
-                (old['last_message_id'], old['posts'], title, name))
+                'UPDATE channel_state SET last_message_id=?, posts=?, title=?, peer_id=? WHERE name=?',
+                (old['last_message_id'], old['posts'], title, peer_id, name))
             self.store.db.execute('DELETE FROM channel_state WHERE name=?', (orphan,))
         self.store.event('channel', '频道 %s 与已移除的 %s 是同一个频道，已接上原来的跟进位置'
                          '（消息 %s），不会重扫旧帖。' % (title, orphan, old['last_message_id']))
@@ -458,9 +439,18 @@ class ChannelMonitor:
                     self._remember(name, title=title, state='error', error=error)
                     return 0
                 if not adopted:
-                    # 每轮只认一次：删了重加的频道，靠标题接上原来的游标和账本。
                     adopted = True
-                    inherited = self._adopt_orphan(name, title)
+                    peer_id = parsed.get('peer_id', '')
+                    if peer_id and state.get('peer_id') and state['peer_id'] != peer_id:
+                        self._remember(name, state='error', error='此名称已指向另一个 Telegram 频道，请核对后重新添加。')
+                        return 0
+                    if peer_id:
+                        self._remember(name, peer_id=peer_id)
+                        self._mark_duplicates()
+                        owner = self._duplicate_owner(name)
+                        if owner and self.rule(owner)['enabled']:
+                            return 0
+                    inherited = self._adopt_orphan(name, title, peer_id)
                     if inherited is not None:
                         cursor = inherited
                         state = self._state(name) or state
@@ -843,8 +833,7 @@ class ChannelMonitor:
         for rule in config['channels']:
             if not rule['enabled']:
                 continue
-            # 每抓一个就重算一次：title 是抓完才知道的，只在循环外算一次的话，
-            # 后面频道的 title 要等到下一轮才生效（白多抓一轮）。
+            self._mark_duplicates()
             self._mark_duplicates()
             owner = self._duplicate_owner(rule['name'])
             if owner and owner in enabled and not force:
@@ -857,7 +846,7 @@ class ChannelMonitor:
             except Exception as exc:
                 self._remember(name, state='error', error='频道读取失败：' + type(exc).__name__)
                 results.append((name, 0))
-        self._mark_duplicates()   # 最后一个频道抓完才拿到 title，收尾再判一次
+        self._mark_duplicates()
         return results
 
     def _duplicate_owner(self, name):

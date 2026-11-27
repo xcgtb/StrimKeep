@@ -296,5 +296,5 @@ class TelegramSession:
                         break
             except Exception:
                 pass
-        return {'title': title,
+        return {'title': title, 'peer_id': str(entity.id) if isinstance(entity, Channel) else '',
                 'messages': rows, 'has_more': has_more}

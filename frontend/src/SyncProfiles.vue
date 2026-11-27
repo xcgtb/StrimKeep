@@ -11,6 +11,16 @@ type EmbyTarget = { id:string; name:string; upstream:string; api_key_configured:
 const embyTargets = ref<EmbyTarget[]>([])
 const embyTargetsError = ref(false)
 const previewRoot = ref<{ id: string; name: string }>()
+const directoryRun = ref<Profile>()
+async function executeDirectory(folder:{id:string;name:string}){
+  const profile = directoryRun.value
+  directoryRun.value = undefined
+  if(!profile)return
+  await runAction(async()=>{
+    const job = await props.api('/sync/profiles/'+profile.id+'/run-directory','POST',{source_cid:folder.id})
+    ElMessage.success(folder.name+' 已加入目录同步（任务 #'+job.id+'）')
+  })
+}
 const previewOpen = ref(false)
 const previewBusy = ref(false)
 const preview = ref<PathPreview>()
@@ -172,12 +182,13 @@ function timing(p:Profile){if(!p.enabled)return '仅手动';if(p.frequency==='in
         <span v-if="p.emby_target!=='main'">{{targetLabel(p.emby_target)}}</span>
         <span v-if="p.enabled&&p.next_due">下次 {{new Date(p.next_due*1000).toLocaleString('zh-CN',{timeZone:p.timezone||'Asia/Shanghai'})}}</span>
       </div>
-      <div class="sync-card-actions"><el-button type="primary" :disabled="busy" @click="execute(p)">立即执行</el-button><el-button :disabled="busy" @click="edit(p)">编辑</el-button><el-button text type="danger" :disabled="busy" @click="remove(p)">删除</el-button></div>
+      <div class="sync-card-actions"><el-button type="primary" :disabled="busy" @click="execute(p)">立即执行</el-button><el-button :disabled="busy" @click="directoryRun=p">同步单个目录</el-button><el-button :disabled="busy" @click="edit(p)">编辑</el-button><el-button text type="danger" :disabled="busy" @click="remove(p)">删除</el-button></div>
     </article>
   </div>
   <div v-else-if="!draft" class="sync-empty"><p>暂无同步任务</p></div>
   <el-button text @click="emit('navigate','tasks')">查看任务进度 →</el-button>
   <DirectoryPicker v-if="picker" :api="api" @select="select" @close="picker=false"/>
+  <DirectoryPicker v-if="directoryRun" :api="api" @select="executeDirectory" @close="directoryRun=undefined"/>
   <DirectoryPicker v-if="previewRoot" :api="api" :file-root="previewRoot" @select="previewFile" @close="previewRoot=undefined"/>
   <el-dialog v-model="previewOpen" title="STRM 路径预览" width="min(600px, 94vw)" append-to-body>
     <p v-if="previewBusy" role="status">正在核对网盘路径…</p>

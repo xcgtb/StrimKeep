@@ -380,7 +380,6 @@ class EmbyDelivery:
             return result
         # 分享 STRM 在 Emby 里以 share/<share_id> 作为播放身份；任务里只有 115
         # 文件 ID，两边永远对不上，整批就会被判「入库未确认」。
-        shares = self.share_pids()
         for row in self.store.db.execute("SELECT i.id,i.file_id,i.plan,i.state FROM organize_items i WHERE job_id=? AND state IN ('done','recycled') ORDER BY id", (jid,)):
             if only_ids is not None and row['id'] not in only_ids:
                 continue
@@ -410,18 +409,36 @@ class EmbyDelivery:
             if folder.startswith('Season '): folder = PurePosixPath(relative).parent.parent.name
             title = details.get('title') or details.get('name') or re.split(r'\s*\(\d{4}\)|\s*\{tmdb-', folder)[0]
             emby_path = str(PurePosixPath(mapping) / relative.replace('\\', '/'))
-            pid = 'share/' + shares[relative] if relative in shares else row['file_id']
-            result.append({'emby_path':emby_path,'update_type':update_type,'relative':relative, 'pid':pid, 'kind':hint.get('media_type'),
+            result.append({'emby_path':emby_path,'update_type':update_type,'relative':relative, 'pid':row['file_id'], 'kind':hint.get('media_type'),
                            'tmdb':details.get('id') or hint.get('tmdb_id'), 'title':title, 'confirmed':False})
+        self.apply_share_pids(result)
         return result
 
-    def share_pids(self):
+    def apply_share_pids(self, targets):
+        shares = self.share_pids(target.get('relative') for target in targets)
+        changed = False
+        for target in targets:
+            share_id = shares.get(target.get('relative'))
+            if share_id and target.get('pid') != 'share/' + share_id:
+                target.update(pid='share/' + share_id, confirmed=False)
+                changed = True
+        return changed
+
+    def share_pids(self, paths):
         """分享入库的播放身份：Emby 里是 share/<share_id>，不是 115 文件 ID。
 
         分享 STRM 的播放地址是 /play115/share/<sid>/…，Emby 条目只带这个地址。
         """
-        return {row['strm_path']: str(row['id']) for row in self.store.db.execute(
-            'SELECT id,strm_path FROM share_strms WHERE revoked=0')}
+        unique = list(dict.fromkeys(path for path in paths if path))
+        result = {}
+        for offset in range(0, len(unique), 500):
+            batch = unique[offset:offset + 500]
+            slots = ','.join('?' for _ in batch)
+            rows = self.store.db.execute(
+                f'SELECT id,strm_path FROM share_strms WHERE revoked=0 AND strm_path IN ({slots}) ORDER BY rowid',
+                batch)
+            result.update((row['strm_path'], str(row['id'])) for row in rows)
+        return result
 
     def row(self, jid):
         return self.store.db.execute('SELECT * FROM emby_deliveries WHERE job_id=?', (jid,)).fetchone()
@@ -697,6 +714,9 @@ class EmbyDelivery:
 
     async def verify_paths(self, jid, payload, url, headers):
         """Query mapped paths directly for libraries organized outside StrimKeep."""
+        from .emby_proxy import delivery_target
+        target_id = payload.get('target_id')
+        instance = delivery_target(self.store, target_id) if target_id else None
         targets = payload['targets']
         pending = [target for target in targets if not target.get('confirmed') and not target.get('library_missing')]
         cursor = payload.get('cursor', 0) % max(len(pending), 1)
@@ -712,7 +732,13 @@ class EmbyDelivery:
                 items = data.get('Items') if isinstance(data, dict) else None
                 if not isinstance(items, list):
                     return None
-                return any(isinstance(item, dict) and self.matches(item, target, strict_mount=True) for item in items)
+                matches = [item for item in items if isinstance(item, dict)
+                           and self.matches(item, target, strict_mount=True)]
+                if instance and instance.extract_media_info and len(matches) == 1:
+                    self.media_info.enqueue(jid, matches[0], {**target, 'emby_instance': target_id,
+                                                              'emby_db': instance.library_db,
+                                                              'emby_mount': instance.mount}, payload['connection'])
+                return bool(matches)
             except (httpx.HTTPError, ValueError, TypeError):
                 return None
 
@@ -737,15 +763,7 @@ class EmbyDelivery:
     async def verify(self, jid):
         row = self.row(jid); payload = json.loads(row['payload'])
         # 旧投递按 115 文件 ID 建的目标在这里就地纠正，不必等重建任务。
-        repaired = False
-        shares = self.share_pids()
-        for target in payload.get('targets', []):
-            share_id = shares.get(target.get('relative') or '')
-            if share_id and target.get('pid') != 'share/' + share_id:
-                target['pid'] = 'share/' + share_id
-                target['confirmed'] = False
-                repaired = True
-        if repaired:
+        if self.apply_share_pids(payload.get('targets', [])):
             self.save(jid, payload=json.dumps(payload, ensure_ascii=False))
         connection, _ = self.delivery_connection(payload)
         if not connection or not payload.get('connection'):
@@ -866,9 +884,6 @@ class EmbyDelivery:
         if self._share_identity_done:
             return 0
         self._share_identity_done = True
-        shares = self.share_pids()
-        if not shares:
-            return 0
         repaired = 0
         for row in self.store.db.execute(
                 "SELECT job_id,payload,state,deadline FROM emby_deliveries "
@@ -877,14 +892,7 @@ class EmbyDelivery:
                 payload = json.loads(row['payload'])
             except (TypeError, ValueError):
                 continue
-            changed = False
-            for target in payload.get('targets', []):
-                share_id = shares.get(target.get('relative') or '')
-                if share_id and target.get('pid') != 'share/' + share_id:
-                    target['pid'] = 'share/' + share_id
-                    target['confirmed'] = False
-                    changed = True
-            if not changed:
+            if not self.apply_share_pids(payload.get('targets', [])):
                 continue
             repaired += 1
             state = row['state'] if row['state'] in ('accepted', 'checking') else 'accepted'

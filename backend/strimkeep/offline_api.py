@@ -7,6 +7,7 @@
 import json
 import re
 import time
+from typing import Literal
 from urllib.parse import unquote, unquote_plus
 
 from fastapi import Depends, HTTPException, Query
@@ -670,6 +671,8 @@ def install_offline(app, store, admin):
     class IntakeInput(BaseModel):
         model_config = ConfigDict(extra='forbid')
         text: str = Field(min_length=1, max_length=20000)
+        action: Literal['auto', 'transfer', 'offline', 'share'] = 'auto'
+        target_cid: str = Field(default='', max_length=24)
 
     @app.post('/api/v1/intake', dependencies=[Depends(admin)])
     async def intake(body: IntakeInput):
@@ -682,16 +685,26 @@ def install_offline(app, store, admin):
         result = {'share': [], 'offline': [], 'errors': []}
         text = body.text
 
-        if SHARE_LINK.search(text):
+        if body.action == 'share':
+            return await app.state.ingest_share_text(text)
+        if body.action == 'transfer' and not SHARE_LINK.search(text):
+            raise HTTPException(422, '请输入 115 分享链接。')
+        if SHARE_LINK.search(text) and body.action != 'offline':
             transfer_cfg = store.get('transfer_config', {}) or {}
+            target = (transfer_cfg.get('explore_cid') if body.action == 'transfer' else None
+                      ) or transfer_cfg.get('target_cid') or ''
+            if body.target_cid and body.target_cid != str(target):
+                raise HTTPException(409, '转存目录已变化，请刷新后重新确认。')
             try:
                 ids = await app.state.organizer.transfer.enqueue(
-                    text, transfer_cfg.get('target_cid', ''),
+                    text, target,
                     bool(transfer_cfg.get('auto_organize', False)), 'web')
                 result['share'] = ids
             except (ValueError, CloudError) as exc:
                 result['errors'].append('分享转存：%s' % str(exc)[:80])
 
+        if body.action == 'transfer':
+            return result
         cfg = config_value()
         prefixes = {'magnet': 'magnet', 'ed2k': 'ed2k'}
         groups = {}

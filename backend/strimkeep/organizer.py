@@ -93,7 +93,9 @@ class Organizer:
         self.drain_task = None
         # Serialize publication/reconciliation at file boundaries while separate
         # workers may scan, transfer and resolve metadata concurrently.
-        self.publication_gate = asyncio.Lock()
+        from .leases import PublicationGate
+        state_root = getattr(store, 'root', None)
+        self.publication_gate = PublicationGate(Path(state_root) / 'data' if state_root else None)
         self.cleanup_gate = asyncio.Lock()
         self.scan_receive_gate = asyncio.Lock()
         self.clock = None
@@ -396,7 +398,7 @@ class Organizer:
             # 留痕失败不能反过来影响整理主流程。
             pass
 
-    def halt(self, job_id, state, message, stage='等待核查', quiet=False):
+    def halt(self, job_id, state, message, stage='等待核查', quiet=False, error_code=''):
         current = self.job(job_id)['state']
         self.update_job(job_id, state=current if current in ('paused', 'cancelled') else state,
                         message=message, stage=stage)
@@ -407,7 +409,8 @@ class Organizer:
         # quiet：传输层抖动（超时/连接重置）会自动退避重排并自愈，首次失败不该刷日志；
         # 任务中心的 stage/message 仍然如实显示，日志只在复发或放弃时才值得看。
         if not quiet:
-            self.store.event('organize', f'任务 {job_id} / {stage}：{message}')
+            details = {'job_id': job_id, 'error_code': error_code} if error_code else {}
+            self.store.event('organize', f'任务 {job_id} / {stage}：{message}', **details)
 
     def boundary(self, job_id):
         """文件边界的三个校验：磁盘余量、任务仍在运行、115 账号未变。
@@ -2699,7 +2702,8 @@ class Organizer:
                     try:
                         await share_service.run_organize(self, job_id, config)
                     finally:
-                        self.sync.invalidate(self.index.account(config))
+                        if self.store.get('cookie'):
+                            self.sync.invalidate(self.index.account(config))
                 return
             if config.get('repair_only'):
                 await self.cloud.directory(config['archive_cid'])
@@ -3076,7 +3080,7 @@ class Organizer:
             pass
         except CloudError as exc:
             if exc.code == 'RATE_LIMITED':
-                self.halt(job_id, 'needs_review', str(exc), '115 限流冷却，稍后自动重排')
+                self.halt(job_id, 'needs_review', str(exc), '115 限流冷却，稍后自动重排', error_code=exc.code)
             elif exc.code in ('TMDB_UNAVAILABLE', 'CLOUD_UNAVAILABLE'):
                 label = 'TMDB 请求失败' if exc.code == 'TMDB_UNAVAILABLE' else 'CLOUD_UNAVAILABLE'
                 try:
@@ -3084,9 +3088,11 @@ class Organizer:
                 except (ValueError, TypeError):
                     retries = 0
                 self.halt(job_id, 'needs_review', str(exc), label + '，保留未完成文件并稍后重试',
-                          quiet=retries == 0)
+                          quiet=retries == 0, error_code=exc.code)
             else:
-                self.halt(job_id, 'waiting_login' if exc.code in ('LOGIN_REQUIRED', 'LOGIN_INVALID') else 'needs_review', str(exc), '等待登录' if exc.code in ('LOGIN_REQUIRED', 'LOGIN_INVALID') else '等待核查')
+                login_needed = exc.code in ('LOGIN_REQUIRED', 'LOGIN_INVALID')
+                self.halt(job_id, 'waiting_login' if login_needed else 'needs_review',
+                          str(exc), '等待登录' if login_needed else '等待核查', error_code=exc.code)
         except (UncertainState, NeedsReview) as exc:
             self.halt(job_id, 'needs_review', str(exc))
         finally:

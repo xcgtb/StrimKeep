@@ -5,6 +5,7 @@ coverage. Inventory scheduled scans stay with the Web API installer because
 they depend on app.state functions registered there.
 """
 import asyncio
+import logging
 import json
 import os
 import signal
@@ -76,6 +77,12 @@ async def command_loop(store, engine, stop, kinds=commands.KINDS, inventory=None
             payload = json.loads(row['payload'] or '{}')
             if row['kind'] == 'share_check':
                 result = await share_service.check_alive(engine)
+            elif row['kind'] == 'share_revoke':
+                result = await share_service.revoke(engine, payload['id'], payload)
+            elif row['kind'] == 'share_prune':
+                result = await share_service.prune_orphans(engine)
+            elif row['kind'] in commands.INVENTORY_CLEANUP:
+                result = await inventory.state.inventory_cleanup_command(row['kind'], payload)
             elif row['kind'] == 'strm_rebuild':
                 result = await engine.rebuild.run(dry_run=bool(payload.get('dry_run')))
             elif row['kind'] == 'strm_rebuild_rollback':
@@ -101,7 +108,36 @@ async def command_loop(store, engine, stop, kinds=commands.KINDS, inventory=None
             await asyncio.to_thread(commands.finish, store, row['id'], result)
         except Exception as exc:
             await asyncio.to_thread(commands.finish, store, row['id'], None,
-                                    str(exc)[:300] or type(exc).__name__)
+                                    str(getattr(exc, 'detail', None) or exc)[:300] or type(exc).__name__)
+
+
+async def heartbeat_loop(store, engine, background, stop, *, interval=5):
+    path = store.root / 'data' / 'worker-heartbeat'
+    temporary = path.with_suffix('.tmp')
+    pending = None
+    last_error = None
+    try:
+        while not stop.is_set():
+            temporary.write_text(str(os.getpid()), encoding='ascii')
+            temporary.replace(path)
+            if pending is None or pending.done():
+                if pending is not None:
+                    try:
+                        pending.result()
+                    except Exception:
+                        now = time.monotonic()
+                        if last_error is None or now - last_error >= 60:
+                            last_error = now
+                            logging.getLogger(__name__).warning('Worker health status could not be written', exc_info=True)
+                payload = heartbeat_payload(engine, background)
+                pending = asyncio.create_task(asyncio.to_thread(store.set_meta, 'worker_heartbeat', payload))
+            try:
+                await asyncio.wait_for(stop.wait(), interval)
+            except TimeoutError:
+                continue
+    finally:
+        if pending is not None:
+            await asyncio.gather(pending, return_exceptions=True)
 
 
 async def run_worker():
@@ -146,7 +182,7 @@ async def run_worker():
         'emby_coverage': engine.emby.coverage_loop(),
         'media_info': inject_loop(app, store),
         'housekeeping': housekeeping_loop(app, store),
-        'operations': command_loop(store, engine, stop, commands.OPERATIONS),
+        'operations': command_loop(store, engine, stop, commands.OPERATIONS, scan_app),
         'cover_operations': command_loop(store, engine, stop, commands.COVER_OPERATIONS),
         'inventory_compare': command_loop(store, engine, stop, ('inventory_compare',), scan_app),
         'inventory_delete': inventory_delete_loop(store, scan_app.state.inventory_run_delete),
@@ -157,9 +193,11 @@ async def run_worker():
     store.event('system', f'StrimKeep worker {__version__} started.')
     last_reap = 0.0
     last_prune = 0.0
+    heartbeat = asyncio.create_task(heartbeat_loop(store, engine, background, stop))
     try:
         while not stop.is_set():
-            store.set_meta('worker_heartbeat', heartbeat_payload(engine, background))
+            if heartbeat.done():
+                await heartbeat
             now = time.monotonic()
             if now - last_reap >= 120:
                 last_reap = now
@@ -175,10 +213,12 @@ async def run_worker():
                     pass
             await asyncio.sleep(5)
     finally:
+        stop.set()
         for task in background.values():
             task.cancel()
         if background:
             await asyncio.gather(*background.values(), return_exceptions=True)
+        await asyncio.gather(heartbeat, return_exceptions=True)
         await engine.close()
         await cloud.close()
         await http.aclose()

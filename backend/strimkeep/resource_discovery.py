@@ -9,7 +9,8 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 import httpx
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .channel_monitor import normalize_channel
@@ -212,20 +213,41 @@ def discovery_config(store):
     return DiscoveryConfig.model_validate(store.get(SETTING, {}))
 
 
-async def discover_resources(store, http, telegram, title):
+async def resource_snapshots(store, http, telegram, title):
     cfg = discovery_config(store)
     titles = {row['name']: row['title'] for row in
               store.db.execute('SELECT name,title FROM channel_state')}
-    searches = [search_source(site.name, search_pansou(http, site, title))
-                for site in cfg.sites if site.enabled]
+
+    async def indexed(index, name, search, *args):
+        return index, await search_source(name, search(*args))
+
+    sources = [(site.name, search_pansou, (http, site, title)) for site in cfg.sites if site.enabled]
     for channel in cfg.telegram_channels:
         label = titles.get(channel) or channel
-        searches.append(search_source(label, search_channel(telegram, channel, label, title)))
-    if not searches:
-        return {'items': [], 'sources': [], 'truncated': False}
-    status, groups = zip(*(await asyncio.gather(*searches)))
-    items, truncated = merge_results(groups)
-    return {'items': items, 'sources': status, 'truncated': truncated}
+        sources.append((label, search_channel, (telegram, channel, label, title)))
+    tasks = [asyncio.create_task(indexed(index, name, search, *args))
+             for index, (name, search, args) in enumerate(sources)]
+    completed = {}
+    try:
+        for ready in asyncio.as_completed(tasks):
+            index, result = await ready
+            completed[index] = result
+            status, groups = zip(*(completed[key] for key in sorted(completed)))
+            items, truncated = merge_results([list(map(dict, group)) for group in groups])
+            yield {'items': items, 'sources': status, 'truncated': truncated}
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def discover_resources(store, http, telegram, title):
+    snapshots = resource_snapshots(store, http, telegram, title)
+    final = {'items': [], 'sources': [], 'truncated': False}
+    async for final in snapshots:
+        pass
+    return final
 
 
 def install_resource_discovery(app, store, admin):
@@ -259,6 +281,19 @@ def install_resource_discovery(app, store, admin):
     async def save(body: DiscoveryConfig):
         store.set_many({SETTING: body.model_dump()})
         return await config()
+
+    @app.get('/api/v1/explore/resources/events', dependencies=[Depends(admin)])
+    async def search_events(title: str = Query(min_length=1, max_length=200)):
+        async def stream():
+            count = 0
+            yield ': search started\n\n'
+            async for result in resource_snapshots(store, app.state.http, app.state.organizer.telegram, title.strip()):
+                count += 1
+                yield 'event: results\ndata: ' + json.dumps(result, ensure_ascii=False) + '\n\n'
+            yield 'event: done\ndata: ' + str(count) + '\n\n'
+
+        return StreamingResponse(stream(), media_type='text/event-stream',
+                                 headers={'X-Accel-Buffering': 'no', 'Cache-Control': 'no-cache, no-transform'})
 
     @app.post('/api/v1/explore/resources', dependencies=[Depends(admin)])
     async def search(body: SearchInput):

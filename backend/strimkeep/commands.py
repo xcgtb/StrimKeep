@@ -10,7 +10,10 @@ import time
 LIBRARY_COVER = 'library_cover'
 RETIRED_COVER = 'cover_sweep'
 COVER_OPERATIONS = (LIBRARY_COVER, RETIRED_COVER)
-OPERATIONS = ('share_check', 'strm_rebuild', 'strm_rebuild_rollback')
+INVENTORY_CLEANUP = ('inventory_orphans', 'inventory_local_clean', 'inventory_cloud_clean', 'inventory_stale_clear')
+OPERATIONS = ('share_check', 'share_revoke', 'share_prune', 'strm_rebuild',
+              'strm_rebuild_rollback', *INVENTORY_CLEANUP)
+VERIFY_AFTER_RESTART = {'inventory_orphans', 'inventory_cloud_clean'}
 INSPECTION_OPERATIONS = ('inventory_compare', 'channel_check')
 KINDS = (*OPERATIONS, *COVER_OPERATIONS, *INSPECTION_OPERATIONS)
 KEEP_SECONDS = 7 * 24 * 3600
@@ -105,10 +108,10 @@ def recover_running(store):
     changed = 0
     with store.db:
         rows = store.db.execute(
-            "SELECT id,attempts FROM worker_commands WHERE state='running'").fetchall()
+            "SELECT id,kind,attempts FROM worker_commands WHERE state='running'").fetchall()
         for row in rows:
             changed += 1
-            if int(row['attempts'] or 0) < MAX_ATTEMPTS:
+            if row['kind'] not in VERIFY_AFTER_RESTART and int(row['attempts'] or 0) < MAX_ATTEMPTS:
                 store.db.execute(
                     "UPDATE worker_commands SET state='queued',attempts=attempts+1,"
                     "updated=?,message='' WHERE id=?", (now, row['id']))
@@ -129,7 +132,7 @@ def prune(store, keep=KEEP_SECONDS):
             (cutoff,)).rowcount
 
 
-def worker_ready(store, timeout=30):
+def worker_ready(store, timeout=30, *, lane=None):
     """True when the Worker heartbeat is fresh and lanes are healthy."""
     raw = store.meta('worker_heartbeat')
     try:
@@ -142,7 +145,8 @@ def worker_ready(store, timeout=30):
                 return False
         except (TypeError, ValueError):
             return False
-        return not value.get('closing') and not any((value.get('lane_faults') or {}).values())
+        return (not value.get('closing') and not any((value.get('lane_faults') or {}).values())
+                and (value.get('background') or {}).get(lane) is not False)
     try:
         return value is not None and time.time() - float(value) < timeout
     except (TypeError, ValueError):

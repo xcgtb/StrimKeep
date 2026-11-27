@@ -189,9 +189,9 @@ class NativeMediaInfo:
         except UnsafePath as exc:
             raise ValueError('媒体信息文件路径不安全') from exc
         # 追更：sidecar 一写好就立刻写进 Emby，不必等定时任务（定时只当兜底）。
-        self._push_to_emby(item, path)
+        self._push_to_emby(item, path, target)
 
-    def _push_to_emby(self, item, sidecar_path):
+    def _push_to_emby(self, item, sidecar_path, target):
         """把刚写好的 sidecar 立即写进 Emby 的 library.db；任何异常都不影响提取流程。
 
         结果（成功/失败原因）同时写进失败清单：失败时能直接看出是哪一部、为什么。
@@ -204,12 +204,15 @@ class NativeMediaInfo:
             item_id = str(item.get('Id') or '')
             if not item_id.isdigit():
                 return
-            db_path = library_db(self.store)
-            if not db_path:
-                return          # 用户没挂 Emby 数据目录：只生成 sidecar，不猜路径
-            state, _streams, reason = inject_sidecar(db_path, int(item_id), str(sidecar_path),
-                                                     str(self.engine.root), emby_strm_mount(self.store),
-                                                     should_continue=lambda: media_info_enabled(self.store))
+            instance_id = target.get('emby_instance')
+            db_path = target.get('emby_db') if instance_id else library_db(self.store)
+            if not db_path or (instance_id and not target.get('emby_path')):
+                return
+            mount = target.get('emby_mount') if instance_id else emby_strm_mount(self.store)
+            state, _streams, reason = inject_sidecar(
+                db_path, int(item_id), str(sidecar_path), str(self.engine.root), mount,
+                should_continue=lambda: media_info_enabled(self.store),
+                expected_path=target.get('emby_path') if instance_id else None)
             if state == 'injected':
                 self._event('媒体信息已即时写入 Emby（条目 %s）。' % item_id)
                 record_failure(self.store, item_id, str(sidecar_path), '')
@@ -232,12 +235,14 @@ class NativeMediaInfo:
             return False
 
     # ---- Emby 端媒体信息：和本地 ffprobe 分开记账 ----
-    def _confirm_emby(self, relative):
+    def _confirm_emby(self, relative, instance=''):
         """Emby 已经有视频流了：这一半收工，后续补扫也不再管它。"""
         with self.store.db:
             cursor = self.store.db.execute(
                 "UPDATE native_media_info_queue SET emby_state='confirmed' "
-                "WHERE json_extract(target,'$.relative')=? AND emby_state!='confirmed'", (relative,))
+                "WHERE json_extract(target,'$.relative')=? "
+                "AND COALESCE(json_extract(target,'$.emby_instance'),'')=? AND emby_state!='confirmed'",
+                (relative, instance or ''))
         return bool(cursor.rowcount)
 
     def _defer_emby(self, row, reason):
@@ -267,7 +272,7 @@ class NativeMediaInfo:
             params={'Ids': item_id, 'Fields': 'Path,MediaSources,MediaStreams,Chapters'}, timeout=15)
         response.raise_for_status()
         items = response.json().get('Items') or []
-        if len(items) != 1 or not self.delivery.matches(items[0], target):
+        if len(items) != 1 or not self.matches_target(items[0], target):
             return None
         return items[0]
 
@@ -399,14 +404,38 @@ class NativeMediaInfo:
         return {**item, 'MediaStreams': streams, 'MediaSources': [],
                 'Size': size, 'RunTimeTicks': duration_ticks, 'Bitrate': media.get('bit_rate')}
 
+    def matches_target(self, item, target):
+        if target.get('emby_instance'):
+            return self.delivery.matches(item, target, strict_mount=True)
+        return self.delivery.matches(item, target)
+
+    def queue_connection(self, row):
+        try:
+            target = json.loads(row['target'])
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(target, dict):
+            return None
+        if instance_id := target.get('emby_instance'):
+            from .emby_proxy import delivery_target
+            instance = delivery_target(self.store, instance_id)
+            if (not instance or not instance.extract_media_info or instance.binding != row['connection']
+                    or instance.library_db != target.get('emby_db')):
+                return None
+            return instance.connection
+        connection = self.delivery.connection()
+        if connection and digest('|'.join(connection)) == row['connection']:
+            return connection
+        return None
+
     async def tick(self):
         if not media_info_enabled(self.store) or not (self.store.get('sync_config', {}) or {}).get('emby_media_info', False):
             return
         row = self.store.db.execute("SELECT * FROM native_media_info_queue WHERE state='queued' AND next_due<=? ORDER BY job_id,item_id LIMIT 1", (time.time(),)).fetchone()
         if not row:
             return
-        connection = self.delivery.connection()
-        if not connection or digest('|'.join(connection)) != row['connection']:
+        connection = self.queue_connection(row)
+        if not connection:
             self._finish(row, 'failed', 'Emby 连接已变化，未执行媒体信息提取。')
             return
         url, key = connection
@@ -419,13 +448,13 @@ class NativeMediaInfo:
                 return
             items = response.json().get('Items') or []
             target = json.loads(row['target'])
-            if len(items) != 1 or not self.delivery.matches(items[0], target):
+            if len(items) != 1 or not self.matches_target(items[0], target):
                 self._finish(row, 'failed', '条目路径或播放身份已变化，未提取媒体信息。')
                 return
             streams = items[0].get('MediaStreams') or [s for source in items[0].get('MediaSources',[]) for s in source.get('MediaStreams',[])]
             if any(s.get('Type') == 'Video' for s in streams):
                 saved = self.save_sidecar_safely(target, items[0])
-                self._confirm_emby(target['relative'])
+                self._confirm_emby(target['relative'], target.get('emby_instance'))
                 self._finish(row, 'done', 'Emby 已有媒体信息，' + ('已保存媒体信息 JSON。' if saved else '已有媒体信息文件保留未覆盖。'))
                 return
             # 本地优先：整理阶段已经 ffprobe 过这个视频，本项目这一半直接落盘收工，
@@ -453,13 +482,13 @@ class NativeMediaInfo:
             if not media_info_enabled(self.store):
                 return
             items = check.json().get('Items') or []
-            if len(items) != 1 or not self.delivery.matches(items[0], target):
+            if len(items) != 1 or not self.matches_target(items[0], target):
                 raise ValueError('媒体信息回读未确认')
             saved = items[0].get('MediaStreams') or [s for source in items[0].get('MediaSources',[]) for s in source.get('MediaStreams',[])]
             if not any(s.get('Type') == 'Video' for s in saved):
                 raise ValueError('媒体信息尚未保存')
             saved = self.save_sidecar_safely(target, items[0])
-            self._confirm_emby(target['relative'])
+            self._confirm_emby(target['relative'], target.get('emby_instance'))
             self._finish(row, 'done', 'Emby 媒体信息已提取，' + ('已保存媒体信息 JSON。' if saved else '已有媒体信息文件保留未覆盖。'))
         except asyncio.CancelledError:
             raise
@@ -528,8 +557,8 @@ class NativeMediaInfo:
         for row in rows:
             if not media_info_enabled(self.store):
                 break
-            connection = self.delivery.connection()
-            if not connection or digest('|'.join(connection)) != row['connection']:
+            connection = self.queue_connection(row)
+            if not connection:
                 self._give_up_emby(row, 'Emby 连接已变化，不再追 Emby 端媒体信息。')
                 continue
             url, key = connection
@@ -551,7 +580,7 @@ class NativeMediaInfo:
                 if any(stream.get('Type') == 'Video' for stream in self._video_streams(item)):
                     # Emby 自己已经探好了（或上一次踢的 PlaybackInfo 已经生效）。
                     self.save_sidecar_safely(target, item)
-                    self._confirm_emby(target['relative'])
+                    self._confirm_emby(target['relative'], target.get('emby_instance'))
                     continue
                 # 踢一次：全项目唯一能让 Emby 去解析 STRM 背后直链的入口。
                 response = await emby_request(self.delivery.http, 'GET',
@@ -561,7 +590,7 @@ class NativeMediaInfo:
                 if item is not None and any(stream.get('Type') == 'Video'
                                             for stream in self._video_streams(item)):
                     self.save_sidecar_safely(target, item)
-                    self._confirm_emby(target['relative'])
+                    self._confirm_emby(target['relative'], target.get('emby_instance'))
                     continue
                 self._defer_emby(row, 'Emby 尚未解析出视频流')
             except asyncio.CancelledError:

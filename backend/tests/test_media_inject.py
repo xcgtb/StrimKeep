@@ -118,6 +118,8 @@ def test_inject_sidecar_is_instant_and_skips_items_that_already_have_video(tmp_p
     db_path, strm_root = _prepare(tmp_path)
     sidecar = Path(strm_root) / '电影' / '片名 (2026)' / '片名 (2026)-media-info.json'
 
+    assert inject_sidecar(str(db_path), 7, str(sidecar), strm_root, expected_path='/other-instance.strm') == (
+        'failed', 0, 'emby_item_path_mismatch')
     assert inject_sidecar(str(db_path), 7, str(sidecar), strm_root) == ('injected', 2, '')
     # 再写一次：已经有视频流，跳过
     assert inject_sidecar(str(db_path), 7, str(sidecar), strm_root) == ('skip', 0, '')
