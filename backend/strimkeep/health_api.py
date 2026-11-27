@@ -11,7 +11,7 @@ import re
 import shutil
 import time
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException
 
 OK, WARN, ERROR = 'ok', 'warn', 'error'
 
@@ -69,6 +69,15 @@ def _worker(store):
                       '任务车道异常：%s' % '、'.join(faults), detail, 'logs')
     if not heartbeat.get('worker_alive') or not heartbeat.get('scheduler_alive'):
         return _check('worker', '后台 Worker', ERROR, '整理或调度已停止', detail, 'logs')
+    labels = {'emby_coverage': '入库核查', 'media_info': '媒体信息补写', 'housekeeping': '例行维护',
+              'operations': '后台命令', 'cover_operations': '封面生成', 'library_covers': '封面定时',
+              'inventory_schedule': '库存定时', 'inventory_compare': '全库对照', 'channel_check': '频道检查'}
+    background = heartbeat.get('background') or {}
+    stopped = [labels.get(name, name) for name, alive in background.items() if not alive]
+    if stopped:
+        return _check('worker', '后台 Worker', ERROR, '后台任务已停止', '、'.join(stopped), 'logs')
+    if background:
+        detail += ' · %d 项后台任务运行中' % len(background)
     return _check('worker', '后台 Worker', OK, '后台任务运行正常', detail)
 
 
@@ -109,20 +118,40 @@ def _disk(label, path, key, action=''):
     return _check(key, label, OK, '磁盘空间正常', detail)
 
 
-def _backup(store):
+def _latest_backup(store):
     directory = store.root / 'config/backups'
-    backups = sorted(directory.glob('pre-upgrade-*.zip'),
-                     key=lambda item: item.stat().st_mtime, reverse=True)
-    if not backups:
+    files = []
+    for path in directory.glob('pre-upgrade-*.zip'):
+        try:
+            files.append((path, path.stat()))
+        except FileNotFoundError:
+            continue
+    return max(files, key=lambda item: item[1].st_mtime_ns, default=None)
+
+
+def _backup_signature(path, info):
+    return {'name': path.name, 'size': info.st_size, 'mtime_ns': info.st_mtime_ns}
+
+
+def _backup(store):
+    latest = _latest_backup(store)
+    if not latest:
         return _check('backup', '备份', WARN,
                       '还没有升级前自动备份', '下次版本升级时会自动生成', 'settings')
-    newest = backups[0]
-    age_days = max(0, (time.time() - newest.stat().st_mtime) / 86400)
+    newest, info = latest
+    age_days = max(0, (time.time() - info.st_mtime) / 86400)
     detail = '%s · %s · %.0f 天前' % (
-        newest.name, _human_size(newest.stat().st_size), age_days)
+        newest.name, _human_size(info.st_size), age_days)
+    verification = store.meta_json('backup_verification', {}) or {}
+    checked = verification.get('file') == _backup_signature(newest, info)
+    if checked and not verification.get('ok'):
+        return _check('backup', '备份', WARN, '校验失败', verification.get('error') or detail, 'settings')
     if age_days > 30:
         return _check('backup', '备份', WARN, '最近备份超过 30 天', detail, 'settings')
-    return _check('backup', '备份', OK, '已有可恢复备份', detail, 'settings')
+    if checked:
+        return _check('backup', '备份', OK, '已校验可恢复', detail, 'settings')
+    return {**_check('backup', '备份', WARN, '备份文件已存在，等待恢复校验', detail, 'settings'),
+            'can_verify': True}
 
 
 def _tmdb(store):
@@ -199,6 +228,7 @@ def collect_health(app, store):
 
 def install_health(app, store, admin):
     cache = {'at': 0.0, 'data': None}
+    verification_lock = asyncio.Lock()
 
     @app.get('/api/v1/system/health', dependencies=[Depends(admin)])
     async def system_health():
@@ -207,4 +237,26 @@ def install_health(app, store, admin):
         data = await asyncio.to_thread(collect_health, app, store)
         cache['at'], cache['data'] = time.time(), data
         return data
+
+    @app.post('/api/v1/system/backup/verify', dependencies=[Depends(admin)])
+    async def verify_latest_backup():
+        if verification_lock.locked():
+            raise HTTPException(409, '备份校验正在进行。')
+        async with verification_lock:
+            def check():
+                from .backup import verify_backup
+                latest = _latest_backup(store)
+                if not latest:
+                    raise HTTPException(404, '暂无可校验的备份。')
+                path, info = latest
+                result = {'file': _backup_signature(path, info), 'ok': True}
+                try:
+                    verify_backup(path, path.parent)
+                except Exception as exc:
+                    result.update(ok=False, error=f'恢复校验未完成（{type(exc).__name__}）')
+                store.set_meta('backup_verification', result)
+                return result
+            result = await asyncio.to_thread(check)
+            cache.update(at=0.0, data=None)
+            return result
 

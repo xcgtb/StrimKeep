@@ -19,8 +19,8 @@ from . import __version__
 REQUIRED_TABLES = ('meta', 'settings', 'organize_jobs', 'organize_items')
 
 
-def create_backup(store):
-    """Return a consistent ZIP payload. Call from a worker thread."""
+def write_backup(store, destination):
+    """Write a consistent ZIP without loading the SQLite snapshot into memory."""
     tmp_dir = store.root / 'config' / '.backup-tmp'
     tmp_dir.mkdir(parents=True, exist_ok=True)
     db_path = tmp_dir / ('state-' + secrets.token_hex(6) + '.db')
@@ -30,18 +30,27 @@ def create_backup(store):
         key_path = store.root / 'config/master.key'
         if key_path.exists():
             files.append(('master.key', key_path))
-        buffer = BytesIO()
         manifest = {'created_at': time.time(), 'version': __version__, 'files': []}
-        with zipfile.ZipFile(buffer, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+        with zipfile.ZipFile(destination, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
             for name, path in files:
-                payload = path.read_bytes()
-                archive.writestr(name, payload)
+                digest = hashlib.sha256()
+                size = 0
+                with path.open('rb') as source, archive.open(name, 'w', force_zip64=True) as output:
+                    for chunk in iter(lambda: source.read(1024 * 1024), b''):
+                        output.write(chunk)
+                        digest.update(chunk)
+                        size += len(chunk)
                 manifest['files'].append({
-                    'name': name, 'size': len(payload),
-                    'sha256': hashlib.sha256(payload).hexdigest()})
+                    'name': name, 'size': size, 'sha256': digest.hexdigest()})
             archive.writestr('manifest.json', json.dumps(manifest, ensure_ascii=False, indent=2))
     finally:
         db_path.unlink(missing_ok=True)
+
+
+def create_backup(store):
+    """In-memory backup for callers that need a bytes payload."""
+    buffer = BytesIO()
+    write_backup(store, buffer)
     return buffer.getvalue()
 
 
@@ -56,10 +65,11 @@ def verify_manifest(archive):
         name = entry.get('name')
         if name not in names:
             raise ValueError('备份缺少文件：%s' % name)
-        payload = archive.read(name)
-        if len(payload) != entry.get('size'):
+        if archive.getinfo(name).file_size != entry.get('size'):
             raise ValueError('备份文件大小不匹配：%s' % name)
-        if hashlib.sha256(payload).hexdigest() != entry.get('sha256'):
+        with archive.open(name) as source:
+            digest = hashlib.file_digest(source, 'sha256').hexdigest()
+        if digest != entry.get('sha256'):
             raise ValueError('备份文件校验失败：%s' % name)
     return manifest
 
@@ -81,7 +91,9 @@ def restore_backup(zip_path, target_root, force=False):
         manifest = verify_manifest(archive)
         data_dir.mkdir(parents=True, exist_ok=True)
         config_dir.mkdir(parents=True, exist_ok=True)
-        (data_dir / 'state.db').write_bytes(archive.read('state.db'))
+        import shutil
+        with archive.open('state.db') as source, state_path.open('wb') as output:
+            shutil.copyfileobj(source, output)
         if 'master.key' in archive.namelist():
             (config_dir / 'master.key').write_bytes(archive.read('master.key'))
     connection = sqlite3.connect(str(state_path))
@@ -100,6 +112,17 @@ def restore_backup(zip_path, target_root, force=False):
         connection.close()
     return {'manifest': manifest, 'integrity': integrity,
             'schema_version': schema_version, 'target': str(target_root)}
+
+
+def verify_backup(zip_path, temporary_directory):
+    from tempfile import TemporaryDirectory
+    from cryptography.fernet import Fernet
+    with TemporaryDirectory(prefix='strimkeep-verify-', dir=temporary_directory) as target:
+        result = restore_backup(zip_path, target)
+        verified = {entry['name'] for entry in result['manifest']['files']}
+        if not {'state.db', 'master.key'} <= verified:
+            raise ValueError('备份清单未覆盖数据库或加密密钥。')
+        Fernet((Path(target) / 'config/master.key').read_bytes())
 
 
 def main(argv=None):

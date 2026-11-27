@@ -18,6 +18,7 @@ type Draft = { name: string; port?: number; source: 'main' | 'custom'; upstream:
 type Probe = { ok: boolean; message: string; latency_ms?: number }
 type StrmCheck = Probe & {
   running: boolean; indexed?: boolean; emby_root: string; emby_path?: string; local_path?: string
+  api_ok?: boolean; mapping_verified?: boolean
   reason?: string; versions?: { id: string; name: string }[]
 }
 type Play = { id: number; at: number; user_agent: string; target: string; filled: number; outcome: string; reason: string }
@@ -317,8 +318,12 @@ onMounted(load)
           :title="checkResult.message" :description="checkResult.reason && reasonText(checkResult.reason)" />
         <dl class="proxy-check-paths">
           <dt>反代监听</dt><dd>{{ checkResult.running ? '运行中' : '未监听' }}</dd>
+          <dt>Emby API</dt><dd>{{ checkResult.api_ok ? '已响应' : '未通过' }}</dd>
           <template v-if="checkResult.indexed"><dt>Emby 入库</dt><dd>已找到条目</dd></template>
           <dt>Emby 映射目录</dt><dd>{{ checkResult.emby_root || '未配置' }}</dd>
+          <dt>媒体源核对</dt><dd>{{ checkResult.mapping_verified ? '已匹配 STRM 播放地址' : '待确认' }}</dd>
+          <dt>115 取链</dt><dd>{{ checkResult.ok ? '已取得直链' : checkResult.reason ? '失败' : '等待媒体源核对' }}</dd>
+          <dt>媒体信息补写</dt><dd>{{checkFor && custom(checkFor) ? '独立实例暂无独立补写' : '使用主 Emby 的数据库挂载'}}</dd>
           <template v-if="checkResult.emby_path"><dt>Emby 媒体路径</dt><dd>{{ checkResult.emby_path }}</dd></template>
           <template v-if="checkResult.local_path"><dt>本地 STRM</dt><dd>{{ checkResult.local_path }}</dd></template>
         </dl>

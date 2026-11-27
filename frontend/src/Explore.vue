@@ -34,6 +34,7 @@ const badgeClass:Record<string,string>={'已入库':'badge-ok','已完整':'badg
 
 let requestVersion=0
 let filterTimer: number | undefined
+let exploreCursor: string | undefined
 async function load(scroll = false){
   window.clearTimeout(filterTimer)
   const version=++requestVersion;busy.value=true;error.value=''
@@ -45,6 +46,7 @@ async function load(scroll = false){
     }
     if ((browsing.value || activeQuery.value) && year.value) q.set('year', String(year.value))
     if(activeQuery.value)q.set('q',activeQuery.value)
+    if (scroll && exploreCursor) q.set('cursor', exploreCursor)
     const r=await props.api('/explore/list?'+q.toString())
     if(version!==requestVersion)return
     items.value = r.items || []
@@ -53,6 +55,8 @@ async function load(scroll = false){
     totalPages.value = r.total_pages || 1
     hasMore.value = r.has_more ?? page.value < totalPages.value
     relaxedYear.value = Boolean(r.relaxed_year)
+    exploreCursor = r.cursor || undefined
+    if (r.restarted) ElMessage.info('浏览结果已过期，已更新至第一页')
     if (scroll && version === requestVersion) {
       await nextTick()
       if (version === requestVersion) resultHeading.value?.scrollIntoView({block: 'start'})
@@ -114,12 +118,8 @@ function setGenres(values: number[]) {
   genreIds.value = values
   refreshFilters()
 }
-function setYear(value?: string | number) {
-  const next = value ? Number(value) : undefined
-  if (next !== undefined && (!Number.isInteger(next) || next < 1900 || next > 2100)) {
-    ElMessage.warning('请输入 1900 至 2100 之间的年份')
-    return
-  }
+function setYear(value: number) {
+  const next = value || undefined
   if (year.value === next) return
   if (activeQuery.value) searchYear.value = next
   else browseYear.value = next
@@ -159,11 +159,8 @@ function clearSearch() {
   void load()
 }
 
-const yearOptions=computed(()=>{
-  const now=new Date().getFullYear()+1,out:number[]=[]
-  for(let y=now;y>=1900;y--)out.push(y)
-  return out
-})
+const currentYear = new Date().getFullYear()
+const yearOptions = Array.from({length: currentYear - 1900 + 1}, (_, index) => currentYear - index)
 const sortOptions=computed(()=>{
   const base=[{v:'popular',t:'热门'},{v:'newest',t:'最新'},{v:'top_rated',t:'高分'},{v:'trending',t:'趋势'}]
   if(kind.value==='movie')base.push({v:'now_playing',t:'正在上映'},{v:'upcoming',t:'即将上映'})
@@ -548,8 +545,9 @@ onUnmounted(() => {
         </el-select>
         <span class="filter-label wide-filters">年份</span>
       </template>
-      <el-select class="year-filter" :model-value="year" filterable allow-create clearable default-first-option
-          aria-label="上映或首播年份" placeholder="全部年份" @change="setYear">
+      <el-select class="year-filter" :model-value="year ?? 0" placement="bottom-end"
+          :fallback-placements="['top-end']" aria-label="上映或首播年份" @change="setYear">
+        <el-option label="全部年份" :value="0"/>
         <el-option v-for="option in yearOptions" :key="option" :label="String(option)" :value="option"/>
       </el-select>
       <el-button v-if="activeQuery" text @click="clearSearch">返回浏览</el-button>
@@ -925,7 +923,7 @@ onUnmounted(() => {
   }
   .filter-fields :deep(.el-select__wrapper) { min-height: 36px; padding-inline: 8px; }
   .filter-fields :deep(.el-select__selection.is-near) { margin-left: 0; }
-  .filter-fields :deep(.el-select__selection) { min-width: 0; overflow: hidden; }
+  .filter-fields :deep(.el-select__selection) { min-width: 0; }
   .select-count { font-size: 13px; color: var(--el-color-primary); }
   .filter-footer { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
   .selected-filters { display: block; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }

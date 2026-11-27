@@ -59,6 +59,12 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+      - name: Browser workflow regressions
+        run: |
+          python -m pip install playwright==1.56.0
+          python -m playwright install --with-deps chromium
+          python frontend/tests/browser_workflows.py
+
   smoke:
     # 生产模式冒烟：构建真实镜像，启动 supervisor + Web + Worker，
     # 验证 /health/ready、worker heartbeat，且日志没有启动期锁冲突/Traceback。

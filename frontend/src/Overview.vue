@@ -5,6 +5,11 @@ import {onMounted,shallowRef,ref,computed} from 'vue'
 import {VideoPlay,Refresh,Film,Collection,Cloudy,List,Link,Grid,Finished} from '@element-plus/icons-vue'
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>();defineEmits<{navigate:[page:string]}>()
 const data=shallowRef<any>(null),error=ref(''),busy=ref(false),broken=ref<Record<string,boolean>>({})
+const activity=shallowRef<{history:any[];trend:any[];trend_days:number;error?:string}>()
+async function loadActivity() {
+  try { activity.value = await props.api('/dashboard/activity') }
+  catch(e) { activity.value = {history:[],trend:[],trend_days:0,error:(e as Error).message} }
+}
 const recentKind=ref<'all'|'Movie'|'Series'>('all'),showAllRecent=ref(false)
 const posterUrl=(item:any)=>item.image_id&&!broken.value[item.image_id]?`/api/v1/dashboard/image/${item.image_id}`:item.tmdb_id?`/api/v1/dashboard/tmdb-poster/${item.kind==='Series'?'tv':'movie'}/${item.tmdb_id}`:''
 const posterFailed=ref<Record<string,boolean>>({})
@@ -13,7 +18,7 @@ const recentList=computed(()=>{const items=(data.value?.emby?.recent||[]).filter
 const cloud=shallowRef<any>(null),tasks=shallowRef<any>(null),schedules=shallowRef<any>(null),syncProfiles=shallowRef<any>(null),events=shallowRef<any>(null),channels=shallowRef<any>(null)
 async function loadAux(){const paths=['/tasks','/system/schedules','/sync/profiles','/events?limit=5','/channels'];const values=[tasks,schedules,syncProfiles,events,channels];const result=await Promise.allSettled(paths.map(p=>props.api(p)));result.forEach((v,i)=>{values[i].value=v.status==='fulfilled'?v.value:null})}
 const syncScheduleStatus=computed(()=>syncProfiles.value?`${(syncProfiles.value.items||[]).filter((p:any)=>p.enabled).length} 个定时任务开启`:'状态不可用')
-async function refreshAll(){await Promise.all([load(),loadAux(),loadCloud()])}
+async function refreshAll(){await Promise.all([load(),loadActivity(),loadAux(),loadCloud()])}
 async function loadCloud(){try{cloud.value=await props.api('/cloud/account')}catch{cloud.value=null}}
 const bytes=(n:any)=>{if(typeof n!=='number'||!Number.isFinite(n))return '—';if(n>=1024**4)return (n/1024**4).toFixed(2)+' TB';return (n/1024**3).toFixed(1)+' GB'}
 const cloudPercent=computed(()=>cloud.value?.space_total>0?Math.min(100,Math.round(cloud.value.space_used/cloud.value.space_total*100)):null)
@@ -21,22 +26,22 @@ const recentTasks=computed(()=>[...(tasks.value?.active||[]),...(tasks.value?.hi
 const jobName=(kind:string)=>({organize:'影视整理',transfer:'链接转存',share_organize:'分享整理',strm_sync:'STRM 同步',archive_index:'媒体索引'} as Record<string,string>)[kind]||kind||'后台任务'
 const jobState=(state:string)=>({queued:'排队中',running:'进行中',paused:'已暂停',waiting_login:'等待登录',needs_review:'待处理',cancelled:'已取消',completed:'已完成',partial:'部分完成'} as Record<string,string>)[state]||state
 
-async function load(){if(busy.value)return;busy.value=true;try{data.value=await props.api('/dashboard');error.value=''}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
+async function load(){if(busy.value)return;busy.value=true;try{data.value=await props.api('/dashboard?include_activity=false');error.value=''}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
 function historyName(name:string){return (name||'').replace(/\bis playing\b/i,'开始播放')}
 function fmt(ts?:number){if(!ts)return '—';const d=new Date(ts*1000);const p=(n:number)=>String(n).padStart(2,'0');return `${d.getMonth()+1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`}
 const trendBars=computed(()=>{
-  const rows:any[]=data.value?.emby?.trend||[]
+  const rows=activity.value?.trend||[]
   const max=Math.max(1,...rows.map((r:any)=>Number(r.count)||0))
   return rows.map((r:any,i:number)=>{const h=Math.max(3,Math.round((Number(r.count)||0)/max*100));return {date:r.date,count:Number(r.count)||0,x:12+i*42,y:132-h,h}})
 })
-const trendTotal=computed(()=>(data.value?.emby?.trend||[]).reduce((sum:number,r:any)=>sum+(Number(r.count)||0),0))
+const trendTotal=computed(()=>(activity.value?.trend||[]).reduce((sum,r)=>sum+(Number(r.count)||0),0))
 const hero=computed(()=>[
   {icon:Film,label:'电影',value:data.value?.emby?.counts?.MovieCount,sub:'Emby 媒体库'},
   {icon:Collection,label:'剧集',value:data.value?.emby?.counts?.SeriesCount,sub:'Emby 媒体库'},
   {icon:Cloudy,label:'115 网盘',value:bytes(cloud.value?.space_used),sub:cloud.value?.space_total?`总容量 ${bytes(cloud.value.space_total)}`:'容量暂不可用'},
   {icon:List,label:'后台任务',value:data.value?.system?.active_tasks,sub:'正在执行或排队'},
 ])
-onMounted(()=>{void load();void loadAux();void loadCloud()});useVisiblePolling(load,20000);useVisiblePolling(loadAux,60000);useVisiblePolling(loadCloud,600000)
+onMounted(()=>{void load();void loadActivity();void loadAux();void loadCloud()});useVisiblePolling(load,20000);useVisiblePolling(loadActivity,60000);useVisiblePolling(loadAux,60000);useVisiblePolling(loadCloud,600000)
 </script>
 <template><PageHeader title="媒体总览"><template #actions><el-button :icon="Refresh" :loading="busy" @click="refreshAll">刷新</el-button></template></PageHeader>
 <el-alert v-if="error" :title="error" type="warning"/>
@@ -91,8 +96,8 @@ onMounted(()=>{void load();void loadAux();void loadCloud()});useVisiblePolling(l
   </div>
 </section>
 <section class="panel half">
-  <div class="section-title"><h2>近 {{data.emby.trend_days||14}} 天观看</h2><span class="muted">共 {{trendTotal}} 次播放</span></div>
-  <svg v-if="data.emby.trend.length" viewBox="0 0 620 160" class="trend-chart" role="img" :aria-label="'近 '+(data.emby.trend_days||14)+' 天播放次数'">
+  <div class="section-title"><h2>{{activity?.trend_days ? '近 '+activity.trend_days+' 天观看' : '观看趋势'}}</h2><span v-if="activity?.trend.length" class="muted">共 {{trendTotal}} 次播放</span></div>
+  <svg v-if="activity?.trend.length" viewBox="0 0 620 160" class="trend-chart" role="img" :aria-label="'近 '+activity.trend_days+' 天播放次数'">
     <defs><linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="var(--el-color-primary)" stop-opacity=".9"/>
       <stop offset="1" stop-color="var(--el-color-primary)" stop-opacity=".45"/>
@@ -108,7 +113,7 @@ onMounted(()=>{void load();void loadAux();void loadCloud()});useVisiblePolling(l
 </section>
 </div>
 
-<section class="panel"><div class="section-title"><h2>观看记录</h2><span class="muted">{{data.emby.history.length?'最近 '+data.emby.history.length+' 次':'—'}}</span></div><div v-if="data.emby.history.length" class="history-list"><div v-for="(h,i) in data.emby.history" :key="i" class="history-row"><span class="history-time">{{fmt(h.at)}}</span><span class="wrap">{{historyName(h.name)}}</span></div></div><el-empty v-else description="Emby 还没有播放记录" :image-size="60"/></section>
+<section class="panel"><div class="section-title"><h2>观看记录</h2><span class="muted">{{activity?.history.length?'最近 '+activity.history.length+' 次':'—'}}</span></div><div v-if="activity?.history.length" class="history-list"><div v-for="(h,i) in activity.history" :key="i" class="history-row"><span class="history-time">{{fmt(h.at)}}</span><span class="wrap">{{historyName(h.name)}}</span></div></div><el-empty v-else :description="activity?.error || (activity ? 'Emby 还没有播放记录' : '正在读取观看记录')" :image-size="60"/></section>
 
 <section class="panel">
   <div class="section-title"><h2>正在观看</h2><el-tag :type="data.emby.connected?'success':'info'">{{data.emby.connected?'Emby 已连接':'Emby 未连接'}}</el-tag></div>

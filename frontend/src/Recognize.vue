@@ -60,10 +60,16 @@ async function test(){
   const options = {use_tmdb:useTmdb.value, library:library.value, folder:folder.value.trim() || undefined}
   busy.value=true;error.value='';rows.value=[]
   try{
-    for(const name of names){
-      try{rows.value.push(await props.api('/organize/preview','POST',{name,...options}))}
-      catch(e){rows.value.push({name,library:options.library,ok:false,reason:(e as Error).message})}
+    let items: ({name:string}&typeof options)[] = []
+    for (const name of names) {
+      const item = {name,...options}
+      if (items.length && new Blob([JSON.stringify({items:[...items,item]})]).size > 60000) {
+        rows.value.push(...(await props.api('/organize/preview/batch','POST',{items})).items)
+        items = []
+      }
+      items.push(item)
     }
+    rows.value.push(...(await props.api('/organize/preview/batch','POST',{items})).items)
   }catch(e){error.value=(e as Error).message}finally{busy.value=false}
 }
 

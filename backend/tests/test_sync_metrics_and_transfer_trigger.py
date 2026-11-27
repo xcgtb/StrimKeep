@@ -8,6 +8,32 @@ from test_phase5 import sync_config
 from test_transfer import mock_share
 
 
+def test_transfer_receipt_sync_skips_unrelated_folders_and_existing_videos(tmp_path):
+    async def run():
+        store, cloud, http, engine, _ = setup(tmp_path)
+        profile = {'id': 'receipt', 'name': '增量', 'mode': 'incremental', 'source_cids': ['200'],
+                   'after_transfer': True, 'enabled': True, 'metadata_mode': 'technical'}
+        store.set_many({'organize_config': CONFIG, 'sync_profiles': [profile]})
+        child = (await cloud.mkdir('200', '留待定时全扫'))['cid']
+        added = cloud.add_video('8001', 'New.mkv', '200')
+        added['sha1'] = 'A' * 40
+        cloud.add_video('8002', 'Old.mkv', '200')['sha1'] = 'B' * 40
+        cloud.add_video('8003', 'Nested.mkv', child)['sha1'] = 'C' * 40
+        try:
+            engine.tasks.enqueue_transfer_sync('1', ['0', '200'], '归档',
+                                               [{**added, 'id': '8001', 'is_dir': False}])
+            row = store.db.execute("SELECT * FROM organize_jobs WHERE json_extract(config,'$.sync_trigger')='transfer'").fetchone()
+            await engine.run_job(row['id'])
+            metrics = json.loads(engine.job(row['id'])['config'])['sync_metrics']
+            assert metrics['scan']['listing'] == 'receipt'
+            assert metrics['videos'] == 1
+            assert [file.name for file in engine.root.rglob('*.strm')] == ['New.strm']
+        finally:
+            await http.aclose()
+            store.close()
+    asyncio.run(run())
+
+
 def test_full_and_incremental_sync_report_scan_and_actual_writes(tmp_path):
     async def run():
         store, cloud, http, engine, _ = setup(tmp_path)

@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing import Literal
 
 from .inventory import missing_season, project, registered_rows, work_complete
+from . import commands
 from .inventory_fs import check_missing_registrations, resolve_roots, scan as filesystem_rows
 from .inventory_audit import audit_roots
 from .inventory_preview import governance_preview
@@ -739,6 +740,10 @@ def install_inventory(app, store, admin):
         item = next((x for x in snapshot['items'] if x['kind'] == 'tv' and x['tmdb_id'] == tmdb_id), None)
         if item is None:
             raise HTTPException(404, '未找到该剧集。')
+        return await compare_work(snapshot, item)
+
+    async def compare_work(snapshot, item):
+        tmdb_id = item['tmdb_id']
         details = await app.state.organizer.tmdb(f'tv/{tmdb_id}')
         seasons = details.get('seasons') if isinstance(details, dict) else None
         if not isinstance(seasons, list) or len(seasons) > 100:
@@ -795,6 +800,38 @@ def install_inventory(app, store, admin):
         except Exception:
             pass
         return reply
+
+    async def compare_inventory(report):
+        snapshot = await mapping_snapshot(force=True)
+        series = [item for item in snapshot['items'] if item['kind'] == 'tv' and item.get('tmdb_id')]
+        data = {'done': 0, 'total': len(series), 'failed': 0, 'failures': [], 'complete': snapshot['complete']}
+        await report(data)
+        for start in range(0, len(series), 3):
+            batch = series[start:start + 3]
+            results = await asyncio.gather(*(compare_work(snapshot, item) for item in batch),
+                                           return_exceptions=True)
+            for item, result in zip(batch, results):
+                data['done'] += 1
+                if isinstance(result, Exception) or not result.get('tmdb_complete'):
+                    data['failed'] += 1
+                    if len(data['failures']) < 20:
+                        reason = (getattr(result, 'detail', None) or str(result)) if isinstance(result, Exception) else '季集资料不完整'
+                        data['failures'].append({'id': item['tmdb_id'], 'reason': str(reason)[:180]})
+            await report(data)
+        return data
+
+    app.state.inventory_compare = compare_inventory
+
+    @app.get('/api/v1/inventory/compare', dependencies=[Depends(admin)])
+    async def inventory_compare_status():
+        return {'job': await asyncio.to_thread(commands.latest_status, store, 'inventory_compare')}
+
+    @app.post('/api/v1/inventory/compare', dependencies=[Depends(admin)])
+    async def inventory_compare_start():
+        if not store.get('tmdb_key'):
+            raise HTTPException(409, '请先配置 TMDB Key。')
+        await asyncio.to_thread(commands.submit, store, 'inventory_compare', unique=True)
+        return await inventory_compare_status()
 
     @app.get('/api/v1/inventory/{kind}/{tmdb_id}/emby', dependencies=[Depends(admin)])
     async def inventory_emby(kind: str, tmdb_id: int):

@@ -94,10 +94,15 @@ def install_console(app,store,admin):
         if body.enabled and not c.get('proxy_url'):raise HTTPException(422,'请填写代理地址。')
         c.update(enabled=body.enabled,proxy_emby=body.proxy_emby);store.set_many({'network_config':c});return await network()
     @app.get('/api/v1/logs',dependencies=[Depends(admin)])
-    async def logs(before:int=Query(2**62),kind:str='',q:str='',limit:int=Query(100,ge=1,le=500)):
+    async def logs(before:int=Query(2**62),kind:str='',q:str='',limit:int=Query(100,ge=1,le=500),
+                   after:int|None=Query(None,ge=0)):
         # 0.8.21：events 是最大的表，带 LIKE 的查询放工作线程（一线程一连接由 Store.db 保证）。
         def read():
-            rows=store.db.execute('SELECT * FROM events WHERE id<? AND (?=\'\' OR kind=?) AND message LIKE ? ORDER BY id DESC LIMIT ?',(before,kind,kind,'%'+q+'%',limit)).fetchall()
+            order = 'ASC' if after is not None else 'DESC'
+            rows = store.db.execute(
+                "SELECT * FROM events WHERE id>? AND id<? AND (?='' OR kind=?) "
+                f"AND message LIKE ? ORDER BY id {order} LIMIT ?",
+                (after or 0, before, kind, kind, '%' + q + '%', limit)).fetchall()
             return {'items':[dict(r) for r in rows]}
         return await app.state.db_worker.run(read, priority='interactive')
     @app.get('/api/v1/logs/export',dependencies=[Depends(admin)])
@@ -138,8 +143,42 @@ def install_console(app,store,admin):
                 if not rows:yield ': heartbeat\n\n'
                 await asyncio.sleep(1)
         return StreamingResponse(events(),media_type='text/event-stream',headers={'X-Accel-Buffering':'no','Cache-Control':'no-cache, no-transform'})
+    def activity_summary(activity):
+        starts = []
+        for row in activity.get('Items', []) if isinstance(activity, dict) else []:
+            if isinstance(row, dict) and row.get('Type') == 'playback.start':
+                at = activity_time(row.get('Date'))
+                if at:
+                    starts.append({'name': row.get('Name') or '', 'at': at, 'item': row.get('ItemId')})
+        today = datetime.date.today()
+        window = 14
+        if starts:
+            window = max(1, min(14, (today - datetime.date.fromtimestamp(min(row['at'] for row in starts))).days + 1))
+        bucket = {}
+        for row in starts:
+            label = time.strftime('%m-%d', time.localtime(row['at']))
+            bucket[label] = bucket.get(label, 0) + 1
+        labels = [(today - datetime.timedelta(days=offset)).strftime('%m-%d') for offset in range(window - 1, -1, -1)]
+        return {'history': starts[:8], 'trend': [{'date': label, 'count': bucket.get(label, 0)} for label in labels],
+                'trend_days': window}
+
+    @app.get('/api/v1/dashboard/activity', dependencies=[Depends(admin)])
+    async def dashboard_activity():
+        connection = app.state.organizer.emby.connection()
+        if not connection:
+            return {'history': [], 'trend': [], 'trend_days': 0, 'error': '尚未配置 Emby 连接'}
+        url, key = connection
+        try:
+            response = await emby_request(app.state.http, 'GET', url + '/System/ActivityLog/Entries',
+                                          headers={'X-Emby-Token': key},
+                                          params={'StartIndex': 0, 'Limit': 1000}, timeout=6)
+            response.raise_for_status()
+            return activity_summary(response.json())
+        except (httpx.HTTPError, ValueError):
+            return {'history': [], 'trend': [], 'trend_days': 0, 'error': 'Emby 观看记录暂时无法读取'}
+
     @app.get('/api/v1/dashboard',dependencies=[Depends(admin)])
-    async def dashboard():
+    async def dashboard(include_activity: bool = True):
         engine=app.state.organizer
         # P01：只对本地登记聚合做短期缓存（绑定登记表数据版本）；Emby 状态
         # 必须实时反映连接变化，不进入缓存。
@@ -207,27 +246,9 @@ def install_console(app,store,admin):
                                        'year':i.get('ProductionYear'),'kind':kind,'image_id':own, 'tmdb_id':str((i.get('ProviderIds') or {}).get('Tmdb') or '') if kind=='Movie' else ''})
                     if len(recent)>=12:break
                 emby['recent']=recent
-                # 观看记录与趋势取 Emby 活动日志：Type 是 playback.start，与界面语言无关。
-                activity=await optional('/System/ActivityLog/Entries',{'StartIndex':0,'Limit':1000})
-                starts=[]
-                for row in (activity.get('Items',[]) if isinstance(activity,dict) else []):
-                    if not isinstance(row,dict) or row.get('Type')!='playback.start':continue
-                    at=activity_time(row.get('Date'))
-                    if at:starts.append({'name':row.get('Name') or '','at':at,'item':row.get('ItemId')})
-                emby['history']=starts[:8]
-                day=datetime.date.today()
-                # 只按实际取到的范围画：日志翻不到 14 天时不能把更早的日期画成 0。
-                window=14
-                if starts:
-                    span=(day-datetime.date.fromtimestamp(min(row['at'] for row in starts))).days+1
-                    window=max(1,min(14,span))
-                labels=[(day-datetime.timedelta(days=offset)).strftime('%m-%d') for offset in range(window-1,-1,-1)]
-                bucket={}
-                for row in starts:
-                    label=time.strftime('%m-%d',time.localtime(row['at']))
-                    bucket[label]=bucket.get(label,0)+1
-                emby['trend']=[{'date':label,'count':bucket.get(label,0)} for label in labels]
-                emby['trend_days']=window
+                if include_activity:
+                    emby.update(activity_summary(await optional('/System/ActivityLog/Entries',
+                                                                {'StartIndex': 0, 'Limit': 1000})))
                 emby['checked_at']=time.time()
                 if not errors:app.state.emby_last_success=(fingerprint(store.get('emby_url'),key),dict(emby))
                 elif not emby['counts'] and not emby['recent']:

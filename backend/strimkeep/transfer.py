@@ -216,7 +216,7 @@ class Transfer:
             self.engine.tasks.wake('organize')
         if current and not state.get('organize_job') and trail and str(trail[-1]) == str(dest):
             try:
-                self.engine.tasks.enqueue_transfer_sync(account, trail, config.get('target_label'))
+                self.engine.tasks.enqueue_transfer_sync(account, trail, config.get('target_label'), current)
             except Exception as exc:
                 self.store.event('sync', f'转存任务 {jid} 已完成，补扫入队失败（{type(exc).__name__}）。')
         message=f'已转存到 {config.get("target_label","目标目录")}，共 {len(current)} 个文件或文件夹。'

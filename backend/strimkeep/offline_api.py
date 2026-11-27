@@ -678,46 +678,49 @@ def install_offline(app, store, admin):
         分享走转存（/transfer 的 enqueue），其余走离线（按类型分组，各自目录与关键词分流）。
         任一类型失败不影响其它类型，结果里逐项返回。
         """
-        from .transfer import shares as parse_share_links
+        from .transfer import LINK as SHARE_LINK
         result = {'share': [], 'offline': [], 'errors': []}
         text = body.text
 
-        share_links = []
-        try:
-            share_links = parse_share_links(text)
-        except ValueError as exc:
-            result['errors'].append('分享链接解析失败：%s' % str(exc)[:80])
-        if share_links:
+        if SHARE_LINK.search(text):
             transfer_cfg = store.get('transfer_config', {}) or {}
             try:
                 ids = await app.state.organizer.transfer.enqueue(
-                    '\n'.join(share_links), transfer_cfg.get('target_cid', ''),
+                    text, transfer_cfg.get('target_cid', ''),
                     bool(transfer_cfg.get('auto_organize', False)), 'web')
                 result['share'] = ids
-            except Exception as exc:
+            except (ValueError, CloudError) as exc:
                 result['errors'].append('分享转存：%s' % str(exc)[:80])
 
-        groups = {'magnet': [], 'ed2k': [], 'direct': []}
-        for url in links_in(text):
-            low = url.lower()
-            if low.startswith('magnet:'):
-                groups['magnet'].append(url)
-            elif low.startswith('ed2k://'):
-                groups['ed2k'].append(url)
-            elif low.startswith(('http://', 'https://', 'ftp://')) and '115.com/s/' not in low:
-                groups['direct'].append(url)
         cfg = config_value()
-        post = app.state.organizer.offline
-        for kind, urls in groups.items():
+        prefixes = {'magnet': 'magnet', 'ed2k': 'ed2k'}
+        groups = {}
+        seen = set()
+        caption = []
+        for line in text.splitlines():
+            urls = links_in(line)
             if not urls:
+                if line.strip():
+                    caption.append(line)
+                else:
+                    caption.clear()
                 continue
-            if kind == 'magnet':
-                target, label, routes = cfg.get('magnet_cid'), cfg.get('magnet_label'), cfg.get('magnet_routes')
-            elif kind == 'ed2k':
-                target, label, routes = cfg.get('ed2k_cid'), cfg.get('ed2k_label'), cfg.get('ed2k_routes')
-            else:
-                target, label, routes = cfg.get('target_cid'), cfg.get('target_label'), []
-            target, label = route_target(routes, text, target or '', label or '')
+            context = '\n'.join([*caption, line])
+            caption.clear()
+            for url in urls:
+                if url in seen or SHARE_LINK.match(url):
+                    continue
+                seen.add(url)
+                kind = prefixes.get(url.split(':', 1)[0].lower(), 'direct')
+                field = 'target' if kind == 'direct' else kind
+                target, label = route_target(
+                    cfg.get(kind + '_routes'), context if len(urls) == 1 else url,
+                    cfg.get(field + '_cid') or '', cfg.get(field + '_label') or '')
+                groups.setdefault((kind, target, label), []).append(url)
+
+        result['receipts'] = []
+        post = app.state.organizer.offline
+        for (kind, target, label), urls in groups.items():
             if not target:
                 result['errors'].append('%s 未配置目录，已跳过 %d 个链接' % (kind, len(urls)))
                 continue
@@ -725,8 +728,11 @@ def install_offline(app, store, admin):
                 sid = await post.submit(urls, target, label,
                                         organize=organize_flag_for(cfg, kind, 'web'))
                 result['offline'].append(sid)
-            except CloudError as exc:
-                result['errors'].append('%s 提交失败：%s' % (kind, str(exc)[:80]))
+                result['receipts'].append({'kind': kind, 'count': len(urls), 'submission_id': sid,
+                                           'target_label': label or target})
+            except (CloudError, HTTPException) as exc:
+                detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+                result['errors'].append('%s 提交失败：%s' % (kind, str(detail)[:80]))
         return result
 
     @app.get('/api/v1/offline/config', dependencies=[Depends(admin)])

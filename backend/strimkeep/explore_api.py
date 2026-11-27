@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from collections import OrderedDict
 from typing import Annotated
+from uuid import uuid4
 
 from fastapi import Depends, HTTPException, Query
 from pydantic import Field
@@ -68,6 +69,7 @@ class _ExploreWindow:
     items: list = field(default_factory=list)
     ids: set = field(default_factory=set)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    cursor: str = field(default_factory=lambda: uuid4().hex)
 
     def append(self, number, data):
         raw = data.get('results') or []
@@ -94,15 +96,19 @@ class _ExplorePages:
     def __init__(self):
         self.windows = OrderedDict()
 
-    async def collect(self, fetch, path, params, page, per_page):
+    def matches(self, path, params, cursor):
+        window = self.windows.get((path, tuple(sorted(params.items()))))
+        return bool(window and window.cursor == cursor and time.monotonic() - window.last_access <= 300)
+
+    async def collect(self, fetch, path, params, page, per_page, cursor=None):
         offset = (page - 1) * per_page
         max_results = TMDB_PAGE_LIMIT * TMDB_PAGE_SIZE
         if offset >= max_results:
-            return [], min(page, math.ceil(max_results / per_page)), math.ceil(max_results / per_page), False, False
+            return [], min(page, math.ceil(max_results / per_page)), math.ceil(max_results / per_page), False, False, None
         key = (path, tuple(sorted(params.items())))
         now = time.monotonic()
         window = self.windows.get(key)
-        if window is None or offset < window.offset or (
+        if window is None or offset < window.offset or (cursor is None and
             not window.lock.locked() and (
                 now - window.last_access > 300
                 or offset > window.offset + len(window.items) + 12 * TMDB_PAGE_SIZE
@@ -143,7 +149,7 @@ class _ExplorePages:
             items = window.items[max(0, start):max(0, start + per_page)]
         if last is not None:
             return await self.collect(fetch, path, params, last, per_page)
-        return items, page, total_pages, exhausted and not available, page < total_pages
+        return items, page, total_pages, exhausted and not available, page < total_pages, window.cursor
 
 
 def install_explore(app, store, admin):
@@ -296,6 +302,7 @@ def install_explore(app, store, admin):
         page: int = Query(1, ge=1, le=500),
         q: str = Query(None, max_length=200),
         per_page: int = Query(40, ge=10, le=60),
+        cursor: str | None = Query(None, pattern=r'^[a-f0-9]{32}$'),
     ):
         genre = sorted(set(genre) - {0})
         region = sorted(set(region))
@@ -358,14 +365,22 @@ def install_explore(app, store, admin):
             params['primary_release_year' if kind == 'movie' else 'first_air_date_year'] = year
 
         year_key = 'primary_release_year' if kind == 'movie' else 'first_air_date_year'
-        results, actual_page, total_pages, empty, has_more = await explore_pages.collect(tmdb, path, params, page, per_page)
-        relaxed_year = bool(query and year and empty)
-        if relaxed_year:
-            relaxed = {key: value for key, value in params.items() if key != year_key}
-            results, actual_page, total_pages, _, has_more = await explore_pages.collect(tmdb, path, relaxed, page, per_page)
+        relaxed = {key: value for key, value in params.items() if key != year_key} if query and year else None
+        relaxed_year = bool(cursor and relaxed is not None and explore_pages.matches(path, relaxed, cursor))
+        effective = relaxed if relaxed_year else params
+        restarted = bool(cursor and not explore_pages.matches(path, effective, cursor))
+        if restarted:
+            page, cursor = 1, None
+        results, actual_page, total_pages, empty, has_more, next_cursor = await explore_pages.collect(
+            tmdb, path, effective, page, per_page, cursor)
+        if relaxed is not None and not relaxed_year and empty:
+            relaxed_year = True
+            results, actual_page, total_pages, _, has_more, next_cursor = await explore_pages.collect(
+                tmdb, path, relaxed, page, per_page)
+        pagination = {'page': actual_page, 'total_pages': total_pages, 'has_more': has_more,
+                      'relaxed_year': relaxed_year, 'cursor': next_cursor, 'restarted': restarted}
         if not results:
-            return {'items': [], 'page': actual_page, 'total_pages': total_pages, 'has_more': False,
-                    'relaxed_year': relaxed_year}
+            return {**pagination, 'items': [], 'has_more': False}
 
         # Emby 为准（在不在媒体库），集数与总集数只查当前页里在库的剧集
         emby_idx, emby_complete = await emby_tmdb_index()
@@ -436,5 +451,4 @@ def install_explore(app, store, admin):
                 'year': (r.get('release_date') or r.get('first_air_date') or '')[:4],
                 'badge': badge, 'ratio': ratio,
             })
-        return {'items': items, 'page': actual_page, 'total_pages': total_pages,
-                'has_more': has_more, 'relaxed_year': relaxed_year}
+        return {**pagination, 'items': items}

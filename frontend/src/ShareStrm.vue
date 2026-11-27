@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import WorkspaceSections from './WorkspaceSections.vue'
 import PageHeader from './PageHeader.vue'
-import {computed,ref,onMounted,onUnmounted} from 'vue'
-import {useVisiblePolling} from './pageActivity'
+import {computed,ref,onMounted} from 'vue'
+import {usePageActivity,useVisiblePolling} from './pageActivity'
 import {ElMessage,ElMessageBox} from 'element-plus'
 import {Setting} from '@element-plus/icons-vue'
 import ShareProfile from './ShareProfile.vue'
@@ -22,6 +22,7 @@ let refreshSequence=0
 const watchJob=ref<number|null>(null),watchTimer=ref<number|null>(null)
 const watchError=ref('')
 let watchInFlight=false, watchGeneration=0
+let pageVisible=false
 
 async function run(fn:()=>Promise<void>){if(busy.value)return;busy.value=true;error.value='';try{await fn()}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
 
@@ -65,7 +66,9 @@ async function pruneOrphans(){
 
 function startWatching(){
   stopWatching();watchError.value=''
+  if(!pageVisible||!watchJob.value)return
   watchTimer.value=window.setInterval(watch,3000)
+  void watch()
 }
 async function watch(){
   const id=watchJob.value, generation=watchGeneration
@@ -103,7 +106,7 @@ function fmtTime(ts:number){if(!ts)return '';return new Date(ts*1000).toLocaleSt
 const tabLabels={pending:'待整理',library:'分享影视库'} as const
 onMounted(async()=>{await refresh();await loadSettings();await loadCheckStatus()})
 useVisiblePolling(async()=>{if(!busy.value&&pageSection.value==='settings')await loadCheckStatus()},5000)
-onUnmounted(stopWatching)
+usePageActivity(()=>{pageVisible=true;startWatching()},()=>{pageVisible=false;stopWatching()})
 async function canLeave(){if(profileEditor.value&&!await profileEditor.value.canLeave())return false;if(!monitorDirty.value)return true;try{await ElMessageBox.confirm('监控设置还没有保存。','放弃修改？',{confirmButtonText:'放弃修改',cancelButtonText:'继续编辑'});settings.value=JSON.parse(settingsBaseline.value);return true}catch{return false}}
 defineExpose({canLeave})
 </script>

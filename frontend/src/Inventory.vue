@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import PageHeader from './PageHeader.vue'
 import {computed, nextTick, onMounted, onUnmounted, ref, watch} from 'vue'
+import {usePageActivity,useVisiblePolling} from './pageActivity'
 import {useRouter} from 'vue-router'
 import {ElMessage, ElMessageBox} from 'element-plus'
 import {inventoryCardStatus, STATUS_LEGEND} from './inventoryStatus'
@@ -107,7 +108,6 @@ type ScanSource = {side:string, path:string, exists:boolean, strm_count:number}
 const scanSources = ref<ScanSource[]>([])
 const emptyScan = computed(() => scanSources.value.length > 0 && scanSources.value.every(source => source.strm_count === 0))
 const compareNotice = ref<{text:string, type:'success'|'warning'} | null>(null)
-let compareView = 0
 let compareNoticeTimer: ReturnType<typeof setTimeout> | null = null
 function clearCompareNotice() {
   if (compareNoticeTimer !== null) { clearTimeout(compareNoticeTimer); compareNoticeTimer = null }
@@ -272,20 +272,18 @@ function cardStatus(item:any) {
   return {text:(labels[item.status] || '待对照') + anomalySuffix, tone:tones[item.status] || 'pending', category:item.status, hint:(hints[item.status] || '还没拿到 TMDB 季/集信息') + (item.numbering_anomaly && item.numbering_note ? '；' + item.numbering_note : '')}
 }
 const comparedOnce = new Set<string>()
-async function compareItems(list:any[], all=false) {
+async function compareItems(list:any[]) {
+  if (statusBusy.value) return
   const generation = statusGeneration
   // 自动补当前页；「同步全库」会传入全库剧集。
   // 服务端已判「待对照」的卡片也要重新对照（缓存可能因库存变动失效）。
   const queue = list.filter(item => {
     if (item.kind !== 'tv' || item.unidentified) return false
-    if (all) return true
     const key = workKey(item)
     if (!statusById.value[key]) return true
     return item.status === 'pending' && !comparedOnce.has(key)
   })
   if (!queue.length) return
-  if (all) { statusBusy.value = true; statusProgress.value = `0 / ${queue.length}` }
-  let done = 0; const total = queue.length
   const worker = async () => {
     while (queue.length && generation === statusGeneration) {
       const item = queue.shift(); if (!item) break
@@ -302,21 +300,18 @@ async function compareItems(list:any[], all=false) {
       }
       await pending
       if (statusInFlight.get(key) === pending) statusInFlight.delete(key)
-      done++; if (all && generation === statusGeneration) statusProgress.value = `${done} / ${total}`
     }
   }
-  try { await Promise.all(Array.from({length:Math.min(3, queue.length)}, worker)) }
-  finally { if (all && generation === statusGeneration) statusBusy.value = false }
-  if (!all && generation === statusGeneration && statusFilter.value !== 'all') await loadPage()
+  await Promise.all(Array.from({length:Math.min(3, queue.length)}, worker))
+  if (generation === statusGeneration && statusFilter.value !== 'all') await loadPage()
 }
-watch([search, kindFilter, scopeFilter, statusFilter, categoryFilter], () => { compareView++; clearCompareNotice(); page.value = 1; chosen.value = []; void loadPage() })
-watch([page, pageSize], () => { compareView++; clearCompareNotice(); void loadPage() })
+watch([search, kindFilter, scopeFilter, statusFilter, categoryFilter], () => { clearCompareNotice(); page.value = 1; chosen.value = []; void loadPage() })
+watch([page, pageSize], () => { clearCompareNotice(); void loadPage() })
 watch(visibleItems, list => { void compareItems(list) })
 
 async function load(refresh=true, autoCompare=true) {
-  compareView++
   clearCompareNotice()
-  busy.value = true; error.value = ''; snapshot.value = null; selected.value = null; seasonResult.value = null; preview.value = null; audit.value = null; statusGeneration++; statusInFlight.clear(); statusById.value = {}; statusBusy.value = false; chosen.value = []; page.value = 1
+  busy.value = true; error.value = ''; snapshot.value = null; selected.value = null; seasonResult.value = null; preview.value = null; audit.value = null; statusGeneration++; statusInFlight.clear(); statusById.value = {}; chosen.value = []; page.value = 1
   try { await loadPage(refresh, autoCompare) }
   catch (e) { error.value = (e as Error).message }
   finally { busy.value = false }
@@ -495,7 +490,7 @@ async function executePlan() {
       // The deletion is finished. Reset the old view before yielding so a
       // subsequent selection cannot be cleared by an older refresh.
       preview.value = null; scanTime.value = 0; snapshot.value = null; selected.value = null; seasonResult.value = null
-      statusGeneration++; statusInFlight.clear(); statusById.value = {}; statusBusy.value = false
+      statusGeneration++; statusInFlight.clear(); statusById.value = {}
       chosen.value = []; page.value = 1
       const refreshGeneration = ++refreshAfterDeleteGeneration
       refreshAfterDeleteBusy.value = true
@@ -517,79 +512,40 @@ async function executePlan() {
   } catch (e) { planError.value = `无法确认执行状态，请查看最近清理计划：${(e as Error).message}`; void loadHistory() }
   finally { planBusy.value = false }
 }
-function compareSummary(list:any[]) {
-  const counts:Record<string, number> = {}
-  const stuck:string[] = []
-  let movies = 0, unmatched = 0
-  for (const item of list) {
-    if (item.unidentified) { unmatched++; continue }
-    if (item.kind === 'movie') { movies++; continue }
-    const entry = statusById.value[workKey(item)]
-    if (!entry || entry.loading) continue
-    const status = inventoryCardStatus(item, entry)
-    counts[status.category] = (counts[status.category] || 0) + 1
-    if (status.category === 'pending') {
-      const failed = (entry.data?.failed_seasons || []).filter((n:number) => n > 0)
-      stuck.push(failed.length ? `${item.title}（TMDB 缺第 ${failed.join('、')} 季）` : item.title)
-    }
+type CompareJob = {id:number;state:string;message:string;data:{
+  done?:number;total?:number;failed?:number;complete?:boolean;failures?:{id:number;reason:string}[]
+}}
+const compareJob = ref<CompareJob>()
+let presentedCompare = 0
+async function acceptCompare(job?:CompareJob) {
+  if (!job || (compareJob.value && job.id < compareJob.value.id)) return
+  compareJob.value = job
+  statusBusy.value = ['queued','running'].includes(job.state)
+  statusProgress.value = job.state==='queued' ? '等待执行'
+    : job.data.total===undefined ? '读取库存' : `${job.data.done || 0} / ${job.data.total}`
+  if (statusBusy.value || presentedCompare === job.id) return
+  presentedCompare = job.id
+  if (job.state==='failed') {
+    showCompareNotice(job.message || '全库对照失败', 'warning', 12000)
+    return
   }
-  const parts = [['complete', '完整'], ['missing', '缺集'], ['extra', '超集'], ['ongoing', '在更']]
-    .filter(([key]) => counts[key]).map(([key, label]) => `${label} ${counts[key]}`)
-  const groups = [parts.length ? `剧集 ${parts.join(' · ')}` : '',
-                  movies ? `电影 ${movies} 部已入库` : '',
-                  unmatched ? `未识别 ${unmatched} 部` : ''].filter(Boolean)
-  const summary = groups.length ? '全库已对照 · ' + groups.join(' · ') : '全库对照完成'
-  return stuck.length ? `${summary}；仍待对照 ${stuck.length} 部：${stuck.slice(0, 2).join('、')}` : summary
-}
-async function allMappingRows() {
-  const all:any[] = []
-  const seen = new Set<string>()
-  let offset = 0
-  try {
-    for (;;) {
-      const query = new URLSearchParams({media:'all', status:'all', scope:'all', category:'all',
-        keyword:'', offset:String(offset), limit:'80', refresh:'0'})
-      const data = await props.api(`/inventory/mapping/page?${query}`)
-      const pageRows = (data.rows || []).map(withFiles)
-      for (const row of pageRows) {
-        const key = workKey(row)
-        if (seen.has(key)) continue
-        seen.add(key); all.push(row)
-      }
-      const total = Number(data.total || 0)
-      const next = Number(data.next_offset ?? offset + pageRows.length)
-      if (!pageRows.length || next <= offset || all.length >= total) break
-      offset = next
-    }
-    return all
-  } catch (original) {
-    // 老后端没有映射分页接口时退回整库快照，仍然对照全部而不是当前页。
-    const snap = snapshot.value || await props.api('/inventory').catch(() => null)
-    if (!snap) throw original
-    return (snap.items || []).map(withFiles)
-  }
+  const failed = job.data.failed || 0
+  showCompareNotice(`对照结束 · ${job.data.done || 0} 部剧集${failed ? ` · ${failed} 部待核查` : ''}`,
+    failed || job.data.complete===false ? 'warning' : 'success')
+  statusGeneration++; statusById.value = {}; statusInFlight.clear(); comparedOnce.clear()
+  await loadPage(true, false)
 }
 async function compareAll() {
   if (statusBusy.value || pageBusy.value || busy.value) return
   clearCompareNotice()
-  try {
-    // 同步全库 = 先重新扫描本地 STRM，再对照全部剧集；片库映射页不再保留单独的刷新按钮。
-    await load(true, false)
-    statusBusy.value = true
-    statusProgress.value = '读取全部作品…'
-    const request = compareView
-    const list = await allMappingRows()
-    if (request !== compareView) return
-    const series = list.filter((item:any) => item.kind === 'tv' && !item.unidentified)
-    if (series.length) await compareItems(series, true)
-    if (request !== compareView) return
-    const summary = compareSummary(list)
-    const warning = summary.includes('仍待对照')
-    showCompareNotice(summary, warning ? 'warning' : 'success', warning ? 12000 : 8000)
-    if (series.length) await loadPage()
-  } catch (e) { error.value = (e as Error).message; ElMessage.error((e as Error).message) }
-  finally { statusBusy.value = false }
+  statusBusy.value = true
+  statusProgress.value = '正在提交'
+  try { await acceptCompare((await props.api('/inventory/compare','POST')).job) }
+  catch (e) { statusBusy.value = false; showCompareNotice((e as Error).message, 'warning', 12000) }
 }
+async function refreshCompare() { await acceptCompare((await props.api('/inventory/compare')).job) }
+usePageActivity(()=>{void refreshCompare().catch(()=>{})},()=>{})
+useVisiblePolling(async()=>{if(statusBusy.value)await refreshCompare()},3000)
 function openWork(row:any) {
   // 治理行 → 片库映射详情：kind/tmdb_id 足以让详情抽屉自己把文件清单取回来。
   tab.value = 'mapping';
@@ -682,6 +638,10 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize); clearC
     <div class="mapping-status-scroll"><el-radio-group v-model="statusFilter"><el-radio-button value="all">全部状态</el-radio-button><el-radio-button value="missing">缺集</el-radio-button><el-radio-button value="complete">完整</el-radio-button><el-radio-button value="extra">超集</el-radio-button><el-radio-button value="ongoing">在更</el-radio-button><el-radio-button value="pending">待对照</el-radio-button><el-radio-button value="unmatched">未识别</el-radio-button></el-radio-group></div>
    </section>
    <el-alert v-if="compareNotice" :title="compareNotice.text" :type="compareNotice.type" closable show-icon @close="clearCompareNotice" />
+   <details v-if="compareJob?.state==='done' && compareJob.data.failures?.length">
+     <summary>查看待核查作品（{{ compareJob.data.failed }} 部）</summary>
+     <ul><li v-for="row in compareJob.data.failures" :key="row.id">TMDB {{row.id}} · {{row.reason}}</li></ul>
+   </details>
    <p v-else-if="!pageBusy && visibleItems.length && !comparableSeries.length" class="muted">本页没有已识别的剧集；点「对照全库」可对照全部剧集和电影。</p>
    <details class="inventory-help mapping-explanation"><summary>状态说明</summary><div class="mapping-legend"><span v-for="entry in STATUS_LEGEND" :key="entry.text" class="mapping-legend-item"><b>{{ entry.text }}</b>{{ entry.hint }}</span></div><p>扫描有问题的作品另标“库存待核实”。</p></details>
    <div class="mapping-result-bar"><div><strong>{{ pageBusy ? '加载中…' : mappingTotal + ' 部作品' }}</strong><span v-if="statusBusy" class="muted"> · 全库对照中 {{ statusProgress }}</span><span v-else-if="pageFallback" class="muted"> · 本地过滤</span></div><span v-if="!chosen.length && !batchMode" class="muted">点海报看详情 · <el-button link type="primary" size="small" @click="toggleBatchMode">多选清理</el-button></span></div>

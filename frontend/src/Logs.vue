@@ -59,7 +59,31 @@ function receive(items:any[]){
 }
 function disconnect(){stream?.close();stream=undefined;live.value=false;if(frame)cancelAnimationFrame(frame);frame=0;pending=[];buffered.value=0}
 function connect(){disconnect();if(!visible)return;stream=new EventSource('/api/v1/logs/events?after='+(rows.value[0]?.id||0));stream.onopen=()=>live.value=true;stream.addEventListener('logs',e=>{try{receive(JSON.parse((e as MessageEvent).data).items)}catch{live.value=false}});stream.onerror=()=>live.value=false}
-async function load(before=false){if(loading.value)return;loading.value=true;try{const suffix=before?'&before='+rows.value.at(-1)?.id:'';const items=(await props.api('/logs?limit=200'+suffix)).items;merge(items);if(before)older.value=items.length===200;if(!before)connect()}catch(e){ElMessage.error('日志读取失败：'+(e as Error).message)}finally{loading.value=false}}
+async function load(before=false) {
+  if (loading.value) return
+  loading.value = true
+  try {
+    if (before || !rows.value.length) {
+      const suffix = before ? '&before=' + rows.value.at(-1)?.id : ''
+      const {items} = await props.api('/logs?limit=200' + suffix)
+      merge(items)
+      if (before) older.value = items.length === 200
+    } else {
+      disconnect()
+      for (let batch = 0; batch < 5; batch++) {
+        const cursor = rows.value[0]?.id ?? 0
+        const {items} = await props.api('/logs?after=' + cursor + '&limit=200')
+        if (!items.length) break
+        merge(items)
+        if (items.length < 200) break
+      }
+    }
+  } catch(e) { ElMessage.error('日志读取失败：'+(e as Error).message) }
+  finally {
+    if (!before) connect()
+    loading.value = false
+  }
+}
 async function download(){
   const params=new URLSearchParams({limit:'5000'})
   if(kind.value)params.set('kind',kind.value)
@@ -75,7 +99,7 @@ async function download(){
 }
 watch(search,value=>{if(queryTimer)clearTimeout(queryTimer);queryTimer=setTimeout(()=>term.value=value.toLowerCase(),180)})
 watch([term,kind,level,showProgress],async()=>{scrollTop.value=0;await nextTick();if(viewport.value)viewport.value.scrollTop=0})
-watch(paused,value=>{if(value){buffered.value=pending.length;return}if(pending.length){merge(pending);pending=[];buffered.value=0}void load()})
+watch(paused,value=>{if(value){buffered.value=pending.length;return}void load()})
 usePageActivity(()=>{visible=true;void load()},()=>{visible=false;disconnect();if(queryTimer)clearTimeout(queryTimer)})
 </script>
 <template>

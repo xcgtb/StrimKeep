@@ -77,9 +77,12 @@ async function save(){
   })
 }
 const intakeText=ref('')
+const receipts=ref<{kind:string;count:number;target_label:string;submission_id:number}[]>([])
 async function submitAll(){await run(async()=>{
   let r:any
+  receipts.value=[]
   try{r=await props.api('/intake','POST',{text:intakeText.value})}catch(e){throw new Error('提交结果未确认，请先到任务中心核对，避免重复提交。'+(e as Error).message)}
+  receipts.value=r.receipts||[]
   const parts=[];if(r.share?.length)parts.push('分享转存 '+r.share.length+' 个');if(r.offline?.length)parts.push('离线 '+r.offline.length+' 批')
   if(r.errors?.length){error.value=(parts.length?parts.join('、')+'已提交。请勿整批重复提交；':'')+r.errors.join('；')+'。输入已保留，请核对后只提交未成功的链接。';ElMessage.warning('部分链接未提交，请查看原因')}
   else if(!parts.length){error.value='没有识别到可提交的链接，请检查内容。';ElMessage.warning(error.value)}
@@ -124,7 +127,8 @@ useVisiblePolling(async()=>{if(!busy.value)await refresh()},5000)
 
 <section class="panel intake-entry">
  <div class="section-title"><h2>提交链接</h2></div>
- <el-input v-model="intakeText" type="textarea" :rows="5" :disabled="busy" placeholder="粘贴链接，可以混合多种类型" aria-label="入库链接"/><p class="hint">115 分享走转存，其余链接走对应的离线目录。</p><div class="button-row"><el-button type="primary" :disabled="busy||!ready||!intakeText.trim()" @click="submitAll">提交</el-button></div></section>
+<el-input v-model="intakeText" type="textarea" :rows="5" :disabled="busy" placeholder="粘贴链接，可以混合多种类型" aria-label="入库链接"/><p class="hint">115 分享走转存，其余链接走对应的离线目录。</p><div class="button-row"><el-button type="primary" :disabled="busy||!ready||!intakeText.trim()" @click="submitAll">提交</el-button></div>
+<ul v-if="receipts.length" class="hint"><li v-for="receipt in receipts" :key="receipt.submission_id">离线 #{{receipt.submission_id}} · {{receipt.target_label}} · {{receipt.count}} 个链接</li></ul></section>
 
 
 <TransferDirectories ref="directoryEditor" :api="api" :disabled="dirty||busy||!ready" :hide-channel="true" @saved="destinationsSaved" @navigate="page=>emit('navigate',page)"/>

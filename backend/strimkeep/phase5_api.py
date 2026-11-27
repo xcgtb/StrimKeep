@@ -440,10 +440,9 @@ def install_phase5(app,store,admin,job_public):
 
     @app.post('/api/v1/sync/incremental', dependencies=[Depends(admin)])
     async def start_incremental_sync(body: SyncRunInput):
-        """增量 STRM 同步：只处理上次同步之后新增/变化的文件。
+        """增量 STRM 同步：重新枚举所选目录，复用内容未变的本地输出。
 
-        这个时间点是上一次成功同步的**开始**时刻；显式传 since 可覆盖。
-        本地输出缺失的文件不会被跳过，仍会完整核对并重建。
+        since 只用于登记统计与回执。缺失、改名和时间戳无法确认的文件也会核对。
         """
         roots = body.source_cids or None
         if roots: await validate_roots(roots)
@@ -455,12 +454,14 @@ def install_phase5(app,store,admin,job_public):
             # 台账级预估：不读云端、不入队，用它判断「这次增量大概会动多少」。
             account = engine().tasks.account()
             changed = store.db.execute(
-                "SELECT count(*) FROM output_registry WHERE account_id=? AND active=1 AND updated>=?",
-                (account, since)).fetchone()[0]
+                "SELECT count(*) FROM output_registry WHERE account_id=? AND active=1 AND updated>=? "
+                "AND EXISTS (SELECT 1 FROM json_each(output_registry.trail) AS t "
+                "WHERE CAST(t.value AS TEXT) IN (SELECT value FROM json_each(?)))",
+                (account, since, json.dumps(config['source_cids']))).fetchone()[0]
             running = store.db.execute(
                 "SELECT count(*) FROM organize_jobs WHERE state IN ('queued','running') "
                 "AND json_extract(config,'$.job_kind')='strm_sync'").fetchone()[0]
-            return {'mode': 'incremental', 'since': since, 'dry_run': True,
+            return {'mode': 'incremental', 'since': since, 'dry_run': True, 'estimate_source': 'local_registry',
                     'changed': int(changed or 0), 'running': int(running or 0),
                     'stale_count': len(stale_records(store))}
         jid, _ = engine().tasks.enqueue(config)
@@ -629,12 +630,24 @@ def install_phase5(app,store,admin,job_public):
     async def download_backup():
         """一致性备份：SQLite VACUUM INTO + 加密密钥 + manifest。"""
         from datetime import datetime, timezone
-        from .backup import create_backup
+        from tempfile import NamedTemporaryFile
+        from starlette.background import BackgroundTask
+        from .backup import write_backup
         stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-        payload = await asyncio.to_thread(create_backup, store)
-        return StreamingResponse(
-            iter([payload]), media_type='application/zip',
-            headers={'Content-Disposition': f'attachment; filename="strimkeep-backup-{stamp}.zip"'})
+        def prepare():
+            directory = store.root / 'config' / '.backup-tmp'
+            directory.mkdir(parents=True, exist_ok=True)
+            with NamedTemporaryFile(dir=directory, suffix='.zip', delete=False) as temporary:
+                path = Path(temporary.name)
+            try:
+                write_backup(store, path)
+            except BaseException:
+                path.unlink(missing_ok=True)
+                raise
+            return path
+        path = await asyncio.to_thread(prepare)
+        return FileResponse(path, media_type='application/zip', filename=f'strimkeep-backup-{stamp}.zip',
+                            background=BackgroundTask(path.unlink, missing_ok=True))
 
     @app.get('/api/v1/system/backups',dependencies=[Depends(admin)])
     async def list_auto_backups():

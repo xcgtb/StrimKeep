@@ -11,16 +11,19 @@ LIBRARY_COVER = 'library_cover'
 RETIRED_COVER = 'cover_sweep'
 COVER_OPERATIONS = (LIBRARY_COVER, RETIRED_COVER)
 OPERATIONS = ('share_check', 'strm_rebuild', 'strm_rebuild_rollback')
-KINDS = (*OPERATIONS, *COVER_OPERATIONS)
+INSPECTION_OPERATIONS = ('inventory_compare', 'channel_check')
+KINDS = (*OPERATIONS, *COVER_OPERATIONS, *INSPECTION_OPERATIONS)
 KEEP_SECONDS = 7 * 24 * 3600
 MAX_ATTEMPTS = 1
 
 
-def submit(store, kind, payload=None):
+def submit(store, kind, payload=None, *, unique=False):
     if kind not in KINDS:
         raise ValueError('unknown command kind: %s' % kind)
     now = time.time()
-    with store.transaction():
+    with store.transaction(immediate=unique):
+        if unique and (active := running(store, kind)):
+            return active['id']
         cursor = store.db.execute(
             'INSERT INTO worker_commands(kind,payload,state,attempts,created,updated) '
             "VALUES(?,?, 'queued', 0, ?, ?)",
@@ -32,6 +35,22 @@ def get(store, command_id):
     row = store.db.execute(
         'SELECT * FROM worker_commands WHERE id=?', (command_id,)).fetchone()
     return dict(row) if row else None
+
+
+def latest_status(store, kind):
+    row = store.db.execute(
+        'SELECT id,state,result,message FROM worker_commands WHERE kind=? ORDER BY id DESC LIMIT 1',
+        (kind,)).fetchone()
+    if row is None:
+        return None
+    return {'id': row['id'], 'state': row['state'], 'data': json.loads(row['result'] or '{}'),
+            'message': row['message']}
+
+
+def progress(store, command_id, data):
+    with store.db:
+        store.db.execute("UPDATE worker_commands SET result=?,updated=? WHERE id=? AND state='running'",
+                         (json.dumps(data, ensure_ascii=False), time.time(), command_id))
 
 
 def running(store, kind=None):

@@ -872,7 +872,8 @@ class EmbyProxyManager:
         running = bool(server and server.running())
         server = ProxyServer(rule, self.store, self.cloud)
         config = server.config()
-        result = {'ok': False, 'running': running, 'emby_root': config.strm_path}
+        result = {'ok': False, 'running': running, 'emby_root': config.strm_path,
+                  'api_ok': False, 'mapping_verified': False}
         if not config.upstream or not config.api_key:
             return {**result, 'message': '请先保存此实例的 Emby 地址和 API Key。'}
         try:
@@ -884,6 +885,7 @@ class EmbyProxyManager:
             return {**result, 'message': error_message(exc)}
         except (httpx.HTTPError, ValueError) as exc:
             return {**result, 'message': error_message(exc)}
+        result['api_ok'] = True
         if media_source_id:
             sources = [source for source in sources if str(source.get('Id') or '') == media_source_id]
         if not sources:
@@ -908,6 +910,7 @@ class EmbyProxyManager:
         if not identity:
             message = '本地 STRM 未找到有效的 StrimKeep 播放地址。' if local else '媒体源未匹配到此实例的 STRM 路径或 StrimKeep 播放地址。'
             return {**result, 'message': message}
+        result['mapping_verified'] = True
         try:
             async with asyncio.timeout(RESOLVE_TOTAL_TIMEOUT):
                 direct, reason = await resolve_direct(identity, user_agent, self.cloud, self.store)

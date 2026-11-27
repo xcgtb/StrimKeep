@@ -5,6 +5,7 @@ import {computed,ref,onMounted,onUnmounted} from 'vue'
 import {ElMessage,ElMessageBox} from 'element-plus'
 import {useRoute} from 'vue-router'
 import DirectoryPicker from './DirectoryPicker.vue'
+import {useVisiblePolling} from './pageActivity'
 const section = ref<'channels' | 'session' | 'schedule'>('channels')
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>()
 const emit=defineEmits<{navigate:[page:string]}>()
@@ -87,7 +88,29 @@ async function save(){const active=config.value.channels.filter((c:any)=>c.enabl
  const payload=JSON.parse(JSON.stringify(config.value))
  payload.channels=payload.channels.map((c:any)=>{const rest={...c};delete rest.mode;delete rest.target_cid;delete rest.target_label;return rest})
  await run(async()=>{absorb(await props.api('/channels','PUT',payload));ElMessage.success('频道监控已保存')})}
-async function check(){await run(async()=>{const data=await props.api('/channels/check','POST');absorb(data);ElMessage.success('已检查 '+data.checked+' 个频道，新入队 '+data.queued+' 个')})}
+const channelCheck=ref<{id:number;state:string;message?:string;data?:{
+  checked:number;queued:number;channels?:{name:string;queued:number;state:string;error:string}[]
+}}>()
+const channelChecking=computed(()=>['queued','running'].includes(channelCheck.value?.state||''))
+async function loadChannelCheck() {
+  const result=await props.api('/channels/check')
+  if(result.job && (!channelCheck.value || result.job.id >= channelCheck.value.id)) {
+    channelCheck.value=result.job
+    sources.value=result.sources
+  }
+}
+async function check() {
+  await run(async()=>{
+    const data=await props.api('/channels/check','POST')
+    if(data.command_id) {
+      channelCheck.value={id:data.command_id,state:'queued'}
+      await loadChannelCheck()
+    } else {
+      absorb(data)
+      ElMessage.success('已检查 '+data.checked+' 个频道，新入队 '+data.queued+' 个')
+    }
+  })
+}
 const tg=ref<any>({logged_in:false,phone:'',api_id:''}),tgOpen=ref(false),tgStep=ref('form'),tgBusy=ref(false)
 const tgForm=ref({api_id:'',api_hash:'',phone:'',code:'',password:''}),tgChannels=ref<any[]>([])
 // 会话列表很长：读出来后可以一键收起，不用一直占着整屏。
@@ -126,8 +149,9 @@ function kindLabel(ch:any){return ch.kind==='group'?'群组':ch.kind==='bot'?'�
 async function canLeave(){if(!dirty.value&&!draft.value.trim())return true;try{await ElMessageBox.confirm('频道设置或输入内容尚未保存，刷新页面可能丢失。','离开频道监控？',{confirmButtonText:'离开',cancelButtonText:'继续编辑'});return true}catch{return false}}
 function beforeUnload(e:BeforeUnloadEvent){if(route.name==='channels'&&(dirty.value||draft.value.trim())){e.preventDefault();e.returnValue=''}}
 defineExpose({canLeave})
-onMounted(()=>{window.addEventListener('beforeunload',beforeUnload);loadTelegram();load()})
+onMounted(()=>{window.addEventListener('beforeunload',beforeUnload);loadTelegram();load();void loadChannelCheck().catch(()=>{})})
 onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
+useVisiblePolling(async()=>{if(channelChecking.value)await loadChannelCheck()},3000)
 </script>
 <template>
 <PageHeader class="channel-page-head" title="频道监控" description="按频道设置保存目录、关键词和处理方式。"><template #actions><div class="channel-head-actions"><span v-if="!baseline||dirty" role="status">{{!baseline?'正在读取设置':'有未保存修改'}}</span><el-button type="primary" :loading="busy" :disabled="!dirty" @click="save">保存修改</el-button></div></template></PageHeader>
@@ -179,7 +203,13 @@ onUnmounted(()=>window.removeEventListener('beforeunload',beforeUnload))
   <el-form-item v-else label="cron（5 段，按服务器时区）"><el-input v-model="config.cron" placeholder="*/10 * * * *"/></el-form-item>
   <el-form-item label="抓到新分享时推送通知"><el-switch v-model="config.notify"/></el-form-item>
  </el-form>
- <div class="button-row"><el-button :loading="busy" :disabled="dirty" @click="check">立即检查一轮</el-button><span v-if="dirty" class="hint">请先保存修改，再检查频道。</span></div>
+ <div class="button-row"><el-button :loading="busy||channelChecking" :disabled="dirty" @click="check">立即检查一轮</el-button><span v-if="dirty" class="hint">请先保存修改，再检查频道。</span></div>
+ <p v-if="channelChecking" class="hint">检查 #{{channelCheck?.id}} {{channelCheck?.state==='queued'?'等待执行':'正在读取频道'}}</p>
+ <el-alert v-else-if="channelCheck?.state==='failed'" type="warning" :title="channelCheck.message||'检查失败'" :closable="false"/>
+ <details v-else-if="channelCheck?.data?.channels">
+   <summary>已检查 {{channelCheck.data.checked}} 个频道 · 新入队 {{channelCheck.data.queued}} 个</summary>
+   <ul><li v-for="row in channelCheck.data.channels" :key="row.name">{{row.name}} · {{row.error || (row.queued ? '入队 '+row.queued+' 个' : '无新任务')}}</li></ul>
+ </details>
  <p class="hint">公开预览页只支持公开频道；使用已登录的 Telegram 用户会话可读取已加入的私密频道或群组。首次检查按各频道设置的回溯页数读取，之后跟进新帖。</p>
 </section>
 

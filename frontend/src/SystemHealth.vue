@@ -6,9 +6,16 @@ import {useVisiblePolling} from './pageActivity'
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>()
 const emit=defineEmits<{navigate:[page:string]}>()
 type CheckStatus = 'ok'|'warn'|'error'
-type HealthCheck = {key:string;title:string;status:CheckStatus;message:string;detail:string;action:string}
+type HealthCheck = {key:string;title:string;status:CheckStatus;message:string;detail:string;action:string;can_verify?:boolean}
 type HealthSnapshot = {overall:CheckStatus;generated_at:number;checks:HealthCheck[]}
 const data=ref<HealthSnapshot|null>(null),loading=ref(false),error=ref('')
+const verifying=ref(false)
+async function verifyBackup() {
+  verifying.value=true
+  try { await props.api('/system/backup/verify','POST'); await load() }
+  catch(e) { error.value=(e as Error).message }
+  finally { verifying.value=false }
+}
 async function load(){if(loading.value)return;loading.value=true;error.value='';try{data.value=await props.api('/system/health')}catch(e){error.value=(e as Error).message}finally{loading.value=false}}
 onMounted(load)
 useVisiblePolling(load,30000)
@@ -60,7 +67,8 @@ const setupSteps=computed(()=>{
         <p>{{check.message}}</p>
         <small v-if="check.detail">{{check.detail}}</small>
       </div>
-      <el-button v-if="check.action" link type="primary" :aria-label="'处理'+check.title"
+      <el-button v-if="check.can_verify" :loading="verifying" size="small" @click="verifyBackup">校验备份</el-button>
+      <el-button v-else-if="check.action" link type="primary" :aria-label="'处理'+check.title"
         @click="emit('navigate',check.action)">去处理</el-button>
     </li>
   </ul>

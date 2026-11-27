@@ -1129,6 +1129,9 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         use_tmdb: bool = True
         library: Literal['cloud', 'share'] = 'cloud'
 
+    class PreviewBatch(Input):
+        items: list[Preview] = Field(min_length=1, max_length=50)
+
     @app.post('/api/v1/strm/rebuild', dependencies=[Depends(admin)])
     async def rebuild_outputs(dry_run: int = Query(0, ge=0, le=1)):
         """按当前规则重写所有受管 STRM（重新整理本地输出，不动云端文件）。
@@ -1263,6 +1266,23 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
             'target_episode': label,
         })
         return result
+
+    @app.post('/api/v1/organize/preview/batch', dependencies=[Depends(admin)])
+    async def preview_batch(body: PreviewBatch):
+        # Ordered calls share the existing TMDB gateway cache. Season/episode
+        # evidence remains specific to each filename.
+        results = {}
+        rows = []
+        for item in body.items:
+            key = item.model_dump_json()
+            if key not in results:
+                try:
+                    results[key] = await preview_organize(item)
+                except (HTTPException, CloudError) as exc:
+                    reason = exc.detail if isinstance(exc, HTTPException) else str(exc)
+                    results[key] = {'name': item.name, 'ok': False, 'library': item.library, 'reason': str(reason)}
+            rows.append(results[key])
+        return {'items': rows}
 
     @app.post('/api/v1/playbacks', dependencies=[Depends(admin)])
     async def create_playback(body: Source):

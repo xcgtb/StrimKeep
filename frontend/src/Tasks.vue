@@ -24,7 +24,7 @@ const syncStageLabels = {
   local_scan:'本地扫描', local_cleanup:'失效核对与清理',
   sidecars:'附属文件', technical:'技术媒体信息', emby:'Emby 通知提交',
 } as const
-const syncListings: Record<string, string> = {bulk:'批量目录树',recursive:'递归文件列表',directory:'逐目录读取'}
+const syncListings: Record<string, string> = {bulk:'批量目录树',recursive:'递归文件列表',directory:'逐目录读取',receipt:'转存产物核对'}
 const seconds = (value: number) => value.toFixed(2) + ' 秒'
 const syncMetrics = computed(() => detail.value?.job.sync_metrics)
 const syncStages = computed(() => Object.entries(syncStageLabels)
@@ -33,6 +33,8 @@ const syncStages = computed(() => Object.entries(syncStageLabels)
     return typeof value==='number' ? [{key,label,value}] : []
   }))
 let stream:EventSource|undefined,timer:ReturnType<typeof setInterval>|undefined,polling=false,visible=false
+let historyBefore: number | undefined
+let olderPagesLoaded = false
 const inProgress=(job:any)=>['queued','running','paused','waiting_login'].includes(job.state)
 const taskSource=taskSourceLabel
 const kinds=new Proxy({} as Record<string,string>,{get(_t,key:string){return taskKindLabel(key)}})
@@ -78,7 +80,23 @@ async function loadOffline(){
     offlineStatusError.value='离线下载状态暂时无法读取'
   }
 }
-async function load(older=false){const before=older&&history.value.length?'?before='+history.value.at(-1).id:'';const data=await props.api('/tasks'+before);active.value=reconcileRows(active.value,data.active);history.value=reconcileRows(history.value,older?[...history.value,...data.history]:data.history);more.value=data.has_more;await loadOffline()}
+function applyJobs(running:any[], finished:any[]) {
+  active.value = reconcileRows(active.value, running)
+  const received = new Set([...running, ...finished].map(job => job.id))
+  const combined = [...finished, ...history.value.filter(job => !received.has(job.id))]
+  history.value = reconcileRows(history.value, combined.sort((a, b) => b.id - a.id))
+}
+async function load(older=false) {
+  const loadingOlder = older && historyBefore !== undefined
+  const data = await props.api('/tasks' + (loadingOlder ? '?before=' + historyBefore : ''))
+  applyJobs(data.active, data.history)
+  if (loadingOlder || !olderPagesLoaded) {
+    historyBefore = data.history.at(-1)?.id ?? historyBefore
+    more.value = data.has_more
+  }
+  if (loadingOlder) olderPagesLoaded = true
+  await loadOffline()
+}
 async function run(fn:()=>Promise<void>){if(busy.value)return;busy.value=true;error.value='';try{await fn()}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
 function fmtAgo(ts:number){if(!ts)return '';const diff=Date.now()/1000-ts;if(diff<60)return '刚刚';if(diff<3600)return Math.floor(diff/60)+' 分钟前';if(diff<86400)return Math.floor(diff/3600)+' 小时前';const d=new Date(ts*1000);return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`}
 async function control(job:any,action:string){if(action==='cancel'){try{await ElMessageBox.confirm('取消后保留已完成步骤，在途操作会先核查结果。','取消任务')}catch{return}}await run(async()=>{await props.api(`/organize/jobs/${job.id}/${action}`,'POST');await load()})}
@@ -86,7 +104,7 @@ async function show(id:number,after=0){if(!after)itemFilter.value='all';await ru
 async function copyName(name:string){if(!navigator.clipboard){ElMessage.warning('浏览器未允许复制，请手动选择文件名。');return}try{await navigator.clipboard.writeText(name);ElMessage.success('文件名已复制，可粘贴到「识别测试」核对。')}catch{ElMessage.warning('复制失败，请手动选择文件名。')}}
 async function dismissUnrecognized(itemIds:number[]=[]){const current=detail.value;if(!current)return;const jobId=current.job.id;try{await ElMessageBox.confirm('只把未识别项标记为已跳过，不删除文件；文件仍在原目录或未识别目录。其他失败项不会被忽略。','人工处理未识别项',{confirmButtonText:'确认忽略',cancelButtonText:'取消'})}catch{return}await run(async()=>{const result=await props.api(`/organize/jobs/${jobId}/dismiss-unrecognized`,'POST',{item_ids:itemIds});ElMessage.success(`已忽略 ${result.dismissed} 项${result.closed?'，任务已结项':''}`);detail.value=await props.api(`/organize/jobs/${jobId}`);await load()})}
 async function manualCreated(){manualItem.value=null;await run(async()=>{if(detail.value)detail.value=await props.api(`/organize/jobs/${detail.value.job.id}`);await load()})}
-function connect(){stream?.close();stream=new EventSource('/api/v1/tasks/events');stream.onopen=()=>live.value=true;stream.addEventListener('tasks',event=>{if(!visible)return;try{const items=JSON.parse((event as MessageEvent).data).items;active.value=reconcileRows(active.value,items.filter(inProgress).sort((a:any,b:any)=>a.id-b.id));const incoming=items.filter((j:any)=>!inProgress(j));const ids=new Set(items.map((j:any)=>j.id));history.value=reconcileRows(history.value,[...incoming,...history.value.filter(j=>!ids.has(j.id))].sort((a,b)=>b.id-a.id));live.value=true}catch{live.value=false}});stream.onerror=()=>live.value=false}
+function connect(){stream?.close();stream=new EventSource('/api/v1/tasks/events');stream.onopen=()=>live.value=true;stream.addEventListener('tasks',event=>{if(!visible)return;try{const items=JSON.parse((event as MessageEvent).data).items;applyJobs(items.filter(inProgress).sort((a:any,b:any)=>a.id-b.id),items.filter((j:any)=>!inProgress(j)));live.value=true}catch{live.value=false}});stream.onerror=()=>live.value=false}
 async function poll(){
   if(!visible||polling||busy.value)return
   polling=true

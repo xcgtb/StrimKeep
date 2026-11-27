@@ -29,13 +29,14 @@ class _App:
     pass
 
 
-def heartbeat_payload(engine):
+def heartbeat_payload(engine, background=None):
     """Worker health visible to Web: heartbeat alone cannot detect dead lanes."""
     return {
         'at': time.time(),
         'worker_alive': bool(engine.worker and not engine.worker.done()),
         'scheduler_alive': bool(engine.clock and not engine.clock.done()),
         'lane_faults': {name: bool(value) for name, value in engine.lane_faults.items()},
+        'background': {name: not task.done() for name, task in (background or {}).items()},
         'closing': bool(engine.closing),
     }
 
@@ -64,7 +65,7 @@ def inventory_app(store, engine, strm_root, http):
     return private
 
 
-async def command_loop(store, engine, stop, kinds=commands.KINDS):
+async def command_loop(store, engine, stop, kinds=commands.KINDS, inventory=None):
     """Consume Web-submitted commands one at a time."""
     while not stop.is_set():
         row = await asyncio.to_thread(commands.claim, store, kinds)
@@ -83,6 +84,18 @@ async def command_loop(store, engine, stop, kinds=commands.KINDS):
                 result = await engine.library_covers.apply(payload)
             elif row['kind'] == commands.RETIRED_COVER:
                 result = {'message': '影片封面补齐已停用。'}
+            elif row['kind'] == 'inventory_compare':
+                async def report(data):
+                    await asyncio.to_thread(commands.progress, store, row['id'], data)
+                result = await inventory.state.inventory_compare(report)
+            elif row['kind'] == 'channel_check':
+                rows = await engine.channels.tick(force=True)
+                source_map = {source['name']: source for source in engine.channels.sources()}
+                result = {'checked': len(rows), 'queued': sum(count for _, count in rows),
+                          'channels': [{'name': name, 'queued': count,
+                                        'state': source_map.get(name, {}).get('state', ''),
+                                        'error': source_map.get(name, {}).get('error', '')}
+                                       for name, count in rows]}
             else:
                 raise RuntimeError('未知的后台命令：%s' % row['kind'])
             await asyncio.to_thread(commands.finish, store, row['id'], result)
@@ -128,21 +141,23 @@ async def run_worker():
     engine.library_covers = LibraryCovers(store, http)
     await asyncio.to_thread(commands.recover_running, store)
     scan_app = inventory_app(store, engine, strm_root.resolve(), http)
-    background = [
-        asyncio.create_task(engine.emby.coverage_loop()),
-        asyncio.create_task(inject_loop(app, store)),
-        asyncio.create_task(housekeeping_loop(app, store)),
-        asyncio.create_task(command_loop(store, engine, stop, commands.OPERATIONS)),
-        asyncio.create_task(command_loop(store, engine, stop, commands.COVER_OPERATIONS)),
-        asyncio.create_task(engine.library_covers.schedule_loop()),
-        asyncio.create_task(scan_app.state.inventory_scan_loop()),
-    ]
+    background = {name: asyncio.create_task(coro, name=name) for name, coro in {
+        'emby_coverage': engine.emby.coverage_loop(),
+        'media_info': inject_loop(app, store),
+        'housekeeping': housekeeping_loop(app, store),
+        'operations': command_loop(store, engine, stop, commands.OPERATIONS),
+        'cover_operations': command_loop(store, engine, stop, commands.COVER_OPERATIONS),
+        'inventory_compare': command_loop(store, engine, stop, ('inventory_compare',), scan_app),
+        'channel_check': command_loop(store, engine, stop, ('channel_check',)),
+        'library_covers': engine.library_covers.schedule_loop(),
+        'inventory_schedule': scan_app.state.inventory_scan_loop(),
+    }.items()}
     store.event('system', f'StrimKeep worker {__version__} started.')
     last_reap = 0.0
     last_prune = 0.0
     try:
         while not stop.is_set():
-            store.set_meta('worker_heartbeat', heartbeat_payload(engine))
+            store.set_meta('worker_heartbeat', heartbeat_payload(engine, background))
             now = time.monotonic()
             if now - last_reap >= 120:
                 last_reap = now
@@ -158,10 +173,10 @@ async def run_worker():
                     pass
             await asyncio.sleep(5)
     finally:
-        for task in background:
+        for task in background.values():
             task.cancel()
         if background:
-            await asyncio.gather(*background, return_exceptions=True)
+            await asyncio.gather(*background.values(), return_exceptions=True)
         await engine.close()
         await cloud.close()
         await http.aclose()

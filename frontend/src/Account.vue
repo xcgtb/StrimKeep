@@ -12,8 +12,8 @@ const account=ref<any>(null),accountBusy=ref(false)
 async function loadAccount(refresh=false){accountBusy.value=true;try{account.value=await props.api('/cloud/account'+(refresh?'?refresh=1':''))}catch(e){account.value={error:(e as Error).message}}finally{accountBusy.value=false}}
 const tb=(n?:number)=>n==null?'—':(n/1024**4).toFixed(2)+' TB'
 const pct=(used?:number,total?:number)=>{const t=Number(total||0);return t>0?Math.min(100,Math.round(Number(used||0)/t*100)):0}
-async function saved(){qr.value=false;const wasConfigured=configured.value;await check();if(wasConfigured&&configured.value)await browse('0')}
-async function saveCookie(){await run(async()=>{await props.api('/settings','PUT',{cookie:cookie.value});cookie.value='';configured.value=true;status.value='已保存';ElMessage.success('Cookie 已保存')})}
+async function saved(){qr.value=false;const wasConfigured=configured.value;resetBrowser();await check();if(wasConfigured&&configured.value)await refreshBranch()}
+async function saveCookie(){await run(async()=>{await props.api('/settings','PUT',{cookie:cookie.value});cookie.value='';const wasConfigured=configured.value;resetBrowser();configured.value=true;status.value='已保存';ElMessage.success('Cookie 已保存');if(wasConfigured)await refreshBranch();await loadAccount(true)})}
 const listLoading=ref(false);let browseSequence=0
 async function browse(id=cid.value,name?:string,index?:number,page=0,trail?:{id:string;name:string}[]){
  const sequence=++browseSequence
@@ -22,10 +22,42 @@ async function browse(id=cid.value,name?:string,index?:number,page=0,trail?:{id:
  try{const d=await props.api(`/cloud/files?cid=${encodeURIComponent(id)}&offset=${page}&limit=100`);if(sequence!==browseSequence)return;files.value=d.items;cid.value=id;offset.value=page;more.value=d.has_more;next.value=d.next_offset??page+d.items.length;path.value=targetPath;await revealTree(sequence)}catch(e){if(sequence===browseSequence){error.value=(e as Error).message;tree.value?.setCurrentKey(cid.value)}}finally{if(sequence===browseSequence)listLoading.value=false}
 }
 type FolderNode={id:string;name:string;children?:FolderNode[];loaded?:boolean;more?:boolean;parent?:string;offset?:number;trail?:{id:string;name:string}[];disabled?:boolean}
-const tree=ref<any>(),treeData=shallowRef<FolderNode[]>([{id:'0',name:'115 网盘',children:[{id:'placeholder:0',name:'展开读取目录',disabled:true}],trail:[{id:'0',name:'115 网盘'}]}]),expanded=new Set(['0']),treeHeight=ref(window.innerWidth<760?220:420),treeBusy=new Set<string>()
+const rootNode=():FolderNode=>({id:'0',name:'115 网盘',children:[{id:'placeholder:0',name:'展开读取目录',disabled:true}],trail:[{id:'0',name:'115 网盘'}]})
+const tree=ref<any>(),treeData=shallowRef<FolderNode[]>([rootNode()]),expanded=new Set(['0']),treeHeight=ref(window.innerWidth<760?220:420),treeBusy=new Set<string>()
+let treeGeneration = 0
+function resetBrowser() {
+  ++browseSequence; ++treeGeneration
+  treeBusy.clear(); expanded.clear(); expanded.add('0')
+  treeData.value=[rootNode()]
+  files.value=[]; cid.value='0'; path.value=treeData.value[0].trail!
+  listLoading.value=false; offset.value=0; more.value=false; next.value=0
+}
+async function refreshBranch() {
+  const node=findNode(cid.value)
+  await Promise.all([browse(), ...(node&&window.innerWidth>760 ? [expandFolder(node,0,true)] : [])])
+}
 function findNode(id:string,nodes=treeData.value):FolderNode|undefined{for(const node of nodes){if(node.id===id)return node;const child=node.children&&findNode(id,node.children);if(child)return child}}
 function replaceNode(id:string,patch:Partial<FolderNode>,nodes=treeData.value):FolderNode[]{return nodes.map(n=>n.id===id?{...n,...patch}:n.children?{...n,children:replaceNode(id,patch,n.children)}:n)}
-async function expandFolder(node:FolderNode,offset=0){if(node.disabled||treeBusy.has(node.id)||(node.loaded&&!offset))return;treeBusy.add(node.id);expanded.add(node.id);try{const d=await props.api(`/cloud/files?cid=${node.id}&offset=${offset}&limit=100`);const children:FolderNode[]=d.items.filter((e:any)=>e.is_dir).map((e:any)=>({...e,trail:[...(node.trail||[]),{id:e.id,name:e.name}],children:[{id:'placeholder:'+e.id,name:'展开读取目录',disabled:true}]}));if(d.has_more)children.push({id:'more:'+node.id+':'+(d.next_offset??offset+d.items.length),name:'加载更多目录…',more:true,parent:node.id,offset:d.next_offset??offset+d.items.length});treeData.value=replaceNode(node.id,{loaded:true,children:offset?[...(node.children||[]).filter(n=>!n.more&&!n.disabled),...children]:children});await nextTick();tree.value?.setExpandedKeys([...expanded])}catch(e){error.value=(e as Error).message}finally{treeBusy.delete(node.id)}}
+async function expandFolder(node:FolderNode,offset=0,force=false) {
+  if(node.disabled||treeBusy.has(node.id)||(node.loaded&&!offset&&!force))return
+  const generation=treeGeneration
+  treeBusy.add(node.id);expanded.add(node.id)
+  try {
+    const d=await props.api(`/cloud/files?cid=${node.id}&offset=${offset}&limit=100`)
+    if(generation!==treeGeneration)return
+    const previous=new Map((node.children||[]).map(child=>[child.id,child]))
+    const children:FolderNode[]=d.items.filter((e:any)=>e.is_dir).map((e:any)=>({
+      ...e,trail:[...(node.trail||[]),{id:e.id,name:e.name}],
+      loaded:previous.get(e.id)?.loaded,
+      children:previous.get(e.id)?.children||[{id:'placeholder:'+e.id,name:'展开读取目录',disabled:true}]
+    }))
+    if(d.has_more)children.push({id:'more:'+node.id+':'+(d.next_offset??offset+d.items.length),name:'加载更多目录…',more:true,parent:node.id,offset:d.next_offset??offset+d.items.length})
+    treeData.value=replaceNode(node.id,{loaded:true,children:offset?[...(node.children||[]).filter(n=>!n.more&&!n.disabled),...children]:children})
+    await nextTick()
+    if(generation===treeGeneration)tree.value?.setExpandedKeys([...expanded])
+  } catch(e) { if(generation===treeGeneration)error.value=(e as Error).message }
+  finally { if(generation===treeGeneration)treeBusy.delete(node.id) }
+}
 async function treeSelect(node:FolderNode){if(node.disabled)return;if(node.more){tree.value?.setCurrentKey(cid.value);const parent=findNode(node.parent!);if(parent)await expandFolder(parent,node.offset);return}await Promise.all([browse(node.id,undefined,undefined,0,node.trail||[{id:'0',name:'115 网盘'},{id:node.id,name:node.name}]),expandFolder(node)])}
 async function revealTree(sequence=browseSequence){if(window.innerWidth<=760)return;for(const folder of path.value.slice(0,-1)){if(sequence!==browseSequence)return;const node=findNode(folder.id);if(node){expanded.add(node.id);await expandFolder(node)}}await nextTick();if(sequence===browseSequence){tree.value?.setExpandedKeys([...expanded]);tree.value?.setCurrentKey(cid.value)}}
 watch(configured,async value=>{if(value){await nextTick();await browse('0',undefined,0);if(window.innerWidth>760)await expandFolder(treeData.value[0])}})
@@ -54,7 +86,7 @@ onMounted(async()=>{try{configured.value=(await props.api('/settings')).cookie_c
   <div class="button-row account-actions"><el-button type="primary" @click="qr=true">扫码登录</el-button><el-button :loading="busy" @click="check">检查登录</el-button></div>
   <details class="cookie-options"><summary>手动填写 Cookie</summary><p class="hint">也可以手动填写登录信息，留空不会覆盖已保存的值。</p><el-form label-position="top"><el-form-item label="Cookie"><el-input v-model="cookie" type="password" autocomplete="new-password" show-password :placeholder="configured?'已加密保存，留空保留原值':'UID、CID、SEID'"/></el-form-item></el-form><el-button :disabled="!cookie||busy" @click="saveCookie">保存 Cookie</el-button></details>
 </section>
-<section class="panel cloud-browser-panel"><div class="section-title"><h2>网盘目录与文件</h2><el-button :disabled="listLoading||!configured" @click="browse()">刷新当前目录</el-button></div>
+<section class="panel cloud-browser-panel"><div class="section-title"><h2>网盘目录与文件</h2><el-button :disabled="listLoading||!configured" @click="refreshBranch">刷新当前目录</el-button></div>
 <div v-if="configured" class="cloud-browser">
   <aside class="cloud-tree-pane" aria-label="目录树"><el-tree-v2 ref="tree" :data="treeData" :height="treeHeight" :item-size="34" :props="{value:'id',label:'name',children:'children',disabled:'disabled'}" :default-expanded-keys="['0']" :expand-on-click-node="false" highlight-current @node-expand="(node:FolderNode)=>expandFolder(node)" @node-collapse="(node:FolderNode)=>expanded.delete(node.id)" @node-click="treeSelect"/></aside>
   <div class="cloud-files">

@@ -35,6 +35,33 @@ def call(app, handler, params):
         return client.get('/api/v1/explore/list', params=params)
 
 
+def test_expired_browse_cursor_restarts_instead_of_repeating_a_deep_page(tmp_path, monkeypatch):
+    app = make_app(tmp_path, monkeypatch)
+    raw = [1] * 7 + list(range(2, 801))
+
+    def handler(request):
+        page = int(request.url.params['page'])
+        items = [{'id': value, 'title': str(value)} for value in raw[(page - 1) * 20:page * 20]]
+        return httpx.Response(200, json={'results': items, 'total_results': len(raw),
+                                         'total_pages': (len(raw) + 19) // 20})
+
+    with TestClient(app) as client:
+        client.post('/api/v1/auth/login', json={'username': 'admin', 'password': 'test-password-1234'})
+        app.state.store.set_many({'tmdb_key': 'k'})
+        app.state.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        first = client.get('/api/v1/explore/list', params={'per_page': 45}).json()
+        cursor = first['cursor']
+        for number in range(2, 7):
+            page = client.get('/api/v1/explore/list',
+                              params={'per_page': 45, 'page': number, 'cursor': cursor}).json()
+            assert page['page'] == number and not page['restarted']
+        for genre in range(1, 9):
+            client.get('/api/v1/explore/list', params={'genre': genre})
+        fresh = client.get('/api/v1/explore/list', params={'per_page': 45, 'page': 7, 'cursor': cursor}).json()
+        assert fresh['restarted'] and fresh['page'] == 1 and fresh['cursor'] != cursor
+        assert fresh['items'] == first['items']
+
+
 def test_search_splits_trailing_year_into_filter(tmp_path, monkeypatch):
     seen = []
 

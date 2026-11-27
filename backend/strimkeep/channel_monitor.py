@@ -199,6 +199,7 @@ class ChannelMonitor:
         self.clock = time.monotonic
         self.sleep = asyncio.sleep
         self._next_fetch = 0.0
+        self._tick_lock = asyncio.Lock()
         with self.store.db:
             self.store.db.execute('''CREATE TABLE IF NOT EXISTS channel_state(
                 name TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '',
@@ -830,6 +831,10 @@ class ChannelMonitor:
         task.add_done_callback(self.engine.notice_tasks.discard)
 
     async def tick(self, force=False):
+        async with self._tick_lock:
+            return await self._tick(force)
+
+    async def _tick(self, force):
         config = self.config()
         if not config['enabled'] and not force:
             return []
@@ -846,7 +851,12 @@ class ChannelMonitor:
                 # 同一个频道的另一种写法（用户名 / 数字 ID），正本这轮会抓：跳过，避免重复抓取和转存。
                 # 正本被禁用或已从配置里移除时不跳过，否则这个频道就谁都不抓了。
                 continue
-            results.append((rule['name'], await self.refresh(rule['name'])))
+            name = rule['name']
+            try:
+                results.append((name, await self.refresh(name)))
+            except Exception as exc:
+                self._remember(name, state='error', error='频道读取失败：' + type(exc).__name__)
+                results.append((name, 0))
         self._mark_duplicates()   # 最后一个频道抓完才拿到 title，收尾再判一次
         return results
 

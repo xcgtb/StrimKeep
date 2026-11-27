@@ -661,11 +661,15 @@ class Store:
                 previous = self.meta_json('last_started_version', '') or ''
                 if not previous or previous == __version__:
                     return
-                from .backup import create_backup
-                payload = create_backup(self)
+                from .backup import write_backup
                 name = 'pre-upgrade-%s-to-%s-%s.zip' % (
                     previous, __version__, time.strftime('%Y%m%d-%H%M%S'))
-                (directory / name).write_bytes(payload)
+                temporary = directory / (name + '.part')
+                try:
+                    write_backup(self, temporary)
+                    temporary.replace(directory / name)
+                finally:
+                    temporary.unlink(missing_ok=True)
                 self.set_meta('last_started_version', __version__)
                 self.event('system', '升级前自动备份已生成：%s' % name)
                 self._prune_backups(directory, keep=5)

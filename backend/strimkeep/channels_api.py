@@ -7,6 +7,7 @@ from fastapi import Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .channel_monitor import normalize_channel
+from . import commands
 from .telegram_session import SessionError
 
 
@@ -196,8 +197,15 @@ def install_channels(app, store, admin):
     @app.post('/api/v1/channels/check', dependencies=[Depends(admin)])
     async def channels_check():
         """立即跑一轮，方便刚加完频道就验证能不能读。"""
+        if getattr(app.state.organizer, 'web_only', False):
+            command_id = commands.submit(store, 'channel_check', unique=True)
+            return {'command_id': command_id, **payload()}
         results = await monitor().tick(force=True)
         return {'checked': len(results), 'queued': sum(count for _, count in results), **payload()}
+
+    @app.get('/api/v1/channels/check', dependencies=[Depends(admin)])
+    async def channels_check_status():
+        return {'job': commands.latest_status(store, 'channel_check'), 'sources': monitor().sources()}
 
     @app.post('/api/v1/channels/rename', dependencies=[Depends(admin)])
     async def channels_rename(body: dict):

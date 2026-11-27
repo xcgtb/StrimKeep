@@ -3,6 +3,7 @@ import json
 import hashlib
 import re
 import time
+from pathlib import Path
 from .quality import public_policy
 from .organize_options import library_root, options
 from .strm_options import effective, sync_metadata_overrides
@@ -98,7 +99,7 @@ class Tasks:
         profile = next((p for p in self.store.get('sync_profiles', []) if p['id'] == profile_id), {})
         return self.transfer_profile_roots(profile)
 
-    def enqueue_transfer_sync(self, account, trail, label):
+    def enqueue_transfer_sync(self, account, trail, label, received=()):
         """Use the confirmed transfer destination, constrained by the user's profile roots."""
         if not trail or str(trail[-1]) == '0':
             return
@@ -116,6 +117,11 @@ class Tasks:
             if config['account_id'] != account:
                 continue
             config.update(sync_trigger='transfer', cleanup_missing=False, stale_detect=False)
+            if received and all(
+                not item['is_dir'] and Path(item['name']).suffix.lower() in config['video_extensions']
+                for item in received
+            ):
+                config['sync_received_ids'] = sorted({str(item['id']) for item in received})
             self.enqueue(config, scheduled=True)
 
     @staticmethod
@@ -123,6 +129,7 @@ class Tasks:
         return (config.get('job_kind', 'organize'), tuple(sorted(config.get('source_cids', []))),
                 *(config.get(key) for key in ('account_id', 'sync_profile_id', 'mode', 'sync_trigger',
                                              'emby_target', 'emby_target_binding')),
+                tuple(config.get('sync_received_ids', [])),
                 frozenset(word.casefold() for word in config.get('sync_exclude_keywords', [])))
 
     @staticmethod

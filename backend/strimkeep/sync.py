@@ -90,13 +90,6 @@ class Sync:
             self.store.db.execute('INSERT OR REPLACE INTO meta VALUES(?,?)',
                                   ('sync_revision:'+account, secrets.token_hex(16)))
 
-    def scope(self, config):
-        options = {key: config.get(key) for key in StrmOptions.model_fields}
-        if config.get('sync_exclude_keywords'):
-            options['sync_exclude_keywords'] = sorted({word.casefold() for word in config['sync_exclude_keywords']})
-        return hashlib.sha256(json.dumps([sorted(config['source_cids']), config.get('archive_cid'), options],
-                                         sort_keys=True).encode()).hexdigest()
-
     async def unchanged(self, source, config):
         """本地即事实：磁盘上有、内容对，才算「没变」。
 
@@ -155,39 +148,6 @@ class Sync:
         return {'relative_path':relative, 'target_name':source['name'], 'playback_id':old['playback_id'],
                 'token_cipher':old['token_cipher'], 'local_files':json.loads(old['files']),
                 'warnings':[], 'sync_unchanged':True}
-
-    async def cached_manifest(self, jid, config):
-        from .core import dumps
-        # 手动同步必须重新发现云端新增文件；仅定时增量可复用近期清单。
-        if not config.get('scheduled') or config.get('full_scan', True) or set(config.get('metadata_extensions', [])) - SUBTITLES:
-            self.store.event('sync', '缓存未命中：手动任务或强制全量，直接重扫。')
-            return False
-        account = self.engine.index.account(config)
-        snapshot = self.store.db.execute('SELECT * FROM sync_snapshots WHERE account_id=? AND scope=?',(account,self.scope(config))).fetchone()
-        if not snapshot:
-            self.store.event('sync', '缓存未命中：无快照（首次或范围变化）。'); return False
-        if not 0 <= time.time()-snapshot['checked'] < self.FULL_SCAN_SECONDS:
-            self.store.event('sync', '缓存未命中：快照已过期（%.0f 分钟）。' % ((time.time()-snapshot['checked'])/60)); return False
-        if snapshot['revision'] != self.store.meta('sync_revision:'+account):
-            self.store.event('sync', '缓存未命中：云端版本号已变（整理期间有变更）。'); return False
-        paths = {cid: await self.cloud.path_info(cid) for cid in config['source_cids']}
-        if paths != json.loads(snapshot['paths']):
-            self.store.event('sync', '缓存未命中：来源目录路径已变化。'); return False
-        # A missing/edited output, address or subtitle change forces fresh discovery
-        # before any repair; stale cached paths never authorize publication/deletion.
-        rows = self.store.db.execute('SELECT original FROM organize_items WHERE job_id=?',(snapshot['job_id'],)).fetchall()
-        async with self.engine.publication_gate:
-            for row in rows:
-                self.engine.boundary(jid)
-                verdict = await self.unchanged(json.loads(row['original']), config)
-                if not verdict:
-                    self.store.event('sync', '缓存未命中：清单内文件指纹变化（%s）。'
-                                     % (json.loads(row['original']).get('name') or '')[:60])
-                    return False
-        self.store.jobs.copy_manifest(snapshot['job_id'], jid)
-        current = json.loads(self.engine.job(jid)['config']);current['sync_mode']='cached';current['manifest_at']=time.time()
-        self.engine.update_job(jid, config=dumps(current))
-        return True
 
     async def download_manifest(self, jid, config, effective, paths):
         """递归目录、文件和批量资料组装成完整路径，不逐目录请求。"""
@@ -283,7 +243,27 @@ class Sync:
         fast = getattr(self.cloud, 'recursive_files_verified', None)
         completed_fast = False
         listing = 'directory'
-        if callable(batched) or callable(fast):
+        received_ids = set(config.get('sync_received_ids') or [])
+        targeted = (config.get('sync_trigger') == 'transfer' and len(effective) == 1 and received_ids
+                    and not (set(config.get('metadata_extensions') or []) - SUBTITLES))
+        if targeted:
+            root, = effective
+            read = getattr(self.cloud, 'children_verified', None) or self.cloud.children
+            started = time.monotonic()
+            entries = await read(root)
+            path = paths[root]
+            root_files = [entry for entry in entries if not entry['is_dir']]
+            if received_ids <= {str(entry['id']) for entry in root_files}:
+                stamp = time.time()
+                files = {entry['id']: {**entry, '_path': path, '_root': root, '_scan_at': stamp}
+                         for entry in root_files if str(entry['id']) in received_ids
+                         or Path(entry['name']).suffix.lower() in SUBTITLES}
+                local = self.relative({'_path': path, '_root': root, 'name': 'scope.strm'}, config)
+                seen, listing, completed_fast = {root}, 'receipt', True
+                stats = {root: {'id': root, 'name': path[-1]['name'], 'directories': 1,
+                                'files': len(root_files), 'local_path': str(self.engine.root / Path(local).parent),
+                                'scan_seconds': time.monotonic() - started}}
+        if not completed_fast and (callable(batched) or callable(fast)):
             try:
                 if callable(batched):
                     seen, files, stats = await self.download_manifest(jid, config, effective, paths)
@@ -364,17 +344,14 @@ class Sync:
         bound_subtitles = {sub['id'] for video in videos for sub in video.get('subtitles', [])}
         manifest_details = {
             'sync_filtered_ids': filtered,
-            'sync_metadata': [source for source in sidecars if source['id'] not in bound_subtitles],
+            'sync_metadata': [] if listing == 'receipt' else
+                [source for source in sidecars if source['id'] not in bound_subtitles],
             'sync_filter_count': skipped_count,
             'sync_path_excluded_count': excluded_count,
             'sync_filter_names': examples,
         }
         config.update(manifest_details)
         self.store.jobs.replace_manifest(jid, [(v['id'], dumps(v)) for v in videos])
-        with self.store.db:
-            account = self.engine.index.account(config)
-            self.store.db.execute('INSERT OR REPLACE INTO sync_snapshots VALUES(?,?,?,?,?,?)',
-                (account,self.scope(config),jid,time.time(),revision_at_start,dumps(paths)))
         current = json.loads(self.engine.job(jid)['config'])
         current.update(manifest_details)
         current['sync_mode'] = 'full'
@@ -1298,7 +1275,6 @@ class Sync:
         config.update({k:saved_config[k] for k in ('sync_filtered_ids','sync_metadata','sync_filter_count',
                                                 'sync_path_excluded_count','sync_filter_names',
                                                 'sync_directory_stats','sync_effective_roots') if k in saved_config})
-        cached = saved_config.get('sync_mode') == 'cached'
         # Network downloads run outside the publication gate; only the final
         # verified local write needs to exclude concurrent publishers.
         with measure(timings, 'sidecars'):
@@ -1334,13 +1310,6 @@ class Sync:
                 with measure(timings, 'sidecars'):
                     await self.backfill_sidecars(jid, row, config)
                 continue
-            elif cached:
-                # The local file changed after cache preflight. Do not mutate from
-                # an old listing: resume will rebuild a fresh cloud manifest.
-                self.invalidate(self.engine.index.account(config))
-                self.engine.update_job(jid,manifest=0)
-                await self._run(jid, config, timings)
-                return
             else:
                 try:
                     async with timed_gate(self.engine.publication_gate, timings, 'publish_wait'):
@@ -1381,7 +1350,7 @@ class Sync:
         if reviews:
             warnings.append(f'{reviews} 个文件同步未完成，保留旧输出；可重试未完成文件。')
         removed = 0
-        if not warnings and not cached and not config.get('sync_trigger') and config.get('cleanup_missing',True):
+        if not warnings and not config.get('sync_trigger') and config.get('cleanup_missing',True):
             async with timed_gate(self.engine.publication_gate, timings, 'publish_wait'):
                 async with self.engine.cleanup_gate:
                     saved = json.loads(self.engine.job(jid)['config'])
