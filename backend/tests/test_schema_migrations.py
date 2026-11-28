@@ -25,6 +25,7 @@ def fresh_db():
         CREATE TABLE playbacks(id TEXT PRIMARY KEY, file_id TEXT, relative_path TEXT);
         CREATE TABLE share_strms(id TEXT PRIMARY KEY, strm_path TEXT);
         CREATE TABLE organize_items(job_id INTEGER, file_id TEXT, state TEXT);
+        CREATE TABLE organize_jobs(id INTEGER PRIMARY KEY, config TEXT);
     ''')
     return conn
 

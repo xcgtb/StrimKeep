@@ -211,7 +211,7 @@ usePageActivity(()=>{visible=true;connect();void run(()=>load());timer=setInterv
     <p v-for="note in taskPresentation(detail.job).notes" :key="note" class="wrap">{{note}}</p>
     <section v-if="syncMetrics" class="sync-timing">
       <h4>同步耗时</h4>
-      <p>{{syncMetrics.mode==='full'?'全量同步':'增量同步'}}<template v-if="detail.job.sync_trigger==='transfer'"> · 转存后补扫目标目录</template></p>
+      <p>{{syncMetrics.mode==='full'?'全量同步':'增量同步'}}<template v-if="detail.job.sync_trigger==='transfer'"> · 转存后补扫目标目录</template><template v-else-if="detail.job.sync_trigger==='cloud_activity'"> · 115 目录变更</template></p>
       <p v-if="syncMetrics.scan">
         {{syncListings[syncMetrics.scan.listing] || '目录读取'}} · {{syncMetrics.scan.directories}}
         个{{syncMetrics.scan.directories_exact ? '目录' : '涉及目录'}} · {{syncMetrics.scan.files}} 个条目

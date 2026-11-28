@@ -136,6 +136,9 @@ class Organizer:
         self.outputs = Outputs(self)
         self.sync = Sync(self)
         self.tasks = Tasks(self)
+        from .cloud_activity import CloudActivity
+        self.cloud_activity = CloudActivity(self)
+        self.cloud_activity_task = None
         self.notifications = Notifications(store, http)
         self.transfer = Transfer(self)
         self.bot = TelegramBot(self)
@@ -167,6 +170,7 @@ class Organizer:
         self.channels.start()
         self.resources.start()
         self.subscription_task = asyncio.create_task(self.subscriptions.loop())
+        self.cloud_activity_task = asyncio.create_task(self.cloud_activity.loop())
         self.bot.start()
         self.emby.task = asyncio.create_task(self.emby.loop())
         self.emby.media_info.task = asyncio.create_task(self.emby.media_info.loop())
@@ -190,6 +194,9 @@ class Organizer:
         if self.subscription_task:
             self.subscription_task.cancel()
             await asyncio.gather(self.subscription_task, return_exceptions=True)
+        if self.cloud_activity_task:
+            self.cloud_activity_task.cancel()
+            await asyncio.gather(self.cloud_activity_task, return_exceptions=True)
         await self.channels.close()
         await self.resources.close()
         await self.bot.close()

@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import inventory, inventory_fs, share_service
 from .cloud115 import CloudError
 from .media import EPISODE_TAG, IDENTITY, KNOWN_VIDEOS, NeedsReview, episode_range, media_from_filename, normal_title, parse_name, source_of
-from .offline_api import directory_config
+from .offline_api import directory_config, offline_target
 from .resource_discovery import discover_resources
 from .strm_options import share_effective_settings
 from .transfer import shares
@@ -167,7 +167,7 @@ def offline_filename(item):
     return unquote(parts[2]) if len(parts) >= 5 and parts[1].casefold() == 'file' else ''
 
 
-def destination(store, row, kind):
+def destination(store, row, kind, text=''):
     if kind == 'share':
         if row['share_action'] == 'share':
             return ''
@@ -175,7 +175,7 @@ def destination(store, row, kind):
         target = cfg.get('explore_cid') or cfg.get('target_cid')
     else:
         cfg = directory_config(store.get('offline_config', {}) or {})
-        target = cfg.get(kind + '_cid')
+        target, _ = offline_target(cfg, kind, text)
     target = str(target or '')
     return target if re.fullmatch(r'[1-9]\d{0,23}', target) else ''
 
@@ -323,7 +323,8 @@ class MediaSubscriptions:
             for attempt in self.attempts(row):
                 if attempt['episode'] not in needed:
                     continue
-                if not row['auto_switch'] or not attempt['job_source_rejected'] or attempt['job_state'] != 'failed':
+                if (not row['auto_switch'] or not attempt['job_source_rejected']
+                        or attempt['job_state'] not in ('partial', 'failed', 'needs_review')):
                     continue
                 self.store.db.execute(
                     '''INSERT INTO media_subscription_rejected
@@ -463,7 +464,7 @@ class MediaSubscriptions:
                         reason = '片名、年份或片源版本无法确认。' if movie else '作品、季集或单集范围无法确认。'
                         progress['candidates'].append({**item, 'review_reason': reason})
                 continue
-            target = destination(self.store, row, item['link_type'])
+            target = destination(self.store, row, item['link_type'], item['title'])
             checked += 1
             reason = '尚未配置该类型的入库目录。'
             if (item['link_type'] == 'share' and row['share_action'] == 'share') or target:

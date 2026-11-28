@@ -65,6 +65,10 @@ MIGRATIONS = [
         'CREATE INDEX IF NOT EXISTS subscription_rejected_work '
         'ON media_subscription_rejected(media_type,tmdb_id,season,episode)',
     ]),
+    (8, '跨入口入库任务去重', [
+        "CREATE INDEX IF NOT EXISTS organize_jobs_intake ON organize_jobs(json_extract(config,'$.intake_key')) "
+        "WHERE json_valid(config)",
+    ]),
 ]
 
 # 列补丁：表 → [(列名, DDL)]。幂等：先 PRAGMA table_info 再补。

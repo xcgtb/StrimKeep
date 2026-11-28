@@ -129,7 +129,6 @@ class Cloud115:
     APP_VER = '38.0.2'
     # App 通道（android/2.0/ufile/files）与网页接口是两套配额：网页接口被 405 挡住时，
     # 期内直接走 App 通道，不再拿网页接口试错。
-    ANDROID_LIST = 'https://proapi.115.com/android/2.0/ufile/files'
     WEBAPI_PROBE_SECONDS = 600
     # 播放取链的并发上限。115 惩罚的是「无间隔轰炸」，间隔由 PLAY_SPACING 把住；
     # 4 路刚好覆盖播放器开播的并发突发（探测、正片、断线重连、下一集预取）。
@@ -199,6 +198,7 @@ class Cloud115:
         # 于是重启后第一次请求立刻撞上还没结束的封锁窗口）。
         self._runtime_checked = float('-inf')
         self._runtime_account = None
+        self._runtime_revision = None
         self._restore_runtime()
 
     def _account_key(self):
@@ -225,8 +225,12 @@ class Cloud115:
             self.limit_streak = self.success_streak = 0
         self._runtime_account = account
         state = self.store.meta_json('cloud_runtime', {}) or {}
-        if state.get('account', account) != account:
+        if not isinstance(state, dict) or state.get('account', account) != account:
             return
+        revision = account, state.get('at')
+        if not first_read and revision == self._runtime_revision:
+            return
+        self._runtime_revision = revision
         try:
             cooldown = float(state.get('cooldown_until') or 0) - time.time()
             waf = float(state.get('waf_until') or 0) - time.time()
@@ -267,6 +271,7 @@ class Cloud115:
                     state[field] = max(state[field], previous)
             self.store.db.execute('INSERT OR REPLACE INTO meta VALUES(?,?)',
                                   ('cloud_runtime', json.dumps(state)))
+        self._runtime_revision = account, wall
 
     def throttle(self):
         """读 store 里的 cloud_throttle，30 秒缓存一次，别让每个请求都查库。"""
@@ -692,11 +697,10 @@ class Cloud115:
         字段对照：fid=id、fn=name、fs=size、sha1=sha1、pc=pickcode、pid=parent_id，
         fc="0" 表示目录、其余表示文件；count 是子项总数（与网页接口的 count 同义）。
         """
-        client = self.client()
-        result = await self.call(client.request, self.ANDROID_LIST, 'GET',
-                                 {'aid': 1, 'cid': str(cid), 'offset': offset,
-                                  'limit': limit, 'show_dir': 1, 'app_ver': self.APP_VER},
-                                 _scope='list')
+        result = await self.call(self.client().fs_files_app, {
+            'aid': 1, 'cid': str(cid), 'offset': offset, 'limit': limit,
+            'show_dir': 1, 'cur': 1, 'record_open_time': 0, 'app_ver': self.APP_VER,
+        }, _scope='list')
         rows = result.get('data') if isinstance(result, dict) else None
         if not isinstance(rows, list):
             raise CloudError('115 未返回目录条目，稍后重试。', 'SCHEMA_CHANGED')
@@ -724,6 +728,15 @@ class Cloud115:
         return {'items': items, 'total': max(total, offset + len(items)),
                 'offset': offset, 'limit': limit, 'next_offset': offset + len(items),
                 'has_more': has_more, 'path': result.get('path', []), 'raw_count': raw_count}
+
+    async def activity_page(self):
+        """Newest bounded page of account activity, using the normal request budget."""
+        response = await self.call(self.client().life_behavior_detail_app,
+                                   {'offset': 0, 'limit': 200}, _scope='life')
+        page = response.get('data')
+        if not isinstance(page, dict) or not isinstance(page.get('list'), list):
+            raise CloudError('115 未返回操作记录。', 'SCHEMA_CHANGED')
+        return page['list']
 
     FILE_MEMO_SECONDS = 300
 

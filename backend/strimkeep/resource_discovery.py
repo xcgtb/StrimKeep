@@ -1,6 +1,5 @@
 """Read-only resource search across configured sites and Telegram channels."""
 import asyncio
-import base64
 import ipaddress
 import json
 import re
@@ -109,11 +108,8 @@ def resource_items(text, title, source, *, kind=None, published_at=''):
         if link_type not in LABELS or (kind and kind != link_type) or len(url) > 4096:
             continue
         if link_type == 'magnet':
-            match = re.fullmatch(r'magnet:([0-9a-f]{40}|[a-z2-7]{32})', key)
-            if not match:
+            if not re.fullmatch(r'magnet:[0-9a-f]{40}', key):
                 continue
-            if len(match[1]) == 32:
-                key = 'magnet:' + base64.b32decode(match[1].upper()).hex()
         elif link_type == 'ed2k' and not key.startswith('ed2k:'):
             continue
         out.append({

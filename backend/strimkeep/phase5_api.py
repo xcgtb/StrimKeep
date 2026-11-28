@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from .emby_connection import strm_mount_path
 from .emby_proxy import delivery_target
 from .sync import stale_records
+from .cloud_activity import STATE as ACTIVITY_STATE
 from .store import digest
 
 
@@ -69,6 +70,7 @@ class SyncProfileInput(Input):
     metadata_mode: str | None = Field(default=None, pattern='^(inherit|source|technical)$')
     exclude_keywords: SyncPathKeywords | None = None
     after_transfer: bool | None = None
+    watch_changes: bool | None = None
     emby_target: str | None = Field(default=None, pattern=r'^[A-Za-z0-9_-]{1,80}$')
     enabled: bool = False
     frequency: str = Field(default='daily', pattern='^(daily|weekly|interval|cron)$')
@@ -344,7 +346,10 @@ def install_phase5(app,store,admin,job_public):
     async def sync_profiles():
         profiles = store.get('sync_profiles', [])
         states = {row['kind']:dict(row) for row in store.db.execute("SELECT * FROM task_schedules WHERE kind LIKE 'sync_profile:%'")}
-        return {'items':[{**profile, 'next_due':states.get('sync_profile:' + profile['id'], {}).get('next_due')} for profile in profiles]}
+        activity = store.meta_json(ACTIVITY_STATE, {}) or {}
+        return {'items':[{**profile, 'next_due':states.get('sync_profile:' + profile['id'], {}).get('next_due')}
+                         for profile in profiles],
+                'activity_status': activity.get('status', '')}
 
     @app.post('/api/v1/sync/profiles/preview-path', dependencies=[Depends(admin)])
     async def preview_sync_path(body: SyncPathInput):
@@ -410,6 +415,7 @@ def install_phase5(app,store,admin,job_public):
         if len(profiles) >= 30: raise HTTPException(422, '最多创建 30 个同步任务。')
         profile = {'id': secrets.token_hex(8), **body.model_dump(), 'metadata_mode':body.metadata_mode or 'inherit', 'source_cids':roots, 'source_labels':labels, 'source_cid':roots[0], 'source_label':labels[roots[0]]}
         profile['after_transfer'] = bool(body.after_transfer and body.mode == 'incremental')
+        profile['watch_changes'] = bool(body.watch_changes)
         profile['emby_target'] = checked_emby_target(body.emby_target)
         profile['exclude_keywords'] = body.exclude_keywords or []
         store.set_many({'sync_profiles': [*profiles, profile]})
@@ -429,6 +435,7 @@ def install_phase5(app,store,admin,job_public):
         profile = {'id': profile_id, **body.model_dump(), 'metadata_mode':body.metadata_mode or existing.get('metadata_mode') or 'inherit', 'source_cids':roots, 'source_labels':labels, 'source_cid':roots[0], 'source_label':labels[roots[0]]}
         after_transfer = existing.get('after_transfer') if body.after_transfer is None else body.after_transfer
         profile['after_transfer'] = bool(after_transfer and body.mode == 'incremental')
+        profile['watch_changes'] = bool(existing.get('watch_changes') if body.watch_changes is None else body.watch_changes)
         profile['emby_target'] = checked_emby_target(body.emby_target, existing.get('emby_target') or 'main')
         profile['exclude_keywords'] = existing.get('exclude_keywords', []) if body.exclude_keywords is None else body.exclude_keywords
         store.set_many({'sync_profiles': [profile if p['id'] == profile_id else p for p in profiles]})
