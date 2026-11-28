@@ -284,6 +284,55 @@ async function compareItems(list:any[]) {
     return item.status === 'pending' && !comparedOnce.has(key)
   })
   if (!queue.length) return
+  if (queue.length > 1) {
+    const batchTargets = []
+    for (const item of queue) {
+      const key = workKey(item)
+      if (!statusInFlight.has(key)) {
+        comparedOnce.add(key)
+        statusById.value[key] = {loading:true}
+        batchTargets.push(item)
+      }
+    }
+    if (batchTargets.length > 1) {
+      let fallback = false
+      for (let start = 0; start < batchTargets.length; start += 50) {
+        if (generation !== statusGeneration) return
+        const chunk = batchTargets.slice(start, start + 50)
+        try {
+          const resp = await props.api('/inventory/tv/missing/batch', 'POST', {
+            tmdb_ids: chunk.map(item => Number(item.tmdb_id)),
+          })
+          if (generation !== statusGeneration) return
+          for (const item of chunk) {
+            const key = workKey(item)
+            const tid = String(item.tmdb_id)
+            if (resp?.items && resp.items[tid]) {
+              statusById.value[key] = {data: resp.items[tid]}
+            } else if (resp?.errors && resp.errors[tid]) {
+              statusById.value[key] = {error: resp.errors[tid]}
+            } else {
+              statusById.value[key] = {error: '对照结果缺失'}
+            }
+          }
+        } catch (e:any) {
+          if (e?.status === 404 || e?.status === 405) {
+            fallback = true
+            break
+          }
+          if (generation === statusGeneration) {
+            for (const item of chunk) {
+              statusById.value[workKey(item)] = {error: (e as Error).message}
+            }
+          }
+        }
+      }
+      if (!fallback) {
+        if (generation === statusGeneration && statusFilter.value !== 'all') await loadPage()
+        return
+      }
+    }
+  }
   const worker = async () => {
     while (queue.length && generation === statusGeneration) {
       const item = queue.shift(); if (!item) break

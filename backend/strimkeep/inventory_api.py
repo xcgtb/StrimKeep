@@ -38,6 +38,11 @@ class ManualComplete(BaseModel):
     complete: bool
 
 
+class MissingBatchRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    tmdb_ids: list[int] = Field(min_length=1, max_length=100)
+
+
 class InventoryConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
     tie: Literal['cloud', 'share'] = 'cloud'
@@ -751,6 +756,41 @@ def install_inventory(app, store, admin):
         if item is None:
             raise HTTPException(404, '未找到该剧集。')
         return await compare_work(snapshot, item)
+
+    @app.post('/api/v1/inventory/tv/missing/batch', dependencies=[Depends(admin)])
+    async def inventory_missing_batch(body: MissingBatchRequest):
+        """批量对照多部剧集的缺集状态，消除前端翻页时的 N+1 请求风暴。"""
+        unique_ids = []
+        seen_ids = set()
+        for tid in body.tmdb_ids:
+            if tid <= 0:
+                raise HTTPException(422, '剧集编号无效。')
+            if tid not in seen_ids:
+                seen_ids.add(tid)
+                unique_ids.append(tid)
+        try:
+            snapshot = await mapping_snapshot()
+        except (OSError, ValueError):
+            raise HTTPException(409, '库存读取失败，请检查 STRM 根目录。') from None
+        tv_by_id = {x['tmdb_id']: x for x in snapshot['items'] if x['kind'] == 'tv' and x.get('tmdb_id')}
+        sem = asyncio.Semaphore(4)
+        items_out, errors_out = {}, {}
+
+        async def run_one(tid: int):
+            item = tv_by_id.get(tid)
+            if item is None:
+                errors_out[str(tid)] = '未找到该剧集。'
+                return
+            async with sem:
+                try:
+                    items_out[str(tid)] = await compare_work(snapshot, item)
+                except HTTPException as exc:
+                    errors_out[str(tid)] = str(exc.detail)
+                except Exception as exc:
+                    errors_out[str(tid)] = str(exc)[:180] or type(exc).__name__
+
+        await asyncio.gather(*(run_one(tid) for tid in unique_ids))
+        return {'items': items_out, 'errors': errors_out}
 
     async def compare_work(snapshot, item):
         tmdb_id = item['tmdb_id']
