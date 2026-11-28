@@ -2,7 +2,7 @@
 
 Each check answers one question a user actually asks when something stops
 working: is the database alive, is the Worker running, is 115/Emby/TMDB
-configured, is disk filling up, do we have a recent backup, are tasks stuck.
+configured, is disk filling up, are tasks stuck.
 No live external calls: the page stays fast and does not depend on 115/Emby
 being reachable. Actions point at the page that can fix the problem.
 """
@@ -135,27 +135,6 @@ def _backup_signature(path, info):
     return {'name': path.name, 'size': info.st_size, 'mtime_ns': info.st_mtime_ns}
 
 
-def _backup(store):
-    latest = _latest_backup(store)
-    if not latest:
-        return _check('backup', '备份', WARN,
-                      '还没有升级前自动备份', '下次版本升级时会自动生成', 'settings')
-    newest, info = latest
-    age_days = max(0, (time.time() - info.st_mtime) / 86400)
-    detail = '%s · %s · %.0f 天前' % (
-        newest.name, _human_size(info.st_size), age_days)
-    verification = store.meta_json('backup_verification', {}) or {}
-    checked = verification.get('file') == _backup_signature(newest, info)
-    if checked and not verification.get('ok'):
-        return _check('backup', '备份', WARN, '校验失败', verification.get('error') or detail, 'settings')
-    if age_days > 30:
-        return _check('backup', '备份', WARN, '最近备份超过 30 天', detail, 'settings')
-    if checked:
-        return _check('backup', '备份', OK, '已校验可恢复', detail, 'settings')
-    return {**_check('backup', '备份', WARN, '备份文件已存在，等待恢复校验', detail, 'settings'),
-            'can_verify': True}
-
-
 def _tmdb(store):
     if store.get('tmdb_key'):
         return _check('tmdb', 'TMDB', OK, '已配置 API Key', action='settings')
@@ -213,7 +192,6 @@ def collect_health(app, store):
         _commands(store),
         _disk('数据目录', store.root, 'disk_data'),
         _disk('STRM 目录', app.state.strms, 'disk_strm', 'sync'),
-        _backup(store),
         _tmdb(store),
         _emby(app),
         _cloud115(store),
@@ -258,7 +236,5 @@ def install_health(app, store, admin):
                     result.update(ok=False, error=f'恢复校验未完成（{type(exc).__name__}）')
                 store.set_meta('backup_verification', result)
                 return result
-            result = await asyncio.to_thread(check)
-            cache.update(at=0.0, data=None)
-            return result
+            return await asyncio.to_thread(check)
 
