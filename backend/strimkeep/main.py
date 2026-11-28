@@ -42,6 +42,7 @@ from .strm_options import share_effective_settings
 from .phase5_api import install_phase5
 from .metrics import Metrics, install_metrics, is_streaming
 from .db_worker import DbWorker
+from .http_guard import LoginGuard, RequestBodyLimit, WRITE_METHODS
 from .emby_proxy import EmbyProxyManager
 from .emby_proxy_api import install_emby_proxy
 from .library_covers import install_library_covers
@@ -150,7 +151,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
     app.state.strms = strms.resolve()
     app.state.cloud = None
     app.state.probe_gate = asyncio.Semaphore(1)
-    app.state.failed_logins = defaultdict(deque)
+    app.state.login_guard = LoginGuard()
     app.state.play_limits = defaultdict(deque)
     app.state.play_logged = {}
 
@@ -263,22 +264,19 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
 
     app.router.lifespan_context = lifespan
 
+    app.add_middleware(RequestBodyLimit)
+
     @app.middleware('http')
     async def headers_and_origin(request: Request, call_next):
         # 每个请求一个短 id，便于串起一次请求的多条日志。
         request_id = request.headers.get('x-request-id') or secrets.token_hex(4)
         started = time.monotonic()
-        if request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
+        if request.method in WRITE_METHODS:
             origin = request.headers.get('origin')
             allowed = {x.strip().rstrip('/') for x in os.environ.get('ALLOWED_ORIGINS','').split(',') if x.strip()}
             if origin and origin.rstrip('/') not in allowed and urlsplit(origin).netloc.lower() != request.headers.get('host', '').lower():
                 return JSONResponse({'error': {'code': 'ORIGIN_REJECTED', 'message': '请求来源不匹配。'}},
                                     403, headers={'X-Request-Id': request_id})
-            size = request.headers.get('content-length', '')
-            limit = 65536
-            if size.isdigit() and int(size) > limit:
-                return JSONResponse({'error': {'code': 'BODY_TOO_LARGE', 'message': '请求内容过大。'}},
-                                    413, headers={'X-Request-Id': request_id})
         response = await call_next(request)
         elapsed = time.monotonic() - started
         response.headers['X-Request-Id'] = request_id
@@ -305,7 +303,8 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
 
     @app.exception_handler(HTTPException)
     async def http_error(_, exc):
-        return JSONResponse({'error': {'code': f'HTTP_{exc.status_code}', 'message': exc.detail}}, exc.status_code)
+        return JSONResponse({'error': {'code': f'HTTP_{exc.status_code}', 'message': exc.detail}},
+                            exc.status_code, headers=exc.headers)
 
     @app.exception_handler(RequestValidationError)
     async def invalid(_, exc):
@@ -412,25 +411,9 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
 
     @app.post('/api/v1/auth/login')
     async def login(body: Login, request: Request):
-        stamp = time.monotonic()
-        for key, attempts in list(app.state.failed_logins.items()):
-            while attempts and attempts[0] < stamp - 900: attempts.popleft()
-            if not attempts: app.state.failed_logins.pop(key, None)
         peer = request.client.host if request.client else 'unknown'
-        failures = app.state.failed_logins[peer]
-        now = time.monotonic()
-        while failures and failures[0] < now - 900:
-            failures.popleft()
-        # Verify credentials before honouring the failure budget. All visitors of
-        # a tunnelled deployment share one peer address, so a limit checked first
-        # would let a remote stranger lock the administrator out for 15 minutes.
-        # Wrong passwords are still counted and throttled after the check.
-        if not store.authenticate(body.username, body.password):
-            failures.append(now)
-            if len(failures) >= 8:
-                raise HTTPException(429, '登录失败次数过多，请稍后再试。')
+        if not await app.state.login_guard.verify(store.authenticate, peer, body.username, body.password):
             raise HTTPException(401, '账号或密码不正确。')
-        failures.clear()
         token, csrf = store.new_session()
         response = JSONResponse({'username': store.meta('username'), 'csrf': csrf})
         from .store import SESSION_SECONDS

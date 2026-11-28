@@ -10,20 +10,130 @@ from strimkeep.store import Store
 from test_app import FakeCloud
 
 
-def test_failed_attempts_never_block_the_correct_password(tmp_path, monkeypatch):
+def test_failed_attempts_are_throttled_before_authentication(tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    import httpx
+
+    from strimkeep import http_guard
+
+    now = [1000.0]
+    monkeypatch.setattr(http_guard, 'time', SimpleNamespace(monotonic=lambda: now[0]))
     monkeypatch.setenv('ADMIN_USERNAME', 'admin')
     monkeypatch.setenv('ADMIN_PASSWORD', 'test-password-1234')
     app = create_app(tmp_path / 'data', tmp_path / 'strm', FakeCloud)
-    with TestClient(app) as client:
-        codes = [client.post('/api/v1/auth/login',
-                             json={'username': 'admin', 'password': 'wrong-password'}).status_code
-                 for _ in range(8)]
-        assert codes[:7] == [401] * 7 and codes[7] == 429
-        # Every client of a tunnelled deployment shares one peer address, so the
-        # owner must still be able to sign in while the budget is exhausted.
-        ok = client.post('/api/v1/auth/login',
-                         json={'username': 'admin', 'password': 'test-password-1234'})
-        assert ok.status_code == 200 and ok.json()['csrf']
+    store = app.state.store
+    authenticate = store.authenticate
+    calls = []
+
+    def counted(username, password):
+        calls.append(username)
+        return authenticate(username, password)
+
+    monkeypatch.setattr(store, 'authenticate', counted)
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url='http://testserver') as client:
+            for index in range(8):
+                response = await client.post('/api/v1/auth/login',
+                                             json={'username': 'admin', 'password': 'wrong-password'})
+                assert response.status_code == (401 if index < 7 else 429)
+            response = await client.post('/api/v1/auth/login',
+                                         json={'username': 'admin', 'password': 'test-password-1234'})
+            assert response.status_code == 429 and response.headers['retry-after'] == '2'
+            assert len(calls) == 8
+
+            # A shared tunnel address can retry after a short, non-renewing cooldown.
+            now[0] += 2
+            response = await client.post('/api/v1/auth/login',
+                                         json={'username': 'admin', 'password': 'test-password-1234'})
+            assert response.status_code == 200 and response.json()['csrf']
+            assert len(calls) == 9
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        store.close()
+
+
+def test_mutation_body_limit_counts_streamed_bytes(tmp_path, monkeypatch):
+    import asyncio
+
+    import httpx
+
+    from strimkeep.http_guard import MAX_BODY_BYTES
+
+    monkeypatch.setenv('ADMIN_USERNAME', 'admin')
+    monkeypatch.setenv('ADMIN_PASSWORD', 'test-password-1234')
+    app = create_app(tmp_path / 'data', tmp_path / 'strm', FakeCloud)
+    payload = b'{"username":"admin","password":"test-password-1234"}'
+    padding = b' ' * (MAX_BODY_BYTES - len(payload))
+
+    async def body(oversize):
+        yield payload
+        yield padding
+        if oversize:
+            yield b' '
+            raise AssertionError('The oversized request must stop consuming the body')
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url='http://testserver') as client:
+            for path in ('/api/v1/auth/login', '/api/v1/resources/webhook/test'):
+                response = await client.post(path, content=body(True), headers={'content-type': 'application/json'})
+                assert response.status_code == 413
+                assert response.json()['error']['code'] == 'BODY_TOO_LARGE'
+                assert 'x-request-id' in response.headers
+            response = await client.post('/api/v1/auth/login', content=body(False),
+                                         headers={'content-type': 'application/json'})
+            assert response.status_code == 200
+            response = await client.post('/api/v1/auth/login', content=b' ' * (MAX_BODY_BYTES + 1))
+            assert response.status_code == 413
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        app.state.store.close()
+
+
+def test_password_workers_stay_bounded_after_caller_cancellation():
+    import asyncio
+    import threading
+
+    import pytest
+    from fastapi import HTTPException
+
+    from strimkeep.http_guard import LoginGuard
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def authenticate(*_):
+        entered.set()
+        return release.wait(3)
+
+    async def scenario():
+        guard = LoginGuard()
+        guard.MAX_ACTIVE = 1
+        request = asyncio.create_task(guard.verify(authenticate, 'first', 'admin', 'ignored'))
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            request.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await request
+            with pytest.raises(HTTPException) as error:
+                await guard.verify(authenticate, 'second', 'admin', 'ignored')
+            assert error.value.status_code == 429
+        finally:
+            release.set()
+        async with asyncio.timeout(2):
+            while guard.active:
+                await asyncio.sleep(.01)
+        assert await guard.verify(authenticate, 'second', 'admin', 'ignored')
+
+    asyncio.run(scenario())
 
 
 def test_hashed_assets_are_cacheable_while_html_stays_uncached(tmp_path, monkeypatch):

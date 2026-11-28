@@ -6,18 +6,41 @@
 """
 from pathlib import Path
 
-VIDEO_EXT = {'.mkv', '.mp4', '.m4v', '.mov', '.avi', '.ts', '.m2ts', '.webm',
-             '.wmv', '.flv', '.rmvb', '.iso', '.strm'}
-SIDECAR_EXT = {'.nfo', '.json', '.xml', '.bif', '.jpg', '.jpeg', '.png', '.webp',
-               '.srt', '.ass', '.ssa', '.vtt', '.sub', '.idx', '.sup'}
+from .media import KNOWN_VIDEOS, SUBTITLES, SUBTITLE_TAG
+
+VIDEO_EXT = KNOWN_VIDEOS | {'.strm'}
+ARTWORK_EXT = {'.jpg', '.jpeg', '.png', '.webp'}
+ARTWORK_NAMES = {'poster', 'fanart', 'thumb', 'backdrop', 'landscape', 'banner',
+                 'clearlogo', 'logo', 'disc', 'discart', 'clearart'}
+SIDECAR_EXT = ARTWORK_EXT | SUBTITLES | {'.nfo', '.json', '.xml', '.bif'}
 LIBRARY_NAMES = ('影视媒体库', '分享影视库')
+
+
+def _sidecar_stems(path):
+    """Filename stems that can own the sidecar under supported naming rules."""
+    stem = path.stem
+    extension = path.suffix.lower()
+    yield stem
+    if extension in SUBTITLES:
+        while '.' in stem:
+            base, _, tag = stem.rpartition('.')
+            if not SUBTITLE_TAG.fullmatch(tag):
+                break
+            yield base
+            stem = base
+    elif extension in ARTWORK_EXT:
+        base, _, role = stem.rpartition('-')
+        if role.lower() in ARTWORK_NAMES:
+            yield base
+    elif extension == '.json' and stem.endswith('-media-info'):
+        yield stem.removesuffix('-media-info')
 
 
 def purge_strm(path, root, *, resume_missing=False):
     """删除一个 STRM，并清理它自己的附属文件；目录无视频时再清整目录侧车并删空目录。
 
     范围控制（单集/单季/整剧不误伤）：
-    - 先删本条目同名的 <stem>.*（nfo/srt/ass…）与 <stem>-*.json（-media-info.json）；
+    - 同名文件、已知字幕标记、图片标记和媒体信息可归属到单个视频；有歧义就保留。
     - 只有当目录里再无任何视频时，才清目录级侧车（tvshow.nfo / poster.jpg 等）并向上删空目录。
     返回 {'file': 0/1, 'sidecars': n, 'dirs': n}。任何一步失败都不抛出。
     """
@@ -34,39 +57,23 @@ def purge_strm(path, root, *, resume_missing=False):
             return out
 
     parent = path.parent
-    stem = path.stem
-
-    def _is_sidecar(name):
-        return Path(name).suffix.lower() in SIDECAR_EXT
-
-    # 1) 本条目专属侧车：同名 <stem>.*（nfo / srt / ass…）与 <stem>-*.json（-media-info.json）
-    try:
-        for e in list(parent.iterdir()):
-            if not e.is_file() or e.name == path.name:
-                continue
-            if (e.name.startswith(stem + '.') or e.name.startswith(stem + '-')) and _is_sidecar(e.name):
-                try:
-                    e.unlink()
-                    out['sidecars'] += 1
-                except OSError:
-                    pass
-    except OSError:
-        return out
-
-    # 2) 目录已无任何视频：整目录侧车（tvshow.nfo / poster / fanart…）一起清
     try:
         entries = list(parent.iterdir())
-        # Never infer a directory is media-free from its immediate files if it
-        # has subdirectories or links: another season or version may be below.
-        still_video = any(e.is_symlink() or e.is_dir() or (e.is_file() and e.suffix.lower() in VIDEO_EXT) for e in entries)
-        if not still_video:
-            for e in entries:
-                if e.is_file() and _is_sidecar(e.name):
-                    try:
-                        e.unlink()
-                        out['sidecars'] += 1
-                    except OSError:
-                        pass
+        videos = {entry.stem.casefold() for entry in entries if entry.suffix.lower() in VIDEO_EXT}
+        # Subdirectories and links can contain another season or version.
+        directory_has_media = bool(videos) or any(entry.is_symlink() or entry.is_dir() for entry in entries)
+        for entry in entries:
+            if entry.suffix.lower() not in SIDECAR_EXT or entry.is_symlink() or not entry.is_file():
+                continue
+            if directory_has_media:
+                owners = tuple(_sidecar_stems(entry))
+                if path.stem not in owners or any(owner.casefold() in videos for owner in owners):
+                    continue
+            try:
+                entry.unlink()
+                out['sidecars'] += 1
+            except OSError:
+                pass
     except OSError:
         return out
 

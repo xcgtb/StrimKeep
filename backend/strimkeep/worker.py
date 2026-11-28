@@ -9,6 +9,7 @@ import logging
 import json
 import os
 import signal
+import sqlite3
 import time
 from pathlib import Path
 
@@ -66,12 +67,34 @@ def inventory_app(store, engine, strm_root, http):
     return private
 
 
+async def _command_queue_io(stop, operation, *args):
+    delay = 0.25
+    last_log = None
+    while True:
+        try:
+            return await asyncio.to_thread(operation, *args)
+        except sqlite3.OperationalError:
+            now = time.monotonic()
+            if last_log is None or now - last_log >= 60:
+                logging.getLogger(__name__).warning(
+                    'Command queue %s could not reach SQLite; retrying', operation.__name__, exc_info=True)
+                last_log = now
+            try:
+                await asyncio.wait_for(stop.wait(), delay)
+                return None
+            except TimeoutError:
+                delay = min(5, delay * 2)
+
+
 async def command_loop(store, engine, stop, kinds=commands.KINDS, inventory=None):
     """Consume Web-submitted commands one at a time."""
     while not stop.is_set():
-        row = await asyncio.to_thread(commands.claim, store, kinds)
+        row = await _command_queue_io(stop, commands.claim, store, kinds)
         if row is None:
-            await asyncio.sleep(1)
+            try:
+                await asyncio.wait_for(stop.wait(), 1)
+            except TimeoutError:
+                pass
             continue
         try:
             payload = json.loads(row['payload'] or '{}')
@@ -105,10 +128,11 @@ async def command_loop(store, engine, stop, kinds=commands.KINDS, inventory=None
                                        for name, count in rows]}
             else:
                 raise RuntimeError('未知的后台命令：%s' % row['kind'])
-            await asyncio.to_thread(commands.finish, store, row['id'], result)
+            # Retry the database write alone. The operation may already have changed remote files.
+            await _command_queue_io(stop, commands.finish, store, row['id'], result)
         except Exception as exc:
-            await asyncio.to_thread(commands.finish, store, row['id'], None,
-                                    str(getattr(exc, 'detail', None) or exc)[:300] or type(exc).__name__)
+            error = str(getattr(exc, 'detail', None) or exc)[:300] or type(exc).__name__
+            await _command_queue_io(stop, commands.finish, store, row['id'], None, error)
 
 
 async def heartbeat_loop(store, engine, background, stop, *, interval=5):

@@ -795,8 +795,6 @@ def install_resources(app, store, admin):
         if not valid:
             raise HTTPException(404, 'Not Found')
         raw = await request.body()
-        if len(raw) > 1_000_000:
-            raise HTTPException(413, 'Payload too large')
         try:
             payload = json.loads(raw.decode('utf-8')) if raw else {}
         except (UnicodeDecodeError, ValueError):

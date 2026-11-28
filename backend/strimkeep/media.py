@@ -846,7 +846,7 @@ def episode_key(name):
     return title, marker['season'] or 1, marker['first'], marker['last']
 
 
-_SUBTITLE_TAG = re.compile(r'(?i)^(?:zh|zho|chi|cn|chs|cht|zh-hans|zh-hant|zh-cn|zh-tw|zh-hk|eng|en|jpn|ja|jap|kor|ko|kr|fre|fra|fr|ger|deu|de|spa|es|rus|ru|ita|it|por|pt|ara|ar|简体|繁体|简中|繁中|中字|双语|中英|简英|繁英|中文|英文|日文|日语|韩文|韩语|简|繁|简体中文|繁体中文|forced|force|foreign|sdh|cc|hi|default|signs|songs|commentary|特效|强制|听障)$')
+SUBTITLE_TAG = re.compile(r'(?i)^(?:zh|zho|chi|cn|chs|cht|zh-hans|zh-hant|zh-cn|zh-tw|zh-hk|eng|en|jpn|ja|jap|kor|ko|kr|fre|fra|fr|ger|deu|de|spa|es|rus|ru|ita|it|por|pt|ara|ar|简体|繁体|简中|繁中|中字|双语|中英|简英|繁英|中文|英文|日文|日语|韩文|韩语|简|繁|简体中文|繁体中文|forced|force|foreign|sdh|cc|hi|default|signs|songs|commentary|特效|强制|听障)$')
 
 
 def subtitle_suffix(video_name, subtitle_name):
@@ -863,7 +863,7 @@ def subtitle_suffix(video_name, subtitle_name):
     stem = Path(subtitle_name).stem
     parts = stem.split('.')
     tags = []
-    while len(parts) > 1 and _SUBTITLE_TAG.fullmatch(parts[-1]):
+    while len(parts) > 1 and SUBTITLE_TAG.fullmatch(parts[-1]):
         tags.insert(0, parts.pop())
     return ('.' + '.'.join(tags) if tags else '') + extension
 

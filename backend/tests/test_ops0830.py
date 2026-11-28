@@ -223,6 +223,28 @@ def test_purge_strm_scopes_sidecars_to_a_single_episode(tmp_path):
     assert season.is_dir()
 
 
+def test_purge_strm_preserves_sidecars_of_versions_with_similar_names(tmp_path):
+    root = tmp_path / 'strm'
+    folder = root / NEW / '电影' / '片名 (2025)'
+    folder.mkdir(parents=True)
+    stem = '片名 (2025)'
+    removed = [stem + suffix for suffix in (
+        '.strm', '.nfo', '.jpg', '-fanart.jpg', '-media-info.json', '.zh-hans.forced.ass',
+    )]
+    kept = [stem + version + suffix
+            for version in ('-1080p', '.2160p')
+            for suffix in ('.strm', '.nfo', '.jpg', '-media-info.json', '.eng.srt')]
+    # Both a language-tagged subtitle and a different video's exact subtitle.
+    kept += [stem + '.en.strm', stem + '.en.srt', 'poster.jpg']
+    for name in removed + kept:
+        (folder / name).write_text('file', encoding='utf-8')
+
+    result = purge_strm(folder / removed[0], root)
+
+    assert result == {'file': 1, 'sidecars': 5, 'dirs': 0}
+    assert {entry.name for entry in folder.iterdir()} == set(kept)
+
+
 def test_purge_strm_clears_directory_sidecars_on_last_episode(tmp_path):
     """删掉目录里最后一集后，目录级侧车与空目录一起清。"""
     root = tmp_path / 'strm'

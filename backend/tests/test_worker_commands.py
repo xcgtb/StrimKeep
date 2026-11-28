@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sqlite3
 
 from strimkeep import commands, worker
 from strimkeep.store import Store
@@ -74,6 +75,35 @@ def test_worker_runs_rebuild_and_rollback(tmp_path, monkeypatch):
     assert row['state'] == 'done'
     assert json.loads(row['result'])['backup_id'] == 5
     assert engine.rebuild.calls[-1] == ('rollback', 5)
+
+
+def test_worker_retries_queue_errors_without_repeating_the_operation(tmp_path, monkeypatch):
+    claim = commands.claim
+    finish = commands.finish
+    attempts = {'claim': 0, 'finish': 0}
+
+    def claim_once_busy(*args):
+        attempts['claim'] += 1
+        if attempts['claim'] == 1:
+            raise sqlite3.OperationalError('database is locked')
+        return claim(*args)
+
+    def finish_once_busy(*args):
+        attempts['finish'] += 1
+        if attempts['finish'] == 1:
+            raise sqlite3.OperationalError('database is locked')
+        return finish(*args)
+
+    monkeypatch.setattr(commands, 'claim', claim_once_busy)
+    monkeypatch.setattr(commands, 'finish', finish_once_busy)
+    engine = FakeEngine()
+
+    row = execute(tmp_path, 'strm_rebuild', {'dry_run': True}, engine, monkeypatch)
+
+    assert row['state'] == 'done'
+    assert json.loads(row['result'])['dry_run'] is True
+    assert attempts['claim'] >= 2 and attempts['finish'] == 2
+    assert engine.rebuild.calls == [('run', True)]
 
 
 def test_worker_records_command_failure(tmp_path, monkeypatch):
