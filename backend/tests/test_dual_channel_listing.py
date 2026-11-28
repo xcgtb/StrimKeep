@@ -18,7 +18,7 @@ def build(web_blocked=True, rows=(DIR_ROW, FILE_ROW), count=2):
     cloud = Cloud115.__new__(Cloud115)
     cloud.webapi_until = 0.0
     cloud.clock = lambda: 0.0
-    api = SimpleNamespace(fs_files=lambda *a, **k: None, request=lambda *a, **k: None)
+    api = SimpleNamespace(fs_files=lambda *a, **k: None, fs_files_app=lambda *a, **k: None)
     cloud.client = lambda: api
     calls = []
 
@@ -30,6 +30,9 @@ def build(web_blocked=True, rows=(DIR_ROW, FILE_ROW), count=2):
                 cloud.webapi_until = cloud.clock() + 600
                 raise CloudError('115 网页接口被限流（HTTP 405）', 'WEBAPI_BLOCKED', 503)
             return {'data': [], 'count': 0, 'path': []}
+        assert fn is api.fs_files_app
+        assert args[0]['record_open_time'] == 0
+        assert args[0]['cur'] == 1
         calls.append('android')
         return {'data': list(rows), 'count': count, 'path': [{'cid': '0', 'name': ''}]}
 
