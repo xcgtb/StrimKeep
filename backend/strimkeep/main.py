@@ -477,6 +477,8 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
             if not all(re.search(r'(?:^|;\s*)' + k + r'=[^;\s]+', cookie) for k in ('UID', 'CID', 'SEID')) or '\n' in cookie or '\r' in cookie:
                 raise HTTPException(422, 'Cookie 需包含 UID、CID、SEID，且不能包含换行。')
         store.set_many(values)
+        if 'cookie' in values:
+            store.set_meta('cloud_verified_at', 0)
         if 'cloud_throttle' in values:
             app.state.cloud._throttle_cache = None
         if ('emby_url' in values or 'emby_key' in values) and getattr(app.state, 'emby_proxy', None):
@@ -496,6 +498,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
             store.event('115', '115 登录检查未通过：' + str(exc)[:120])
             return {'connected': False, 'message': str(exc)}
         app.state.organizer.login_ready()
+        store.set_meta('cloud_verified_at', time.time())
         store.event('115', '115 登录状态检查通过。')
         return {**result, 'connected': True}
 
@@ -519,6 +522,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         result = await app.state.cloud.qr_poll(key)
         if result.get('status') == 'connected':
             app.state.organizer.login_ready()
+            store.set_meta('cloud_verified_at', time.time())
         return result
 
     def checked_config(body: OrganizeConfig):

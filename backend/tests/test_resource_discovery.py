@@ -130,7 +130,62 @@ def test_retired_search_sources_are_removed_without_losing_active_sources(tmp_pa
         assert app.state.store.get('resource_search_sources') == {'sites': [site], 'telegram_channels': channels}
         config = client.get(settings)
         assert config.status_code == 200
-        assert config.json()['sites'] == [site]
+        public_site = config.json()['sites'][0]
+        assert {key: value for key, value in public_site.items()
+                if key not in ('api_key', 'api_key_configured')} == site
+        assert public_site['api_key'] == '' and public_site['api_key_configured'] is False
         assert config.json()['telegram_channels'] == channels
         assert client.put(settings, json={'sites': [retired]}).status_code == 422
         assert client.post('/api/v1/explore/re0/authorize', json={}).status_code in (404, 405)
+
+
+def test_prowlarr_provider_keeps_key_and_accepts_only_magnets(tmp_path, monkeypatch):
+    monkeypatch.setenv('ADMIN_USERNAME', 'admin')
+    monkeypatch.setenv('ADMIN_PASSWORD', 'test-password-1234')
+    app = create_app(tmp_path / 'data', tmp_path / 'strm', FakeCloud)
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        assert request.url.path == '/api/v1/search'
+        assert request.headers['x-api-key'] == 'prowlarr-secret'
+        assert request.url.params['query'] == '示例片名 2026'
+        return httpx.Response(200, json=[
+            {'title': '示例片名.2026.1080p', 'magnetUrl': 'magnet:?xt=urn:btih:' + 'c' * 40},
+            {'title': '只有种子', 'downloadUrl': 'https://indexer.example/file.torrent'},
+            {'title': '直链视频', 'downloadUrl': 'https://cdn.example/movie.mkv'},
+        ])
+
+    settings = '/api/v1/explore/resource-config'
+    with TestClient(app) as client:
+        login = client.post('/api/v1/auth/login', json={'username': 'admin', 'password': 'test-password-1234'})
+        client.headers['X-CSRF-Token'] = login.json()['csrf']
+        site = {'kind': 'prowlarr', 'name': 'Prowlarr', 'base_url': 'https://prowlarr.example',
+                'api_key': 'prowlarr-secret', 'enabled': True}
+        response = client.put(settings, json={'sites': [site], 'telegram_channels': []})
+        assert response.status_code == 200
+        public_site = response.json()['sites'][0]
+        assert public_site['api_key'] == '' and public_site['api_key_configured'] is True
+        assert app.state.store.get('resource_search_sources')['sites'][0]['api_key'] == 'prowlarr-secret'
+        # Saving the masked form must not erase the encrypted key.
+        assert client.put(settings, json={'sites': [{**site, 'api_key': ''}], 'telegram_channels': []}).status_code == 200
+        assert app.state.store.get('resource_search_sources')['sites'][0]['api_key'] == 'prowlarr-secret'
+        original_http = app.state.http
+        mock_http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        app.state.http = mock_http
+        try:
+            result = client.post('/api/v1/explore/resources', json={
+                'title': '示例片名', 'tmdb_id': 42, 'media_type': 'movie', 'year': '2026'})
+            assert result.status_code == 200
+            payload = result.json()
+            assert [item['link_type'] for item in payload['items']] == ['magnet']
+            assert payload['items'][0]['source_names'] == ['Prowlarr']
+            assert len(seen) == 1
+        finally:
+            app.state.http = original_http
+            client.portal.call(mock_http.aclose)
+        assert client.put(settings, json={'sites': [{**site, 'api_key': ''}],
+                                          'telegram_channels': []}).status_code == 200
+        assert client.put(settings, json={'sites': [{**site, 'api_key': 'new-secret'}],
+                                          'telegram_channels': []}).status_code == 200
+        assert app.state.store.get('resource_search_sources')['sites'][0]['api_key'] == 'new-secret'

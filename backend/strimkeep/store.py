@@ -250,7 +250,8 @@ class Store:
           title TEXT NOT NULL DEFAULT '',text TEXT NOT NULL,target_cid TEXT NOT NULL DEFAULT '',
           auto_organize INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'pending',
           message TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,
-          job_ids TEXT NOT NULL DEFAULT '[]',created REAL NOT NULL,updated REAL NOT NULL);
+          job_ids TEXT NOT NULL DEFAULT '[]',lease_until REAL NOT NULL DEFAULT 0,
+          created REAL NOT NULL,updated REAL NOT NULL);
         CREATE INDEX IF NOT EXISTS resource_inbox_status ON resource_inbox(status,id);
         CREATE INDEX IF NOT EXISTS resource_inbox_source ON resource_inbox(source,id);
         CREATE TABLE IF NOT EXISTS media_subscriptions(

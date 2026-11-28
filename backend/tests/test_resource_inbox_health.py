@@ -1,5 +1,7 @@
+import time
 from types import SimpleNamespace
 
+from strimkeep.health_api import _cloud115
 from strimkeep.resource_inbox import ResourceInbox
 from strimkeep.store import Store
 
@@ -30,5 +32,21 @@ def test_feed_backoff_and_inbox_prune(tmp_path):
         pruned = inbox.prune(keep_days=1, keep_rows=1)
         assert pruned['by_age'] == 3
         assert store.db.execute("SELECT count(*) FROM resource_inbox WHERE status='skipped'").fetchone()[0] == 0
+    finally:
+        store.close()
+
+
+def test_cloud_health_requires_recent_verification(tmp_path):
+    store = Store(tmp_path / 'data', 'admin', 'test-password-1234')
+    try:
+        store.set_many({'cookie': 'UID=1_A1; CID=fake; SEID=fake'})
+        pending = _cloud115(store)
+        assert pending['status'] == 'warn' and '尚未验证' in pending['message']
+        store.set_meta('cloud_verified_at', time.time())
+        verified = _cloud115(store)
+        assert verified['status'] == 'ok' and '最近验证' in verified['detail']
+        store.set_meta('cloud_verified_at', time.time() - 2 * 86400)
+        stale = _cloud115(store)
+        assert stale['status'] == 'warn' and '尚未验证' in stale['message']
     finally:
         store.close()

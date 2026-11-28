@@ -328,6 +328,26 @@ def test_subscription_http_routes_save_options_without_running_worker(tmp_path, 
         rows = {row['media_type']: row for row in client.get(URL).json()['items']}
         assert rows['movie']['season'] == 0 and not rows['movie']['backfill']
         assert rows['tv']['season'] == 1 and rows['tv']['backfill']
+        with app.state.store.db:
+            app.state.store.db.execute(
+                """INSERT INTO resource_inbox(dedupe_key,source,text,status,created,updated)
+                   VALUES('share:retry','subscription','https://115.com/s/retry','needs_review',?,?)""",
+                (1, 1))
+            inbox_id = app.state.store.db.execute(
+                "SELECT id FROM resource_inbox WHERE dedupe_key='share:retry'").fetchone()['id']
+            app.state.store.db.execute(
+                """INSERT INTO media_subscription_attempts
+                   (media_type,tmdb_id,season,episode,link_key,kind,inbox_id,created)
+                   VALUES('tv',78,1,1,'share:retry','share',?,?)""", (inbox_id, 1))
+            app.state.store.db.execute(
+                "UPDATE media_subscriptions SET state='review' WHERE media_type='tv' AND tmdb_id=78 AND season=1")
+        assert client.post(URL + '/78/1/retry').status_code == 200
+        retried = client.get(URL).json()['items']
+        tv = next(row for row in retried if row['media_type'] == 'tv')
+        assert tv['state'] == 'pending' and tv['attempts'] == []
+        assert app.state.store.db.execute(
+            "SELECT status FROM resource_inbox WHERE id=?", (inbox_id,)).fetchone()['status'] == 'pending'
+        assert client.post(URL + '/movie/999/retry').status_code == 404
         assert client.delete(URL + '/78/1').status_code == 200
         assert len(client.get(URL).json()['items']) == 1
         assert client.delete(URL + '/movie/78').status_code == 200

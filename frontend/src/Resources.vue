@@ -15,12 +15,13 @@ const webhookToken=ref('')
 const text=ref(''),title=ref(''),auto=ref(false)
 const target=ref({cid:'',label:''}),picker=ref<''|'manual'|'config'|'feed'>('')
 const inbox=ref<any[]>([]),counts=ref<Record<string,number>>({}),status=ref('all'),source=ref('')
+const hasMore=ref(false),loadingMore=ref(false)
 const feeds=ref<any[]>([]),channels=ref<any[]>([]),editing=ref(0)
 const blankFeed=()=>({name:'',url:'',enabled:true,interval:300,target_cid:'',include:'',exclude:'',auto_organize:false})
 const feed=ref<any>(blankFeed())
 const rssXml=ref(''),importing=ref(false)
 const busy=ref(false),loading=ref(false),error=ref('')
-const STATUS:Record<string,string>={pending:'待处理',queued:'已入队',duplicate:'重复',needs_review:'待核查',failed:'失败',skipped:'已跳过'}
+const STATUS:Record<string,string>={pending:'待处理',processing:'处理中',queued:'已入队',duplicate:'重复',needs_review:'待核查',failed:'失败',skipped:'已跳过'}
 const SOURCE:Record<string,string>={manual:'手动',rss:'RSS',webhook:'Webhook',telegram:'Telegram',subscription:'追更订阅'}
 const statusType=(s:string):'success'|'danger'|'warning'|'info'=>s==='queued'?'success':s==='failed'?'danger':s==='needs_review'?'warning':'info'
 const webhookUrl=computed(()=>webhookToken.value?`${location.origin}/api/v1/resources/webhook/${webhookToken.value}`:'')
@@ -28,7 +29,21 @@ const feedHealth=computed(()=>feeds.value.reduce((acc:any,row:any)=>{if(row.erro
 function fmtTime(ts:number){return ts?new Date(ts*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'—'}
 
 async function loadConfig(){try{const r=await props.api('/resources/config');config.value=r.config||config.value;webhookToken.value=r.webhook_token||''}catch(e){error.value=(e as Error).message}}
-async function loadInbox(){try{const params=new URLSearchParams({status:status.value,limit:'100'});if(source.value)params.set('source',source.value);const r=await props.api('/resources/inbox?'+params.toString());inbox.value=r.items||[];counts.value=r.counts||{}}catch(e){error.value=(e as Error).message}}
+async function loadInbox(reset=true){
+  if(!reset&&(loadingMore.value||!hasMore.value))return
+  if(!reset)loadingMore.value=true
+  try{
+    const params=new URLSearchParams({status:status.value,limit:'100'})
+    if(source.value)params.set('source',source.value)
+    if(!reset&&inbox.value.length)params.set('before',String(inbox.value[inbox.value.length-1].id))
+    const r=await props.api('/resources/inbox?'+params.toString())
+    const items=r.items||[]
+    inbox.value=reset?items:[...inbox.value,...items]
+    counts.value=r.counts||{}
+    hasMore.value=items.length>=100
+  }catch(e){error.value=(e as Error).message}
+  finally{if(!reset)loadingMore.value=false}
+}
 async function loadFeeds(){try{feeds.value=(await props.api('/resources/feeds')).items||[]}catch(e){error.value=(e as Error).message}}
 async function loadSources(){try{const r=await props.api('/resources/sources');channels.value=r.channels||[];if(r.feeds)feeds.value=r.feeds}catch(e){error.value=(e as Error).message}}
 async function load(){loading.value=true;error.value='';try{await Promise.all([loadConfig(),loadInbox(),loadFeeds(),loadSources()])}finally{loading.value=false}}
@@ -53,7 +68,12 @@ async function submit(){
   }catch(e){error.value=(e as Error).message}finally{busy.value=false}
 }
 async function saveConfig(){busy.value=true;try{const r=await props.api('/resources/config','PUT',config.value);config.value=r.config||config.value;webhookToken.value=r.webhook_token||'';ElMessage.success('默认设置已保存')}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
-async function rotate(){busy.value=true;try{webhookToken.value=(await props.api('/resources/webhook-token','POST')).token||'';ElMessage.success('Webhook 令牌已更新')}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
+async function rotate(){
+  if(webhookToken.value){
+    try{await ElMessageBox.confirm('旧令牌仍会保留 24 小时，方便外部发送方完成当前批次。确定重新生成？','重新生成 Webhook 令牌',{type:'warning',confirmButtonText:'重新生成',cancelButtonText:'取消'})}catch{return}
+  }
+  busy.value=true;try{webhookToken.value=(await props.api('/resources/webhook-token','POST')).token||'';ElMessage.success('Webhook 令牌已更新')}catch(e){error.value=(e as Error).message}finally{busy.value=false}
+}
 async function copyWebhook(){try{await copyText(webhookUrl.value,navigator.clipboard,document);ElMessage.success('Webhook 地址已复制')}catch(e){ElMessage.error((e as Error).message)}}
 async function retry(row:any){busy.value=true;try{await props.api(`/resources/inbox/${row.id}/retry`,'POST');await loadInbox()}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
 async function skip(row:any){busy.value=true;try{await props.api(`/resources/inbox/${row.id}/skip`,'POST');await loadInbox()}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
@@ -87,9 +107,10 @@ async function removeFeed(row:any){try{await ElMessageBox.confirm(`删除 RSS �
   <div v-else class="resource-rows">
    <article v-for="row in inbox" :key="row.id" class="resource-row">
     <div class="resource-row-main"><div class="resource-row-title"><el-tag size="small" :type="statusType(row.status)">{{STATUS[row.status]||row.status}}</el-tag><strong>{{row.title||('资源 #'+row.id)}}</strong><span class="muted">{{SOURCE[row.source]||row.source}}</span></div><p class="resource-text">{{row.text}}</p><p class="hint">{{row.message||'等待 Worker 处理'}}<span v-if="row.job_ids?.length"> · 任务 {{row.job_ids.join(', ')}}</span></p></div>
-    <div class="resource-row-actions"><el-button size="small" :disabled="busy||row.status==='queued'" @click="retry(row)">重试</el-button><el-button size="small" :disabled="busy||row.status==='queued'" @click="skip(row)">跳过</el-button><el-button size="small" text type="danger" :disabled="busy" @click="remove(row)">删除</el-button></div>
+    <div class="resource-row-actions"><el-button size="small" :disabled="busy||['queued','processing'].includes(row.status)" @click="retry(row)">重试</el-button><el-button size="small" :disabled="busy||['queued','processing'].includes(row.status)" @click="skip(row)">跳过</el-button><el-button size="small" text type="danger" :disabled="busy||['queued','processing'].includes(row.status)" @click="remove(row)">删除</el-button></div>
    </article>
   </div>
+  <div v-if="hasMore" class="button-row load-more-row"><el-button :loading="loadingMore" @click="loadInbox(false)">加载更多</el-button></div>
  </section>
 </el-tab-pane>
 

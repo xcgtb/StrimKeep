@@ -1,6 +1,9 @@
+import time
 from types import SimpleNamespace
 
-from strimkeep.resource_inbox import ResourceInbox, candidates, feed_items
+import pytest
+
+from strimkeep.resource_inbox import ResourceInbox, _validate_url, candidates, feed_items
 from strimkeep.store import Store
 
 
@@ -81,5 +84,55 @@ def test_worker_hands_links_to_existing_pipelines(tmp_path):
             'SELECT status FROM resource_inbox ORDER BY id')] == ['queued', 'queued']
         assert calls[0][0] == 'transfer' and calls[0][2] == '123'
         assert calls[1][0] == 'offline' and calls[1][2] == '123'
+    finally:
+        store.close()
+
+
+def test_rss_url_validation_blocks_local_and_metadata_targets():
+    for value in ('http://localhost/rss', 'http://127.0.0.1/rss', 'http://[::1]/rss',
+                  'http://169.254.169.254/latest/meta-data', 'http://metadata.google.internal/'):
+        with pytest.raises(ValueError):
+            _validate_url(value)
+    assert _validate_url('https://example.com/feed.xml') == 'https://example.com/feed.xml'
+
+
+def test_expired_processing_lease_is_reclaimed(tmp_path):
+    import asyncio
+
+    store = Store(tmp_path / 'data', 'admin', 'test-password-1234')
+
+    class Offline:
+        async def submit(self, urls, target, label, organize, origin):
+            return 9
+
+    engine = SimpleNamespace(store=store, http=None, transfer=None, offline=Offline(), closing=False)
+    inbox = ResourceInbox(engine)
+    try:
+        inbox.add_many('magnet:?xt=urn:btih:ABCDEF123456', 'manual', '', 'Movie', '123', False)
+        with store.db:
+            store.db.execute("UPDATE resource_inbox SET status='processing',lease_until=?",
+                             (time.time() - 1,))
+        asyncio.run(inbox.process_pending())
+        row = store.db.execute('SELECT status FROM resource_inbox').fetchone()
+        assert row['status'] == 'queued'
+    finally:
+        store.close()
+
+
+def test_prune_keeps_rows_referenced_by_subscription_attempts(tmp_path):
+    store = Store(tmp_path / 'data', 'admin', 'test-password-1234')
+    inbox = ResourceInbox(SimpleNamespace(store=store, http=None))
+    try:
+        result = inbox.add_many('magnet:?xt=urn:btih:ABCDEF123456', 'manual', '', 'Movie', '123', False)
+        row_id = result['items'][0]
+        with store.db:
+            store.db.execute("UPDATE resource_inbox SET status='failed',updated=0 WHERE id=?", (row_id,))
+            store.db.execute(
+                """INSERT INTO media_subscription_attempts
+                   (media_type,tmdb_id,season,episode,link_key,kind,inbox_id,created)
+                   VALUES('movie',78,0,0,'magnet:abcdef123456','magnet',?,?)""",
+                (row_id, time.time()))
+        inbox.prune(keep_days=1, keep_rows=1)
+        assert store.db.execute('SELECT 1 FROM resource_inbox WHERE id=?', (row_id,)).fetchone()
     finally:
         store.close()

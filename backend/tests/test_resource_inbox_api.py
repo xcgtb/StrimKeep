@@ -55,3 +55,22 @@ def test_webhook_enters_the_inbox(tmp_path, monkeypatch):
             'target_cid': '123'})
         assert imported.status_code == 200, imported.text
         assert imported.json()['accepted'] == 1
+
+        row_id = inbox['items'][0]['id']
+        with app.state.store.db:
+            app.state.store.db.execute("UPDATE resource_inbox SET status='queued' WHERE id=?", (row_id,))
+        assert client.post(f'/api/v1/resources/inbox/{row_id}/skip').status_code == 409
+        assert client.delete(f'/api/v1/resources/inbox/{row_id}').status_code == 409
+        with app.state.store.db:
+            app.state.store.db.execute("UPDATE resource_inbox SET status='processing' WHERE id=?", (row_id,))
+        assert client.post(f'/api/v1/resources/inbox/{row_id}/retry').status_code == 409
+        with app.state.store.db:
+            app.state.store.db.execute("UPDATE resource_inbox SET status='pending' WHERE id=?", (row_id,))
+
+        old_token = token
+        token = client.post('/api/v1/resources/webhook-token').json()['token']
+        assert token != old_token
+        assert client.post('/api/v1/resources/webhook/' + old_token, json=payload).status_code == 200
+        app.state.store.set_meta('resource_webhook_previous_until', 0)
+        assert client.post('/api/v1/resources/webhook/' + old_token, json=payload).status_code == 404
+        assert client.post('/api/v1/resources/webhook/' + token, json=payload).status_code == 200

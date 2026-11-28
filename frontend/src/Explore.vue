@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import PageHeader from './PageHeader.vue'
-import {computed, nextTick, onMounted, onUnmounted, ref, watch} from 'vue'
+import {computed, nextTick, onActivated, onMounted, onUnmounted, ref, watch} from 'vue'
 import {ArrowLeft, ArrowRight, Film, Search, Setting, Refresh} from '@element-plus/icons-vue'
 import {ElMessage,ElMessageBox} from 'element-plus'
 import {useRouter,useRoute} from 'vue-router'
@@ -325,6 +325,13 @@ function updateSubscription(row: Subscription, enabled: boolean) {
     await refreshSubscriptions()
   })
 }
+function retrySubscription(row: Subscription) {
+  void doSubscription(async () => {
+    await props.api(subscriptionEndpoint(row.media_type, row.tmdb_id, row.season) + '/retry', 'POST')
+    ElMessage.success('已安排重新检查')
+    await refreshSubscriptions()
+  })
+}
 async function removeSubscription(row: Subscription) {
   try {
     const label = row.media_type === 'tv' ? seasonLabel(row.season) : ''
@@ -357,6 +364,7 @@ async function findResources(item: any) {
   resourceDialog.value = true
   resourceMessage.value = ''
   resourceFilter.value = 'all'
+  resourceSubmissions.value = {}
   transferTarget.value = null
   targetError.value = ''
   await Promise.all([loadTransferTarget(), searchResources()])
@@ -520,6 +528,9 @@ onMounted(() => {
   void refreshSubscriptions().catch(() => {})
   void loadGenres()
   void load()
+})
+onActivated(() => {
+  void refreshSubscriptions().catch(() => {})
 })
 onUnmounted(() => {
   moviesOnMobile.removeEventListener('change', updatePageSize)
@@ -700,6 +711,7 @@ onUnmounted(() => {
       <p class="hint" v-if="row.attempts.length">提交记录 {{row.attempts.slice(-4).map(a =>
         (row.media_type === 'tv' ? 'E' + a.episode + ' · ' : '') + (a.job_id ? '任务 #' + a.job_id : a.inbox_id ? '收件箱 #' + a.inbox_id : '已有分享 STRM')).join('、')}}</p>
       <div class="subscription-actions">
+        <el-button v-if="['review','error'].includes(row.state)" size="small" type="warning" plain @click="retrySubscription(row)">重试</el-button>
         <el-button v-if="row.details.candidates?.length" size="small" @click="reviewSubscription(row)">查看候选</el-button>
         <el-button v-else-if="row.details.needs_review?.length" size="small"
           @click="subscriptionDialog=false;findResources({id:row.tmdb_id,title:row.title,kind:row.media_type})">查找其他资源</el-button>

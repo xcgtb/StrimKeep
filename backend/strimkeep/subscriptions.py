@@ -188,15 +188,70 @@ class MediaSubscriptions:
     def update(self, row, state, message, *, interval=CHECK_INTERVAL, details=None):
         now = time.time()
         finished = state == 'completed'
+        try:
+            old_details = json.loads(row['details'] or '{}')
+            old_details = old_details if isinstance(old_details, dict) else {}
+        except (TypeError, ValueError):
+            old_details = {}
         with self.store.transaction():
-            self.store.db.execute(
+            changed = self.store.db.execute(
                 """UPDATE media_subscriptions SET state=?,message=?,last_check=?,next_check=?,enabled=?,
                      details=COALESCE(?,details)
                    WHERE media_type=? AND tmdb_id=? AND season=? AND enabled=1
                      AND share_action=? AND backfill=? AND next_check=?""",
                 (state, message, now, 0 if finished else now + interval, not finished,
                  json.dumps(details) if details is not None else None,
-                 row['media_type'], row['tmdb_id'], row['season'], row['share_action'], row['backfill'], row['next_check']))
+                 row['media_type'], row['tmdb_id'], row['season'], row['share_action'], row['backfill'],
+                 row['next_check'])).rowcount
+        new_details = details if isinstance(details, dict) else {}
+        old_submitted = sorted(old_details.get('submitted') or [])
+        new_submitted = sorted(new_details.get('submitted') or [])
+        old_review = sorted(old_details.get('needs_review') or [])
+        new_review = sorted(new_details.get('needs_review') or [])
+        notify = changed and state in ('submitted', 'completed', 'review', 'error') and (
+            state != row['state']
+            or (state == 'submitted' and new_submitted != old_submitted)
+            or (state == 'review' and new_review != old_review))
+        if notify:
+            self._notify(row, state, message, details)
+
+    def _notify(self, row, state, message, details):
+        """Publish subscription transitions through the existing notification queue."""
+        notifications = getattr(self.engine, 'notifications', None)
+        if notifications is None:
+            return
+        episodes = []
+        if isinstance(details, dict):
+            episodes = details.get('submitted') or details.get('needs_review') or []
+        suffix = ','.join(str(value) for value in sorted(set(episodes))) if episodes else ''
+        key = 'media:subscription:%s:%s:%s:%s:%s' % (
+            row['media_type'], row['tmdb_id'], row['season'], state, suffix)
+        label = '电影' if row['media_type'] == 'movie' else f"S{row['season']:02d}"
+        title = f"《{row['title']}》{label}"
+        try:
+            task = asyncio.create_task(notifications.publish(
+                key, title, message, category='media'))
+        except RuntimeError:
+            # Synchronous callers (tests/CLI) may not have a running loop.
+            return
+        notice_tasks = getattr(self.engine, 'notice_tasks', None)
+        if notice_tasks is not None:
+            notice_tasks.add(task)
+
+            def done(finished):
+                notice_tasks.discard(finished)
+                try:
+                    finished.result()
+                except asyncio.CancelledError:
+                    pass
+                except Exception as exc:  # notification failure must not break the loop
+                    self.store.event('subscription', '订阅通知发送失败：%s' % type(exc).__name__)
+            task.add_done_callback(done)
+        else:
+            def done(finished):
+                if not finished.cancelled():
+                    finished.exception()
+            task.add_done_callback(done)
 
     def attempts(self, row):
         return self.store.db.execute(
@@ -224,8 +279,14 @@ class MediaSubscriptions:
             if not current or not current['enabled'] or any(
                     current[field] != row[field] for field in ('share_action', 'backfill', 'next_check')):
                 return False
-            existing = self.store.db.execute('SELECT id FROM resource_inbox WHERE dedupe_key=?',
+            existing = self.store.db.execute('SELECT id,status FROM resource_inbox WHERE dedupe_key=?',
                                              (item['key'],)).fetchone()
+            if existing and existing['status'] in ('failed', 'skipped', 'needs_review', 'duplicate'):
+                # A previous subscription attempt may have left a terminal row.
+                # Retry it once when the subscription itself is retried/re-added.
+                self.store.db.execute(
+                    "UPDATE resource_inbox SET status='pending',message='',attempts=0,updated=? WHERE id=?",
+                    (now, existing['id']))
             existing_share = secret and self.store.db.execute(
                 'SELECT 1 FROM share_strms WHERE share_code=? AND revoked=0 LIMIT 1', (secret['share_code'],)).fetchone()
             claim = self.store.db.execute(
@@ -376,7 +437,8 @@ class MediaSubscriptions:
             self.update(row, state, message, interval=interval, details=progress)
             return
 
-        result = await discover_resources(self.store, engine.http, engine.telegram, details['title' if movie else 'name'])
+        result = await discover_resources(self.store, engine.http, engine.telegram,
+                                          details['title' if movie else 'name'])
         progress['sources'] = result['sources']
         if not result['sources'] or all(source.get('error') for source in result['sources']):
             self.update(row, 'error', '暂无可用搜索来源，请检查 PanSou 和 Telegram 搜索频道。', details=progress)
@@ -466,7 +528,7 @@ class MediaSubscriptions:
                 safe = str(exc) if isinstance(exc, (CloudError, ValueError)) else '搜索或库存核查暂时不可用。'
                 self.update(row, 'error', safe[:200], details={})
             except Exception as exc:
-                logging.getLogger(__name__).warning('影视订阅检查失败：%s', type(exc).__name__)
+                logging.getLogger(__name__).exception('影视订阅检查失败：%s', type(exc).__name__)
                 self.update(row, 'error', '本轮检查失败，请查看日志。', details={})
 
     async def loop(self):
@@ -479,9 +541,15 @@ class MediaSubscriptions:
 
     def public(self, row):
         data = dict(row)
-        data['details'] = json.loads(data['details'])
+        try:
+            data['details'] = json.loads(data['details'] or '{}')
+        except (TypeError, ValueError):
+            data['details'] = {}
         data['auto_switch'] = bool(data['auto_switch'])
-        data['preferred_sources'] = json.loads(data['preferred_sources'])
+        try:
+            data['preferred_sources'] = json.loads(data['preferred_sources'] or '[]')
+        except (TypeError, ValueError):
+            data['preferred_sources'] = []
         fields = ('episode', 'job_id', 'inbox_id', 'created', 'job_state', 'inbox_state')
         data['attempts'] = [{key: attempt[key] for key in fields} for attempt in self.attempts(row)[-12:]]
         data['rejected_attempts'] = [dict(attempt) for attempt in self.store.db.execute(
@@ -507,10 +575,24 @@ def install_subscriptions(app, store, admin):
                     'air_date': row.get('air_date') or ''} for row in regular_seasons(details)]
         return {'title': details['name'], 'seasons': choices or [{'number': 1, 'name': '第 1 季', 'air_date': ''}]}
 
+    def reset_attempts(media_type, tmdb_id, season, *, requeue_inbox=False):
+        key = media_type, tmdb_id, season
+        inbox_ids = [row['inbox_id'] for row in store.db.execute(
+            'SELECT inbox_id FROM media_subscription_attempts WHERE media_type=? AND tmdb_id=? AND season=?',
+            key) if row['inbox_id']]
+        store.db.execute(
+            'DELETE FROM media_subscription_attempts WHERE media_type=? AND tmdb_id=? AND season=?', key)
+        if requeue_inbox:
+            for inbox_id in inbox_ids:
+                store.db.execute(
+                    "UPDATE resource_inbox SET status='pending',message='',attempts=0,updated=? "
+                    "WHERE id=? AND status IN ('failed','skipped','needs_review','duplicate')",
+                    (time.time(), inbox_id))
+
     async def save_work(media_type, tmdb_id, season, body):
         key = media_type, tmdb_id, season
         row = store.db.execute(
-            'SELECT title FROM media_subscriptions WHERE media_type=? AND tmdb_id=? AND season=?', key).fetchone()
+            'SELECT * FROM media_subscriptions WHERE media_type=? AND tmdb_id=? AND season=?', key).fetchone()
         title = row['title'] if row else ''
         if not title:
             details = await work_details(app.state.organizer, media_type, tmdb_id)
@@ -519,9 +601,29 @@ def install_subscriptions(app, store, admin):
                 if season not in options:
                     raise HTTPException(422, '请从这部剧的季列表中选择。')
             title = details['title' if media_type == 'movie' else 'name']
+        backfill = media_type == 'tv' and body.backfill
+        preferred = list(dict.fromkeys(s.strip()[:60] for s in body.preferred_sources if s.strip()))
+        try:
+            old_preferred = json.loads(row['preferred_sources'] or '[]') if row else []
+        except (TypeError, ValueError):
+            old_preferred = []
+        reset = bool(row) and (
+            row['state'] in ('review', 'error', 'completed')
+            or row['share_action'] != body.share_action
+            or bool(row['backfill']) != backfill
+            or bool(row['auto_switch']) != body.auto_switch
+            or int(row['minimum_resolution'] or 0) != body.minimum_resolution
+            or old_preferred != preferred)
         # The revision used by a running check changes even if the same settings are saved twice.
         next_check = time.time()
         with store.transaction():
+            if reset:
+                # Claims are intentionally unique per episode.  Without clearing
+                # them, changing settings or retrying a failed row would leave the
+                # subscription permanently stuck in review.
+                reset_attempts(media_type, tmdb_id, season, requeue_inbox=True)
+                store.db.execute(
+                    "UPDATE media_subscriptions SET details='{}' WHERE media_type=? AND tmdb_id=? AND season=?", key)
             store.db.execute(
                 """INSERT INTO media_subscriptions
                    (media_type,tmdb_id,season,title,enabled,share_action,backfill,next_check,
@@ -530,14 +632,34 @@ def install_subscriptions(app, store, admin):
                      enabled=excluded.enabled,share_action=excluded.share_action,backfill=excluded.backfill,
                      next_check=excluded.next_check,state='pending',message='',auto_switch=excluded.auto_switch,
                      minimum_resolution=excluded.minimum_resolution,preferred_sources=excluded.preferred_sources""",
-                (*key, title, body.enabled, body.share_action, media_type == 'tv' and body.backfill, next_check,
+                (*key, title, body.enabled, body.share_action, backfill, next_check,
                  body.auto_switch, body.minimum_resolution,
-                 json.dumps(list(dict.fromkeys(s.strip()[:60] for s in body.preferred_sources if s.strip())),
-                            ensure_ascii=False)))
+                 json.dumps(preferred, ensure_ascii=False)))
         return {'saved': True}
+
+    def retry_work(media_type, tmdb_id, season):
+        key = media_type, tmdb_id, season
+        row = store.db.execute(
+            'SELECT 1 FROM media_subscriptions WHERE media_type=? AND tmdb_id=? AND season=?', key).fetchone()
+        if not row:
+            raise HTTPException(404, '订阅不存在。')
+        with store.transaction():
+            reset_attempts(media_type, tmdb_id, season, requeue_inbox=True)
+            store.db.execute(
+                'DELETE FROM media_subscription_rejected WHERE media_type=? AND tmdb_id=? AND season=?', key)
+            store.db.execute(
+                "UPDATE media_subscriptions SET state='pending',message='',details='{}',"
+                "next_check=0,enabled=1 WHERE media_type=? AND tmdb_id=? AND season=?", key)
+        return {'retried': True}
 
     def remove_work(media_type, tmdb_id, season):
         with store.transaction():
+            store.db.execute(
+                'DELETE FROM media_subscription_attempts WHERE media_type=? AND tmdb_id=? AND season=?',
+                (media_type, tmdb_id, season))
+            store.db.execute(
+                'DELETE FROM media_subscription_rejected WHERE media_type=? AND tmdb_id=? AND season=?',
+                (media_type, tmdb_id, season))
             store.db.execute('DELETE FROM media_subscriptions WHERE media_type=? AND tmdb_id=? AND season=?',
                              (media_type, tmdb_id, season))
         return {'removed': True}
@@ -545,6 +667,10 @@ def install_subscriptions(app, store, admin):
     @app.put(path + '/movie/{tmdb_id}', dependencies=[Depends(admin)])
     async def save_movie(body: SubscriptionInput, tmdb_id: int = Path(gt=0)):
         return await save_work('movie', tmdb_id, 0, body)
+
+    @app.post(path + '/movie/{tmdb_id}/retry', dependencies=[Depends(admin)])
+    async def retry_movie(tmdb_id: int = Path(gt=0)):
+        return retry_work('movie', tmdb_id, 0)
 
     @app.delete(path + '/movie/{tmdb_id}', dependencies=[Depends(admin)])
     async def remove_movie(tmdb_id: int = Path(gt=0)):
@@ -554,6 +680,10 @@ def install_subscriptions(app, store, admin):
     async def save_subscription(body: SubscriptionInput, tmdb_id: int = Path(gt=0),
                                 season: int = Path(ge=1, le=99)):
         return await save_work('tv', tmdb_id, season, body)
+
+    @app.post(path + '/{tmdb_id}/{season}/retry', dependencies=[Depends(admin)])
+    async def retry_subscription(tmdb_id: int = Path(gt=0), season: int = Path(ge=1, le=99)):
+        return retry_work('tv', tmdb_id, season)
 
     @app.delete(path + '/{tmdb_id}/{season}', dependencies=[Depends(admin)])
     async def remove_subscription(tmdb_id: int = Path(gt=0), season: int = Path(ge=1, le=99)):

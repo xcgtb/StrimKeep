@@ -60,9 +60,13 @@ def validate_base(value):
 
 class SearchSite(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
-    kind: Literal['pansou'] = 'pansou'
+    # Prowlarr is an aggregator: TTD and other indexers are configured inside it,
+    # StrimKeep only needs one stable search API.
+    kind: Literal['pansou', 'prowlarr'] = 'pansou'
     name: str = Field(min_length=1, max_length=60)
     base_url: str = Field(min_length=1, max_length=300)
+    api_key: str = Field(default='', max_length=300)
+    api_key_configured: bool = Field(default=False, exclude=True)
     enabled: bool = True
 
     @model_validator(mode='after')
@@ -163,6 +167,50 @@ async def search_pansou(http, site, title):
     return items
 
 
+async def search_prowlarr(http, site, title, year=''):
+    """Search one Prowlarr instance.
+
+    Prowlarr owns the per-indexer adapters (including TTD).  We deliberately
+    accept only magnet links here: Usenet/.torrent download URLs are returned
+    by Prowlarr too, but submitting them to 115 offline would create a task for
+    a .torrent file rather than the video.
+    """
+    if not site.api_key:
+        raise SourceError('Prowlarr API Key 未配置。')
+    query = str(title or '').strip()
+    if year and str(year) not in query:
+        query = f'{query} {year}'
+    payload = await read_response(
+        http, 'GET', site.base_url + '/api/v1/search',
+        params={'query': query, 'type': 'search', 'limit': MAX_RESULTS},
+        headers={'X-Api-Key': site.api_key, 'Accept': 'application/json'})
+    data = json.loads(payload)
+    releases = data if isinstance(data, list) else (
+        data.get('releases') or data.get('results') or [] if isinstance(data, dict) else [])
+    items = []
+    for release in releases[:MAX_RESULTS]:
+        if not isinstance(release, dict):
+            continue
+        label = str(release.get('title') or title)[:200]
+        link = str(release.get('magnetUrl') or '').strip()
+        if not link:
+            candidate = str(release.get('downloadUrl') or release.get('guid') or '').strip()
+            if candidate.lower().startswith('magnet:'):
+                link = candidate
+        if not link.lower().startswith('magnet:'):
+            continue
+        items.extend(resource_items(
+            link, label, site.name, kind='magnet',
+            published_at=str(release.get('publishDate') or release.get('publish_date') or '')))
+    return items
+
+
+async def search_site(http, site, title, year=''):
+    if site.kind == 'prowlarr':
+        return await search_prowlarr(http, site, title, year)
+    return await search_pansou(http, site, title)
+
+
 async def search_channel(telegram, channel, source, title):
     messages = await telegram.search_channel(channel, title)
     items = []
@@ -213,7 +261,7 @@ def discovery_config(store):
     return DiscoveryConfig.model_validate(store.get(SETTING, {}))
 
 
-async def resource_snapshots(store, http, telegram, title):
+async def resource_snapshots(store, http, telegram, title, *, year=''):
     cfg = discovery_config(store)
     titles = {row['name']: row['title'] for row in
               store.db.execute('SELECT name,title FROM channel_state')}
@@ -221,7 +269,8 @@ async def resource_snapshots(store, http, telegram, title):
     async def indexed(index, name, search, *args):
         return index, await search_source(name, search(*args))
 
-    sources = [(site.name, search_pansou, (http, site, title)) for site in cfg.sites if site.enabled]
+    sources = [(site.name, search_site, (http, site, title, year))
+               for site in cfg.sites if site.enabled]
     for channel in cfg.telegram_channels:
         label = titles.get(channel) or channel
         sources.append((label, search_channel, (telegram, channel, label, title)))
@@ -242,8 +291,8 @@ async def resource_snapshots(store, http, telegram, title):
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
-async def discover_resources(store, http, telegram, title):
-    snapshots = resource_snapshots(store, http, telegram, title)
+async def discover_resources(store, http, telegram, title, year=''):
+    snapshots = resource_snapshots(store, http, telegram, title, year=year)
     final = {'items': [], 'sources': [], 'truncated': False}
     async for final in snapshots:
         pass
@@ -254,12 +303,20 @@ def install_resource_discovery(app, store, admin):
     store.forget(('resource_discovery_base', 'resource_discovery_token'))
     saved = store.get(SETTING, {})
     old_sites = saved.get('sites', [])
-    sites = [{key: value for key, value in site.items() if key != 'api_key'}
+    # Retired experimental Torznab entries were not compatible with Prowlarr's
+    # API shape.  Keep valid Prowlarr/PanSou entries and their encrypted keys.
+    sites = [{key: value for key, value in site.items() if key != 'api_key' or value}
              for site in old_sites if site.get('kind') != 'torznab']
     if 're0' in saved or sites != old_sites:
         saved.pop('re0', None)
         saved['sites'] = sites
         store.set_many({SETTING: saved})
+
+    def public_site(site):
+        data = site.model_dump()
+        data['api_key_configured'] = bool(data.pop('api_key', ''))
+        data['api_key'] = ''
+        return data
 
     def channel_options():
         monitor = app.state.organizer.channels
@@ -274,20 +331,39 @@ def install_resource_discovery(app, store, admin):
         return {
             'telegram_channels': cfg.telegram_channels, 'channels': channel_options(),
             'telegram_logged_in': app.state.organizer.telegram.status()['logged_in'],
-            'sites': [site.model_dump() for site in cfg.sites],
+            'sites': [public_site(site) for site in cfg.sites],
         }
 
     @app.put('/api/v1/explore/resource-config', dependencies=[Depends(admin)])
     async def save(body: DiscoveryConfig):
-        store.set_many({SETTING: body.model_dump()})
+        old = discovery_config(store)
+        old_keys = {(site.kind, site.name, site.base_url): site.api_key for site in old.sites}
+        sites = []
+        for index, site in enumerate(body.sites):
+            key = site.api_key.strip() or old_keys.get((site.kind, site.name, site.base_url), '')
+            if not key and index < len(old.sites) and old.sites[index].kind == site.kind:
+                key = old.sites[index].api_key
+            if site.kind == 'prowlarr' and not key:
+                raise HTTPException(422, 'Prowlarr 需要填写 API Key。')
+            sites.append(site.model_copy(update={'api_key': key}))
+        payload = body.model_dump()
+        payload['sites'] = []
+        for site in sites:
+            item = site.model_dump()
+            if not item.get('api_key'):
+                item.pop('api_key', None)
+            payload['sites'].append(item)
+        store.set_many({SETTING: payload})
         return await config()
 
     @app.get('/api/v1/explore/resources/events', dependencies=[Depends(admin)])
-    async def search_events(title: str = Query(min_length=1, max_length=200)):
+    async def search_events(title: str = Query(min_length=1, max_length=200),
+                            year: str = Query(default='', pattern='^(|[0-9]{4})$')):
         async def stream():
             count = 0
             yield ': search started\n\n'
-            async for result in resource_snapshots(store, app.state.http, app.state.organizer.telegram, title.strip()):
+            async for result in resource_snapshots(store, app.state.http, app.state.organizer.telegram,
+                                                   title.strip(), year=year):
                 count += 1
                 yield 'event: results\ndata: ' + json.dumps(result, ensure_ascii=False) + '\n\n'
             yield 'event: done\ndata: ' + str(count) + '\n\n'
@@ -297,7 +373,8 @@ def install_resource_discovery(app, store, admin):
 
     @app.post('/api/v1/explore/resources', dependencies=[Depends(admin)])
     async def search(body: SearchInput):
-        results = await discover_resources(store, app.state.http, app.state.organizer.telegram, body.title)
+        results = await discover_resources(store, app.state.http, app.state.organizer.telegram,
+                                           body.title, year=body.year)
         if not results['sources']:
             raise HTTPException(409, '请在「系统设置 → 资源来源」添加站点或选择要搜索的 Telegram 频道。')
         return results

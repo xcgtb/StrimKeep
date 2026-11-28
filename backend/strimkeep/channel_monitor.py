@@ -306,8 +306,11 @@ class ChannelMonitor:
         with self.store.db:
             self.store.db.execute('DELETE FROM channel_state WHERE name=?', (name,))
             self.store.db.execute('DELETE FROM channel_posts WHERE name=?', (name,))
+            self.store.db.execute('DELETE FROM channel_cancelled_shares WHERE share_code IN '
+                                  '(SELECT share_code FROM channel_shares WHERE name=?)', (name,))
             self.store.db.execute('DELETE FROM channel_shares WHERE name=?', (name,))
             self.store.db.execute('DELETE FROM channel_backfill WHERE name=?', (name,))
+            self.store.db.execute('DELETE FROM channel_share_attempts WHERE name=?', (name,))
         config = self.config()
         config['channels'] = [c for c in config['channels'] if c['name'] != name]
         self.store.set_many({'channel_monitor': config})
@@ -628,6 +631,19 @@ class ChannelMonitor:
         except CloudError as exc:
             self._remember(name, state='error', error='离线提交失败：%s' % str(exc)[:120])
             self.store.event('channel', '频道 %s 离线提交结果未确认，需人工核查，避免重复提交：%s' % (title or name, str(exc)[:120]))
+            # The cursor will advance because retrying an ambiguous submission
+            # can duplicate the download.  Keep every link visible in the shared
+            # inbox as needs_review instead of silently losing the post.
+            resources = getattr(self.engine, 'resources', None)
+            if resources is not None:
+                for index, url in enumerate(submitted):
+                    try:
+                        resources.add_review(
+                            url, 'telegram', f'{name}:{message["id"]}:{index}',
+                            title or name, rule['offline_cid'],
+                            '频道离线提交结果未确认，请到 115 核查后决定是否重试。')
+                    except ValueError:
+                        continue
             if self.config()['notify']:
                 self._notify(name, title, message, [], 'offline_unknown',
                              self.store.directory_label(rule['offline_cid'], rule['offline_label']),
@@ -820,7 +836,16 @@ class ChannelMonitor:
                 photo=photo, telegram_options=options)
         task = asyncio.create_task(publish)
         self.engine.notice_tasks.add(task)
-        task.add_done_callback(self.engine.notice_tasks.discard)
+
+        def done(finished):
+            self.engine.notice_tasks.discard(finished)
+            if finished.cancelled():
+                return
+            error = finished.exception()
+            if error is not None:
+                self.store.event('channel', '频道通知发送失败：%s' % type(error).__name__)
+
+        task.add_done_callback(done)
 
     async def tick(self, force=False):
         async with self._tick_lock:

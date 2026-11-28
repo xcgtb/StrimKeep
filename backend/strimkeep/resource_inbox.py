@@ -9,12 +9,13 @@ import asyncio
 import hashlib
 import hmac
 import html
+import ipaddress
 import json
 import re
 import secrets
 import time
 import xml.etree.ElementTree as ET
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from fastapi import Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -24,7 +25,10 @@ from .offline_api import directory_config, organize_flag_for
 from .transfer import shares
 
 SOURCES = ('manual', 'rss', 'webhook', 'telegram', 'subscription')
-STATUSES = ('pending', 'queued', 'duplicate', 'needs_review', 'failed', 'skipped')
+STATUSES = ('pending', 'processing', 'queued', 'duplicate', 'needs_review', 'failed', 'skipped')
+PROCESSING_LEASE = 300
+MAX_FEED_BYTES = 2 * 1024 * 1024
+MAX_FEED_REDIRECTS = 5
 URL_RE = re.compile(r'(?i)(?:magnet:\?[^\s<>"\']+|ed2k://[^\s<>"\']+|(?:https?|ftp)://[^\s<>"\']+)')
 MAGNET_HASH = re.compile(r'(?i)btih:([A-Za-z0-9]+)')
 ED2K_HASH = re.compile(r'(?i)ed2k://\|file\|[^|]*\|\d+\|([0-9a-f]{32})\|')
@@ -197,6 +201,9 @@ class ResourceInbox:
                           ('last_count', ' INTEGER NOT NULL DEFAULT 0')):
             if name not in columns:
                 self.store.db.execute('ALTER TABLE resource_feeds ADD COLUMN %s%s' % (name, ddl))
+        inbox_columns = {row[1] for row in self.store.db.execute('PRAGMA table_info(resource_inbox)')}
+        if 'lease_until' not in inbox_columns:
+            self.store.db.execute('ALTER TABLE resource_inbox ADD COLUMN lease_until REAL NOT NULL DEFAULT 0')
         self.store.db.commit()
 
     def config(self):
@@ -251,12 +258,22 @@ class ResourceInbox:
         return {'accepted': accepted, 'requeued': requeued, 'duplicates': duplicates,
                 'items': items}
 
+    def add_review(self, text, source='telegram', external_id='', title='',
+                   target_cid='', message='需要人工核查。'):
+        """Insert links as ``needs_review`` instead of submitting them."""
+        result = self.add_many(text, source, external_id, title, target_cid, False)
+        with self.store.db:
+            for row_id in result['items']:
+                self.store.db.execute(
+                    "UPDATE resource_inbox SET status='needs_review',message=?,updated=? "
+                    "WHERE id=? AND status='pending'", (message[:300], _now(), row_id))
+        return result
 
     def _set(self, row_id, status, message='', *, attempts=None):
         values = [status, message, _now(), row_id]
-        sql = 'UPDATE resource_inbox SET status=?,message=?,updated=? WHERE id=?'
+        sql = 'UPDATE resource_inbox SET status=?,message=?,updated=?,lease_until=0 WHERE id=?'
         if attempts is not None:
-            sql = ('UPDATE resource_inbox SET status=?,message=?,updated=?,attempts=? '
+            sql = ('UPDATE resource_inbox SET status=?,message=?,updated=?,attempts=?,lease_until=0 '
                    'WHERE id=?')
             values = [status, message, _now(), attempts, row_id]
         with self.store.db:
@@ -349,8 +366,26 @@ class ResourceInbox:
         return self.store.directory_label(cid, '') or str(cid)
 
     async def process_pending(self):
-        rows = self.store.db.execute(
-            "SELECT * FROM resource_inbox WHERE status='pending' ORDER BY id LIMIT 5").fetchall()
+        now = _now()
+        # A worker may have died after claiming a row.  Reclaim it only after
+        # the lease expires so two workers never submit the same link.
+        with self.store.db:
+            self.store.db.execute(
+                "UPDATE resource_inbox SET status='pending',message='处理超时，已重新排队。',"
+                "lease_until=0,updated=? WHERE status='processing' AND lease_until<?",
+                (now, now))
+        rows = []
+        with self.store.transaction(immediate=True):
+            candidates = self.store.db.execute(
+                "SELECT id FROM resource_inbox WHERE status='pending' ORDER BY id LIMIT 5").fetchall()
+            for candidate in candidates:
+                changed = self.store.db.execute(
+                    "UPDATE resource_inbox SET status='processing',lease_until=?,updated=? "
+                    "WHERE id=? AND status='pending'",
+                    (now + PROCESSING_LEASE, now, candidate['id'])).rowcount
+                if changed:
+                    rows.append(self.store.db.execute(
+                        'SELECT * FROM resource_inbox WHERE id=?', (candidate['id'],)).fetchone())
         for row in rows:
             try:
                 await self.process_row(row)
@@ -371,6 +406,30 @@ class ResourceInbox:
         for row in rows:
             await self.poll_feed(row)
 
+    async def _fetch_feed(self, url, headers):
+        """Fetch a feed with a hard size cap and validated manual redirects."""
+        current = str(url)
+        for _ in range(MAX_FEED_REDIRECTS + 1):
+            current = _validate_url(current)
+            async with self.http.stream('GET', current, headers=headers, timeout=30,
+                                        follow_redirects=False) as response:
+                if response.status_code in (301, 302, 303, 307, 308):
+                    location = response.headers.get('location', '')
+                    if not location:
+                        raise ValueError('RSS 重定向缺少目标地址。')
+                    current = urljoin(current, location)
+                    continue
+                if response.status_code == 304:
+                    return 304, response.headers, b''
+                response.raise_for_status()
+                body = bytearray()
+                async for chunk in response.aiter_bytes(65536):
+                    if len(body) + len(chunk) > MAX_FEED_BYTES:
+                        raise ValueError('RSS 内容超过 2MB。')
+                    body.extend(chunk)
+                return response.status_code, response.headers, bytes(body)
+        raise ValueError('RSS 重定向次数过多。')
+
     async def poll_feed(self, row):
         headers = {}
         if row['etag']:
@@ -379,13 +438,11 @@ class ResourceInbox:
             headers['If-Modified-Since'] = row['last_modified']
         now = _now()
         try:
-            response = await self.http.get(str(row['url']), headers=headers,
-                                           timeout=30, follow_redirects=True)
-            if response.status_code == 304:
+            status, response_headers, content = await self._fetch_feed(str(row['url']), headers)
+            if status == 304:
                 self._feed_done(row, now, state='ok')
                 return
-            response.raise_for_status()
-            items = feed_items(response.content[:2_000_000])
+            items = feed_items(content)
             include = str(row['include'] or '').casefold()
             exclude = str(row['exclude'] or '').casefold()
             accepted = duplicates = 0
@@ -404,8 +461,8 @@ class ResourceInbox:
                 accepted += result['accepted'] + result['requeued']
                 duplicates += result['duplicates']
             self._feed_done(row, now, state='ok', accepted=accepted,
-                            etag=response.headers.get('etag', ''),
-                            last_modified=response.headers.get('last-modified', ''))
+                            etag=response_headers.get('etag', ''),
+                            last_modified=response_headers.get('last-modified', ''))
             if accepted:
                 self.store.event('resource', 'RSS「%s」新增 %d 条资源，重复 %d 条。'
                                  % (row['name'] or row['url'], accepted, duplicates))
@@ -445,17 +502,19 @@ class ResourceInbox:
         now = _now()
         cutoff = now - max(1, int(keep_days)) * 86400
         with self.store.db:
+            protected = (" AND NOT EXISTS (SELECT 1 FROM media_subscription_attempts a"
+                         " WHERE a.inbox_id=resource_inbox.id)")
             by_age = self.store.db.execute(
                 "DELETE FROM resource_inbox WHERE status IN ('duplicate','skipped','failed')"
-                " AND updated<?", (cutoff,)).rowcount
+                " AND updated<?" + protected, (cutoff,)).rowcount
             total = self.store.db.execute(
                 "SELECT count(*) FROM resource_inbox WHERE status IN"
-                " ('duplicate','skipped','failed')").fetchone()[0]
+                " ('duplicate','skipped','failed')" + protected).fetchone()[0]
             by_count = max(0, total - max(1, int(keep_rows)))
             if by_count:
                 self.store.db.execute(
                     "DELETE FROM resource_inbox WHERE id IN (SELECT id FROM resource_inbox"
-                    " WHERE status IN ('duplicate','skipped','failed')"
+                    " WHERE status IN ('duplicate','skipped','failed')" + protected +
                     " ORDER BY id ASC LIMIT ?)", (by_count,))
         return {'by_age': by_age, 'by_count': by_count}
 
@@ -502,6 +561,17 @@ def _validate_url(value):
     if (parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or
             parsed.password or parsed.fragment or (port is not None and not 1 <= port <= 65535)):
         raise ValueError('请填写不含凭据和片段的 HTTP(S) 地址。')
+    host = parsed.hostname.lower().rstrip('.')
+    if host == 'localhost' or host.endswith('.localhost') or host in (
+            'metadata', 'metadata.google.internal'):
+        raise ValueError('RSS 地址不能指向本机或云元数据服务。')
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    if address and (address.is_loopback or address.is_link_local or address.is_unspecified
+                    or address.is_multicast or address.is_reserved):
+        raise ValueError('RSS 地址不能指向本机、链路本地或保留地址。')
     return value
 
 
@@ -526,7 +596,13 @@ def install_resources(app, store, admin):
 
     @app.post('/api/v1/resources/webhook-token', dependencies=[Depends(admin)])
     async def rotate_webhook_token():
+        previous = store.meta_json('resource_webhook_token', '') or ''
         token = secrets.token_urlsafe(24)
+        if previous:
+            # Keep the old token valid for one day so an external sender can
+            # finish a batch while the user updates its configuration.
+            store.set_meta('resource_webhook_previous_token', previous)
+            store.set_meta('resource_webhook_previous_until', _now() + 86400)
         store.set_meta('resource_webhook_token', token)
         return {'token': token}
 
@@ -575,12 +651,12 @@ def install_resources(app, store, admin):
         row = store.db.execute('SELECT * FROM resource_inbox WHERE id=?', (row_id,)).fetchone()
         if not row:
             raise HTTPException(404, '收件箱条目不存在。')
-        if row['status'] == 'queued':
-            raise HTTPException(409, '这条已经入队，不能重复提交。')
+        if row['status'] in ('queued', 'processing'):
+            raise HTTPException(409, '这条已经入队或正在处理，不能重复提交。')
         with store.db:
             store.db.execute(
-                "UPDATE resource_inbox SET status='pending',message='',attempts=0,updated=? WHERE id=?",
-                (_now(), row_id))
+                "UPDATE resource_inbox SET status='pending',message='',attempts=0,updated=?,"
+                "lease_until=0 WHERE id=?", (_now(), row_id))
         return service().public(store.db.execute(
             'SELECT * FROM resource_inbox WHERE id=?', (row_id,)).fetchone())
 
@@ -589,14 +665,21 @@ def install_resources(app, store, admin):
         row = store.db.execute('SELECT * FROM resource_inbox WHERE id=?', (row_id,)).fetchone()
         if not row:
             raise HTTPException(404, '收件箱条目不存在。')
+        if row['status'] in ('queued', 'processing'):
+            raise HTTPException(409, '这条已经入队或正在处理，不能跳过。')
         with store.db:
             store.db.execute(
-                "UPDATE resource_inbox SET status='skipped',message='已手动跳过。',updated=? WHERE id=?",
-                (_now(), row_id))
+                "UPDATE resource_inbox SET status='skipped',message='已手动跳过。',updated=?,"
+                "lease_until=0 WHERE id=?", (_now(), row_id))
         return {'ok': True}
 
     @app.delete('/api/v1/resources/inbox/{row_id}', dependencies=[Depends(admin)])
     async def remove(row_id: int):
+        row = store.db.execute('SELECT * FROM resource_inbox WHERE id=?', (row_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, '收件箱条目不存在。')
+        if row['status'] in ('queued', 'processing'):
+            raise HTTPException(409, '这条已经入队或正在处理，不能删除。')
         with store.db:
             store.db.execute('DELETE FROM resource_inbox WHERE id=?', (row_id,))
         return {'ok': True}
@@ -648,12 +731,22 @@ def install_resources(app, store, admin):
         rows = store.db.execute('SELECT * FROM resource_feeds ORDER BY id DESC').fetchall()
         return {'items': [dict(row) for row in rows]}
 
+    def feed_url_exists(url, exclude=None):
+        sql = 'SELECT 1 FROM resource_feeds WHERE url=?'
+        params = [url]
+        if exclude is not None:
+            sql += ' AND id<>?'
+            params.append(exclude)
+        return store.db.execute(sql, params).fetchone() is not None
+
     @app.post('/api/v1/resources/feeds', dependencies=[Depends(admin)])
     async def add_feed(body: FeedInput):
         try:
             url = _validate_url(body.url)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from None
+        if feed_url_exists(url):
+            raise HTTPException(409, '这个 RSS 地址已经添加过了。')
         if body.target_cid and (not body.target_cid.isdigit() or int(body.target_cid) <= 0):
             raise HTTPException(422, '请选择一个非根目录作为 RSS 落点。')
         now = _now()
@@ -672,6 +765,8 @@ def install_resources(app, store, admin):
             url = _validate_url(body.url)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from None
+        if feed_url_exists(url, exclude=feed_id):
+            raise HTTPException(409, '这个 RSS 地址已经添加过了。')
         if body.target_cid and (not body.target_cid.isdigit() or int(body.target_cid) <= 0):
             raise HTTPException(422, '请选择一个非根目录作为 RSS 落点。')
         with store.db:
@@ -704,7 +799,12 @@ def install_resources(app, store, admin):
     @app.post('/api/v1/resources/webhook/{token}')
     async def webhook(token: str, request: Request):
         expected = store.meta_json('resource_webhook_token', '') or ''
-        if not expected or not hmac.compare_digest(token, expected):
+        valid = bool(expected) and hmac.compare_digest(token, expected)
+        if not valid:
+            previous = store.meta_json('resource_webhook_previous_token', '') or ''
+            until = float(store.meta_json('resource_webhook_previous_until', 0) or 0)
+            valid = bool(previous) and until >= _now() and hmac.compare_digest(token, previous)
+        if not valid:
             raise HTTPException(404, 'Not Found')
         raw = await request.body()
         if len(raw) > 1_000_000:

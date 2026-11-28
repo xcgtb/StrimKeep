@@ -34,7 +34,7 @@ export function createApi(options: ApiClientOptions): Api {
 
     const controller = requestOptions.signal ? null : new AbortController()
     const timeoutMs = requestOptions.timeoutMs
-      ?? (method === 'GET' && /^\/organize\/jobs\/\d+$/.test(path) ? 15000 : 0)
+      ?? (method === 'GET' ? (/^\/organize\/jobs\/\d+$/.test(path) ? 15000 : 60000) : 0)
     const timer = controller && timeoutMs
       ? window.setTimeout(() => controller.abort(), timeoutMs)
       : null
@@ -65,6 +65,7 @@ export function createApi(options: ApiClientOptions): Api {
       } catch (error) {
         if (error instanceof ApiError) throw error
         if ((error as Error)?.name === 'AbortError') throw new ApiError('请求超时，请稍后重试。', 0, 'TIMEOUT')
+        if (error instanceof TypeError) throw new ApiError('网络连接失败，请检查服务是否在线。', 0, 'NETWORK_ERROR')
         throw error
       } finally {
         if (timer !== null) window.clearTimeout(timer)

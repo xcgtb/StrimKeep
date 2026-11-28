@@ -4,6 +4,7 @@ const routes: RouteRecordRaw[] = [
   {path: '/', redirect: {name: 'overview'}},
   {path: '/overview', name: 'overview', component: () => import('./Overview.vue'), meta: {title: '媒体总览'}},
   {path: '/explore', name: 'explore', component: () => import('./Explore.vue'), meta: {title: '影视探索'}},
+  {path: '/subscriptions', name: 'subscriptions', component: () => import('./Subscriptions.vue'), meta: {title: '追更订阅'}},
   {path: '/resources', redirect: '/transfer'},
   {path: '/inventory', name: 'inventory', component: () => import('./Inventory.vue'), meta: {title: '库存管理'}},
   {path: '/account', name: 'account', component: () => import('./Account.vue'), meta: {title: '115 网盘'}},

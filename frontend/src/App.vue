@@ -2,7 +2,7 @@
 import {computed,nextTick,onMounted,onUnmounted,ref,watch,shallowRef} from 'vue'
 import {useRoute,useRouter} from 'vue-router'
 import {createApi} from './api/client'
-import {Monitor,FirstAidKit,House,Cloudy,FolderOpened,Refresh,Document,Setting,Menu,Sunny,Moon,SwitchButton,List,Link,Film,Promotion,MagicStick,Search,Share} from '@element-plus/icons-vue'
+import {Monitor,FirstAidKit,House,Cloudy,FolderOpened,Refresh,Document,Setting,Menu,Sunny,Moon,SwitchButton,List,Link,Film,Promotion,MagicStick,Search,Share,Bell} from '@element-plus/icons-vue'
 const route=useRoute(),router=useRouter()
 const ready=ref(false),logged=ref(false),csrf=ref(''),username=ref(''),busy=ref(false),error=ref(''),mobile=ref(false),version=ref('—')
 const closeNavigation=ref<HTMLButtonElement>()
@@ -25,6 +25,7 @@ const connectionError=ref(false)
 const menu=[
  {id:'overview',title:'媒体总览',icon:House,group:'media'},
  {id:'explore',title:'影视探索',icon:Film,group:'media'},
+ {id:'subscriptions',title:'追更订阅',icon:Bell,group:'media'},
  {id:'inventory',title:'库存管理',icon:List,group:'media'},
  {id:'account',title:'115 网盘',icon:Cloudy,group:'media'},
  {id:'transfer',title:'资源入库',icon:Link,group:'media'},

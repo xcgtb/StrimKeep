@@ -179,8 +179,17 @@ def _cloud115(store):
     cookie = store.get('cookie') or ''
     match = re.search(r'(?:^|;\s*)UID=(\d+)', cookie)
     if cookie and match:
-        return _check('cloud115', '115 网盘', OK, '已登录',
-                      'UID %s' % match.group(1), 'account')
+        try:
+            verified = float(store.meta_json('cloud_verified_at', 0) or 0)
+        except (TypeError, ValueError):
+            verified = 0
+        if verified and time.time() - verified < 86400:
+            return _check('cloud115', '115 网盘', OK, '已登录',
+                          'UID %s · 最近验证 %s' % (
+                              match.group(1),
+                              time.strftime('%m-%d %H:%M', time.localtime(verified))), 'account')
+        return _check('cloud115', '115 网盘', WARN, 'Cookie 已配置，尚未验证',
+                      '请到「115 网盘」执行连接测试；未验证时无法确认登录仍有效', 'account')
     return _check('cloud115', '115 网盘', WARN, '未登录或缺少 UID',
                   '整理、分享与播放取链会不可用', 'account')
 
