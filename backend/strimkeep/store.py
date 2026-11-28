@@ -212,6 +212,15 @@ class Store:
           id INTEGER PRIMARY KEY AUTOINCREMENT,at REAL NOT NULL,level TEXT NOT NULL,
           job_id INTEGER,event_key TEXT NOT NULL UNIQUE,title TEXT NOT NULL,message TEXT NOT NULL,
           read_at REAL,telegram_state TEXT NOT NULL DEFAULT 'disabled');
+        CREATE TABLE IF NOT EXISTS notification_dependencies(
+          event_key TEXT PRIMARY KEY, depends_on TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS media_notice_outbox(job_id INTEGER PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS media_notice_groups(
+          event_key TEXT PRIMARY KEY, job_id INTEGER, items TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS telegram_message_refs(
+          event_key TEXT PRIMARY KEY, chat_id TEXT NOT NULL, message_id INTEGER NOT NULL,
+          photo INTEGER NOT NULL, edited TEXT NOT NULL DEFAULT '',
+          attempts INTEGER NOT NULL DEFAULT 0, next_try REAL NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS emby_deliveries(
           job_id INTEGER PRIMARY KEY,state TEXT NOT NULL,payload TEXT NOT NULL,
           attempts INTEGER NOT NULL DEFAULT 0,next_due REAL NOT NULL,
@@ -262,6 +271,8 @@ class Store:
         CREATE INDEX IF NOT EXISTS organized_files_relative_nocase ON organized_files(relative_path COLLATE NOCASE);
         CREATE INDEX IF NOT EXISTS output_registry_relative_nocase ON output_registry(relative_path COLLATE NOCASE);
         CREATE INDEX IF NOT EXISTS archive_entries_relative_nocase ON archive_entries(relative_path COLLATE NOCASE);
+        CREATE INDEX IF NOT EXISTS organize_jobs_kind_state ON organize_jobs(COALESCE(json_extract(config,'$.job_kind'),'organize'), state);
+        CREATE INDEX IF NOT EXISTS organize_jobs_kind ON organize_jobs(json_extract(config,'$.job_kind'));
         ''')
         # 版本变化时先留一份可恢复的快照，再跑迁移；保留最近 5 份。
         self._auto_backup_before_upgrade()

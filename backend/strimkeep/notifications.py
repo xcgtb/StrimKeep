@@ -286,11 +286,19 @@ class Notifications:
         self.media_gate = asyncio.Lock()
         self.channel_photo = None
         self._verified_cards_requeued = False
-        with self.store.db:
-            self.store.db.execute('CREATE TABLE IF NOT EXISTS notification_dependencies(event_key TEXT PRIMARY KEY, depends_on TEXT NOT NULL)')
-            self.store.db.execute('CREATE TABLE IF NOT EXISTS media_notice_outbox(job_id INTEGER PRIMARY KEY)')
-            self.store.db.execute("CREATE TABLE IF NOT EXISTS media_notice_groups(event_key TEXT PRIMARY KEY,job_id INTEGER,items TEXT NOT NULL)")
-            self.store.db.execute("CREATE TABLE IF NOT EXISTS telegram_message_refs(event_key TEXT PRIMARY KEY,chat_id TEXT NOT NULL,message_id INTEGER NOT NULL,photo INTEGER NOT NULL,edited TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,next_try REAL NOT NULL DEFAULT 0)")
+        # 4 张通知辅助表已统一收口至 store.py 启动建表；仅当测试夹具跳过 Store 建表时按需补齐，
+        # 避免每次实例化都执行 4 条写事务 DDL。
+        required = ('notification_dependencies', 'media_notice_outbox',
+                    'media_notice_groups', 'telegram_message_refs')
+        existing = {r[0] for r in self.store.db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?,?,?)",
+            required)}
+        if len(existing) < len(required):
+            with self.store.db:
+                self.store.db.execute('CREATE TABLE IF NOT EXISTS notification_dependencies(event_key TEXT PRIMARY KEY, depends_on TEXT NOT NULL)')
+                self.store.db.execute('CREATE TABLE IF NOT EXISTS media_notice_outbox(job_id INTEGER PRIMARY KEY)')
+                self.store.db.execute("CREATE TABLE IF NOT EXISTS media_notice_groups(event_key TEXT PRIMARY KEY,job_id INTEGER,items TEXT NOT NULL)")
+                self.store.db.execute("CREATE TABLE IF NOT EXISTS telegram_message_refs(event_key TEXT PRIMARY KEY,chat_id TEXT NOT NULL,message_id INTEGER NOT NULL,photo INTEGER NOT NULL,edited TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,next_try REAL NOT NULL DEFAULT 0)")
 
     async def _deliver_webhook(self, title, message, category):
         """通用 Webhook：不参与 Telegram 状态机，也不新增台账表。"""

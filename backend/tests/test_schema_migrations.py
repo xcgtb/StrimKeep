@@ -54,3 +54,23 @@ def test_indexes_created_for_hot_paths():
     assert {'playbacks_relative', 'playbacks_relative_nocase', 'playbacks_file'} <= indexes
     share_indexes = {row[1] for row in conn.execute('PRAGMA index_list(share_strms)')}
     assert 'share_strms_path_nocase' in share_indexes
+
+
+def test_organize_jobs_kind_expression_indexes(tmp_path):
+    from strimkeep.store import Store
+    store = Store(tmp_path / 'data', 'admin', 'test-password-1234')
+    indexes = {row[1] for row in store.db.execute('PRAGMA index_list(organize_jobs)')}
+    assert {'organize_jobs_kind_state', 'organize_jobs_kind'} <= indexes
+    # 验证表达式索引可被 SQLite 查询计划命中
+    plan = ' '.join(
+        row[3] for row in store.db.execute(
+            "EXPLAIN QUERY PLAN SELECT * FROM organize_jobs "
+            "WHERE state='queued' AND COALESCE(json_extract(config,'$.job_kind'),'organize')='organize'"
+        ).fetchall()
+    )
+    assert 'USING INDEX' in plan
+    # 验证通知辅助表已在 Store 启动时建好
+    tables = {row[0] for row in store.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {'notification_dependencies', 'media_notice_outbox',
+            'media_notice_groups', 'telegram_message_refs'} <= tables
+

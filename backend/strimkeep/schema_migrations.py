@@ -56,7 +56,16 @@ MIGRATIONS = [
         "CREATE INDEX IF NOT EXISTS worker_commands_state ON worker_commands(state,id)",
     ]),
     (6, '库存清理派发与确认进度', [INVENTORY_DISPATCH_DDL]),
+    (7, '任务种类表达式索引', []),
 ]
+
+# 依赖可选表的表达式索引：仅当目标表存在时创建（兼容只含部分表的迁移测试夹具）。
+INDEX_PATCHES = {
+    'organize_jobs': [
+        "CREATE INDEX IF NOT EXISTS organize_jobs_kind_state ON organize_jobs(COALESCE(json_extract(config,'$.job_kind'),'organize'), state)",
+        "CREATE INDEX IF NOT EXISTS organize_jobs_kind ON organize_jobs(json_extract(config,'$.job_kind'))",
+    ],
+}
 
 # 列补丁：表 → [(列名, DDL)]。幂等：先 PRAGMA table_info 再补。
 COLUMN_PATCHES = {
@@ -111,6 +120,11 @@ def apply(db):
         for name, ddl in columns:
             if name not in existing:
                 db.execute('ALTER TABLE %s ADD COLUMN %s%s' % (table, name, ddl))
+    for table, statements in INDEX_PATCHES.items():
+        if table not in tables:
+            continue
+        for sql in statements:
+            db.execute(sql)
     if done:
         _mark(db, max(done))
     db.commit()
