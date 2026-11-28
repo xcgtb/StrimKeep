@@ -1,4 +1,6 @@
 """批量剧集缺集对照接口测试（消除翻页 N+1 请求）。"""
+import asyncio
+
 import httpx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -68,5 +70,42 @@ def test_inventory_missing_batch_returns_items_and_errors(tmp_path):
         assert body['items']['1002']['combined_missing'] == 0
         assert body['errors'] == {'9999': '未找到该剧集。'}
 
-        bad = client.post('/api/v1/inventory/tv/missing/batch', json={'tmdb_ids': [0]})
-        assert bad.status_code == 422
+        for invalid in ([0], ['1001'], [1001, 1002, 1003, 1004, 1005]):
+            bad = client.post('/api/v1/inventory/tv/missing/batch', json={'tmdb_ids': invalid})
+            assert bad.status_code == 422
+
+
+def test_batch_and_single_requests_share_tmdb_concurrency_limit(tmp_path):
+    app = _make_app(tmp_path)
+
+    async def run():
+        running = peak = 0
+
+        async def tmdb(path):
+            nonlocal running, peak
+            if '/season/' not in path:
+                return {'status': 'Ended', 'seasons': [{'season_number': n} for n in range(1, 9)]}
+            running += 1
+            peak = max(peak, running)
+            try:
+                await asyncio.sleep(0.01)
+                return {'episodes': [{'episode_number': 1, 'air_date': '2025-01-01'}]}
+            finally:
+                running -= 1
+
+        app.state.organizer.tmdb = tmdb
+        try:
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+                batch, single = await asyncio.gather(
+                    client.post('/api/v1/inventory/tv/missing/batch', json={'tmdb_ids': [1001, 1002]}),
+                    client.get('/api/v1/inventory/tv/1001/missing'),
+                )
+                assert batch.status_code == single.status_code == 200
+                assert set(batch.json()['items']) == {'1001', '1002'}
+                assert peak == 4
+        finally:
+            await app.state.http.aclose()
+            app.state.store.close()
+
+    asyncio.run(run())

@@ -10,8 +10,9 @@ from urllib.parse import quote, urlsplit
 from fastapi import Depends, HTTPException, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Literal
+from typing import Annotated, Literal
 
+from .cloud115 import CloudError
 from .inventory import missing_season, project, registered_rows, work_complete
 from . import commands
 from .inventory_fs import check_missing_registrations, resolve_roots, scan as filesystem_rows
@@ -40,7 +41,7 @@ class ManualComplete(BaseModel):
 
 class MissingBatchRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    tmdb_ids: list[int] = Field(min_length=1, max_length=100)
+    tmdb_ids: list[Annotated[int, Field(gt=0, strict=True)]] = Field(min_length=1, max_length=4)
 
 
 class InventoryConfig(BaseModel):
@@ -122,6 +123,7 @@ def install_inventory(app, store, admin):
     orphan_tasks = {}
     mapping_cache = {'at': 0.0, 'snapshot': None, 'refreshing': False, 'generation': 0, 'error': ''}
     mapping_lock = asyncio.Lock()
+    compare_tmdb_gate = asyncio.Semaphore(4)
     MAPPING_TTL = 60.0
 
     def invalidate_mapping_cache():
@@ -809,21 +811,13 @@ def install_inventory(app, store, admin):
 
     @app.post('/api/v1/inventory/tv/missing/batch', dependencies=[Depends(admin)])
     async def inventory_missing_batch(body: MissingBatchRequest):
-        """批量对照多部剧集的缺集状态，消除前端翻页时的 N+1 请求风暴。"""
-        unique_ids = []
-        seen_ids = set()
-        for tid in body.tmdb_ids:
-            if tid <= 0:
-                raise HTTPException(422, '剧集编号无效。')
-            if tid not in seen_ids:
-                seen_ids.add(tid)
-                unique_ids.append(tid)
+        """一批最多对照四部作品，让翻页时优先返回已经完成的小批。"""
         try:
             snapshot = await mapping_snapshot()
         except (OSError, ValueError):
             raise HTTPException(409, '库存读取失败，请检查 STRM 根目录。') from None
-        tv_by_id = {x['tmdb_id']: x for x in snapshot['items'] if x['kind'] == 'tv' and x.get('tmdb_id')}
-        sem = asyncio.Semaphore(4)
+        unique_ids = dict.fromkeys(body.tmdb_ids)
+        tv_by_id = {x['tmdb_id']: x for x in snapshot['items'] if x['kind'] == 'tv' and x['tmdb_id'] in unique_ids}
         items_out, errors_out = {}, {}
 
         async def run_one(tid: int):
@@ -831,20 +825,26 @@ def install_inventory(app, store, admin):
             if item is None:
                 errors_out[str(tid)] = '未找到该剧集。'
                 return
-            async with sem:
-                try:
-                    items_out[str(tid)] = await compare_work(snapshot, item)
-                except HTTPException as exc:
-                    errors_out[str(tid)] = str(exc.detail)
-                except Exception as exc:
-                    errors_out[str(tid)] = str(exc)[:180] or type(exc).__name__
+            try:
+                items_out[str(tid)] = await compare_work(snapshot, item)
+            except HTTPException as exc:
+                errors_out[str(tid)] = str(exc.detail)
+            except CloudError as exc:
+                errors_out[str(tid)] = str(exc)
+            except Exception:
+                logging.getLogger(__name__).exception('库存缺集对照失败，TMDB %s', tid)
+                errors_out[str(tid)] = '剧集对照失败，请重试。'
 
         await asyncio.gather(*(run_one(tid) for tid in unique_ids))
         return {'items': items_out, 'errors': errors_out}
 
+    async def compare_tmdb(path):
+        async with compare_tmdb_gate:
+            return await app.state.organizer.tmdb(path)
+
     async def compare_work(snapshot, item):
         tmdb_id = item['tmdb_id']
-        details = await app.state.organizer.tmdb(f'tv/{tmdb_id}')
+        details = await compare_tmdb(f'tv/{tmdb_id}')
         seasons = details.get('seasons') if isinstance(details, dict) else None
         if not isinstance(seasons, list) or len(seasons) > 100:
             raise HTTPException(502, 'TMDB 季列表不完整或超出支持范围。')
@@ -856,11 +856,8 @@ def install_inventory(app, store, admin):
             seen.add(number)
             if number > 0:
                 numbers.append(number)
-        sem = asyncio.Semaphore(4)
-        async def fetch(number):
-            async with sem:
-                return await app.state.organizer.tmdb(f'tv/{tmdb_id}/season/{number}')
-        values = await asyncio.gather(*(fetch(number) for number in numbers), return_exceptions=True)
+        values = await asyncio.gather(*(compare_tmdb(f'tv/{tmdb_id}/season/{number}') for number in numbers),
+                                      return_exceptions=True)
         result, errors = [], []
         for number, value in zip(numbers, values):
             episodes = value.get('episodes') if isinstance(value, dict) else None

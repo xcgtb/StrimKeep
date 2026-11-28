@@ -18,9 +18,16 @@ def completed(id):
     return {'id': id, 'kind': 'strm_sync', 'state': 'completed', 'updated': 1, 'counts': {}}
 
 
+def compared(tmdb_id):
+    return {'tmdb_id': tmdb_id, 'tmdb_complete': True, 'inventory_complete': True,
+            'series_status': 'Ended', 'combined_missing': 0, 'combined_extra': 0,
+            'seasons': [{'season': 1, 'expected': [1]}], 'failed_seasons': []}
+
+
 def exercise(browser, address):
     state = {'log_head': 200, 'settings_body': None}
     requests = []
+    inventory_batches, held_batches, inventory_retries = [], [], []
     errors = []
     page = browser.new_page(viewport={'width': 1360, 'height': 950})
     page.on('pageerror', lambda error: errors.append(str(error)))
@@ -55,6 +62,20 @@ def exercise(browser, address):
             else:
                 ids = range(head, max(0, head - 200), -1)
             data = {'items': [{'id': id, 'at': 1, 'kind': 'system', 'message': f'回归事件 {id}'} for id in ids]}
+        elif endpoint == '/inventory/mapping/page':
+            data = {'rows': [{'tmdb_id': id, 'kind': 'tv', 'title': f'测试剧集 {id}', 'status': 'pending',
+                              'cloud_files': 1, 'share_files': 0} for id in range(1001, 1009)], 'total': 8}
+        elif endpoint == '/inventory/tv/missing/batch':
+            ids = route.request.post_data_json['tmdb_ids']
+            inventory_batches.append(ids)
+            if 1001 in ids:
+                held_batches.append(route)
+                return
+            data = {'items': {str(id): compared(id) for id in ids if id != 1006},
+                    'errors': {'1006': 'TMDB 请求超时'}}
+        elif endpoint == '/inventory/tv/1006/missing':
+            inventory_retries.append(endpoint)
+            data = compared(1006)
         elif endpoint == '/explore/genres':
             data = {'genres': [{'id': 18, 'name': '剧情'}, {'id': 28, 'name': '动作'}]}
         elif endpoint == '/explore/list':
@@ -112,6 +133,22 @@ def exercise(browser, address):
     page.locator('.year-filter .el-select__wrapper').click()
     expect(page.get_by_role('option', name='2026', exact=True)).to_be_visible()
     expect(page.get_by_role('option', name='2027', exact=True)).to_have_count(0)
+
+    page.goto(address + 'inventory')
+    cards = page.locator('.poster-card')
+    slow = cards.filter(has_text='测试剧集 1001')
+    fast = cards.filter(has_text='测试剧集 1005')
+    failed = cards.filter(has_text='测试剧集 1006')
+    expect(fast.get_by_text('✓ 完整')).to_be_visible()
+    expect(slow.get_by_text('对照中')).to_be_visible()
+    expect(failed.get_by_text('对照失败')).to_be_visible()
+    failed.get_by_role('button', name='重新对照 测试剧集 1006').click()
+    expect(failed.get_by_text('✓ 完整')).to_be_visible()
+    expect(slow.get_by_text('对照中')).to_be_visible()
+    assert sorted(inventory_batches) == [[1001, 1002, 1003, 1004], [1005, 1006, 1007, 1008]]
+    assert inventory_retries == ['/inventory/tv/1006/missing']
+    held_batches[0].fulfill(json={'items': {str(id): compared(id) for id in range(1001, 1005)}, 'errors': {}})
+    expect(slow.get_by_text('✓ 完整')).to_be_visible()
     assert not errors, errors
     page.close()
 

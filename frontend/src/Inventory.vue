@@ -4,6 +4,7 @@ import {computed, nextTick, onMounted, onUnmounted, ref, watch} from 'vue'
 import {usePageActivity,useVisiblePolling} from './pageActivity'
 import {useRouter} from 'vue-router'
 import {ElMessage, ElMessageBox} from 'element-plus'
+import {ApiError} from './api/client'
 import {inventoryCardStatus, STATUS_LEGEND} from './inventoryStatus'
 import {actionKey, bulkConflictKeys, selectionConflict} from './governanceSelection'
 import {librarySeasonStatus, ordinaryEpisodes} from './inventorySeason'
@@ -272,87 +273,95 @@ function cardStatus(item:any) {
   return {text:(labels[item.status] || '待对照') + anomalySuffix, tone:tones[item.status] || 'pending', category:item.status, hint:(hints[item.status] || '还没拿到 TMDB 季/集信息') + (item.numbering_anomaly && item.numbering_note ? '；' + item.numbering_note : '')}
 }
 const comparedOnce = new Set<string>()
-async function compareItems(list:any[]) {
-  if (statusBusy.value) return
-  const generation = statusGeneration
-  // 自动补当前页；「同步全库」会传入全库剧集。
-  // 服务端已判「待对照」的卡片也要重新对照（缓存可能因库存变动失效）。
-  const queue = list.filter(item => {
-    if (item.kind !== 'tv' || item.unidentified) return false
-    const key = workKey(item)
-    if (!statusById.value[key]) return true
-    return item.status === 'pending' && !comparedOnce.has(key)
-  })
-  if (!queue.length) return
-  if (queue.length > 1) {
-    const batchTargets = []
-    for (const item of queue) {
-      const key = workKey(item)
-      if (!statusInFlight.has(key)) {
-        comparedOnce.add(key)
-        statusById.value[key] = {loading:true}
-        batchTargets.push(item)
+const MISSING_BATCH_SIZE = 4
+let comparingPage = -1
+let missingBatchAvailable = true
+
+async function fetchComparison(items:any[], generation:number) {
+  function save(item:any, result:{data?:any;error?:string}) {
+    if (generation === statusGeneration) statusById.value[workKey(item)] = result
+  }
+  if (items.length > 1 && missingBatchAvailable) {
+    try {
+      const ids = items.map(item => Number(item.tmdb_id))
+      const result = await props.api('/inventory/tv/missing/batch', 'POST', {tmdb_ids:ids})
+      for (const item of items) {
+        const data = result.items?.[item.tmdb_id]
+        save(item, data ? {data} : {error:result.errors?.[item.tmdb_id] || '对照结果缺失'})
       }
-    }
-    if (batchTargets.length > 1) {
-      let fallback = false
-      for (let start = 0; start < batchTargets.length; start += 50) {
-        if (generation !== statusGeneration) return
-        const chunk = batchTargets.slice(start, start + 50)
-        try {
-          const resp = await props.api('/inventory/tv/missing/batch', 'POST', {
-            tmdb_ids: chunk.map(item => Number(item.tmdb_id)),
-          })
-          if (generation !== statusGeneration) return
-          for (const item of chunk) {
-            const key = workKey(item)
-            const tid = String(item.tmdb_id)
-            if (resp?.items && resp.items[tid]) {
-              statusById.value[key] = {data: resp.items[tid]}
-            } else if (resp?.errors && resp.errors[tid]) {
-              statusById.value[key] = {error: resp.errors[tid]}
-            } else {
-              statusById.value[key] = {error: '对照结果缺失'}
-            }
-          }
-        } catch (e:any) {
-          if (e?.status === 404 || e?.status === 405) {
-            fallback = true
-            break
-          }
-          if (generation === statusGeneration) {
-            for (const item of chunk) {
-              statusById.value[workKey(item)] = {error: (e as Error).message}
-            }
-          }
-        }
-      }
-      if (!fallback) {
-        if (generation === statusGeneration && statusFilter.value !== 'all') await loadPage()
+      return
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 404 || error.status === 405)) {
+        missingBatchAvailable = false
+      } else {
+        for (const item of items) save(item, {error:(error as Error).message || '对照失败'})
         return
       }
     }
   }
-  const worker = async () => {
-    while (queue.length && generation === statusGeneration) {
-      const item = queue.shift(); if (!item) break
-      const key = workKey(item)
-      let pending = statusInFlight.get(key)
-      if (!pending) {
-        comparedOnce.add(key)
-        statusById.value[key] = {loading:true}
-        pending = (async () => {
-          try { const data = await props.api(`/inventory/tv/${item.tmdb_id}/missing`); if (generation === statusGeneration) statusById.value[key] = {data} }
-          catch (e) { if (generation === statusGeneration) statusById.value[key] = {error:(e as Error).message} }
-        })()
-        statusInFlight.set(key, pending)
-      }
-      await pending
-      if (statusInFlight.get(key) === pending) statusInFlight.delete(key)
+  for (const item of items) {
+    if (generation !== statusGeneration) return
+    try {
+      const data = await props.api(`/inventory/tv/${item.tmdb_id}/missing`)
+      save(item, {data})
+    } catch (error) {
+      save(item, {error:(error as Error).message || '对照失败'})
     }
   }
-  await Promise.all(Array.from({length:Math.min(3, queue.length)}, worker))
-  if (generation === statusGeneration && statusFilter.value !== 'all') await loadPage()
+}
+
+function compareChunk(items:any[], generation:number) {
+  const keys = items.map(workKey)
+  for (const key of keys) {
+    comparedOnce.add(key)
+    statusById.value[key] = {loading:true}
+  }
+  const pending = fetchComparison(items, generation)
+  for (const key of keys) statusInFlight.set(key, pending)
+  return pending.finally(() => {
+    for (const key of keys) if (statusInFlight.get(key) === pending) statusInFlight.delete(key)
+  })
+}
+
+function canRetryCompare(item:any) {
+  const result = statusById.value[workKey(item)]
+  return !batchMode.value && !statusBusy.value && !item.identity_conflict
+    && !result?.loading && (result?.error || result?.data?.failed_seasons?.length)
+}
+
+async function retryCompare(item:any) {
+  if (!canRetryCompare(item) || statusInFlight.has(workKey(item))) return
+  const generation = statusGeneration
+  const request = pageRequest
+  await compareChunk([item], generation)
+  if (generation === statusGeneration && request === pageRequest && statusFilter.value !== 'all') await loadPage()
+}
+
+async function compareItems(list:any[]) {
+  if (statusBusy.value || comparingPage === pageRequest) return
+  const generation = statusGeneration
+  const request = pageRequest
+  const queue = list.filter(item => {
+    if (item.kind !== 'tv' || item.unidentified || !Number.isSafeInteger(Number(item.tmdb_id))
+        || Number(item.tmdb_id) <= 0) return false
+    const key = workKey(item)
+    return !statusInFlight.has(key) && (!statusById.value[key]
+      || (item.status === 'pending' && !comparedOnce.has(key)))
+  })
+  if (!queue.length) return
+  comparingPage = request
+  const worker = async () => {
+    while (queue.length && generation === statusGeneration && request === pageRequest) {
+      const chunk = queue.splice(0, MISSING_BATCH_SIZE).filter(item => !statusInFlight.has(workKey(item)))
+      if (chunk.length) await compareChunk(chunk, generation)
+    }
+  }
+  try {
+    await Promise.all([worker(), worker()])
+  } finally {
+    if (comparingPage === request) comparingPage = -1
+  }
+  if (generation === statusGeneration && request === pageRequest && statusFilter.value !== 'all') await loadPage()
 }
 watch([search, kindFilter, scopeFilter, statusFilter, categoryFilter], () => { clearCompareNotice(); page.value = 1; chosen.value = []; void loadPage() })
 watch([page, pageSize], () => { clearCompareNotice(); void loadPage() })
@@ -720,7 +729,7 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize); clearC
    <el-empty v-else-if="!visibleItems.length" :description="emptyScan ? '扫描目录中未找到 STRM' : '没有符合当前筛选的作品'" />
    <div v-else class="poster-wall" :class="{ 'swipe-select': batchMode }" @touchstart="wallTouchStart" @touchmove="wallTouchMove" @touchend="wallTouchEnd" @touchcancel="wallTouchEnd"><article v-for="item in visibleItems" :key="workKey(item)" class="poster-card" :class="{ 'batch-selected': picked(item) }" :data-work-key="workKey(item)" tabindex="0" role="button" :aria-label="`查看 ${item.title} 详情`" @click="inspect(item)" @keydown.enter.prevent="inspect(item)" @keydown.space.prevent="inspect(item)">
     <div class="poster-cover"><img loading="lazy" :src="item.unidentified ? `/api/v1/inventory/mapping/unidentified-poster/${item.id}` : `/api/v1/dashboard/tmdb-poster/${item.kind}/${item.tmdb_id}`" :alt="`${item.title} 海报`" @error="($event.target as HTMLImageElement).style.visibility='hidden'" /><span class="poster-type">{{ item.kind === 'tv' ? '剧集' : '电影' }}</span><span :class="['poster-status', cardStatus(item).tone]">{{ cardStatus(item).text }}</span><label v-if="!item.unidentified" class="poster-pick" @click.stop><input type="checkbox" :checked="picked(item)" :aria-label="`选择 ${item.title}`" @change="togglePicked(item, ($event.target as HTMLInputElement).checked)" /></label></div>
-    <div class="poster-info"><strong :title="item.title">{{ item.title }}</strong><span>网盘 {{ item.cloud_files }} · 分享 {{ item.share_files }}</span></div>
+    <div class="poster-info"><strong :title="item.title">{{ item.title }}</strong><span>网盘 {{ item.cloud_files }} · 分享 {{ item.share_files }}</span><el-button v-if="canRetryCompare(item)" text type="primary" size="small" class="poster-compare-retry" :aria-label="`重新对照 ${item.title}`" @click.stop="retryCompare(item)" @keydown.enter.stop @keydown.space.stop>重新对照</el-button></div>
    </article></div>
    <div v-if="totalPages > 1" class="inventory-pagination"><el-button :disabled="page <= 1" @click="page--">上一页</el-button><span>第 {{ page }} / {{ totalPages }} 页</span><el-button :disabled="page >= totalPages" @click="page++">下一页</el-button></div>
    <el-drawer :model-value="!!selected" :title="selected?.title || '作品详情'" size="min(94%, 600px)" destroy-on-close @close="closeDetails">
@@ -928,6 +937,7 @@ onUnmounted(() => { window.removeEventListener('resize', updatePageSize); clearC
 
 .poster-wall.swipe-select{touch-action:pan-y}
 .poster-card.batch-selected{outline:2px solid var(--el-color-primary);outline-offset:-2px}
+.poster-compare-retry{justify-self:start;padding-inline:0}
 .poster-card.batch-selected .poster-cover::after{content:'✓';position:absolute;right:8px;top:8px;width:22px;height:22px;border-radius:11px;background:var(--el-color-primary);color:#fff;font-size:13px;display:flex;align-items:center;justify-content:center}
 .poster-cover{position:relative}
 
