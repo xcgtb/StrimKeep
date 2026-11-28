@@ -5,10 +5,8 @@ restarted in place with backoff; the container only dies when the supervisor
 itself cannot maintain the roles. Temporary worker unavailability is exposed
 by /health/ready, not by taking down a healthy Web process.
 """
-import json
 import os
 import signal
-import sqlite3
 import subprocess
 import sys
 import time
@@ -16,7 +14,7 @@ import urllib.request
 from pathlib import Path
 
 DATA = Path(os.environ.get('STRIMKEEP_DATA_DIR', '/data'))
-STATE_DB = DATA / 'data/state.db'
+HEARTBEAT_FILE = DATA / 'data/worker-heartbeat'
 BACKOFF_MIN = 2
 BACKOFF_MAX = 60
 HEARTBEAT_TIMEOUT = 45
@@ -75,23 +73,13 @@ def web_ready():
         return False
 
 
-def heartbeat_stale():
+def heartbeat_stale(pid):
     try:
-        connection = sqlite3.connect('file:%s?mode=ro' % STATE_DB, uri=True, timeout=2)
-        row = connection.execute(
-            "SELECT value FROM meta WHERE key='worker_heartbeat'").fetchone()
-        connection.close()
-        if not row:
-            return True
-        # set_meta JSON-encodes values.
-        try:
-            value = json.loads(row[0])
-        except (TypeError, ValueError):
-            value = row[0]
-        if isinstance(value, dict):
-            value = value.get('at')
-        return time.time() - float(value) > HEARTBEAT_TIMEOUT
-    except Exception:
+        age = time.time() - HEARTBEAT_FILE.stat().st_mtime
+        return HEARTBEAT_FILE.read_text(encoding='ascii').strip() != str(pid) or age > HEARTBEAT_TIMEOUT
+    except FileNotFoundError:
+        return True
+    except OSError:
         return False
 
 
@@ -105,7 +93,7 @@ def should_restart(role):
         reap(role)
         return True
     if role == 'worker' and time.monotonic() - restart_at.get(role, 0) > HEARTBEAT_TIMEOUT:
-        if heartbeat_stale():
+        if heartbeat_stale(process.pid):
             log('worker heartbeat stale; restarting worker in %ss' % backoff[role])
             process.terminate()
             reap(role)

@@ -18,7 +18,7 @@ const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise
 const emit=defineEmits<{navigate:[page:string]}>()
 const outputRoot=ref(''),savedBase=ref('')
 const config=ref<any>({inherit_video_extensions:true,video_extensions:[],metadata_extensions:[],min_video_size_mb:0,generate_nfo:false,generate_images:false,emby_media_info:false,stale_detect:false,webhook_token:'',deep_delete_dry_run:true,cleanup_empty:true,source_cids:[] as string[],directory_labels:{} as Record<string,string>,notify_emby:true,full_scan:true,cleanup_missing:true}),base=ref('')
-const baseline=ref(''),ready=ref(false)
+const baseline=ref(''),revision=ref(''),ready=ref(false)
 const busy=ref(false),error=ref(''),query=ref('')
 const profileEditor=ref<any>(null)
 const unidentified=ref<any>(null),selectedUnidentified=ref<string[]>([])
@@ -48,6 +48,7 @@ async function genToken(){await run(async()=>{
   const r=await props.api('/sync/webhook-token','POST',{})
   config.value.webhook_token=r.webhook_token
   baseline.value=syncBaselineWithWebhookToken(baseline.value,r.webhook_token)
+  revision.value=r.revision || revision.value
   ElMessage.success('深度删除令牌已由服务端生成并保存')
 })}
 async function copyUrl(){try{await copyText(webhookUrl.value,navigator.clipboard,document);ElMessage.success('完整地址已复制')}catch(e){ElMessage.error((e as Error).message||'复制失败，请手动复制完整地址')}}
@@ -89,13 +90,27 @@ async function cleanupUnidentifiedEmpty(){
 async function cleanupPlaybacks(){await run(async()=>{const r:any=await props.api('/playbacks/cleanup','POST',{});cleanupMsg.value=r.message||`已清理 ${r.removed} 条`;ElMessage.success(cleanupMsg.value)})}
 async function rewrite(){await run(async()=>{const p:any=await props.api('/strm/rebuild?dry_run=1','POST',{});if(!p.rewritten&&!p.missing){rewriteMsg.value=`无需重写：${p.unchanged} 条已是最新`;ElMessage.success('本地 STRM 与当前播放地址一致');return}try{await ElMessageBox.confirm(`将重写 ${p.rewritten} 条，缺失 ${p.missing} 条（缺失只报告、不创建）。执行前会自动快照，可一键回滚。`,'按当前地址重写本地 STRM',{confirmButtonText:'开始重写',cancelButtonText:'取消'})}catch{return}const r:any=await props.api('/strm/rebuild','POST',{});rewriteMsg.value=`重写 ${r.rewritten} · 未变 ${r.unchanged} · 缺失 ${r.missing} · 失败 ${r.failed}`;ElMessage.success(r.snapshot?`已重写 ${r.rewritten} 条，快照 #${r.snapshot} 可回滚`:'本地 STRM 已按当前播放地址重写')})}
 async function rollbackRewrite(){await run(async()=>{const s:any=await props.api('/strm/rebuild/status');if(!s||!s.snapshot){ElMessage.warning('还没有可回滚的重写记录');return}try{await ElMessageBox.confirm(`把上次重写（快照 #${s.snapshot}）写回的本地 STRM 内容还原？不影响云端文件与播放身份。`,'回滚上次重写',{confirmButtonText:'回滚',cancelButtonText:'取消'})}catch{return}const r:any=await props.api('/strm/rebuild/rollback','POST',{});rewriteMsg.value=`已回滚 ${r.restored}/${r.total} 条（快照 #${r.snapshot}）`;ElMessage.success('已回滚上次重写')})}
-async function save(){await run(async()=>{const latest=await props.api('/sync/config');config.value.emby_media_info=!!latest.config.emby_media_info;await props.api('/sync/config','PUT',config.value);try{if(base.value!==savedBase.value){await props.api('/settings','PUT',{playback_base:base.value});savedBase.value=base.value}}catch(e){throw new Error('同步设置已保存；播放地址未保存：'+(e as Error).message)}baseline.value=snapshot();ElMessage.success('STRM 同步设置已保存')})}
+async function save(){await run(async()=>{
+  const previous=JSON.parse(baseline.value).config
+  const patch=Object.fromEntries(Object.entries(config.value).filter(([key,value])=>
+    JSON.stringify(value)!==JSON.stringify(previous[key])))
+  if(Object.keys(patch).length){
+    const result=await props.api('/sync/config?revision='+revision.value,'PATCH',patch)
+    config.value=result.config
+    revision.value=result.revision
+    baseline.value=JSON.stringify({config:config.value,base:savedBase.value})
+  }
+  try{if(base.value!==savedBase.value){await props.api('/settings','PUT',{playback_base:base.value});savedBase.value=base.value}}
+  catch(e){throw new Error('同步设置已保存；播放地址未保存：'+(e as Error).message)}
+  baseline.value=snapshot()
+  ElMessage.success('STRM 同步设置已保存')
+})}
 async function canLeave(){if(profileEditor.value&&!await profileEditor.value.canLeave())return false;if(!dirty.value)return true;try{await ElMessageBox.confirm('当前修改尚未保存，修改会暂存到当前页面，刷新网页前请记得保存。确定切换？','离开同步设置',{confirmButtonText:'暂存并切换',cancelButtonText:'继续编辑'});return true}catch{return false}}
 function beforeUnload(e:BeforeUnloadEvent){if(route.name==='sync'&&(dirty.value||profileEditor.value?.hasDraft())){e.preventDefault();e.returnValue=''}}
 defineExpose({canLeave})
-onMounted(()=>{window.addEventListener('beforeunload',beforeUnload);run(async()=>{const [data,settings]=await Promise.all([props.api('/sync/config'),props.api('/settings')]);config.value=data.config;outputRoot.value=data.output_root;base.value=settings.playback_base;savedBase.value=base.value;baseline.value=snapshot();ready.value=true})})
+onMounted(()=>{window.addEventListener('beforeunload',beforeUnload);run(async()=>{const [data,settings]=await Promise.all([props.api('/sync/config'),props.api('/settings')]);config.value=data.config;revision.value=data.revision;outputRoot.value=data.output_root;base.value=settings.playback_base;savedBase.value=base.value;baseline.value=snapshot();ready.value=true})})
 onUnmounted(()=>{window.removeEventListener('beforeunload',beforeUnload)})
-useVisiblePolling(async()=>{if(!ready.value||busy.value||dirty.value)return;const before=baseline.value,previousBase=savedBase.value;const [data,settings]=await Promise.all([props.api('/sync/config'),props.api('/settings')]);if(busy.value||dirty.value||baseline.value!==before||savedBase.value!==previousBase)return;config.value=data.config;base.value=settings.playback_base;savedBase.value=base.value;baseline.value=snapshot()},5000)
+useVisiblePolling(async()=>{if(!ready.value||busy.value||dirty.value)return;const before=baseline.value,previousBase=savedBase.value;const [data,settings]=await Promise.all([props.api('/sync/config'),props.api('/settings')]);if(busy.value||dirty.value||baseline.value!==before||savedBase.value!==previousBase)return;config.value=data.config;revision.value=data.revision;base.value=settings.playback_base;savedBase.value=base.value;baseline.value=snapshot()},5000)
 </script>
 <template><div class="workflow-page">
 <WorkflowToolbar v-model:query="query" title="STRM 管理" save-label="保存全局设置" :dirty="dirty" :busy="busy" :ready="ready" @save="save"/>

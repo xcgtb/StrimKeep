@@ -17,6 +17,8 @@ class ProxyInput(BaseModel):
     upstream: str | None = Field(default=None, max_length=1000)
     api_key: str | None = Field(default=None, max_length=1000)
     emby_strm_path: str | None = Field(default=None, max_length=1000)
+    library_db: str | None = Field(default=None, max_length=1000)
+    extract_media_info: bool | None = None
     port: int | None = Field(default=None, ge=1, le=65535)
     enabled: bool | None = None
 
@@ -48,6 +50,8 @@ def _updates(body, rule, default_upstream):
         previous_url = str(rule.get('upstream') or default_upstream or '').rstrip('/')
         if (values['upstream'] or str(default_upstream or '').rstrip('/')) != previous_url:
             values.setdefault('api_key', '')
+            if values.get('library_db') == rule.get('library_db') or 'library_db' not in values:
+                values['library_db'] = ''
     if 'api_key' in values:
         values['api_key'] = values['api_key'].strip()
         if any(char.isspace() or ord(char) < 32 for char in values['api_key']):
@@ -62,6 +66,14 @@ def _updates(body, rule, default_upstream):
                     or any(ord(char) < 32 for char in path)):
             raise HTTPException(422, '请填写 Emby 容器内的绝对目录，例如 /media。')
         values['emby_strm_path'] = path
+    if 'library_db' in values:
+        from pathlib import PurePosixPath
+        path = values['library_db'].strip()
+        parsed = PurePosixPath(path)
+        if path and (not parsed.is_absolute() or '..' in parsed.parts or parsed.name != 'library.db'
+                     or '\\' in path or any(ord(char) < 32 for char in path)):
+            raise HTTPException(422, '请填写 StrimKeep 容器内 library.db 的绝对路径。')
+        values['library_db'] = path
     return values
 
 

@@ -20,7 +20,6 @@ from . import share_service
 from .strm_options import shared_settings, share_effective_settings, effective
 from .organize_options import OrganizeOptions
 from .quality import UpgradePolicy, public_policy, KEYS, LABELS, CHOICES, OPTIONS, SUGGESTED_ORDER
-from .fsops import purge_strm
 from .transfer import shares as parse_shares
 from .playaddr import ua_label
 
@@ -187,9 +186,10 @@ def install_share(app, store, admin):
     @app.post('/api/v1/share/generate', dependencies=[Depends(admin)])
     async def generate_strm(body: ShareGenerateInput):
         try:
-            result = share_service.generate(store, strm_root,
-                                            {'share_code': body.share_code, 'receive_code': body.receive_code},
-                                            body.files, origin='web', allow_restore=True)
+            async with app.state.organizer.publication_gate:
+                result = share_service.generate(store, strm_root,
+                                                {'share_code': body.share_code, 'receive_code': body.receive_code},
+                                                body.files, origin='web', allow_restore=True)
         except ValueError as exc:
             raise HTTPException(422, str(exc))
         job_id = None
@@ -205,13 +205,16 @@ def install_share(app, store, admin):
 
     @app.post('/api/v1/share/ingest', dependencies=[Depends(admin)])
     async def ingest_share(body: ShareIngestInput):
+        return await ingest_share_text(body.text)
+
+    async def ingest_share_text(text):
         """影视探索「分享入库」：解锁后的分享直接进分享库，不转存到自己网盘。
 
         与「转存到 115」并列的第二条入库路径：解析 → 列出视频 → 生成 STRM 到待整理，
         播放时走分享下载通道，不占自己 115 的空间。整理跟随分享设置里的自动整理开关。
         """
         try:
-            parsed = parse_shares(body.text)
+            parsed = parse_shares(text)
         except ValueError as exc:
             raise HTTPException(422, str(exc))
         unique = {(entry['share_code'], entry['receive_code']): entry for entry in parsed}
@@ -223,7 +226,8 @@ def install_share(app, store, admin):
         if not videos:
             raise HTTPException(422, '这个分享里没有可识别的视频文件。')
         videos.sort(key=lambda entry: entry['name'])
-        result = share_service.generate(store, strm_root, secret, videos, origin='web', allow_restore=True)
+        async with app.state.organizer.publication_gate:
+            result = share_service.generate(store, strm_root, secret, videos, origin='web', allow_restore=True)
         job_id = None
         organize_error = ''
         if result['created'] and (store.get('share_settings', {}) or {}).get('auto_organize', True):
@@ -235,6 +239,8 @@ def install_share(app, store, admin):
                 'count': len(result['created']), 'skip_count': len(result['skipped']),
                 'skipped': result['skipped'][:20], 'job_id': job_id, 'organize_error':organize_error,
                 'target': str(strm_root / PENDING_NAME)}
+
+    app.state.ingest_share_text = ingest_share_text
 
     @app.post('/api/v1/share/organize', dependencies=[Depends(admin)])
     async def organize_share_strm():
@@ -258,44 +264,35 @@ def install_share(app, store, admin):
             store.event('emby', '共享库刷新请求失败（%s）；请在 Emby 里手动扫描媒体库。'
                         % type(exc).__name__)
 
+    async def run_share_command(kind, payload=None):
+        if not commands.worker_ready(store, lane='operations'):
+            raise HTTPException(503, '后台任务暂未就绪，请稍后重试。')
+        command_id = await asyncio.to_thread(commands.submit, store, kind, payload)
+        result = await commands.wait(store, command_id, timeout=30)
+        if result is None:
+            raise HTTPException(503, '后台仍在处理，请刷新分享列表查看结果。')
+        if result.get('failed'):
+            raise HTTPException(409, result['message'])
+        return result
+
     @app.delete('/api/v1/share/strm/{sid}', dependencies=[Depends(admin)])
     async def revoke(sid: str):
-        async with app.state.organizer.publication_gate:
-            row = store.db.execute('SELECT strm_path,revoked FROM share_strms WHERE id=?', (sid,)).fetchone()
-            if not row:
-                raise HTTPException(404, '分享记录不存在。')
-            if row['revoked']:
-                # 旧版本遗留的「已撤销」行：直接清掉，不再保留状态。
-                with store.db:
-                    store.db.execute('DELETE FROM share_strms WHERE id=?', (sid,))
-                return {'ok': True, 'deleted': True}
-            local = strm_root / row['strm_path']
-            if local.exists() or local.is_symlink():
-                if share_service._verified_share_strm(strm_root, row['strm_path'], sid) is None:
-                    raise HTTPException(409, '本地文件归属无法确认，已保留。')
-                try:
-                    purge_strm(local, strm_root)
-                except Exception:
-                    raise HTTPException(503, '本地文件删除失败，记录未删除。') from None
-            with store.db:
-                store.db.execute('DELETE FROM share_strms WHERE id=? AND strm_path=?', (sid, row['strm_path']))
-        return {'ok': True, 'deleted': True}
+        row = store.db.execute('SELECT strm_path,token_hash FROM share_strms WHERE id=?', (sid,)).fetchone()
+        if not row:
+            raise HTTPException(404, '分享记录不存在。')
+        expected = dict(row)
+        if getattr(app.state.organizer, 'web_only', False):
+            return await run_share_command('share_revoke', {'id': sid, **expected})
+        try:
+            return await share_service.revoke(app.state.organizer, sid, expected)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
 
     @app.post('/api/v1/share/strms/prune', dependencies=[Depends(admin)])
     async def prune_orphans():
-        """删除本地文件已不存在的登记：不是标记撤销，而是直接删行。"""
-        async with app.state.organizer.publication_gate:
-            rows = store.db.execute('SELECT id,strm_path FROM share_strms WHERE revoked=0').fetchall()
-            removed = 0
-            with store.db:
-                for row in rows:
-                    path = strm_root / row['strm_path']
-                    if path.is_file() or path.is_symlink():
-                        continue
-                    removed += store.db.execute('DELETE FROM share_strms WHERE id=? AND strm_path=?',
-                                                (row['id'], row['strm_path'])).rowcount
-            return {'ok': True, 'removed': removed,
-                    'message': '已删除 %d 条本地文件不存在的登记' % removed}
+        if getattr(app.state.organizer, 'web_only', False):
+            return await run_share_command('share_prune')
+        return await share_service.prune_orphans(app.state.organizer)
 
     # 分享 STRM 里写的是 /play115/share/<sid>/<文件名>，路由必须带文件名段，
     # 否则整条分享库都是 404（Emby 也就永远探测不到媒体信息）。
@@ -392,7 +389,8 @@ def install_share(app, store, admin):
                 secret = {'share_code': code, 'receive_code': receive}
                 videos = await share_service.list_videos(app.state.cloud, secret, share_effective_settings(store)['strm']['video_extensions'])
                 scanned += 1
-                result = share_service.generate(store, strm_root, secret, videos, origin='monitor')
+                async with app.state.organizer.publication_gate:
+                    result = share_service.generate(store, strm_root, secret, videos, origin='monitor')
                 new_total += len(result['created'])
                 with store.db:
                     store.db.execute('UPDATE share_watchlist SET last_checked=? WHERE share_code=?', (time.time(), code))

@@ -171,6 +171,42 @@ def test_premiere_waits_then_enqueues_share_job_and_can_pause(follow, monkeypatc
     assert len(calls) == 1
 
 
+def test_subscription_moves_to_another_source_only_after_verified_failure(follow, monkeypatch):
+    service, _ = follow
+    insert(service, 'share')
+    for number in (1, 2, 3):
+        media(service, number)
+    monkeypatch.setattr(subscriptions, 'discover_resources', source([
+        item('episode', '海岸线.2025.S01E04.1080p'),
+    ]))
+    asyncio.run(service.tick())
+    first, = current(service)['attempts']
+    store = service.store
+    original = service.engine.cloud.share_items
+    async def read_share(secret, cid):
+        if secret['share_code'] == 'replacement':
+            return await original({**secret, 'share_code': 'episode'}, cid)
+        return await original(secret, cid)
+    service.engine.cloud.share_items = read_share
+    monkeypatch.setattr(subscriptions, 'discover_resources', source([
+        item('episode', '海岸线.2025.S01E04.1080p'),
+        item('replacement', '海岸线.2025.S01E04.1080p'),
+    ]))
+    store.db.execute("UPDATE organize_jobs SET state='needs_review' WHERE id=?", (first['job_id'],))
+    due(service)
+    asyncio.run(service.tick())
+    assert current(service)['attempts'][0]['job_id'] == first['job_id']
+    store.db.execute("""UPDATE organize_jobs SET state='failed',
+                     config=json_set(config,'$.subscription_source_rejected',1) WHERE id=?""", (first['job_id'],))
+    due(service)
+    asyncio.run(service.tick())
+    result = current(service)
+    assert result['rejected_attempts'][0]['job_id'] == first['job_id']
+    assert result['attempts'][0]['job_id'] != first['job_id']
+    assert result['details']['submitted'] == [4]
+    assert store.db.execute('SELECT count(*) FROM organize_jobs').fetchone()[0] == 2
+
+
 def test_same_title_ambiguity_and_offline_wrong_filename_require_review(follow, monkeypatch):
     service, metadata = follow
     insert(service, backfill=True)

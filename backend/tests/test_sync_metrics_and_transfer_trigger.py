@@ -103,7 +103,10 @@ def test_confirmed_transfer_limits_followup_to_matched_destination(tmp_path, mov
             rows = store.db.execute(
                 "SELECT * FROM organize_jobs WHERE json_extract(config,'$.sync_trigger')='transfer'").fetchall()
             supplemental, = rows
+            receipt = json.loads(engine.job(jid)['config'])['receipt']
+            assert receipt['sync_jobs'] == [supplemental['id']]
             config = json.loads(supplemental['config'])
+            assert config['transfer_parent'] == jid
             assert config['source_cids'] == [dest]
             assert config['sync_profile_id'] == 'scope'
             assert config['cleanup_missing'] is False and config['stale_detect'] is False

@@ -9,7 +9,21 @@ These hashes are inputs for plan revalidation, not deletion authority.
 import hashlib
 import json
 
+from .cloud115 import CloudError
 from .inventory_fs import is_synthetic
+
+
+def optional_account(engine):
+    """An unavailable account makes cloud files ineligible, not local shares."""
+    index = getattr(engine, 'index', None)
+    if index is None:
+        return ''
+    try:
+        return index.account({})
+    except CloudError as exc:
+        if exc.code not in ('LOGIN_REQUIRED', 'LOGIN_INVALID'):
+            raise
+        return ''
 
 
 def _digest(value):

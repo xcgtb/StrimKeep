@@ -189,25 +189,42 @@ const resourceSubmissions = ref<Record<string, 'submitted' | 'uncertain'>>({})
 const transferTarget = ref<any>(null), targetError = ref('')
 const resourceFilter = ref<'all' | 'share' | 'offline'>('all')
 let resourceRequestVersion = 0
+let resourceStream: EventSource | undefined
+function closeResourceStream() {
+  resourceStream?.close()
+  resourceStream = undefined
+}
+watch(resourceDialog, open => {
+  if (open) return
+  resourceRequestVersion++
+  closeResourceStream()
+  resourceBusy.value = false
+})
 let targetRequestVersion = 0
 const resourceFailures = computed(() => resourceSources.value.filter(source => source.error))
 const visibleResources = computed(() => resourceItems.value.filter(item =>
   resourceFilter.value === 'all' || (resourceFilter.value === 'share') === (item.link_type === 'share')))
 
 type SeasonChoice = { number: number; name: string; air_date: string }
-type SubscriptionSettings = { share_action: 'share' | 'transfer'; backfill: boolean; enabled: boolean }
+type SubscriptionSettings = { share_action: 'share' | 'transfer'; backfill: boolean; enabled: boolean;
+  auto_switch: boolean; minimum_resolution: number; preferred_sources: string[] }
+const defaultSubscriptionSettings = (): SubscriptionSettings => ({
+  share_action: 'share', backfill: false, enabled: true, auto_switch: true,
+  minimum_resolution: 0, preferred_sources: [],
+})
 type Subscription = SubscriptionSettings & {
   media_type: 'movie' | 'tv'; tmdb_id: number; season: number; title: string; state: string; message: string;
   last_check: number; next_check: number;
   details: { present?: number[]; missing?: number[]; submitted?: number[]; needs_review?: number[];
     candidates?: ResourceItem[]; sources?: ResourceSource[] };
   attempts: { episode: number; job_id?: number; inbox_id?: number }[];
+  rejected_attempts?: { episode: number; job_id?: number }[];
 }
 const subscriptionDialog = ref(false), subscriptionBusy = ref(false), subscriptionError = ref('')
 const subscriptions = ref<Subscription[]>([])
 const subscriptionEditor = ref<{ id: number; kind: 'movie' | 'tv'; title: string; seasons: SeasonChoice[]; edit: boolean } | null>(null)
 const subscriptionSeason = ref<number>()
-const subscriptionSettings = ref<SubscriptionSettings>({share_action: 'share', backfill: false, enabled: true})
+const subscriptionSettings = ref<SubscriptionSettings>(defaultSubscriptionSettings())
 const subscribedWorks = computed(() => new Set(subscriptions.value.map(row => row.media_type + ':' + row.tmdb_id)))
 const subscriptionStates: Record<string, string> = {
   pending: '等待检查', waiting: '待开播', caught_up: '已追齐', searching: '等待资源',
@@ -230,7 +247,9 @@ const checkTime = (ts: number) => new Date(ts * 1000).toLocaleString('zh-CN', {
   month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
 })
 function settingsFor(row: Subscription): SubscriptionSettings {
-  return {share_action: row.share_action, backfill: Boolean(row.backfill), enabled: Boolean(row.enabled)}
+  return {share_action: row.share_action, backfill: Boolean(row.backfill), enabled: Boolean(row.enabled),
+          auto_switch: row.auto_switch !== false, minimum_resolution: row.minimum_resolution || 0,
+          preferred_sources: [...(row.preferred_sources || [])]}
 }
 async function refreshSubscriptions() {
   subscriptions.value = (await props.api(subscriptionPath)).items || []
@@ -259,7 +278,7 @@ function subscribeTo(item: { id: number; kind: 'movie' | 'tv'; title: string }) 
     return
   }
   subscriptionError.value = ''
-  subscriptionSettings.value = {share_action: 'share', backfill: false, enabled: true}
+  subscriptionSettings.value = defaultSubscriptionSettings()
   subscriptionSeason.value = undefined
   subscriptionEditor.value = {id: item.id, kind: item.kind, title: item.title, seasons: [], edit: false}
   subscriptionDialog.value = true
@@ -281,7 +300,7 @@ function subscribeTo(item: { id: number; kind: 'movie' | 'tv'; title: string }) 
 function loadSeasonSettings() {
   const row = subscriptions.value.find(row => row.media_type === 'tv'
     && row.tmdb_id === subscriptionEditor.value?.id && row.season === subscriptionSeason.value)
-  subscriptionSettings.value = row ? settingsFor(row) : {share_action: 'share', backfill: false, enabled: true}
+  subscriptionSettings.value = row ? settingsFor(row) : defaultSubscriptionSettings()
 }
 function editSubscription(row: Subscription) {
   subscriptionError.value = ''
@@ -319,6 +338,7 @@ async function removeSubscription(row: Subscription) {
 }
 function reviewSubscription(row: Subscription) {
   ++resourceRequestVersion
+  closeResourceStream()
   selected.value = {id: row.tmdb_id, title: row.title, kind: row.media_type}
   resourceItems.value = row.details.candidates || []
   resourceFilter.value = 'all'
@@ -370,32 +390,50 @@ async function searchResources() {
   resourceItems.value = []
   resourceSources.value = []
   resourceTruncated.value = false
-  try {
-    const result = await props.api('/explore/resources', 'POST', {
-      title: movie.title, tmdb_id: movie.id, media_type: movie.kind, year: String(movie.year || '')
-    })
-    if (version === resourceRequestVersion) {
+  closeResourceStream()
+  const stream = new EventSource('/api/v1/explore/resources/events?' + new URLSearchParams({title: movie.title}))
+  resourceStream = stream
+
+  function finish() {
+    stream.close()
+    if (resourceStream === stream) resourceStream = undefined
+    if (version === resourceRequestVersion) resourceBusy.value = false
+  }
+  stream.addEventListener('results', event => {
+    if (version !== resourceRequestVersion) return
+    try {
+      const result = JSON.parse((event as MessageEvent).data)
       resourceItems.value = result.items || []
       resourceSources.value = result.sources || []
       resourceTruncated.value = !!result.truncated
+    } catch {
+      resourceError.value = '资源搜索返回了无法读取的结果。'
+      finish()
     }
-  } catch (e) {
-    if (version === resourceRequestVersion) resourceError.value = (e as Error).message
-  } finally {
-    if (version === resourceRequestVersion) resourceBusy.value = false
+  })
+  stream.addEventListener('done', event => {
+    if (version === resourceRequestVersion && Number((event as MessageEvent).data) === 0) {
+      resourceError.value = '请在「系统设置 → 资源来源」添加站点或选择要搜索的 Telegram 频道。'
+    }
+    finish()
+  })
+  stream.onerror = () => {
+    if (version === resourceRequestVersion) resourceError.value = '资源搜索连接中断，可以保留当前结果或刷新。'
+    finish()
   }
 }
+
 async function submitResource(item: ResourceItem, action: ResourceAction) {
   if (searchOrSubmitBusy() || resourceSubmissions.value[item.key]) return
   submittingResource.value = true
   const searchVersion = resourceRequestVersion
   const actions = {
-    transfer: { label: '转存到 115', path: '/transfer/jobs', description: '' },
-    share: { label: '分享入库', path: '/share/ingest', description: '为该 115 分享生成 STRM，并提交整理。' },
-    offline: { label: '离线下载', path: '/offline/jobs', description: '使用资源入库中已设置的离线下载目录和整理规则。' },
+    transfer: { label: '转存到 115', description: '' },
+    share: { label: '分享入库', description: '为该 115 分享生成 STRM，并按设置提交整理。' },
+    offline: { label: '离线下载', description: '使用资源入库中已设置的离线下载目录和整理规则。' },
   }
   const operation = actions[action]
-  const body: { text: string; target_cid?: string } = { text: item.link }
+  const body: { text: string; action: ResourceAction; target_cid?: string } = { text: item.link, action }
   try {
     if (action === 'transfer') {
       const target = await loadTransferTarget()
@@ -418,7 +456,8 @@ async function submitResource(item: ResourceItem, action: ResourceAction) {
     resourceError.value = ''
     resourceMessage.value = ''
     try {
-      const result = await props.api(operation.path, 'POST', body)
+      const result = await props.api('/intake', 'POST', body)
+      if (action !== 'share' && result.errors?.length) throw new Error(result.errors.join('；'))
       resourceSubmissions.value[item.key] = 'submitted'
       if (searchVersion !== resourceRequestVersion) return
       if (action === 'share') {
@@ -427,8 +466,8 @@ async function submitResource(item: ResourceItem, action: ResourceAction) {
         if (result.organize_error) resourceError.value = result.organize_error
       } else {
         resourceMessage.value = action === 'offline'
-          ? `离线下载已提交，记录 #${result.submission_id}。`
-          : `转存任务${result.items?.[0]?.id ? ' #' + result.items[0].id : ''}已入队。`
+          ? '离线下载已提交，记录 '+result.offline.map((id:number)=>'#'+id).join('、')+'。'
+          : '转存任务 '+result.share.map((id:number)=>'#'+id).join('、')+' 已入队。'
       }
     } catch (e) {
       const rejected = e instanceof ApiError && e.status >= 400 && e.status < 500
@@ -442,7 +481,7 @@ async function submitResource(item: ResourceItem, action: ResourceAction) {
     submittingResource.value = false
   }
 }
-const searchOrSubmitBusy = () => resourceBusy.value || submittingResource.value
+const searchOrSubmitBusy = () => submittingResource.value
 async function copyResource(item: ResourceItem) {
   try {
     if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(item.link)
@@ -486,6 +525,7 @@ onUnmounted(() => {
   moviesOnMobile.removeEventListener('change', updatePageSize)
   window.clearTimeout(filterTimer)
   requestVersion++
+  closeResourceStream()
 })
 </script>
 <template>
@@ -621,6 +661,15 @@ onUnmounted(() => {
     <el-form-item v-if="subscriptionEditor.kind==='tv'">
       <el-checkbox v-model="subscriptionSettings.backfill">补齐已有集数之前的缺集</el-checkbox>
     </el-form-item>
+    <el-form-item label="资源策略">
+      <el-checkbox v-model="subscriptionSettings.auto_switch">已确认失效时尝试其他来源</el-checkbox>
+      <el-select v-model="subscriptionSettings.minimum_resolution" aria-label="最低分辨率">
+        <el-option :value="0" label="不限分辨率" />
+        <el-option v-for="quality in [720,1080,2160]" :key="quality" :value="quality" :label="quality+'p 或更高'" />
+      </el-select>
+      <el-select v-model="subscriptionSettings.preferred_sources" multiple filterable allow-create default-first-option
+        aria-label="优先来源" placeholder="按顺序填写站点或频道名称" />
+    </el-form-item>
     <div class="subscription-actions">
       <el-button @click="showSubscriptions">订阅列表</el-button>
       <el-button type="primary" :disabled="subscriptionEditor.kind==='tv' && !subscriptionSeason" :loading="subscriptionBusy" @click="saveSubscription">保存订阅</el-button>
@@ -647,6 +696,7 @@ onUnmounted(() => {
       <p class="hint" v-if="row.details.sources?.some(source => source.error)">
         搜索失败 {{row.details.sources.filter(source => source.error).map(source => source.name).join('、')}}
       </p>
+      <p v-if="row.rejected_attempts?.length" class="hint">已排除 {{row.rejected_attempts.length}} 条失效来源</p>
       <p class="hint" v-if="row.attempts.length">提交记录 {{row.attempts.slice(-4).map(a =>
         (row.media_type === 'tv' ? 'E' + a.episode + ' · ' : '') + (a.job_id ? '任务 #' + a.job_id : a.inbox_id ? '收件箱 #' + a.inbox_id : '已有分享 STRM')).join('、')}}</p>
       <div class="subscription-actions">
@@ -665,7 +715,7 @@ onUnmounted(() => {
 <el-dialog v-model="resourceDialog" class="discovery-dialog" width="min(880px, 96vw)" :show-close="true">
 <template #header><div class="resource-heading"><h2>{{selected?.title}}</h2><p>{{selected?.kind==='tv'?'剧集':'电影'}} · {{selected?.year||'年份未知'}} · {{selected?.badge||'状态未知'}}</p></div></template>
 <div class="resource-toolbar">
-  <span class="hint">{{ resourceBusy ? '正在搜索已启用的来源…' : resourceSources.length ? `已搜索 ${resourceSources.length} 个来源` : '聚合搜索' }}</span>
+  <span class="hint">{{ resourceBusy ? '已返回 '+resourceSources.length+' 个来源，继续搜索…' : resourceSources.length ? `已搜索 ${resourceSources.length} 个来源` : '聚合搜索' }}</span>
   <div class="resource-toolbar-actions">
     <el-button :icon="Refresh" :loading="resourceBusy" :disabled="submittingResource" @click="searchResources">刷新</el-button>
     <el-button :icon="Setting" @click="resourceDialog=false;router.push({name:'settings',query:{section:'resource'}})">资源来源</el-button>
@@ -690,7 +740,7 @@ onUnmounted(() => {
     <button :class="{active:resourceFilter==='offline'}" @click="resourceFilter='offline'">磁力 / ED2K</button>
   </div>
 </div>
-<el-skeleton v-if="resourceBusy" :rows="4" animated/>
+<el-skeleton v-if="resourceBusy && !resourceItems.length" :rows="4" animated/>
 <el-empty v-else-if="!visibleResources.length && !resourceError"
   :description="resourceItems.length ? '当前筛选下没有资源' : resourceFailures.length === resourceSources.length && resourceFailures.length ? '所有来源查询失败' : '暂未找到资源'"/>
 <div v-else class="resource-list">

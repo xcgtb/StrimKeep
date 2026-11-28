@@ -62,6 +62,7 @@ useVisiblePolling(async()=>{if(!busy.value)await refreshJob()},5000)
 <template>
 <div class="workflow-page">
 <WorkflowToolbar v-model:query="query" title="影视整理" description="扫描 115 待整理目录，识别归档后生成 STRM。" :dirty="dirty" :busy="busy" :ready="ready" @save="save"/>
+<RouterLink :to="{name:'recognize',query:{section:'test'}}" class="hint">预演识别、分类和洗版规则 →</RouterLink>
 <el-alert v-if="error" :title="error" type="error" show-icon class="global-error"/>
 <WorkspaceSections v-if="!query.trim()" v-model="section" label="影视整理分区" :items="[
   {id:'start', label:'执行与目录'}, {id:'rules', label:'文件与命名'}, {id:'advanced', label:'洗版与联动'},

@@ -17,6 +17,7 @@ import json
 import shutil
 import sqlite3
 import time
+from pathlib import Path
 from .emby_connection import strm_mount_path
 
 # Emby 的 MediaStreamType：1=Audio 2=Video 3=Subtitle 4=EmbeddedImage（按线上库统计核对过）
@@ -56,7 +57,7 @@ def emby_strm_mount(store):
 
 
 
-def inject_sidecar(db_path, item_id, sidecar, strm_root='/strm', emby_root='/media', should_continue=None):
+def inject_sidecar(db_path, item_id, sidecar, strm_root='/strm', emby_root='/media', should_continue=None, *, expected_path=None):
     """单条即时写入（追更用）：已经有视频流就跳过。
 
     返回 ``(状态, 流数, 原因)``：状态为 ``injected`` / ``skip`` / ``missing`` /
@@ -66,10 +67,17 @@ def inject_sidecar(db_path, item_id, sidecar, strm_root='/strm', emby_root='/med
     import os
     if should_continue and not should_continue():
         return 'skip', 0, ''
-    conn = sqlite3.connect(db_path, timeout=20)
+    if not os.path.isfile(db_path):
+        return 'missing', 0, 'library_db_missing'
+    conn = sqlite3.connect(Path(db_path).resolve().as_uri() + '?mode=rw', uri=True, timeout=20)
     conn.execute('PRAGMA busy_timeout=15000')
     conn.row_factory = sqlite3.Row
     try:
+        if expected_path:
+            conn.execute('BEGIN IMMEDIATE')
+            row = conn.execute('SELECT Path FROM MediaItems WHERE Id=?', (item_id,)).fetchone()
+            if not row or row['Path'] != expected_path:
+                return 'failed', 0, 'emby_item_path_mismatch'
         if conn.execute('SELECT 1 FROM MediaStreams2 WHERE ItemId=? AND StreamType=2 LIMIT 1',
                         (item_id,)).fetchone():
             return 'skip', 0, ''

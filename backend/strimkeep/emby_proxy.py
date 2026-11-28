@@ -256,6 +256,8 @@ class ProxyDeliveryTarget:
     name: str
     mount: str
     connection: tuple[str, str]
+    library_db: str = ''
+    extract_media_info: bool = False
 
     @property
     def binding(self):
@@ -275,7 +277,8 @@ def delivery_target(store, rule_id):
     if not rule.get('upstream') and not rule.get('api_key'):
         connection = saved_base(store)
     return ProxyDeliveryTarget(rule.get('name') or 'Emby', config.strm_path,
-                               connection or (config.upstream_url('/emby'), config.api_key))
+                               connection or (config.upstream_url('/emby'), config.api_key),
+                               rule.get('library_db') or '', bool(rule.get('extract_media_info')))
 
 
 class ProxyServer:
@@ -799,7 +802,9 @@ class EmbyProxyManager:
                            'upstream_override': rule.get('upstream') or '',
                            'api_key_configured': bool(config.api_key),
                            'api_key_override_configured': bool(rule.get('api_key')),
-                           'emby_strm_path': rule.get('emby_strm_path') or ''})
+                           'emby_strm_path': rule.get('emby_strm_path') or '',
+                           'library_db': rule.get('library_db') or '',
+                           'extract_media_info': bool(rule.get('extract_media_info'))})
         return result
 
 

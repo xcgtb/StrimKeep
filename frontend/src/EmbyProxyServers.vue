@@ -12,9 +12,11 @@ type Server = {
   upstream_override: string
   api_key_override_configured: boolean
   emby_strm_path: string
+  library_db?: string
+  extract_media_info?: boolean
 }
 type Payload = { servers: Server[]; emby_url: string; emby_strm_path: string; id?: string }
-type Draft = { name: string; port?: number; source: 'main' | 'custom'; upstream: string; key: string; path: string }
+type Draft = { name: string; port?: number; source: 'main' | 'custom'; upstream: string; key: string; path: string; db: string; extract: boolean }
 type Probe = { ok: boolean; message: string; latency_ms?: number }
 type StrmCheck = Probe & {
   running: boolean; indexed?: boolean; emby_root: string; emby_path?: string; local_path?: string
@@ -32,7 +34,7 @@ const error = ref('')
 const formError = ref('')
 const editOpen = ref(false)
 const editing = ref<Server>()
-const draft = ref<Draft>({ name: '', source: 'main', upstream: '', key: '', path: '' })
+const draft = ref<Draft>({ name: '', source: 'main', upstream: '', key: '', path: '', db: '', extract: false })
 const result = ref<Probe>()
 const playsOpen = ref(false)
 const playsFor = ref('')
@@ -91,7 +93,7 @@ function edit(server: Server, newServer = false) {
   editing.value = server
   draft.value = {
     name: server.name, port: server.port, source: newServer || custom(server) ? 'custom' : 'main',
-    upstream: custom(server) ? server.upstream : '', key: '', path: server.emby_strm_path,
+    upstream: custom(server) ? server.upstream : '', key: '', path: server.emby_strm_path, db: server.library_db || '', extract: !!server.extract_media_info,
   }
   formError.value = ''
   result.value = undefined
@@ -122,7 +124,7 @@ async function save() {
     const { name, port, path } = draft.value
     if (port === undefined || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('请填写有效的监听端口。')
     const response: Payload = await props.api(serverPath(server), 'PUT', {
-      ...connectionDraft(), name, port, emby_strm_path: path,
+      ...connectionDraft(), name, port, emby_strm_path: path, library_db: draft.value.db, extract_media_info: draft.value.extract,
     })
     update(response)
     editOpen.value = false
@@ -284,6 +286,13 @@ onMounted(load)
           <el-input v-model="draft.path" :placeholder="'留空沿用 ' + (defaultPath || '/media')" />
         </el-form-item>
         <p>指向与 StrimKeep 共用的 STRM 文件。</p>
+      </details>
+      <details class="proxy-help" :open="draft.extract">
+        <summary>技术媒体信息</summary>
+        <el-form-item label="在入库后提取媒体信息"><el-switch v-model="draft.extract" /></el-form-item>
+        <el-form-item v-if="draft.extract" label="这台 Emby 的 library.db">
+          <el-input v-model="draft.db" placeholder="留空仅保存媒体信息 JSON" />
+        </el-form-item>
       </details>
     </el-form>
     <el-alert v-if="formError" :title="formError" type="error" :closable="false" />

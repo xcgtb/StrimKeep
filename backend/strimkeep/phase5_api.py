@@ -19,6 +19,8 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from .emby_connection import strm_mount_path
 from .emby_proxy import delivery_target
 from .sync import stale_records
+from .cloud_activity import STATE as ACTIVITY_STATE
+from .store import digest
 
 
 class Input(BaseModel):
@@ -50,6 +52,10 @@ class SyncRunInput(Input):
     dry_run: bool = False    # 只按台账估算影响面，不入队、不读云端
 
 
+class ScopedSyncInput(Input):
+    source_cid: str = Field(pattern=r'^[1-9]\d{0,23}$')
+
+
 class UnidentifiedCleanupInput(Input):
     paths: list[str] = Field(default_factory=list, max_length=500)
 
@@ -64,6 +70,7 @@ class SyncProfileInput(Input):
     metadata_mode: str | None = Field(default=None, pattern='^(inherit|source|technical)$')
     exclude_keywords: SyncPathKeywords | None = None
     after_transfer: bool | None = None
+    watch_changes: bool | None = None
     emby_target: str | None = Field(default=None, pattern=r'^[A-Za-z0-9_-]{1,80}$')
     enabled: bool = False
     frequency: str = Field(default='daily', pattern='^(daily|weekly|interval|cron)$')
@@ -141,9 +148,15 @@ def install_phase5(app,store,admin,job_public):
         try: return engine().tasks.config(kind,roots)
         except ValueError as exc: raise HTTPException(409,str(exc)) from None
 
+    def sync_revision(current):
+        return digest(json.dumps(current, sort_keys=True, ensure_ascii=False))
+
     @app.get('/api/v1/sync/config',dependencies=[Depends(admin)])
-    async def sync_config(): return {'config':{**SyncConfig().model_dump(),**store.get('sync_config',{}), **effective(store), 'full_scan': True}, 'effective_shared': shared_settings(store), 'output_root': str(app.state.strms),
-        'stale_strms': stale_records(store)}
+    async def sync_config():
+        current = store.get('sync_config', {})
+        return {'config': {**SyncConfig().model_dump(), **current, **effective(store, current), 'full_scan': True},
+                'revision': sync_revision(current), 'effective_shared': shared_settings(store),
+                'output_root': str(app.state.strms), 'stale_strms': stale_records(store)}
 
     @app.get('/api/v1/strm/audit',dependencies=[Depends(admin)])
     async def strm_audit(limit:int=Query(20,ge=1,le=200)):
@@ -307,6 +320,23 @@ def install_phase5(app,store,admin,job_public):
         store.set_many({'sync_config':{**body.model_dump(), 'full_scan':True}})
         return await sync_config()
 
+    @app.patch('/api/v1/sync/config', dependencies=[Depends(admin)])
+    async def patch_sync(body: SyncConfig, revision: str = Query(pattern=r'^[a-f0-9]{64}$')):
+        pending = body.model_dump(exclude_unset=True)
+        if pending.get('source_cids'):
+            await validate_roots(pending['source_cids'])
+        with store.transaction(immediate=True):
+            current = store.get('sync_config', {})
+            if revision != sync_revision(current):
+                raise HTTPException(409, '同步设置已在其他页面变化，请刷新后重新应用修改。')
+            config = {**current, **pending, 'full_scan': True}
+            try:
+                effective(store, config)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from None
+            store.set_many({'sync_config': config})
+        return await sync_config()
+
     @app.post('/api/v1/sync/jobs',dependencies=[Depends(admin)])
     async def start_sync():
         jid,_ = engine().tasks.enqueue(config_for('strm_sync'))
@@ -316,7 +346,10 @@ def install_phase5(app,store,admin,job_public):
     async def sync_profiles():
         profiles = store.get('sync_profiles', [])
         states = {row['kind']:dict(row) for row in store.db.execute("SELECT * FROM task_schedules WHERE kind LIKE 'sync_profile:%'")}
-        return {'items':[{**profile, 'next_due':states.get('sync_profile:' + profile['id'], {}).get('next_due')} for profile in profiles]}
+        activity = store.meta_json(ACTIVITY_STATE, {}) or {}
+        return {'items':[{**profile, 'next_due':states.get('sync_profile:' + profile['id'], {}).get('next_due')}
+                         for profile in profiles],
+                'activity_status': activity.get('status', '')}
 
     @app.post('/api/v1/sync/profiles/preview-path', dependencies=[Depends(admin)])
     async def preview_sync_path(body: SyncPathInput):
@@ -382,6 +415,7 @@ def install_phase5(app,store,admin,job_public):
         if len(profiles) >= 30: raise HTTPException(422, '最多创建 30 个同步任务。')
         profile = {'id': secrets.token_hex(8), **body.model_dump(), 'metadata_mode':body.metadata_mode or 'inherit', 'source_cids':roots, 'source_labels':labels, 'source_cid':roots[0], 'source_label':labels[roots[0]]}
         profile['after_transfer'] = bool(body.after_transfer and body.mode == 'incremental')
+        profile['watch_changes'] = bool(body.watch_changes)
         profile['emby_target'] = checked_emby_target(body.emby_target)
         profile['exclude_keywords'] = body.exclude_keywords or []
         store.set_many({'sync_profiles': [*profiles, profile]})
@@ -401,6 +435,7 @@ def install_phase5(app,store,admin,job_public):
         profile = {'id': profile_id, **body.model_dump(), 'metadata_mode':body.metadata_mode or existing.get('metadata_mode') or 'inherit', 'source_cids':roots, 'source_labels':labels, 'source_cid':roots[0], 'source_label':labels[roots[0]]}
         after_transfer = existing.get('after_transfer') if body.after_transfer is None else body.after_transfer
         profile['after_transfer'] = bool(after_transfer and body.mode == 'incremental')
+        profile['watch_changes'] = bool(existing.get('watch_changes') if body.watch_changes is None else body.watch_changes)
         profile['emby_target'] = checked_emby_target(body.emby_target, existing.get('emby_target') or 'main')
         profile['exclude_keywords'] = existing.get('exclude_keywords', []) if body.exclude_keywords is None else body.exclude_keywords
         store.set_many({'sync_profiles': [profile if p['id'] == profile_id else p for p in profiles]})
@@ -422,6 +457,25 @@ def install_phase5(app,store,admin,job_public):
         if not profile: raise HTTPException(404, '同步任务不存在。')
         try: config = engine().tasks.sync_profile_config(profile)
         except ValueError as exc: raise HTTPException(409, str(exc)) from None
+        jid, _ = engine().tasks.enqueue(config)
+        return job_public(engine().job(jid))
+
+    @app.post('/api/v1/sync/profiles/{profile_id}/run-directory', dependencies=[Depends(admin)])
+    async def run_profile_directory(profile_id: str, body: ScopedSyncInput):
+        profile = next((p for p in store.get('sync_profiles', []) if p['id'] == profile_id), None)
+        if not profile:
+            raise HTTPException(404, '同步任务不存在。')
+        roots = set(profile.get('source_cids') or [profile.get('source_cid')])
+        trail = await app.state.cloud.path_info(body.source_cid)
+        if not trail or str(trail[-1]['id']) != body.source_cid or not roots.intersection(
+                str(part['id']) for part in trail):
+            raise HTTPException(409, '所选目录不在当前同步计划范围内。')
+        try:
+            config = engine().tasks.sync_profile_config({**profile, 'mode': 'incremental',
+                                                           'source_cids': [body.source_cid]})
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+        config.update(sync_trigger='directory_change', cleanup_missing=False, stale_detect=False)
         jid, _ = engine().tasks.enqueue(config)
         return job_public(engine().job(jid))
 
@@ -507,7 +561,7 @@ def install_phase5(app,store,admin,job_public):
         current['webhook_token'] = token
         store.set_many({'sync_config': current})
         store.event('system', '深度删除 Webhook 令牌已由服务端重新生成；旧令牌立即失效。')
-        return {'webhook_token': token}
+        return {'webhook_token': token, 'revision': sync_revision(store.get('sync_config', {}))}
 
     @app.get('/api/v1/system/schedules',dependencies=[Depends(admin)])
     async def schedules():

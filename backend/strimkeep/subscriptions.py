@@ -11,12 +11,12 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from zoneinfo import ZoneInfo
 
 from fastapi import Depends, HTTPException, Path
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import inventory, inventory_fs, share_service
 from .cloud115 import CloudError
-from .media import EPISODE_TAG, IDENTITY, KNOWN_VIDEOS, NeedsReview, episode_range, normal_title, parse_name, source_of
-from .offline_api import directory_config
+from .media import EPISODE_TAG, IDENTITY, KNOWN_VIDEOS, NeedsReview, episode_range, media_from_filename, normal_title, parse_name, source_of
+from .offline_api import directory_config, offline_target
 from .resource_discovery import discover_resources
 from .strm_options import share_effective_settings
 from .transfer import shares
@@ -38,6 +38,16 @@ class SubscriptionInput(BaseModel):
     share_action: Literal['share', 'transfer']
     backfill: bool = False
     enabled: bool = True
+    auto_switch: bool = True
+    minimum_resolution: Literal[0, 720, 1080, 2160] = 0
+    preferred_sources: list[str] = Field(default_factory=list, max_length=16)
+
+
+def meets_resolution(name, minimum):
+    if not minimum:
+        return True
+    media = media_from_filename(name)
+    return (media.get('height') or 0) >= minimum
 
 
 def parse_date(value):
@@ -157,7 +167,7 @@ def offline_filename(item):
     return unquote(parts[2]) if len(parts) >= 5 and parts[1].casefold() == 'file' else ''
 
 
-def destination(store, row, kind):
+def destination(store, row, kind, text=''):
     if kind == 'share':
         if row['share_action'] == 'share':
             return ''
@@ -165,7 +175,7 @@ def destination(store, row, kind):
         target = cfg.get('explore_cid') or cfg.get('target_cid')
     else:
         cfg = directory_config(store.get('offline_config', {}) or {})
-        target = cfg.get(kind + '_cid')
+        target, _ = offline_target(cfg, kind, text)
     target = str(target or '')
     return target if re.fullmatch(r'[1-9]\d{0,23}', target) else ''
 
@@ -190,12 +200,13 @@ class MediaSubscriptions:
 
     def attempts(self, row):
         return self.store.db.execute(
-            """SELECT a.episode,a.inbox_id,a.created,COALESCE(a.job_id,
-                      CASE WHEN a.kind='share' THEN json_extract(i.job_ids,'$[0]') END) AS job_id,
-                      i.status AS inbox_state,j.state AS job_state
+            """SELECT a.episode,a.inbox_id,a.link_key,a.kind,a.created,COALESCE(a.job_id,
+                      CASE WHEN a.kind='share' AND json_valid(i.job_ids) THEN json_extract(i.job_ids,'$[0]') END) AS job_id,
+                      i.status AS inbox_state,j.state AS job_state,
+                      json_extract(j.config,'$.subscription_source_rejected') AS job_source_rejected
                  FROM media_subscription_attempts a LEFT JOIN resource_inbox i ON i.id=a.inbox_id
                  LEFT JOIN organize_jobs j ON j.id=COALESCE(a.job_id,
-                      CASE WHEN a.kind='share' THEN json_extract(i.job_ids,'$[0]') END)
+                      CASE WHEN a.kind='share' AND json_valid(i.job_ids) THEN json_extract(i.job_ids,'$[0]') END)
                  WHERE a.media_type=? AND a.tmdb_id=? AND a.season=? ORDER BY a.episode""",
             (row['media_type'], row['tmdb_id'], row['season'])).fetchall()
 
@@ -203,6 +214,9 @@ class MediaSubscriptions:
         key = (row['media_type'], row['tmdb_id'], row['season'])
         now = time.time()
         with self.store.transaction(immediate=True):
+            if self.store.db.execute('SELECT 1 FROM media_subscription_rejected WHERE link_key=?',
+                                     (item['key'],)).fetchone():
+                return False
             current = self.store.db.execute(
                 """SELECT enabled,share_action,backfill,next_check FROM media_subscriptions
                    WHERE media_type=? AND tmdb_id=? AND season=?""",
@@ -239,6 +253,32 @@ class MediaSubscriptions:
                 self.store.db.execute('UPDATE media_subscription_attempts SET inbox_id=? WHERE id=?',
                                       (result['items'][0], claim.lastrowid))
         return True
+
+    def retire_rejected(self, row, needed):
+        # Move only a definitively rejected resource out of the unique active
+        # slot. Unknown outcomes keep their slot and require reconciliation.
+        rejected = []
+        with self.store.transaction(immediate=True):
+            for attempt in self.attempts(row):
+                if attempt['episode'] not in needed:
+                    continue
+                if (not row['auto_switch'] or not attempt['job_source_rejected']
+                        or attempt['job_state'] not in ('partial', 'failed', 'needs_review')):
+                    continue
+                self.store.db.execute(
+                    '''INSERT INTO media_subscription_rejected
+                       (link_key,media_type,tmdb_id,season,episode,inbox_id,job_id,created,rejected)
+                       VALUES(?,?,?,?,?,?,?,?,?)''',
+                    (attempt['link_key'], row['media_type'], row['tmdb_id'], row['season'], attempt['episode'],
+                     attempt['inbox_id'], attempt['job_id'], attempt['created'], time.time()))
+                self.store.db.execute('DELETE FROM media_subscription_attempts WHERE link_key=?',
+                                      (attempt['link_key'],))
+                rejected.append(attempt['episode'])
+        history = self.store.db.execute(
+            '''SELECT link_key FROM media_subscription_rejected
+               WHERE media_type=? AND tmdb_id=? AND season=?''',
+            (row['media_type'], row['tmdb_id'], row['season']))
+        return {entry[0] for entry in history}, sorted(set(rejected))
 
     async def checked_share(self, item, details, row, years, episode, cache):
         secret, = shares(item['link'])
@@ -317,6 +357,7 @@ class MediaSubscriptions:
         if targets is None:
             return
         present, needed, years, has_upcoming = targets
+        rejected_keys, rejected = self.retire_rejected(row, needed)
         attempts = [entry for entry in self.attempts(row) if entry['episode'] not in present]
         pending = [entry['episode'] for entry in attempts if entry['episode'] in needed]
         attention = [entry['episode'] for entry in attempts if entry['episode'] in needed and (
@@ -326,7 +367,7 @@ class MediaSubscriptions:
             or time.time() - entry['created'] >= REVIEW_AFTER)]
         progress = {'present': sorted(present), 'missing': sorted(needed),
                     'submitted': sorted(set(pending) - set(attention)),
-                    'needs_review': attention, 'candidates': []}
+                    'needs_review': attention, 'candidates': [], 'rejected': rejected}
         waiting = needed - set(pending)
         if not waiting:
             state = 'review' if attention else 'submitted' if pending else 'caught_up'
@@ -342,7 +383,11 @@ class MediaSubscriptions:
             self.update(row, 'error', '暂无可用搜索来源，请检查 PanSou 和 Telegram 搜索频道。', details=progress)
             return
         checked, submitted, cache = 0, [], {}
-        items = result['items']
+        items = [item for item in result['items'] if item['key'] not in rejected_keys]
+        priorities = {name: i for i, name in enumerate(json.loads(row['preferred_sources']))}
+        if priorities:
+            items.sort(key=lambda item: min((priorities.get(name, len(priorities))
+                                            for name in item.get('source_names', [])), default=len(priorities)))
         offset = json.loads(row['details']).get('search_offset', 0) % max(1, len(items))
         for index, item in enumerate(items[offset:] + items[:offset], offset):
             if checked >= 4:
@@ -357,7 +402,7 @@ class MediaSubscriptions:
                         reason = '片名、年份或片源版本无法确认。' if movie else '作品、季集或单集范围无法确认。'
                         progress['candidates'].append({**item, 'review_reason': reason})
                 continue
-            target = destination(self.store, row, item['link_type'])
+            target = destination(self.store, row, item['link_type'], item['title'])
             checked += 1
             reason = '尚未配置该类型的入库目录。'
             if (item['link_type'] == 'share' and row['share_action'] == 'share') or target:
@@ -375,6 +420,10 @@ class MediaSubscriptions:
                         actual = release_hint(offline_filename(item), details, media_type, season, years, file_name=True)
                         verified = bool(actual and (actual['episode'] or 0) == episode
                                         and await matches_tmdb(engine, details, actual, cache))
+                    if verified and row['minimum_resolution']:
+                        filename = expected['path'][-1] if expected else offline_filename(item)
+                        reason = '文件名无法确认达到订阅的最低分辨率。'
+                        verified = meets_resolution(filename, row['minimum_resolution'])
                     if verified and self.enqueue(row, item, episode, str(target), secret=secret, expected=expected):
                         submitted.append(episode)
                         waiting.remove(episode)
@@ -432,7 +481,14 @@ class MediaSubscriptions:
     def public(self, row):
         data = dict(row)
         data['details'] = json.loads(data['details'])
-        data['attempts'] = [dict(attempt) for attempt in self.attempts(row)[-12:]]
+        data['auto_switch'] = bool(data['auto_switch'])
+        data['preferred_sources'] = json.loads(data['preferred_sources'])
+        fields = ('episode', 'job_id', 'inbox_id', 'created', 'job_state', 'inbox_state')
+        data['attempts'] = [{key: attempt[key] for key in fields} for attempt in self.attempts(row)[-12:]]
+        data['rejected_attempts'] = [dict(attempt) for attempt in self.store.db.execute(
+            '''SELECT episode,inbox_id,job_id,rejected FROM media_subscription_rejected
+               WHERE media_type=? AND tmdb_id=? AND season=? ORDER BY rejected DESC LIMIT 12''',
+            (row['media_type'], row['tmdb_id'], row['season']))]
         return data
 
 
@@ -468,11 +524,17 @@ def install_subscriptions(app, store, admin):
         next_check = time.time()
         with store.transaction():
             store.db.execute(
-                """INSERT INTO media_subscriptions(media_type,tmdb_id,season,title,enabled,share_action,backfill,next_check)
-                   VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(media_type,tmdb_id,season) DO UPDATE SET
+                """INSERT INTO media_subscriptions
+                   (media_type,tmdb_id,season,title,enabled,share_action,backfill,next_check,
+                    auto_switch,minimum_resolution,preferred_sources)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(media_type,tmdb_id,season) DO UPDATE SET
                      enabled=excluded.enabled,share_action=excluded.share_action,backfill=excluded.backfill,
-                     next_check=excluded.next_check,state='pending',message=''""",
-                (*key, title, body.enabled, body.share_action, media_type == 'tv' and body.backfill, next_check))
+                     next_check=excluded.next_check,state='pending',message='',auto_switch=excluded.auto_switch,
+                     minimum_resolution=excluded.minimum_resolution,preferred_sources=excluded.preferred_sources""",
+                (*key, title, body.enabled, body.share_action, media_type == 'tv' and body.backfill, next_check,
+                 body.auto_switch, body.minimum_resolution,
+                 json.dumps(list(dict.fromkeys(s.strip()[:60] for s in body.preferred_sources if s.strip())),
+                            ensure_ascii=False)))
         return {'saved': True}
 
     def remove_work(media_type, tmdb_id, season):

@@ -20,14 +20,13 @@ from fastapi import Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from .cloud115 import CloudError
-from .offline_api import directory_config, organize_flag_for
+from .intake_policy import offline_identity, offline_kind
+from .offline_api import directory_config, offline_target, organize_flag_for
 from .transfer import shares
 
 SOURCES = ('manual', 'rss', 'webhook', 'telegram', 'subscription')
 STATUSES = ('pending', 'queued', 'duplicate', 'needs_review', 'failed', 'skipped')
 URL_RE = re.compile(r'(?i)(?:magnet:\?[^\s<>"\']+|ed2k://[^\s<>"\']+|(?:https?|ftp)://[^\s<>"\']+)')
-MAGNET_HASH = re.compile(r'(?i)btih:([A-Za-z0-9]+)')
-ED2K_HASH = re.compile(r'(?i)ed2k://\|file\|[^|]*\|\d+\|([0-9a-f]{32})\|')
 MAX_ITEMS = 100
 
 
@@ -54,14 +53,8 @@ def _extract_urls(text):
 
 
 def _link_key(url):
-    low = str(url or '').lower()
-    magnet = MAGNET_HASH.search(low)
-    if magnet:
-        return 'magnet:' + magnet.group(1).lower()
-    ed2k = ED2K_HASH.search(low)
-    if ed2k:
-        return 'ed2k:' + ed2k.group(1).lower()
-    return 'url:' + _digest(url)
+    kind, identity = offline_identity(url)
+    return kind + ':' + (_digest(identity) if kind == 'url' else identity)
 
 
 def candidates(text):
@@ -305,16 +298,11 @@ class ResourceInbox:
             self._set(row['id'], 'skipped', '内容里没有可提交的链接。')
             return
         url = urls[0]
-        low = url.lower()
-        kind = 'magnet' if low.startswith('magnet:') else ('ed2k' if low.startswith('ed2k://') else 'direct')
+        kind = offline_kind(url)
         cfg = directory_config(self.store.get('offline_config', {}) or {})
         if not str(row['target_cid'] or '').strip() and not self.config().get('target_cid'):
-            if kind == 'magnet':
-                target = cfg.get('magnet_cid') or cfg.get('target_cid') or target
-            elif kind == 'ed2k':
-                target = cfg.get('ed2k_cid') or cfg.get('target_cid') or target
-            else:
-                target = cfg.get('target_cid') or target
+            target, _ = offline_target(cfg, kind, text)
+            target = target or cfg.get('target_cid') or ''
         if not target:
             self._set(row['id'], 'needs_review', '还没有设置 %s 的离线目录。' % kind)
             return
@@ -337,7 +325,7 @@ class ResourceInbox:
         message = str(exc)[:300] or type(exc).__name__
         if code == 'OFFLINE_DUPLICATE':
             status = 'duplicate'
-        elif code in ('LOGIN_REQUIRED', 'LOGIN_INVALID'):
+        elif code in ('LOGIN_REQUIRED', 'LOGIN_INVALID', 'INTAKE_CONFLICT'):
             status = 'needs_review'
         else:
             status = 'failed'

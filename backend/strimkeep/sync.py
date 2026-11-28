@@ -237,6 +237,14 @@ class Sync:
             allowed = self.engine.tasks.transfer_sync_roots(config['sync_profile_id'])
             if any(not allowed.intersection(part['id'] for part in trail) for trail in paths.values()):
                 raise UncertainState('转存目录已不在启用变更补扫的同步范围内，未发布同步清单。')
+        if config.get('sync_trigger') in ('directory_change', 'cloud_activity'):
+            profile = next((p for p in self.store.get('sync_profiles', [])
+                            if p['id'] == config.get('sync_profile_id')), {})
+            if config['sync_trigger'] == 'cloud_activity' and not profile.get('watch_changes'):
+                raise UncertainState('该计划已关闭 115 变更同步，未发布同步清单。')
+            allowed = set(profile.get('source_cids') or [profile.get('source_cid')])
+            if any(not allowed.intersection(str(part['id']) for part in trail) for trail in paths.values()):
+                raise UncertainState('所选目录已不在同步计划的范围内，未发布同步清单。')
         # Pick the outermost selected root, independent of selection order.
         effective = [cid for cid in roots if not any(other != cid and other in [x['id'] for x in paths[cid]] for other in roots)]
         batched = getattr(self.cloud, 'download_tree', None)
@@ -1394,6 +1402,8 @@ class Sync:
         summary = f'完整清单已核实；清理失效受管文件 {removed} 个。'
         if config.get('sync_trigger') == 'transfer':
             summary = '已核实转存目录并补齐输出，失效清理交由常规同步。'
+        elif config.get('sync_trigger') == 'cloud_activity':
+            summary = '已核实 115 变更目录并补齐输出，失效清理交由常规同步。'
         messages = [summary, '；'.join(warnings) if warnings else '云端文件未修改。']
         if config.get('sync_filter_count'):
             messages.append(f'按生成规则跳过 {config["sync_filter_count"]} 个文件。')

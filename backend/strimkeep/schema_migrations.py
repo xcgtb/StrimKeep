@@ -56,10 +56,29 @@ MIGRATIONS = [
         "CREATE INDEX IF NOT EXISTS worker_commands_state ON worker_commands(state,id)",
     ]),
     (6, '库存清理派发与确认进度', [INVENTORY_DISPATCH_DDL]),
+    (7, '订阅已拒绝的资源与频道身份', [
+        '''CREATE TABLE IF NOT EXISTS media_subscription_rejected (
+            link_key TEXT PRIMARY KEY, media_type TEXT NOT NULL, tmdb_id INTEGER NOT NULL,
+            season INTEGER NOT NULL, episode INTEGER NOT NULL, inbox_id INTEGER, job_id INTEGER,
+            created REAL NOT NULL, rejected REAL NOT NULL
+        )''',
+        'CREATE INDEX IF NOT EXISTS subscription_rejected_work '
+        'ON media_subscription_rejected(media_type,tmdb_id,season,episode)',
+    ]),
+    (8, '跨入口入库任务去重', [
+        "CREATE INDEX IF NOT EXISTS organize_jobs_intake ON organize_jobs(json_extract(config,'$.intake_key')) "
+        "WHERE json_valid(config)",
+    ]),
 ]
 
 # 列补丁：表 → [(列名, DDL)]。幂等：先 PRAGMA table_info 再补。
 COLUMN_PATCHES = {
+    'media_subscriptions': [('auto_switch', ' INTEGER NOT NULL DEFAULT 1'),
+                            ('minimum_resolution', ' INTEGER NOT NULL DEFAULT 0'),
+                            ('preferred_sources', " TEXT NOT NULL DEFAULT '[]'")],
+    'channel_state': [('peer_id', " TEXT NOT NULL DEFAULT ''")],
+    'events': [('level', " TEXT NOT NULL DEFAULT ''"), ('job_id', ' INTEGER'),
+               ('error_code', " TEXT NOT NULL DEFAULT ''")],
     'notifications': [
         ('attempts', ' INTEGER NOT NULL DEFAULT 0'),
         ('next_try', ' REAL NOT NULL DEFAULT 0'),

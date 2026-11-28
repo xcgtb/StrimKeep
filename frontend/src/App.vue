@@ -75,7 +75,7 @@ function paintTheme(theme:string){dark.value=theme==='dark'||(theme==='system'&&
 function applyAppearance(value:any){appearance.value={...appearance.value,...value};paintTheme(appearance.value.theme);document.documentElement.style.setProperty('--app-wallpaper',appearance.value.background_url?`url(${JSON.stringify(appearance.value.background_url)})`:'none');document.documentElement.style.setProperty('--wallpaper-opacity',String(appearance.value.background_opacity??.12));try{localStorage.setItem('strimkeep-appearance',JSON.stringify(appearance.value))}catch{}}
 try{applyAppearance(JSON.parse(storedAppearance||'{}'))}catch{}
 function systemTheme(){if(appearance.value.theme==='system')applyAppearance(appearance.value)}
-async function saveTheme(theme:string){try{const c=(await api('/console/config')).config;await api('/console/config','PUT',{...c,theme})}catch{}}
+async function saveTheme(theme:string){try{await api('/console/config','PATCH',{theme})}catch{}}
 function toggleTheme(){const next=dark.value?'light':'dark';applyAppearance({...appearance.value,theme:next});void saveTheme(next)}
 const api=createApi({
   getCsrf:()=>csrf.value,

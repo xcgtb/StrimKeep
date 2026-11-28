@@ -200,12 +200,18 @@ usePageActivity(()=>{visible=true;connect();void run(()=>load());timer=setInterv
   <template v-if="detail">
     <h3>{{taskPresentation(detail.job).title}}</h3>
     <p class="wrap">当前阶段：{{detail.job.stage}}</p>
+    <section v-if="detail.job.receipt" class="task-extra">
+      <p v-if="detail.job.receipt.phase==='received'">已核实转存 {{detail.job.receipt.received_count}} 项</p>
+      <el-button v-for="id in detail.job.receipt.children" :key="id" link type="primary" @click="show(id)">后续任务 #{{id}}</el-button>
+      <p v-for="warning in detail.job.receipt.warnings" :key="warning" class="wrap">{{warning}}</p>
+    </section>
+    <el-button v-if="detail.job.config?.transfer_parent" link type="primary" @click="show(detail.job.config.transfer_parent)">查看转存回执 #{{detail.job.config.transfer_parent}}</el-button>
     <p v-if="detail.job.emby_target_name" class="wrap">Emby 入库通知 · {{detail.job.emby_target_name}}</p>
     <p v-if="taskPresentation(detail.job).summary" class="wrap">{{taskPresentation(detail.job).summary}}</p>
     <p v-for="note in taskPresentation(detail.job).notes" :key="note" class="wrap">{{note}}</p>
     <section v-if="syncMetrics" class="sync-timing">
       <h4>同步耗时</h4>
-      <p>{{syncMetrics.mode==='full'?'全量同步':'增量同步'}}<template v-if="detail.job.sync_trigger==='transfer'"> · 转存后补扫目标目录</template></p>
+      <p>{{syncMetrics.mode==='full'?'全量同步':'增量同步'}}<template v-if="detail.job.sync_trigger==='transfer'"> · 转存后补扫目标目录</template><template v-else-if="detail.job.sync_trigger==='cloud_activity'"> · 115 目录变更</template></p>
       <p v-if="syncMetrics.scan">
         {{syncListings[syncMetrics.scan.listing] || '目录读取'}} · {{syncMetrics.scan.directories}}
         个{{syncMetrics.scan.directories_exact ? '目录' : '涉及目录'}} · {{syncMetrics.scan.files}} 个条目

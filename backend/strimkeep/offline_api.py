@@ -7,12 +7,14 @@
 import json
 import re
 import time
+from typing import Literal
 from urllib.parse import unquote, unquote_plus
 
 from fastapi import Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from .cloud115 import CloudError
+from .intake_policy import offline_identity, offline_kind
 from .message_templates import offline_completed, offline_stalled
 
 ALLOWED_PREFIXES = ('magnet:', 'ed2k://', 'http://', 'https://', 'ftp://')
@@ -23,11 +25,6 @@ def ensure_link_count(urls):
     """链接数量闸门：超过上限直接 422，不做截断（避免静默丢链接）。"""
     if len(urls) > OFFLINE_MAX_LINKS:
         raise HTTPException(422, f'单次最多提交 {OFFLINE_MAX_LINKS} 个链接。')
-
-_MAGNET_HASH = re.compile(r'(?i)btih:([A-Za-z0-9]+)')
-# ed2k 链接形如 ed2k://|file|名称|大小|32位哈希|/，云端任务的 info_hash 与它一致。
-_ED2K_HASH = re.compile(r'(?i)ed2k://\|file\|[^|]*\|\d+\|([0-9a-f]{32})\|')
-
 
 class OfflineRoute(BaseModel):
     """关键词二次分流：帖子/文本命中关键词就落到这个目录。"""
@@ -103,6 +100,12 @@ def organize_flag_for(cfg, kind, origin):
     return bool(cfg.get(key, False))
 
 
+def offline_target(cfg, kind, text, origin='web'):
+    field = 'target' if kind == 'direct' else ('bot_' + kind if origin == 'bot' else kind)
+    return route_target(cfg.get(kind + '_routes'), text,
+                        cfg.get(field + '_cid') or '', cfg.get(field + '_label') or '')
+
+
 class OfflineInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
     text: str = Field(min_length=1, max_length=16000)
@@ -120,10 +123,14 @@ def _split(text):
 
 def links_in(text):
     """挑出可提交的链接，保持顺序并去重。Web 与 Telegram 机器人共用。"""
-    out = []
+    out, seen = [], set()
     for url in _split(text):
-        if url.lower().startswith(ALLOWED_PREFIXES) and url not in out:
+        if not url.lower().startswith(ALLOWED_PREFIXES):
+            continue
+        key = offline_identity(url)
+        if key not in seen:
             out.append(url)
+            seen.add(key)
     return out
 
 
@@ -158,20 +165,10 @@ def _tasks(rows):
     return items, len(data)
 
 
-def _magnet_key(url):
-    match = _MAGNET_HASH.search(url or '')
-    return match[1].lower() if match else None
-
-
 def _link_key(url):
     """认领键：磁力/电驴用 hash（云端会改写链接），其余退回 URL 包含匹配。"""
-    magnet = _magnet_key(url)
-    if magnet:
-        return 'hash', magnet
-    ed2k = _ED2K_HASH.search(url or '')
-    if ed2k:
-        return 'hash', ed2k.group(1).lower()
-    return 'url', url or ''
+    kind, value = offline_identity(url or '')
+    return ('url' if kind == 'url' else 'hash'), value
 
 
 class OfflinePostProcess:
@@ -197,6 +194,18 @@ class OfflinePostProcess:
             self.store.db.execute('ALTER TABLE offline_submissions ADD COLUMN finished_seen_at REAL NOT NULL DEFAULT 0')
         self.store.db.commit()
 
+    def check_duplicate(self, wanted):
+        for old in self.store.db.execute(
+                "SELECT id,urls FROM offline_submissions"
+                " WHERE state IN ('submitting','submitted','needs_review')"):
+            try:
+                existing = {offline_identity(url) for url in json.loads(old['urls'] or '[]')}
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if wanted & existing:
+                raise CloudError('该链接已在离线任务中（#%d），不会重复提交。' % old['id'],
+                                 'OFFLINE_DUPLICATE', 409)
+
     async def submit(self, urls, target_cid, target_label, organize=True, origin='web', *, notice_context=None):
         """先登记意图与目录快照，再提交 115；失败不重复提交，转 needs_review。
 
@@ -205,20 +214,17 @@ class OfflinePostProcess:
         """
         if not target_cid or not re.fullmatch(r'[1-9]\d{0,23}', target_cid):
             raise CloudError('请先配置有效的离线下载目录。', 'OFFLINE_NO_TARGET', 409)
-        # 同一个链接已经在处理中就直接拒绝，和转存一样先查再提交，别让 115 那边报「任务已存在」。
-        wanted = {_link_key(url) for url in urls}
-        for old in self.store.db.execute(
-                "SELECT id,urls FROM offline_submissions"
-                " WHERE state IN ('submitting','submitted','needs_review')"):
-            try:
-                existing = {_link_key(url) for url in json.loads(old['urls'] or '[]')}
-            except (TypeError, ValueError):
-                continue
-            if wanted & existing:
-                raise CloudError('该链接已在离线任务中（#%d），不会重复提交。' % old['id'],
-                                 'OFFLINE_DUPLICATE', 409)
+        unique = {}
+        for url in urls:
+            unique.setdefault(offline_identity(url), url)
+        urls = list(unique.values())
+        if not urls:
+            raise CloudError('没有可用的离线链接。', 'OFFLINE_NO_LINKS', 422)
+        wanted = set(unique)
+        self.check_duplicate(wanted)
         before = [e['id'] for e in await self.engine.cloud.children(target_cid)]
-        with self.store.db:
+        with self.store.transaction(immediate=True):
+            self.check_duplicate(wanted)
             sid = self.store.db.execute(
                 'INSERT INTO offline_submissions(urls,target_cid,target_label,before_ids,submitted_at,state,message,organize,notice_context) '
                 "VALUES(?,?,?,?,?, 'submitting','',?,?)",
@@ -670,6 +676,8 @@ def install_offline(app, store, admin):
     class IntakeInput(BaseModel):
         model_config = ConfigDict(extra='forbid')
         text: str = Field(min_length=1, max_length=20000)
+        action: Literal['auto', 'transfer', 'offline', 'share'] = 'auto'
+        target_cid: str = Field(default='', max_length=24)
 
     @app.post('/api/v1/intake', dependencies=[Depends(admin)])
     async def intake(body: IntakeInput):
@@ -682,18 +690,27 @@ def install_offline(app, store, admin):
         result = {'share': [], 'offline': [], 'errors': []}
         text = body.text
 
-        if SHARE_LINK.search(text):
+        if body.action == 'share':
+            return await app.state.ingest_share_text(text)
+        if body.action == 'transfer' and not SHARE_LINK.search(text):
+            raise HTTPException(422, '请输入 115 分享链接。')
+        if SHARE_LINK.search(text) and body.action != 'offline':
             transfer_cfg = store.get('transfer_config', {}) or {}
+            target = (transfer_cfg.get('explore_cid') if body.action == 'transfer' else None
+                      ) or transfer_cfg.get('target_cid') or ''
+            if body.target_cid and body.target_cid != str(target):
+                raise HTTPException(409, '转存目录已变化，请刷新后重新确认。')
             try:
                 ids = await app.state.organizer.transfer.enqueue(
-                    text, transfer_cfg.get('target_cid', ''),
+                    text, target,
                     bool(transfer_cfg.get('auto_organize', False)), 'web')
                 result['share'] = ids
             except (ValueError, CloudError) as exc:
                 result['errors'].append('分享转存：%s' % str(exc)[:80])
 
+        if body.action == 'transfer':
+            return result
         cfg = config_value()
-        prefixes = {'magnet': 'magnet', 'ed2k': 'ed2k'}
         groups = {}
         seen = set()
         caption = []
@@ -711,11 +728,8 @@ def install_offline(app, store, admin):
                 if url in seen or SHARE_LINK.match(url):
                     continue
                 seen.add(url)
-                kind = prefixes.get(url.split(':', 1)[0].lower(), 'direct')
-                field = 'target' if kind == 'direct' else kind
-                target, label = route_target(
-                    cfg.get(kind + '_routes'), context if len(urls) == 1 else url,
-                    cfg.get(field + '_cid') or '', cfg.get(field + '_label') or '')
+                kind = offline_kind(url)
+                target, label = offline_target(cfg, kind, context if len(urls) == 1 else url)
                 groups.setdefault((kind, target, label), []).append(url)
 
         result['receipts'] = []
@@ -769,29 +783,18 @@ def install_offline(app, store, admin):
                 raise HTTPException(422, '只支持磁力、电驴、HTTP/HTTPS/FTP 链接：' + url[:60])
         seen = links_in(body.text)
         cfg = config_value()
-        magnets = [u for u in seen if u.lower().startswith('magnet:')]
-        ed2ks = [u for u in seen if u.lower().startswith('ed2k://')]
-        others = [u for u in seen if not u.lower().startswith(('magnet:', 'ed2k://'))]
-        kinds = sum(1 for group in (magnets, ed2ks, others) if group)
-        if kinds > 1:
+        kinds = {offline_kind(url) for url in seen}
+        if len(kinds) > 1:
             raise HTTPException(422, '磁力、电驴与直链的保存目录不同，请分开提交，便于按批次整理。')
-        if magnets:
-            target, label = cfg.get('magnet_cid'), cfg.get('magnet_label')
-            routes = cfg.get('magnet_routes')
-        elif ed2ks:
-            target, label = cfg.get('ed2k_cid'), cfg.get('ed2k_label')
-            routes = cfg.get('ed2k_routes')
-        else:
-            target, label, routes = cfg.get('target_cid'), cfg.get('target_label'), []
-        target, label = route_target(routes, body.text, target or '', label or '')
+        kind, = kinds
+        target, label = offline_target(cfg, kind, body.text)
         post = app.state.organizer.offline
-        kind = 'magnet' if magnets else ('ed2k' if ed2ks else 'direct')
+        organize = organize_flag_for(cfg, kind, 'web')
         try:
-            sid = await post.submit(seen, target or '', label or '',
-                                    organize=organize_flag_for(cfg, kind, 'web'))
+            sid = await post.submit(seen, target, label, organize=organize)
         except CloudError as exc:
-            raise HTTPException(502, str(exc))
-        auto = '，完成后自动定位本批产物并整理。' if cfg.get('auto_organize', True) else '。'
+            raise HTTPException(409 if exc.code == 'OFFLINE_DUPLICATE' else 502, str(exc)) from None
+        auto = '，完成后自动定位本批产物并整理。' if organize else '。'
         return {'count': len(seen), 'submission_id': sid, 'message': '已提交 %d 个离线任务到%s' % (len(seen), label or target) + auto}
 
     @app.get('/api/v1/offline/submissions', dependencies=[Depends(admin)])

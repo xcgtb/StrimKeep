@@ -5,10 +5,13 @@ import {onMounted,shallowRef,ref,computed} from 'vue'
 import {VideoPlay,Refresh,Film,Collection,Cloudy,List,Link,Grid,Finished} from '@element-plus/icons-vue'
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>();defineEmits<{navigate:[page:string]}>()
 const data=shallowRef<any>(null),error=ref(''),busy=ref(false),broken=ref<Record<string,boolean>>({})
-const activity=shallowRef<{history:any[];trend:any[];trend_days:number;error?:string}>()
+const activity=shallowRef<{history:any[];trend:any[];trend_days:number;updated_at?:number;stale?:boolean;error?:string}>()
 async function loadActivity() {
   try { activity.value = await props.api('/dashboard/activity') }
-  catch(e) { activity.value = {history:[],trend:[],trend_days:0,error:(e as Error).message} }
+  catch(e) {
+    activity.value = {history:[],trend:[],trend_days:0,...activity.value,
+                      stale:!!activity.value?.updated_at,error:(e as Error).message}
+  }
 }
 const recentKind=ref<'all'|'Movie'|'Series'>('all'),showAllRecent=ref(false)
 const posterUrl=(item:any)=>item.image_id&&!broken.value[item.image_id]?`/api/v1/dashboard/image/${item.image_id}`:item.tmdb_id?`/api/v1/dashboard/tmdb-poster/${item.kind==='Series'?'tv':'movie'}/${item.tmdb_id}`:''
@@ -16,7 +19,18 @@ const posterFailed=ref<Record<string,boolean>>({})
 function posterError(item:any){if(item.image_id&&!broken.value[item.image_id])broken.value={...broken.value,[item.image_id]:true};else posterFailed.value={...posterFailed.value,[item.id]:true}}
 const recentList=computed(()=>{const items=(data.value?.emby?.recent||[]).filter((item:any)=>recentKind.value==='all'||item.kind===recentKind.value);return showAllRecent.value?items:items.slice(0,6)})
 const cloud=shallowRef<any>(null),tasks=shallowRef<any>(null),schedules=shallowRef<any>(null),syncProfiles=shallowRef<any>(null),events=shallowRef<any>(null),channels=shallowRef<any>(null)
-async function loadAux(){const paths=['/tasks','/system/schedules','/sync/profiles','/events?limit=5','/channels'];const values=[tasks,schedules,syncProfiles,events,channels];const result=await Promise.allSettled(paths.map(p=>props.api(p)));result.forEach((v,i)=>{values[i].value=v.status==='fulfilled'?v.value:null})}
+const staleSections=ref<string[]>([])
+async function loadAux(){
+  const paths=['/tasks','/system/schedules','/sync/profiles','/events?limit=5','/channels']
+  const names=['任务','调度','STRM 同步','实时日志','频道监控']
+  const values=[tasks,schedules,syncProfiles,events,channels]
+  const result=await Promise.allSettled(paths.map(path=>props.api(path)))
+  staleSections.value=[]
+  result.forEach((reply,index)=>{
+    if(reply.status==='fulfilled')values[index].value=reply.value
+    else staleSections.value.push(names[index])
+  })
+}
 const syncScheduleStatus=computed(()=>syncProfiles.value?`${(syncProfiles.value.items||[]).filter((p:any)=>p.enabled).length} 个定时任务开启`:'状态不可用')
 async function refreshAll(){await Promise.all([load(),loadActivity(),loadAux(),loadCloud()])}
 async function loadCloud(){try{cloud.value=await props.api('/cloud/account')}catch{cloud.value=null}}
@@ -45,6 +59,7 @@ onMounted(()=>{void load();void loadActivity();void loadAux();void loadCloud()})
 </script>
 <template><PageHeader title="媒体总览"><template #actions><el-button :icon="Refresh" :loading="busy" @click="refreshAll">刷新</el-button></template></PageHeader>
 <el-alert v-if="error" :title="error" type="warning"/>
+<p v-if="staleSections.length" class="hint stale-hint">{{staleSections.join('、')}}暂时无法更新，保留上次读取结果。</p>
 <el-skeleton v-if="!data&&busy" :rows="8" animated/>
 <template v-if="data">
 <el-alert v-if="data.emby.error" :title="data.emby.error" type="warning" :closable="false" class="global-error"/>

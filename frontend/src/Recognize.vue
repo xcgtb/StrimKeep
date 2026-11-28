@@ -2,11 +2,13 @@
 import PageHeader from './PageHeader.vue'
 import WorkspaceSections from './WorkspaceSections.vue'
 import {ref,computed,watch} from 'vue'
+import {useRoute} from 'vue-router'
 import TmdbLookup from './TmdbLookup.vue'
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>()
 const section = ref<'lookup' | 'test' | 'aliases'>('lookup')
 const text=ref('')
-const folder=ref('')
+const folder=ref(''),compareWith=ref('')
+const route=useRoute()
 const useTmdb=ref(true)
 type Library = 'cloud' | 'share'
 type RecognitionAlias = {
@@ -18,11 +20,19 @@ type Recognition = {
   hint?: { query?: string; media_type: 'tv' | 'movie'; season?: number; episode?: number; end_episode?: number; recognition_alias?: RecognitionAlias }
   work?: { id?: number; title?: string; year?: string }
   technical?: string; episode_title?: string; target_name?: string; parts?: string[]; category?: string
+  comparison?: { score?: number; reason?: string; incomplete?: boolean;
+    evidence?: {rule:string;label:string;result:number|'unknown';new?:string;old?:string;reason?:string}[] }
   classification?: {
     category_reason: string; region_reason: string; genres: { id: number; name: string }[]
   }
 }
 const library=ref<Library>('cloud')
+watch(() => route.query, query => {
+  if (route.name !== 'recognize' || query.section !== 'test') return
+  section.value = 'test'
+  library.value = query.library === 'share' ? 'share' : 'cloud'
+  if (typeof query.name === 'string') text.value = query.name
+}, {immediate:true})
 const libraryNames: Record<Library, string> = {cloud:'网盘库',share:'分享库'}
 const busy=ref(false),error=ref(''),rows=ref<Recognition[]>([])
 const aliases=ref<RecognitionAlias[]>([])
@@ -57,7 +67,8 @@ async function test(){
   const names=lines.value
   if(!names.length){error.value='先粘贴至少一个文件名。';return}
   if(names.length>50){error.value='一次最多测试 50 个文件名。';return}
-  const options = {use_tmdb:useTmdb.value, library:library.value, folder:folder.value.trim() || undefined}
+  const options = {use_tmdb:useTmdb.value, library:library.value, folder:folder.value.trim() || undefined,
+                   compare_with: compareWith.value.trim()}
   busy.value=true;error.value='';rows.value=[]
   try{
     let items: ({name:string}&typeof options)[] = []
@@ -128,6 +139,9 @@ function genreLabels(row:Recognition) {
         <el-radio-button value="share">分享库</el-radio-button>
       </el-radio-group>
     </el-form-item>
+    <el-form-item v-if="lines.length===1" label="对照现有版本（可选）">
+      <el-input v-model="compareWith" maxlength="400" placeholder="粘贴同一作品或同一集的现有版本文件名"/>
+    </el-form-item>
   </el-form>
   <div class="button-row">
     <el-checkbox v-model="useTmdb" :disabled="busy">查询 TMDB 并预览分类</el-checkbox>
@@ -175,6 +189,13 @@ function genreLabels(row:Recognition) {
           <template v-if="row.technical"><dt>文件名技术字段</dt><dd>{{row.technical}}</dd></template>
         </dl>
         <p v-if="row.note" class="hint">{{row.note}}</p>
+        <div v-if="row.comparison">
+          <p v-if="row.comparison.reason">{{row.comparison.reason}}</p>
+          <template v-else>
+            <p>洗版规则预演 · {{row.comparison.incomplete ? '部分规格待探测' : (row.comparison.score ?? 0)>0 ? '新版本优先' : (row.comparison.score ?? 0)<0 ? '现有版本优先' : '规则下并列'}}</p>
+            <ul><li v-for="rule in row.comparison.evidence" :key="rule.rule">{{rule.label}} · {{rule.reason || rule.new+' / '+rule.old}}</li></ul>
+          </template>
+        </div>
       </details>
     </article>
   </div>

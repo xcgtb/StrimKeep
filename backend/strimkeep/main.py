@@ -374,6 +374,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
     @app.get('/health/ready')
     async def ready():
         store.db.execute('SELECT 1').fetchone()
+        degraded = []
         if getattr(app.state.organizer, 'web_only', False):
             raw = store.meta('worker_heartbeat')
             try:
@@ -386,6 +387,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
                 except (TypeError, ValueError):
                     fresh = False
                 faults = heartbeat.get('lane_faults') or {}
+                degraded = sorted(name for name, alive in (heartbeat.get('background') or {}).items() if not alive)
                 if fresh and (heartbeat.get('closing') or any(faults.values())):
                     raise HTTPException(503, '后台任务车道异常，请检查 Worker 日志。')
             else:
@@ -403,7 +405,10 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
                 raise HTTPException(503, '任务车道异常，请检查操作记录。')
             if app.state.organizer.scheduler_fault or (app.state.organizer.clock and app.state.organizer.clock.done() and not app.state.organizer.closing):
                 raise HTTPException(503, '调度器异常，请检查操作记录。')
-        return {'status': 'ready', 'version': __version__, 'stage': 5}
+        result = {'status': 'ready', 'version': __version__, 'stage': 5}
+        if degraded:
+            result['degraded'] = degraded
+        return result
 
     @app.post('/api/v1/auth/login')
     async def login(body: Login, request: Request):
@@ -670,6 +675,12 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
             row['state'] in ('completed', 'partial') and row['manifest'] and states_ok
             and isinstance(cleanup_state, dict) and cleanup_state.get('entries'))
         result['kind'] = result['config'].get('job_kind', 'organize')
+        if result['kind'] == 'transfer':
+            receipt = job_config.get('receipt') or {}
+            children = ([receipt['organize_job']] if receipt.get('organize_job') else []) + receipt.get('sync_jobs', [])
+            result['receipt'] = {'phase': receipt.get('phase') or '',
+                                 'received_count': len(receipt.get('received_entries') or []),
+                                 'children': children, 'warnings': receipt.get('sync_warnings') or []}
         result['finished'] = sum(counts.get(s,0) for s in ('done','pending','skipped','recycled','review'))
         result['progress'] = round(result['finished'] * 100 / result['total']) if result['total'] else (100 if row['state'] in ('completed','partial') else 0)
         # 预计剩余：只在运行中给，历史任务不编 ETA。
@@ -1130,6 +1141,7 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
         folder: str | None = Field(default=None, max_length=800)
         tmdb_id: int | None = None
         use_tmdb: bool = True
+        compare_with: str = Field(default='', max_length=400)
         library: Literal['cloud', 'share'] = 'cloud'
 
     class PreviewBatch(Input):
@@ -1214,6 +1226,17 @@ def create_app(data_root=None, strm_root=None, cloud_factory=Cloud115):
                   'media': {k: media.get(k) for k in ('width', 'height', 'codec', 'dynamic_range',
                                                       'bit_depth', 'fps', 'dolby_vision_profile')},
                   'audio': media.get('audio') or []}
+        if old := body.compare_with.strip():
+            from .quality import compare, facts
+            policy = (share_effective_settings(store)['upgrade_policy'] if body.library == 'share'
+                      else public_policy(store.get('upgrade_policy')))
+            try:
+                score, evidence = compare(facts(name, media, 0), facts(old, media_from_filename(old), 0),
+                                          policy, skip_unknown=True)
+                result['comparison'] = {'score': score, 'evidence': evidence,
+                                        'incomplete': any(rule['result'] == 'unknown' for rule in evidence)}
+            except NeedsReview as exc:
+                result['comparison'] = {'reason': str(exc)}
         if not body.use_tmdb:
             return result
         try:
