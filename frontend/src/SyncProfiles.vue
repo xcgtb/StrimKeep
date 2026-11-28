@@ -2,10 +2,11 @@
 import {onMounted,ref} from 'vue'
 import {ElMessage,ElMessageBox} from 'element-plus'
 import DirectoryPicker from './DirectoryPicker.vue'
-type Profile={id?:string;name:string;source_cid:string;source_label:string;source_cids:string[];source_labels:Record<string,string>;mode:'incremental'|'full';metadata_mode:'inherit'|'source'|'technical';exclude_keywords:string[];after_transfer?:boolean;emby_target:string;enabled:boolean;frequency:'daily'|'weekly'|'interval'|'cron';weekday:number;time:string;interval_minutes:number;cron:string;timezone:string;next_due?:number}
+type Profile={id?:string;name:string;source_cid:string;source_label:string;source_cids:string[];source_labels:Record<string,string>;mode:'incremental'|'full';metadata_mode:'inherit'|'source'|'technical';exclude_keywords:string[];after_transfer?:boolean;watch_changes?:boolean;emby_target:string;enabled:boolean;frequency:'daily'|'weekly'|'interval'|'cron';weekday:number;time:string;interval_minutes:number;cron:string;timezone:string;next_due?:number}
 const props=defineProps<{api:(path:string,method?:string,body?:unknown)=>Promise<any>}>()
 const emit=defineEmits<{navigate:[page:string]}>()
 const profiles=ref<Profile[]>([]),draft=ref<Profile|null>(null),picker=ref(false),busy=ref(false),error=ref('')
+const activityStatus=ref('')
 type PathPreview = { cloud_path: string; local_path?: string; emby_path?: string | null; emby_target_name?: string; emby_error?: string; skip_reason?: string; sidecar?: boolean }
 type EmbyTarget = { id:string; name:string; upstream:string; api_key_configured:boolean }
 const embyTargets = ref<EmbyTarget[]>([])
@@ -33,7 +34,11 @@ const metadataLabels = {
 } satisfies Record<Profile['metadata_mode'], string>
 const blank=():Profile=>({name:'',source_cid:'',source_label:'',source_cids:[],source_labels:{},mode:'incremental',metadata_mode:'inherit',exclude_keywords:[],emby_target:'main',enabled:false,frequency:'daily',weekday:1,time:'03:00',interval_minutes:60,cron:'0 3 * * *',timezone:'Asia/Shanghai'})
 function normalized(p:Profile):Profile{const ids=p.source_cids?.length?[...p.source_cids]:p.source_cid?[p.source_cid]:[];return {...blank(),...p,emby_target:p.emby_target||'main',exclude_keywords:[...(p.exclude_keywords||[])],source_cids:ids,source_labels:{...(p.source_labels||{}),...(p.source_cid&&p.source_label?{[p.source_cid]:p.source_label}:{})}}}
-async function load(){profiles.value=(await props.api('/sync/profiles')).items.map(normalized)}
+async function load(){
+  const result=await props.api('/sync/profiles')
+  profiles.value=result.items.map(normalized)
+  activityStatus.value=result.activity_status||''
+}
 async function loadEmbyTargets() {
   try { embyTargets.value=(await props.api('/emby-proxy')).servers || [] }
   catch { embyTargetsError.value=true }
@@ -88,6 +93,7 @@ async function save() {
       mode, metadata_mode, emby_target, enabled, frequency, weekday, time,
       exclude_keywords: p.exclude_keywords.map(word => word.trim()),
       after_transfer: mode === 'incremental' && !!p.after_transfer,
+      watch_changes: !!p.watch_changes,
       interval_minutes: p.interval_minutes ?? 60, cron: p.cron || '0 3 * * *', timezone: p.timezone || 'Asia/Shanghai',
     })
     draft.value = null
@@ -134,6 +140,10 @@ function timing(p:Profile){if(!p.enabled)return '仅手动';if(p.frequency==='in
     <details class="sync-advanced">
       <summary>附属文件与高级选项</summary>
       <div class="sync-editor-grid">
+        <div class="sync-field wide">
+          <div class="sync-switch"><el-switch v-model="draft.watch_changes" aria-label="跟踪 115 目录变更"/><span>跟踪 115 目录变更</span></div>
+          <span class="sync-directory-tip">约每 90 秒补扫有变更的目录。开启定时同步可核对漏报和失效文件。</span>
+        </div>
         <div v-if="draft.mode==='incremental'" class="sync-field wide">
           <div class="sync-switch"><el-switch v-model="draft.after_transfer" aria-label="纯转存后同步"/><span>纯转存后同步</span></div>
           <span class="sync-directory-tip">转存核实后同步目标目录。已安排立即整理的转存会跳过这一步。</span>
@@ -176,8 +186,9 @@ function timing(p:Profile){if(!p.enabled)return '仅手动';if(p.frequency==='in
       <div class="sync-card-top"><strong>{{p.name}}</strong><span class="sync-badge" :class="{'sync-badge-full':p.mode==='full'}">{{p.mode==='incremental'?'增量同步':'全量同步'}}</span></div>
       <div class="sync-card-directory"><div v-for="id in p.source_cids" :key="id">{{p.source_labels[id]||id}}</div></div>
       <div class="sync-card-meta">
-        <span v-if="p.enabled||!p.after_transfer">{{timing(p)}}</span>
+        <span v-if="p.enabled||(!p.after_transfer&&!p.watch_changes)">{{timing(p)}}</span>
         <span v-if="p.after_transfer">纯转存后同步</span>
+        <span v-if="p.watch_changes">115 变更同步{{activityStatus&&activityStatus!=='active'?' · 暂缓':''}}</span>
         <span v-if="p.metadata_mode!=='inherit'">{{metadataLabels[p.metadata_mode]}}</span>
         <span v-if="p.emby_target!=='main'">{{targetLabel(p.emby_target)}}</span>
         <span v-if="p.enabled&&p.next_due">下次 {{new Date(p.next_due*1000).toLocaleString('zh-CN',{timeZone:p.timezone||'Asia/Shanghai'})}}</span>

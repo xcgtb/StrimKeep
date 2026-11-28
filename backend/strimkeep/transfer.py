@@ -5,6 +5,8 @@ import time
 from pathlib import PurePosixPath
 from urllib.parse import urlsplit,parse_qs
 from .cloud115 import CloudError, fatal
+from .intake_policy import (log_reused, matching_job, matching_legacy_job, share_identity,
+                            verify_credential, verify_existing)
 
 LINK = re.compile(r'https?://(?:www\.)?(?:115\.com|115cdn\.com|anxia\.com)/s/[A-Za-z0-9]+(?:\?[^\s<>"，。]*)?',re.I)
 
@@ -44,6 +46,9 @@ class Transfer:
     async def enqueue(self,text,dest,auto=False,origin='web',update=None,*,expected_video=None):
         if not re.fullmatch(r'[1-9]\d{0,23}',dest):raise ValueError('请选择一个非根目录作为转存目标。')
         links=shares(text);account=self.engine.tasks.account()
+        if update:
+            old=self.store.get('transfer-update:'+update,[])
+            if old:return old
         path=await self.cloud.path_info(dest)
         label=' / '.join(p['name'] for p in path if p['id']!='0')
         if self.engine.tasks.account()!=account:raise ValueError('115 账号已变化，请重新提交。')
@@ -57,20 +62,34 @@ class Transfer:
                 organize=None
             else:
                 organize['source_cids']=[dest]
-        if update:
-            old=self.store.get('transfer-update:'+update,[])
-            if old:return old
-        ids=[]
+        ids, reused = [], []
         def encrypted(value):return self.store.crypto.encrypt(json.dumps(value,ensure_ascii=False).encode()).decode()
-        with self.store.db:
+        with self.store.transaction(immediate=True):
+            if self.engine.tasks.account()!=account:raise ValueError('115 账号已变化，请重新提交。')
+            if update:
+                old=self.store.get('transfer-update:'+update,[])
+                if old:return old
             for link in links:
+                key = share_identity('transfer', link, account=account, target=dest)
+                old = matching_job(self.store, key, completed_seconds=24*3600 if origin in ('channel', 'inbox') else 120)
+                if old is None:
+                    old = matching_legacy_job(self.store, 'transfer', link, account=account, target=dest)
+                if old:
+                    verify_credential(self.store, old, 'transfer', link)
+                    jid = verify_existing(self.store, old, expected=expected_video, auto=bool(auto))
+                    ids.append(jid)
+                    reused.append(jid)
+                    continue
                 config={'job_kind':'transfer','account_id':account,'target_cid':dest,'target_label':label,'origin':origin,'organize_after':organize,'target_path_ids':[str(p['id']) for p in path]}
+                config.update(intake_key=key, intake_auto=bool(auto))
                 if expected_video is not None:
                     config['expected_subscription_video'] = expected_video
                 jid=self.store.jobs.create(json.dumps(config))
                 self.store.db.execute('INSERT OR REPLACE INTO settings VALUES(?,?)',('transfer-secret:'+str(jid),encrypted(link)))
                 ids.append(jid)
             if update:self.store.db.execute('INSERT OR REPLACE INTO settings VALUES(?,?)',('transfer-update:'+update,encrypted(ids)))
+        for jid in reused:
+            log_reused(self.store, 'transfer', origin, jid)
         return ids
 
     async def run(self,jid,config):
@@ -96,7 +115,7 @@ class Transfer:
                         and not state.get('phase')):
                     config['subscription_source_rejected'] = True
                     save()
-                    self.engine.update_job(jid,state='failed',stage='分享已失效',message='订阅将尝试其他来源。')
+                    self.engine.update_job(jid,state='partial',stage='分享已失效',message='订阅将尝试其他来源。')
                     return
                 if (config.get('origin') == 'channel' and exc.code in ('CLOUD_REJECTED', 'SHARE_NOT_FOUND')
                         and '分享已取消' in str(exc)):

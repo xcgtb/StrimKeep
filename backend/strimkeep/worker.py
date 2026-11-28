@@ -190,6 +190,7 @@ async def run_worker():
         'library_covers': engine.library_covers.schedule_loop(),
         'inventory_schedule': scan_app.state.inventory_scan_loop(),
     }.items()}
+    background['cloud_activity'] = engine.cloud_activity_task
     store.event('system', f'StrimKeep worker {__version__} started.')
     last_reap = 0.0
     last_prune = 0.0

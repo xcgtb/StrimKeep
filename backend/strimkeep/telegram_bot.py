@@ -5,7 +5,8 @@ import json
 import re
 import time
 from .cloud115 import CloudError
-from .offline_api import links_in, directory_config, route_target, OFFLINE_MAX_LINKS
+from .offline_api import links_in, directory_config, offline_target, organize_flag_for, OFFLINE_MAX_LINKS
+from .intake_policy import offline_kind
 from .transfer import LINK, shares as parse_shares
 from . import share_service
 from .message_templates import transfer_received, cloud_sign_notice, offline_submitted
@@ -300,28 +301,28 @@ class TelegramBot:
         ignored=max(0,len(urls)-OFFLINE_MAX_LINKS)
         urls=urls[:OFFLINE_MAX_LINKS]
         cfg=directory_config(self.store.get('offline_config',{}) or {})
-        from .offline_api import organize_flag_for
-        magnets=[u for u in urls if u.lower().startswith('magnet:')]
-        ed2ks=[u for u in urls if u.lower().startswith('ed2k://')]
-        others=[u for u in urls if not u.lower().startswith(('magnet:','ed2k://'))]
+        groups = {'magnet': [], 'ed2k': [], 'direct': []}
+        for url in urls:
+            groups[offline_kind(url)].append(url)
         results=[]
         receipts=[]
-        for group,kind,title in ((magnets,'bot_magnet','磁力'),(ed2ks,'bot_ed2k','ED2K'),(others,'target','直链')):
+        for kind, title in (('magnet', '磁力'), ('ed2k', 'ED2K'), ('direct', '直链')):
+            group = groups[kind]
             if not group:continue
-            target_cid=cfg.get(kind+'_cid') or ''
-            label=cfg.get(kind+'_label') or target_cid
-            if kind in ('bot_magnet','bot_ed2k'):
-                routes=cfg.get(('magnet' if kind=='bot_magnet' else 'ed2k')+'_routes')
-                target_cid,label=route_target(routes,text,target_cid,label)
+            target_cid, label = offline_target(cfg, kind, text, origin='bot')
+            label = label or target_cid
             if not target_cid:
                 results.append(f'⚠️ {title}未提交：尚未选择目录。');continue
             context = {'resource_kind': title}
             try:
                 sid=await self.engine.offline.submit(group,target_cid,label,origin='bot',
-                    organize=organize_flag_for(cfg,'magnet' if kind=='bot_magnet' else ('ed2k' if kind=='bot_ed2k' else 'direct'),'bot'),
+                    organize=organize_flag_for(cfg, kind, 'bot'),
                     notice_context=context)
             except CloudError as exc:
-                results.append(f'⚠️ {title}：提交结果待核查 · {self._safe_error(exc)}\n请先检查 115 离线任务，避免重复提交。')
+                if exc.code == 'OFFLINE_DUPLICATE':
+                    results.append(f'ℹ️ {title}：{self._safe_error(exc)}')
+                else:
+                    results.append(f'⚠️ {title}：提交结果待核查 · {self._safe_error(exc)}\n请先检查 115 离线任务，避免重复提交。')
             except Exception:
                 results.append(f'⚠️ {title}：提交结果未确认。请先检查 115 离线任务，避免重复提交。')
             else:

@@ -626,6 +626,9 @@ class ChannelMonitor:
                                                    organize=bool(rule['organize_after']),
                                                    origin='channel', notice_context=context)
         except CloudError as exc:
+            if exc.code == 'OFFLINE_DUPLICATE':
+                self.store.event('channel', '频道 %s：%s' % (title or name, str(exc)))
+                return 0
             self._remember(name, state='error', error='离线提交失败：%s' % str(exc)[:120])
             self.store.event('channel', '频道 %s 离线提交结果未确认，需人工核查，避免重复提交：%s' % (title or name, str(exc)[:120]))
             if self.config()['notify']:
@@ -749,7 +752,8 @@ class ChannelMonitor:
         except (ValueError, CloudError) as exc:
             detail = str(exc)[:120]
             # 私密链接、提取码失效、分享已取消：重试多少次都一样，记成跳过就走。
-            if any(key in detail for key in ('访问码', '提取码', '私密', '分享已取消', '不存在')):
+            if (getattr(exc, 'code', '') == 'INTAKE_CONFLICT'
+                    or any(key in detail for key in ('访问码', '提取码', '私密', '分享已取消', '不存在'))):
                 with self.store.db:
                     for secret in fresh:
                         self.store.db.execute(

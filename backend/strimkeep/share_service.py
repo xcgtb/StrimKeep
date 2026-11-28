@@ -39,6 +39,8 @@ from .share_cleanup import (pending_count, validate_play_token, refresh_share_ad
 from .share_recognition import episode_range_of, is_share_category as _is_share_category, quality_rank
 from .recognition_aliases import apply_alias
 from .transfer import verify_subscription_video
+from .intake_policy import (log_reused, matching_job, matching_legacy_job, share_identity,
+                            verify_credential, verify_existing)
 
 PENDING_NAME = '分享STRM待整理'
 UNIDENT_NAME = '分享STRM未识别'
@@ -320,9 +322,18 @@ def enqueue_organize(engine, origin='web', secret=None, channel_claim=None, gene
     if expected_video is not None:
         config['expected_subscription_video'] = expected_video
     now = time.time()
-    with store.transaction():
-        jid = store.jobs.create(json.dumps(config, ensure_ascii=False))
+    with store.transaction(immediate=True):
+        old = None
         if secret:
+            key = share_identity('share', secret)
+            config['intake_key'] = key
+            old = matching_job(store, key) or matching_legacy_job(store, 'share', secret)
+        if old:
+            verify_credential(store, old, 'share', secret)
+            jid = verify_existing(store, old, expected=expected_video, generate_only=generate_only)
+        else:
+            jid = store.jobs.create(config)
+        if secret and not old:
             store.db.execute('INSERT OR REPLACE INTO settings VALUES(?,?)',
                              ('share-secret:' + str(jid),
                               store.crypto.encrypt(json.dumps(secret, ensure_ascii=False).encode()).decode()))
@@ -333,7 +344,10 @@ def enqueue_organize(engine, origin='web', secret=None, channel_claim=None, gene
                 (jid, secret['share_code'], name, message_id)).rowcount
             if changed != 1:
                 raise ValueError('频道分享认领状态已变化，请重新核对。')
-    store.event('share', f'分享 STRM 整理任务 {jid} 已入队（来源 {origin}）。')
+    if old:
+        log_reused(store, 'share', origin, jid)
+    else:
+        store.event('share', f'分享 STRM 整理任务 {jid} 已入队（来源 {origin}）。')
     return jid
 
 
@@ -372,14 +386,15 @@ async def prune_orphans(engine):
 
 def enqueue_pending_organize(engine, origin='web'):
     """合并尚未开始的待整理任务；运行中的任务需要后续任务接住新文件。"""
-    for row in engine.store.db.execute("SELECT id,config FROM organize_jobs WHERE state='queued' ORDER BY id"):
-        try:
-            config=json.loads(row['config'] or '{}')
-        except (TypeError, ValueError):
-            continue
-        if config.get('job_kind')=='share_organize' and config.get('pending_only'):
-            return row['id']
-    return enqueue_organize(engine, origin=origin, pending_only=True)
+    with engine.store.transaction(immediate=True):
+        for row in engine.store.db.execute("SELECT id,config FROM organize_jobs WHERE state='queued' ORDER BY id"):
+            try:
+                config=json.loads(row['config'] or '{}')
+            except (TypeError, ValueError):
+                continue
+            if config.get('job_kind')=='share_organize' and config.get('pending_only'):
+                return row['id']
+        return enqueue_organize(engine, origin=origin, pending_only=True)
 
 
 async def run_organize(engine, job_id, config):
@@ -408,7 +423,7 @@ async def run_organize(engine, job_id, config):
             if not (expected and exc.code == 'SHARE_NOT_FOUND' and not config.get('share_generation_started')):
                 raise
             config['subscription_source_rejected'] = True
-            engine.update_job(job_id, state='failed', stage='分享已失效', message='订阅将尝试其他来源。',
+            engine.update_job(job_id, state='partial', stage='分享已失效', message='订阅将尝试其他来源。',
                               config=json.dumps(config, ensure_ascii=False))
             return
         if expected:
